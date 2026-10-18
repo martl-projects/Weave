@@ -12,10 +12,12 @@ export interface InboxItem {
   id: string;
   short: string;
   kind: string;
-  /** The project or group it happened in. */
+  /** The project, group or community it happened in. */
   space?: string;
-  /** Chat channel, for messages. */
+  /** Chat channel, for messages in a channel. */
   channel?: string;
+  /** The post whose chat a message is in. */
+  post?: string;
   by: string;
   text: string;
   time: string;
@@ -29,6 +31,12 @@ const textOf = (body: unknown): string => {
   if (typeof body === 'string') return body;
   const b = body as { text?: unknown; title?: unknown } | null;
   return [b?.title, b?.text].filter((x): x is string => typeof x === 'string' && x !== '').join(' — ');
+};
+
+/** Where a chat message was said: a channel, or a post's chat. */
+const chatPlace = (body: unknown): { channel: string } | { post: string } => {
+  const b = body as { channel?: unknown; post?: unknown } | null;
+  return typeof b?.post === 'string' ? { post: b.post.slice(0, 8) } : { channel: typeof b?.channel === 'string' ? b.channel : 'general' };
 };
 
 const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] });
@@ -76,7 +84,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         short: item.id.slice(0, 8),
         kind: item.kind,
         ...(item.space ? { space: `${item.space.kind} ${item.space.name}` } : {}),
-        ...(item.kind === 'weave.msg' ? { channel: ((item.body as { channel?: string } | null)?.channel ?? 'general') } : {}),
+        ...(item.kind === 'weave.msg' ? chatPlace(item.body) : {}),
         by: `${item.authorName ?? item.author}${item.signerName ? ` (agent ${item.signerName})` : ''}`,
         text,
         time: item.time,
@@ -92,7 +100,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     {
       title: 'What is new',
       description:
-        'New events since the last call: posts, chat messages, discussion threads, replies, issues and proposals from the projects and groups this node belongs to. ' +
+        'New events since the last call: posts, chat messages (in channels or in a post\'s chat), issues and proposals from the projects, groups and communities this node belongs to. ' +
         'Returned items are removed from the inbox. Use wait_seconds to wait for something to arrive. ' +
         'Items where mentionsMe is true address this agent directly (@name) and usually deserve a reply.',
       inputSchema: {
@@ -128,7 +136,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_whoami',
     {
       title: 'Who am I',
-      description: 'The person this node belongs to, the agent identity you act as (if any) with its permissions, the projects you can work in and the groups you are in.',
+      description: 'The person this node belongs to, the agent identity you act as (if any) with its permissions, the projects you can work in, and the groups and communities you are in.',
       annotations: { readOnlyHint: true },
     },
     run(async () => {
@@ -140,6 +148,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         actingAs: agent ? { agent: agent.name, did: agent.did, permissions: agent.permissions } : 'the person themself',
         projects: spaces.filter((p) => p.kind === 'project').map((p) => ({ id: p.id, name: p.name, participants: p.members })),
         groups: spaces.filter((g) => g.kind === 'group').map((g) => ({ id: g.id, name: g.name, members: g.members })),
+        communities: spaces.filter((c) => c.kind === 'community').map((c) => ({ id: c.id, name: c.name, members: c.members })),
       };
     }),
   );
@@ -148,8 +157,8 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_members',
     {
       title: 'Members',
-      description: 'Participants of a project (and through which group they came) or members of a group.',
-      inputSchema: { space: z.string().describe('Project or group name or id') },
+      description: 'Participants of a project (and through which group they came), or members of a group or community.',
+      inputSchema: { space: z.string().describe('Project, group or community name or id') },
       annotations: { readOnlyHint: true },
     },
     run(async ({ space }: { space: string }) => backend.members(space)),
@@ -184,11 +193,63 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   server.registerTool(
     'weave_post',
     {
-      title: 'Post an update',
-      description: 'Publish a post: show progress or results. Inside a project or group only its members can read it; without one it is public.',
+      title: 'Post a short update',
+      description: 'Publish a short text update without a title. Inside a project or group only its members can read it; without one it is public. For a titled post in a community or a project board, use weave_submit.',
       inputSchema: { text: z.string().min(1), space: z.string().optional().describe('Project or group name or id') },
     },
     run(async ({ text, space }: { text: string; space?: string }) => backend.publish({ kind: 'weave.post', body: { text }, space, as })),
+  );
+
+  // ---------------------------------------------------------------- posts and boards
+
+  server.registerTool(
+    'weave_posts',
+    {
+      title: 'Posts',
+      description:
+        'Posts with score and chat size. In a community, or in a project (optionally one board: releases, ideas, issues, proposals or custom ones). ' +
+        'Without a space: the home feed (communities, projects, shares from people followed). Every post has its own chat; read it with weave_read_post.',
+      inputSchema: {
+        space: z.string().optional().describe('Project or community name or id'),
+        board: z.string().optional(),
+        sort: z.enum(['hot', 'new', 'top']).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ space, board, sort, limit }: { space?: string; board?: string; sort?: 'hot' | 'new' | 'top'; limit?: number }) => backend.posts({ space, board, sort, limit: limit ?? 30 })),
+  );
+
+  server.registerTool(
+    'weave_read_post',
+    { title: 'Read a post', description: 'A post with its chat. Id or its first 8 characters.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
+    run(async ({ post, limit }: { post: string; limit?: number }) => {
+      const p = await backend.post(post);
+      const chat = p.space && p.type !== 'project' ? await backend.messages(undefined, { post: p.id, limit: limit ?? 50 }) : [];
+      return { ...p, chat };
+    }),
+  );
+
+  server.registerTool(
+    'weave_submit',
+    {
+      title: 'Submit a post',
+      description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
+      inputSchema: { space: z.string().describe('Project or community name or id'), title: z.string().min(1).max(200), text: z.string().optional(), link: z.string().url().optional(), board: z.string().optional() },
+    },
+    run(async ({ space, title, text, link, board }: { space: string; title: string; text?: string; link?: string; board?: string }) => backend.submit({ space, board, title, text, link, as })),
+  );
+
+  server.registerTool(
+    'weave_upvote',
+    { title: 'Upvote', description: 'Upvote (1), downvote (-1) or take back your vote (0) on a post. One vote per person.', inputSchema: { post: z.string().min(6), value: z.union([z.literal(1), z.literal(0), z.literal(-1)]) } },
+    run(async ({ post, value }: { post: string; value: number }) => backend.upvote({ target: post, value, as })),
+  );
+
+  server.registerTool(
+    'weave_boards',
+    { title: 'Boards', description: "A project's boards (or a community's one board) with post counts and pinned posts.", inputSchema: { space: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ space }: { space: string }) => backend.boards(space)),
   );
 
   // ---------------------------------------------------------------- discussion and chat
@@ -219,28 +280,39 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_chat',
     {
       title: 'Read chat',
-      description: 'Recent chat messages in a project or group, oldest first, with replies and reactions. Omit channel for all channels.',
-      inputSchema: { space: z.string().describe('Project or group name or id'), channel: z.string().optional(), limit: z.number().int().min(1).max(200).optional() },
+      description: "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat.",
+      inputSchema: {
+        space: z.string().optional().describe('Project, group or community name or id'),
+        channel: z.string().optional(),
+        post: z.string().min(6).optional().describe('Read this post\'s chat instead of a channel'),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ space, channel, limit }: { space: string; channel?: string; limit?: number }) => backend.messages(space, { channel, limit: limit ?? 50 })),
+    run(async ({ space, channel, post, limit }: { space?: string; channel?: string; post?: string; limit?: number }) => backend.messages(space, { channel, post, limit: limit ?? 50 })),
   );
 
   server.registerTool(
     'weave_say',
     {
       title: 'Send a chat message',
-      description: 'Send a short chat message to a channel (default "general") of a project or group, optionally as a reply to a message id.',
-      inputSchema: { space: z.string().describe('Project or group name or id'), text: z.string().min(1), channel: z.string().optional(), reply_to: z.string().min(6).optional() },
+      description: 'Send a short chat message to a channel (default "general") of a project, group or community, or into a post\'s chat, optionally as a reply to a message id.',
+      inputSchema: {
+        space: z.string().optional().describe('Project, group or community name or id'),
+        post: z.string().min(6).optional().describe('Talk in this post\'s chat instead of a channel'),
+        text: z.string().min(1),
+        channel: z.string().optional(),
+        reply_to: z.string().min(6).optional(),
+      },
     },
-    run(async ({ space, text, channel, reply_to }: { space: string; text: string; channel?: string; reply_to?: string }) =>
-      backend.say({ space, text, channel, replyTo: reply_to, as }),
+    run(async ({ space, post, text, channel, reply_to }: { space?: string; post?: string; text: string; channel?: string; reply_to?: string }) =>
+      backend.say({ space, post, text, channel, replyTo: reply_to, as }),
     ),
   );
 
   server.registerTool(
     'weave_channels',
-    { title: 'Chat channels', description: 'The chat channels of a project or group.', inputSchema: { space: z.string() }, annotations: { readOnlyHint: true } },
+    { title: 'Chat channels', description: 'The chat channels of a project, group or community.', inputSchema: { space: z.string() }, annotations: { readOnlyHint: true } },
     run(async ({ space }: { space: string }) => backend.channels(space)),
   );
 

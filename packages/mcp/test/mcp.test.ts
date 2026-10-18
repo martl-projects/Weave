@@ -73,6 +73,20 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('lets the agent post into a board, read the post and talk in its chat', async () => {
+    const { node, call, close } = await setup(['weave.post', 'weave.msg', 'weave.upvote']);
+    const posted = (await call('weave_submit', { space: 'Weave', board: 'releases', title: 'Nightly build', text: 'All green' })).data;
+    expect(posted).toMatchObject({ board: 'releases', by: { agent: 'forge' } });
+    await node.say({ post: posted.short, text: 'Thanks @forge' });
+    await call('weave_say', { post: posted.short, text: 'You are welcome' });
+    await call('weave_upvote', { post: posted.short, value: 1 });
+    const { data } = await call('weave_read_post', { post: posted.short });
+    expect(data.chat.map((m: { text: string }) => m.text)).toEqual(['Thanks @forge', 'You are welcome']);
+    expect(data.score).toBe(1);
+    expect((await call('weave_posts', { space: 'Weave', board: 'releases' })).data[0].title).toBe('Nightly build');
+    close();
+  });
+
   it('reports permission errors as tool errors', async () => {
     const { node, call, close } = await setup();
     const proposal = await node.propose({ project: 'Weave', title: 'Ship it' });

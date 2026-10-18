@@ -11,9 +11,12 @@ import {
   type Actor,
   type Admission,
   type Backend,
+  type BoardInfo,
+  type CommunityInfo,
   type FeedItem,
   type IssueInfo,
   type MemberInfo,
+  type PostInfo,
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
@@ -28,8 +31,8 @@ usage: weave <command> [options]
   init <name>                create your identity in the Weave home
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
-  status                     node status: peers, groups, projects
-  post <text...>             publish a post            [-p <project> | -g <group>] [--as <agent>]
+  status                     node status: peers, groups, projects, communities
+  post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
   mcp                        serve this node to an agent harness over MCP (stdio)  [--as <agent>]
@@ -63,7 +66,32 @@ projects — something being built; participants chat, discuss, vote and work on
   admit <project> <who> <group>          let a group newcomer in   [--always: also its future newcomers, in all your projects with that group]
   decline <project> <who> <group>        turn a group newcomer away
 
-chat, in a project (-p) or group (-g):
+communities — boards of posts that people join, each post with its own chat:
+  community create <name>                start a community          [--text <description>]
+  community list                         communities you're in
+  community show <community>             description and moderators
+  community about <community> <text...>  change the description (moderators)
+  community invite <community>           print an invite link (any member)
+  community join <link>                  join with an invite link
+  community members <community>          members and who invited them
+  community remove <community> <who>     remove someone and rotate the key (moderators)
+  community moderator <community> <who>  make someone a moderator; --off to undo
+
+posts — in a community (-r) or a project's boards (-p); without either, your home:
+  posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
+  read <id>                  a post and its chat
+  submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>]
+                             (in a project's issues or proposals board this opens an issue or a proposal)
+  up <id> / down <id> / unvote <id>   upvote, downvote, or take your vote back
+  save <id> / unsave <id>    keep a post for later; --pin puts it at the top of your home (only you see this)
+  share <id> --to <community|followers>   share a post into a community; public projects also to your followers  [--text <t>]
+  boards                     a project's boards
+  board add <name>           add a board (maintainers)  [--title <t>] [--type posts|issues|proposals] [--sort hot|new|top] [--position <n>]
+  board set <name>           change title, sort or position (maintainers)
+  board drop <name>          remove a board; its posts stay in the logs
+  pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
+
+chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
   chat                       recent messages            [-c <channel>] [-n <count>]
   say <text...>              send a message             [-c <channel>] [--reply <id>]
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
@@ -113,6 +141,17 @@ const { values, positionals } = parseArgs({
     always: { type: 'boolean', default: false },
     project: { type: 'string', short: 'p' },
     group: { type: 'string', short: 'g' },
+    community: { type: 'string', short: 'r' },
+    board: { type: 'string', short: 'b' },
+    post: { type: 'string' },
+    sort: { type: 'string' },
+    saved: { type: 'boolean', default: false },
+    pin: { type: 'boolean', default: false },
+    link: { type: 'string' },
+    to: { type: 'string' },
+    title: { type: 'string' },
+    type: { type: 'string' },
+    position: { type: 'string' },
     hours: { type: 'string' },
     text: { type: 'string' },
     status: { type: 'string' },
@@ -154,12 +193,23 @@ function needProject(): string {
   return values.project;
 }
 
-/** Chat and posts work in either: -p project or -g group. */
+/** Chat works in any space: -p project, -g group or -r community. */
 function needSpace(): string {
-  const space = values.project ?? values.group;
-  if (!space) throw new Error('where? add -p <project> or -g <group>');
+  const space = values.project ?? values.group ?? values.community;
+  if (!space) throw new Error('where? add -p <project>, -g <group> or -r <community>');
   return space;
 }
+
+const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', group: 'g' }[p.space.kind]}/${p.space.name}${p.board && p.space.kind === 'project' ? `/${p.board}` : ''}` : `u/${p.by.name ?? p.by.did.slice(8, 20)}`);
+const postLine = (p: PostInfo) => {
+  const vote = p.myVote > 0 ? '▲' : p.myVote < 0 ? '▼' : ' ';
+  const marks = [p.pinned && 'pinned', p.saved === 'pinned' ? 'on your home' : p.saved, p.issue && `[${p.issue.status}]`, p.proposal && (p.proposal.closed ? (p.proposal.passed ? '[passed]' : '[rejected]') : '[voting]')].filter(Boolean).join(' ');
+  return `${p.short}  ${vote}${String(p.score).padStart(3)}  ${p.title}${marks ? `  ${marks}` : ''}
+                 ${where(p)} · ${actor(p.by)} · ${p.chat} in chat${p.link ? ` · ${p.link}` : ''}`;
+};
+const boardLine = (b: BoardInfo) => `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}`;
+const communityText = (c: CommunityInfo) =>
+  [`r/${c.name}`, c.description ? `  ${c.description}` : '', `  moderators: ${c.moderators.map(actor).join(', ')}`, `  ${c.members} member${c.members === 1 ? '' : 's'}`].filter(Boolean).join('\n');
 
 const threadLine = (t: ThreadInfo) => `${t.short}  ${t.title}  — ${actor(t.by)}, ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'}`;
 const issueLine = (i: IssueInfo) =>
@@ -169,7 +219,7 @@ const proposalLine = (p: ProposalInfo) => {
   const mine = p.myVote ? `, you: ${p.myVote.choice}${p.myVote.via ? ` via ${actor(p.myVote.via)}` : ''}` : '';
   return `${p.short}  ${p.title}\n          yes ${p.yes} · no ${p.no} · abstain ${p.abstain} · ${p.voted}/${p.eligible} voted, quorum ${p.quorum} · ${state}${mine}`;
 };
-const spaceLine = (s: SpaceInfo) => `${s.name.padEnd(24)} ${s.members} ${s.kind === 'group' ? 'member' : 'participant'}${s.members === 1 ? '' : 's'}, founded by ${s.founderName ?? s.founder}`;
+const spaceLine = (s: SpaceInfo) => `${s.name.padEnd(24)} ${s.members} ${s.kind === 'project' ? 'participant' : 'member'}${s.members === 1 ? '' : 's'}, founded by ${s.founderName ?? s.founder}`;
 const memberLine = (m: MemberInfo) => {
   const how = m.via ? `via ${m.via.name}, let in by ${m.invitedByName ?? m.invitedBy}` : m.invitedBy ? `invited by ${m.invitedByName ?? m.invitedBy}` : 'founder';
   return `${(m.name ?? m.did).padEnd(24)} ${how}${m.maintainer ? '  (maintainer)' : ''}`;
@@ -193,8 +243,8 @@ function line(item: FeedItem): string {
   const time = new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const body = typeof item.body === 'string' ? item.body : (item.body as { text?: unknown } | null)?.text ?? JSON.stringify(item.body);
   const kind = item.kind === 'weave.post' ? '' : `[${item.kind}] `;
-  const where = item.space ? `${item.space.kind === 'group' ? '@' : '#'}${item.space.name} ` : item.private ? '(private) ' : '';
-  return `${time}  ${who(item).padEnd(20)}  ${where}${kind}${body}`;
+  const place = item.space ? `${{ group: 'g', project: 'p', community: 'r' }[item.space.kind]}/${item.space.name} ` : item.private ? '(private) ' : '';
+  return `${time}  ${who(item).padEnd(20)}  ${place}${kind}${body}`;
 }
 
 async function main(): Promise<void> {
@@ -217,7 +267,7 @@ async function main(): Promise<void> {
       const daemon = await startDaemon(home.dir);
       const status = await daemon.node.status();
       console.log(`weave daemon for ${status.name ?? status.did}`);
-      console.log(`  home ${home.dir}\n  api  http://127.0.0.1:${daemon.port}\n  ${status.groups} groups, ${status.projects} projects`);
+      console.log(`  home ${home.dir}\n  api  http://127.0.0.1:${daemon.port}\n  ${status.groups} groups, ${status.projects} projects, ${status.communities} communities`);
       daemon.node.replica.onAppend((event) => {
         if (event.signer === daemon.node.identity.did) return;
         const item = daemon.node.itemFor(event);
@@ -238,7 +288,7 @@ async function main(): Promise<void> {
         [
           `${s.name ?? '(no name)'}  ${s.did}`,
           `  ${s.online ? `online, ${s.peers} peer${s.peers === 1 ? '' : 's'}` : 'offline (no daemon running)'}`,
-          `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}`,
+          `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.communities} communit${s.communities === 1 ? 'y' : 'ies'}`,
           `  ${s.events} events in ${s.logs} logs${s.pending ? `, ${s.pending} pending` : ''}`,
         ].join('\n'),
       );
@@ -247,7 +297,7 @@ async function main(): Promise<void> {
     case 'post': {
       const text = args.join(' ').trim();
       if (!text) throw new Error('usage: weave post <text>');
-      const item = await (await backend()).publish({ kind: values.kind ?? 'weave.post', body: { text }, as: values.as, space: values.project ?? values.group });
+      const item = await (await backend()).publish({ kind: values.kind ?? 'weave.post', body: { text }, as: values.as, space: values.project ?? values.group ?? values.community });
       return out(item, () => line(item));
     }
 
@@ -255,7 +305,7 @@ async function main(): Promise<void> {
       const items = await (await backend()).feed({
         limit: values.n ? Number(values.n) : 20,
         kinds: values.kind?.split(',') ?? (values.all ? undefined : CONTENT_KINDS),
-        space: values.project ?? values.group,
+        space: values.project ?? values.group ?? values.community,
       });
       if (values.json) return items.forEach((item) => console.log(JSON.stringify(item)));
       return console.log(items.map(line).join('\n') || '(nothing yet)');
@@ -396,6 +446,143 @@ async function main(): Promise<void> {
       throw new Error('usage: weave project create|list|show|page|invite|join|members|remove|maintainer|add-group|drop-group|rule — see "weave --help"');
     }
 
+    case 'community': {
+      const [sub, ref, extra] = args;
+      const b = await backend();
+      switch (sub) {
+        case 'create': {
+          if (!ref) break;
+          const c = await b.createCommunity({ name: args.slice(1).join(' '), description: values.text });
+          return out(c, () => `created community r/${c.name}\n  invite people: weave community invite "${c.name}"\n  post:          weave submit "Hello" -r "${c.name}"`);
+        }
+        case 'list': {
+          const list = await b.spaces('community');
+          return out(list, () => list.map(spaceLine).join('\n') || '(no communities)');
+        }
+        case 'show': {
+          if (!ref) break;
+          const c = await b.community(ref);
+          return out(c, () => communityText(c));
+        }
+        case 'about': {
+          if (!ref || !extra) break;
+          const c = await b.setCommunity({ community: ref, description: args.slice(2).join(' ') });
+          return out(c, () => communityText(c));
+        }
+        case 'invite': {
+          if (!ref) break;
+          const invite = await b.invite(ref, values.hours ? Number(values.hours) : undefined);
+          return out({ invite }, () => `${invite}\n\nShare this link privately: whoever has it can join the community.\nThey join with: weave community join <link>`);
+        }
+        case 'join': {
+          if (!ref) break;
+          const c = await b.joinSpace(ref);
+          return out(c, () => `joined ${c.kind} ${c.name} (founded by ${c.founderName ?? c.founder})`);
+        }
+        case 'members': {
+          if (!ref) break;
+          const members = await b.members(ref);
+          return out(members, () => members.map(memberLine).join('\n'));
+        }
+        case 'remove':
+          if (!ref || !extra) break;
+          await b.removeMember(ref, extra);
+          return out({ removed: extra }, () => `removed ${extra} and rotated the key`);
+        case 'moderator':
+          if (!ref || !extra) break;
+          await b.setModerator({ community: ref, who: extra, on: !values.off });
+          return out({ moderator: extra, on: !values.off }, () => `${extra} is ${values.off ? 'no longer' : 'now'} a moderator`);
+      }
+      throw new Error('usage: weave community create|list|show|about|invite|join|members|remove|moderator — see "weave --help"');
+    }
+
+    case 'posts': {
+      const posts = await (await backend()).posts({
+        space: values.project ?? values.community,
+        board: values.board,
+        sort: values.sort as BoardInfo['sort'] | undefined,
+        saved: values.saved,
+        limit: values.n ? Number(values.n) : 25,
+      });
+      return out(posts, () => posts.map(postLine).join('\n') || '(no posts yet)');
+    }
+
+    case 'read': {
+      if (!args[0]) throw new Error('usage: weave read <id>');
+      const b = await backend();
+      const p = await b.post(args[0]);
+      const chat = p.space && p.type !== 'project' ? await b.messages(undefined, { post: p.id, limit: values.n ? Number(values.n) : 30 }) : [];
+      return out({ ...p, messages: chat }, () =>
+        [
+          postLine(p),
+          p.text ? `\n${p.text}\n` : '',
+          p.project && !p.project.member ? `  (a project you're not in: ${p.project.name} [${p.project.status}] — ask in the chat to be invited)` : '',
+          p.type === 'project' ? `  chat in its channels: weave chat -p "${p.title}"` : '',
+          ...chat.map((m) => `  ${m.short}  ${actor(m.by).padEnd(20)}  ${m.text}`),
+          p.space && p.type !== 'project' ? `\n  talk: weave say --post ${p.short} "..."` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    }
+
+    case 'submit': {
+      const title = args.join(' ').trim();
+      if (!title) throw new Error('usage: weave submit <title...> -r <community> | -p <project> [-b <board>]');
+      const space = values.community ?? values.project;
+      if (!space) throw new Error('where? add -r <community> or -p <project> (with -b <board>)');
+      const p = await (await backend()).submit({ space, board: values.board, title, text: values.text, link: values.link, as: values.as });
+      return out(p, () => postLine(p));
+    }
+
+    case 'up':
+    case 'down':
+    case 'unvote': {
+      if (!args[0]) throw new Error(`usage: weave ${command} <id>`);
+      const p = await (await backend()).upvote({ target: args[0], value: { up: 1, down: -1, unvote: 0 }[command], as: values.as });
+      return out(p, () => postLine(p));
+    }
+
+    case 'save':
+    case 'unsave': {
+      if (!args[0]) throw new Error(`usage: weave ${command} <id>`);
+      const mode = command === 'unsave' ? null : values.pin ? 'pinned' : 'saved';
+      await (await backend()).save({ target: args[0], mode });
+      return out({ target: args[0], mode }, () => (mode === 'pinned' ? 'pinned to the top of your home' : mode ? 'saved' : 'forgotten'));
+    }
+
+    case 'share': {
+      if (!args[0] || !values.to) throw new Error('usage: weave share <id> --to <community|followers> [--text <t>]');
+      const p = await (await backend()).share({ post: args[0], to: values.to, text: values.text });
+      return out(p, () => postLine(p));
+    }
+
+    case 'boards': {
+      const boards = await (await backend()).boards(values.community ?? needProject());
+      return out(boards, () => boards.map(boardLine).join('\n'));
+    }
+
+    case 'board': {
+      const [sub, name] = args;
+      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop <name> -p <project>');
+      const boards = await (await backend()).setBoard({
+        project: needProject(),
+        name,
+        title: values.title,
+        type: values.type as BoardInfo['type'] | undefined,
+        sort: values.sort as BoardInfo['sort'] | undefined,
+        position: values.position !== undefined ? Number(values.position) : undefined,
+        on: sub !== 'drop',
+      });
+      return out(boards, () => boards.map(boardLine).join('\n'));
+    }
+
+    case 'pin': {
+      if (!args.length && !values.clear) throw new Error('usage: weave pin <id...> -r <community> | -p <project> -b <board>  (--clear unpins all)');
+      const boards = await (await backend()).curate({ space: values.community ?? needProject(), board: values.board, pinned: values.clear ? [] : args });
+      return out(boards, () => boards.map(boardLine).join('\n'));
+    }
+
     case 'admissions': {
       const list = await (await backend()).admissions(args[0]);
       return out(list, () => list.map(admissionLine).join('\n') || '(nobody waiting)');
@@ -441,14 +628,14 @@ async function main(): Promise<void> {
     }
 
     case 'chat': {
-      const messages = await (await backend()).messages(needSpace(), { channel: values.channel, limit: values.n ? Number(values.n) : 30 });
+      const messages = await (await backend()).messages(values.post ? undefined : needSpace(), { channel: values.channel, post: values.post, limit: values.n ? Number(values.n) : 30 });
       return out(messages, () =>
         messages
           .map((m) => {
             const time = new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const reply = m.replyTo ? `  ↪ ${actor(m.replyTo.by)}: ${m.replyTo.text.slice(0, 40)}\n` : '';
             const reactions = m.reactions.length ? `  ${m.reactions.map((r) => `${r.emoji}${r.count}`).join(' ')}` : '';
-            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel ? '' : `#${m.channel} `}${m.text}${reactions}`;
+            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel || values.post ? '' : `#${m.channel} `}${m.text}${reactions}`;
           })
           .join('\n') || '(quiet so far)',
       );
@@ -456,8 +643,8 @@ async function main(): Promise<void> {
 
     case 'say': {
       const text = args.join(' ').trim();
-      if (!text) throw new Error('usage: weave say <text...> -p <project> | -g <group>');
-      const m = await (await backend()).say({ space: needSpace(), text, channel: values.channel, replyTo: values.reply, as: values.as });
+      if (!text) throw new Error('usage: weave say <text...> -p <project> | -g <group> | -r <community> | --post <id>');
+      const m = await (await backend()).say({ space: values.post ? undefined : needSpace(), post: values.post, text, channel: values.channel, replyTo: values.reply, as: values.as });
       return out(m, () => `${actor(m.by)}: ${m.text}`);
     }
 
