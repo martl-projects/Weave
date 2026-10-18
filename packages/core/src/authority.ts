@@ -34,8 +34,9 @@ export function revocation(subject: Did, afterSeq: number): EventFields {
   return { kind: KIND_REVOKE, body: { subject, afterSeq } };
 }
 
+/** `weave.issue.*` covers `weave.issue` itself and everything under it, like `weave.issue.claim`. */
 export function permits(permissions: string[], kind: string): boolean {
-  return permissions.some((p) => p === '*' || p === kind || (p.endsWith('.*') && kind.startsWith(p.slice(0, -1))));
+  return permissions.some((p) => p === '*' || p === kind || (p.endsWith('.*') && (kind === p.slice(0, -2) || kind.startsWith(p.slice(0, -1)))));
 }
 
 /**

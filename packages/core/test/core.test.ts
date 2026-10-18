@@ -6,6 +6,7 @@ import {
   delegation,
   didFromPublicKey,
   eventId,
+  permits,
   publicKeyFromDid,
   Replica,
   revocation,
@@ -105,6 +106,17 @@ describe('Replica', () => {
 
   it('rejects malformed input', () => {
     expect(new Replica().ingest({ hello: 'world' }).status).toBe('rejected');
+  });
+});
+
+describe('permits', () => {
+  it('matches exact kinds, families and everything', () => {
+    expect(permits(['weave.issue.*'], 'weave.issue')).toBe(true);
+    expect(permits(['weave.issue.*'], 'weave.issue.claim')).toBe(true);
+    expect(permits(['weave.issue.*'], 'weave.issues')).toBe(false);
+    expect(permits(['weave.post'], 'weave.post')).toBe(true);
+    expect(permits(['weave.post'], 'weave.vote')).toBe(false);
+    expect(permits(['*'], 'anything.at.all')).toBe(true);
   });
 });
 
