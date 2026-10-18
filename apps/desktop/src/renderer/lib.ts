@@ -40,7 +40,29 @@ export interface Loaded<T> {
   reload(): void;
 }
 
-/** Fetch something from the node; refetches on live events and when `deps` change (clearing stale data). */
+/**
+ * Run an action against the node once (and again only when `deps` change), never
+ * on live events. For calls that write, like creating an invite: refetching them
+ * on every event would write again, which is an event, which refetches…
+ */
+export function useAction<T>(action: () => Promise<T>, deps: unknown[]): Omit<Loaded<T>, 'reload'> {
+  const key = JSON.stringify(deps);
+  const [state, setState] = useState<{ key: string; data?: T; error?: string }>({ key });
+  useEffect(() => {
+    let alive = true;
+    action().then(
+      (data) => alive && setState({ key, data }),
+      (error: Error) => alive && setState({ key, error: error.message }),
+    );
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return state.key === key ? { data: state.data, error: state.error } : {};
+}
+
+/** Fetch something from the node; refetches on live events and when `deps` change (clearing stale data). Only for reads: see useAction. */
 export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): Loaded<T> {
   const t = useTick();
   const key = JSON.stringify(deps);

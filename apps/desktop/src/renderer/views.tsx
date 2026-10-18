@@ -4,7 +4,7 @@ import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, MemberInfo, 
 import { ChatView } from './chat.tsx';
 import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
 import { Icon } from './icons.tsx';
-import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useApi } from './lib.ts';
+import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
 
@@ -826,7 +826,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
 }
 
 export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
-  const { data: link, error } = useApi(() => api<string>('invite', space.id), [space.id]);
+  const { data: link, error } = useAction(() => api<string>('invite', space.id), [space.id]);
   return (
     <Modal title={`Invite someone to ${spaceLabel(space)}`} onClose={onClose}>
       {error ? (
