@@ -31,7 +31,7 @@ await kofi.setProfile({ theme: { accent: '#39d0b4', background: '#0b1211', surfa
 await martin.createGroup('Weave');
 await lena.joinGroup(await martin.invite('Weave'));
 await kofi.joinGroup(await lena.invite('Weave'));
-await martin.addAgent('forge', ['weave.post', 'weave.reply']);
+await martin.addAgent('forge', ['weave.post', 'weave.reply', 'weave.msg', 'weave.issue.*']);
 
 await martin.publish({ kind: 'weave.post', body: { text: 'Started building Weave: a peer-to-peer place to show off projects with friends and agents.' } });
 await lena.publish({ kind: 'weave.post', body: { text: 'Finished the first prototype of my modular synth case. Photos soon!' } });
@@ -40,6 +40,25 @@ await martin.publish({ kind: 'weave.post', body: { text: 'M3 is in: encrypted gr
 await lena.publish({ kind: 'weave.post', body: { text: 'I can take a first pass at the theme editor.' }, group: 'Weave' });
 await martin.publish({ kind: 'weave.post', body: { text: 'Summary: Lena takes the theme editor, Kofi tests sync on his mesh.' }, group: 'Weave', as: 'forge' });
 await kofi.publish({ kind: 'weave.post', body: { text: 'Sync test across three routers passed.' }, group: 'Weave' });
+
+// Working together: a discussion, chat, a vote, issues — some of it by Martin's agent.
+// Homes are offline here, so each person only acts on what their own node has;
+// everything syncs once the daemons run.
+const thread = await martin.startThread({ group: 'Weave', title: 'Hypercore for the logs?', text: 'It would save us the hardest part of the data layer. Downsides?' });
+await martin.reply({ target: thread.id, text: 'Benchmarked it: replication is about 3x faster than our JSON lines.', as: 'forge' });
+await lena.startThread({ group: 'Weave', title: 'Which fonts should themes offer?', text: 'Four presets for now, custom fonts later?' });
+await martin.say({ group: 'Weave', text: 'Morning! Desktop app is coming along.' });
+await lena.say({ group: 'Weave', text: 'Nice, I pushed the theme editor sketches.' });
+await martin.say({ group: 'Weave', text: 'Build is green on all three platforms.', as: 'forge' });
+const proposal = await martin.propose({ group: 'Weave', title: 'Adopt Hypercore for v1', text: 'Replace our log format with Hypercore; keep Weave event signatures on top.', hours: 72 });
+await martin.vote({ proposal: proposal.id, choice: 'yes' });
+await kofi.delegateVote({ group: 'Weave', who: lena.identity.author });
+const keys = await martin.openIssue({ group: 'Weave', title: 'Encrypt keys at rest', labels: ['security'] });
+await martin.claimIssue({ issue: keys.id, as: 'forge' });
+await kofi.openIssue({ group: 'Weave', title: 'Phone light client', labels: ['later'] });
+const docs = await lena.openIssue({ group: 'Weave', title: 'Write the getting started guide', labels: ['docs'] });
+await lena.claimIssue({ issue: docs.id });
+await lena.setIssueStatus({ issue: docs.id, status: 'done' });
 
 console.log('seeded .dev/martin, .dev/lena and .dev/kofi — start their daemons:');
 for (const name of ['martin', 'lena', 'kofi']) console.log(`  npx weave --home .dev/${name} daemon`);

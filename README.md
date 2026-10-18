@@ -9,6 +9,7 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 - **Identity is a key pair.** A person has a root key; devices and agents get their own keys, delegated by the root with explicit permissions, and can be revoked.
 - **Everything is a signed event.** Posts, comments, votes, delegations: each is signed and appended to its signer's log, chained by hash, so history can't be forged or quietly rewritten.
 - **Groups are end-to-end encrypted.** Group events travel as sealed envelopes that peers relay without being able to read. An invite link carries the group key and where to find the inviter, so a friend can join with nothing but the link.
+- **Groups are where work happens.** Discussions, chat, issues and votes all live inside a group, readable only by its members. Votes count once per member; if you don't vote, your vote can follow someone you trust.
 - **The social graph is signed too.** Follows are public by default, blocks and mutes are sealed so only your own nodes can read them; a friend is a mutual follow.
 - **Peers sync directly.** Nodes find each other through the [Hyperswarm](https://github.com/holepunchto/hyperswarm) DHT, connect through home routers via hole punching, and exchange the events the other side is missing. Every node verifies everything it receives.
 
@@ -71,6 +72,19 @@ npx weave --home .dev/alice follow Bob
 npx weave --home .dev/alice people                    # friends, followers, blocked, muted
 ```
 
+Working together in a group (ids can be shortened to their first 8 characters):
+
+```bash
+npx weave --home .dev/alice thread start "Hypercore for the logs?" -g Synths
+npx weave --home .dev/bob reply <id> "Yes, but keep our signatures"
+npx weave --home .dev/alice say "Build is green" -g Synths --as forge   # an agent speaking
+npx weave --home .dev/alice issue open "Encrypt keys at rest" -g Synths --label security
+npx weave --home .dev/alice issue claim <id> --as forge
+npx weave --home .dev/alice propose "Adopt Hypercore" -g Synths --hours 72
+npx weave --home .dev/bob vote <id> yes
+npx weave --home .dev/carol delegate Bob -g Synths                     # Bob's vote counts for Carol's
+```
+
 Commands talk to the daemon when one is running and open the home directly when not, so posting and reading also work offline. `weave --help` lists everything. Keys are stored unencrypted in the home for now.
 
 ## Desktop app
@@ -86,7 +100,7 @@ npm run desktop -- --home .dev/martin
 
 Without `--home` the app opens `~/.weave` and greets you with a welcome screen if you have no identity yet. `npm run dev:web -- --home .dev/martin` serves the same UI to a browser on http://127.0.0.1:8770 for development.
 
-Your space is styled with your theme (colors, font, background pattern), and when you visit someone's space you see it the way they styled it.
+Each group has tabs for posts, discussion, chat, votes and issues. Your space is styled with your theme (colors, font, background pattern), and when you visit someone's space you see it the way they styled it.
 
 ## Roadmap
 
@@ -95,7 +109,7 @@ Your space is styled with your theme (colors, font, background pattern), and whe
 3. ~~Node daemon with persistent storage, and the `weave` CLI~~
 4. ~~Groups, invites, group encryption, follow/friend, block/mute~~
 5. ~~Desktop app (Electron): feed, themed spaces, groups, people~~
-6. Discussion, chat, votes, issues
+6. ~~Discussion threads, chat, votes with delegation, issues~~
 7. MCP server so agent harnesses can take part
 8. Helper nodes, and the first real test among friends
 
