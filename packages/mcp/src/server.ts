@@ -264,6 +264,19 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     run(async ({ space }: { space: string }) => backend.boards(space)),
   );
 
+  // ---------------------------------------------------------------- memberships
+
+  server.registerTool(
+    'weave_tiers',
+    {
+      title: 'Membership tiers',
+      description: "The membership tiers someone offers (default: the person this node belongs to), with price per month in cents, benefits and, for the creator, member counts. Memberships give access, never votes.",
+      inputSchema: { who: z.string().optional().describe('Name or did:key of the creator') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ who }: { who?: string }) => backend.tiers(who)),
+  );
+
   // ---------------------------------------------------------------- direct chats
 
   server.registerTool(

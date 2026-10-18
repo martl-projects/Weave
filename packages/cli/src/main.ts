@@ -22,6 +22,7 @@ import {
   type ProposalInfo,
   type SpaceInfo,
   type ThreadInfo,
+  type TierInfo,
 } from '@weave/node';
 
 const HELP = `weave — build things together, peer to peer, with your friends and their agents
@@ -90,6 +91,17 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board set <name>           change title, sort or position (maintainers)
   board drop <name>          remove a board; its posts stay in the logs
   pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
+
+memberships, Patreon-style (tiers buy access to a tier's chat and the projects it's invited into, never votes):
+  tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"]
+  tier list [who]            the tiers someone offers (default: yours)
+  tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
+  tier open|close|hide <tier>   take new members, stop taking them, or take it off your space
+  support <tier>             ask to join a tier               [--text "how I paid"] (only the creator reads it)
+  requests                   people asking to join your tiers
+  grant <tier> <who>         let them in, or renew            [--months 1]
+  decline <tier> <who>       turn a request down
+  memberships                tiers you support
 
 direct chats with friends (people you follow who follow you back):
   chats                      your chats, most recent first
@@ -162,6 +174,11 @@ const { values, positionals } = parseArgs({
     position: { type: 'string' },
     hours: { type: 'string' },
     text: { type: 'string' },
+    price: { type: 'string' },
+    currency: { type: 'string' },
+    benefit: { type: 'string' },
+    months: { type: 'string' },
+    name: { type: 'string' },
     status: { type: 'string' },
     label: { type: 'string' },
     quorum: { type: 'string' },
@@ -207,6 +224,15 @@ function needSpace(): string {
   if (!space) throw new Error('where? add -p <project>, -g <group> or -r <community>');
   return space;
 }
+
+const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
+const tierLine = (t: TierInfo) => {
+  const state = t.mine ? `${t.members ?? 0} member${t.members === 1 ? '' : 's'}${t.open ? '' : ', closed'}` : t.membership ? (t.membership.active ? `member until ${new Date(t.membership.until).toLocaleDateString()}` : 'membership ended') : t.requested ? 'asked to join' : t.open ? 'open' : 'closed';
+  return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}`;
+};
+/** "5" or "5.50" (in the currency's main unit) → cents. */
+const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
+const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
 const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', group: 'g', direct: '@' }[p.space.kind]}/${p.space.name}${p.board && p.space.kind === 'project' ? `/${p.board}` : ''}` : `u/${p.by.name ?? p.by.did.slice(8, 20)}`);
 const postLine = (p: PostInfo) => {
@@ -633,6 +659,58 @@ async function main(): Promise<void> {
       if (!target || !words.length) throw new Error('usage: weave reply <id> <text...>');
       const r = await (await backend()).reply({ target, text: words.join(' '), as: values.as });
       return out(r, () => `replied as ${actor(r.by)}`);
+    }
+
+    case 'tier': {
+      const [sub, ref] = args;
+      const b = await backend();
+      if (sub === 'create' && ref) {
+        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit) });
+        return out(t, () => `offered ${t.name}\n${tierLine(t)}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
+      }
+      if (sub === 'list') {
+        const tiers = await b.tiers(ref);
+        return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(no tiers)');
+      }
+      if (sub === 'set' && ref) {
+        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit) });
+        return out(t, () => tierLine(t));
+      }
+      if ((sub === 'open' || sub === 'close' || sub === 'hide') && ref) {
+        const t = await b.setTier({ tier: ref, open: sub === 'open', hidden: sub === 'hide' || undefined });
+        return out(t, () => (sub === 'hide' ? `${t.name} is off your space; members keep it until their grants run out` : tierLine(t)));
+      }
+      throw new Error('usage: weave tier create|list|set|open|close|hide — see "weave --help"');
+    }
+
+    case 'support': {
+      const tier = args.join(' ').trim();
+      if (!tier) throw new Error('usage: weave support <tier id> [--text "how I paid"]');
+      await (await backend()).requestMembership({ tier, note: values.text });
+      return out({ requested: tier }, () => 'asked to join; the creator decides');
+    }
+
+    case 'requests': {
+      const list = await (await backend()).membershipRequests();
+      return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
+    }
+
+    case 'grant':
+    case 'decline': {
+      const [tier, person] = args;
+      if (!tier || !person) throw new Error(`usage: weave ${command} <tier> <who>${command === 'grant' ? ' [--months 1]' : ''}`);
+      const b = await backend();
+      if (command === 'grant') {
+        const t = await b.grantMembership({ tier, who: person, months: values.months ? Number(values.months) : 1 });
+        return out(t, () => `${person} is in ${t.name} (${t.members} member${t.members === 1 ? '' : 's'})`);
+      }
+      await b.declineMembership({ tier, who: person });
+      return out({ declined: person }, () => `turned down ${person}`);
+    }
+
+    case 'memberships': {
+      const tiers = await (await backend()).memberships();
+      return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(you support nobody yet)');
     }
 
     case 'chats': {
