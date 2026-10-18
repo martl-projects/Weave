@@ -17,7 +17,9 @@ npm test          # optional: should end with every test passing
 npm run desktop
 ```
 
-The app opens and asks what people should call you. That creates your identity in `~/.weave` on this computer. It starts its own background node (the daemon); keep the app open while you want to be reachable.
+The app opens and asks what people should call you. That creates your identity and shows your **24 recovery words**: write them down on paper before you continue. The app starts its own background node (the daemon); keep it open while you want to be reachable.
+
+Already using Weave on another computer? Choose **I already use Weave…** and type your words instead (keep your other computer online while you do).
 
 ## 2. Connect with Martin
 
@@ -38,7 +40,8 @@ npx weave --help                   # everything else
 
 ## 3. Things to know
 
-- **Back up `~/.weave/identity.json`.** It *is* your account. There is no password reset; lose it and that identity is gone, and anyone who copies it can act as you. Keep the folder private.
+- **Your 24 recovery words are your account.** With them you set up another computer, replace a stolen key and rotate your keys (**Keys & devices** in the app, or `npx weave keys`). Weave never stores them and there's no password reset. Keep them on paper, away from chats and AI agents: whoever has them is you.
+- **Each computer has its own key.** Don't copy `~/.weave` to another computer; restore with your words there instead. A copied folder makes your key appear in two places, which Weave reports as a possible theft.
 - **Nothing is ever fully deleted.** Posts and messages are append-only and get copied to your friends' computers.
 - **Projects, groups, communities and chats are end-to-end encrypted.** Public posts, your profile, your theme and whom you follow are public. People connected to you can see *that* you posted somewhere and when, not what.
 - **Invite links are keys.** Whoever has one can join and read that space's history. Contact links are just your address and safe to share.
