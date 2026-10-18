@@ -43,4 +43,4 @@ npm run dev:mesh -- --people 4 --seconds 20
 
 ## License
 
-Not chosen yet; to be decided before the first public release.
+[MIT](LICENSE)
