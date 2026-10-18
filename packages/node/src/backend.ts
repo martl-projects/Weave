@@ -98,6 +98,7 @@ export interface Profile {
   followsMe: boolean;
   blocked: boolean;
   muted: boolean;
+  /** Number of public posts. */
   posts: number;
 }
 

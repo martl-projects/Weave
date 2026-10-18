@@ -60,7 +60,7 @@ describe('spaces', () => {
     await node.publish({ kind: 'weave.post', body: { text: 'in group' }, group: 'Secret' });
     const mine = await node.feed({ author: 'Alice', publicOnly: true, kinds: ['weave.post'] });
     expect(mine.map((i) => (i.body as { text: string }).text)).toEqual(['public']);
-    expect((await node.profile()).posts).toBe(2);
+    expect((await node.profile()).posts).toBe(1); // public posts only
     expect(await node.directory()).toEqual([]);
   });
 });
