@@ -132,6 +132,13 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
               </span>
             </div>
           </div>
+          {p.me && (
+            <div className="space-actions">
+              <a className="button-link" href="#/keys">
+                <Icon name="lock" /> Keys &amp; devices
+              </a>
+            </div>
+          )}
           {!p.me && (
             <div className="space-actions">
               {p.following && p.followsMe && (
@@ -841,38 +848,6 @@ export function LonePost({ post, meDid, spaces }: { post: PostInfo; meDid: strin
     <Page title={post.title}>
       <PostHeader post={post} meDid={meDid} spaces={spaces} />
     </Page>
-  );
-}
-
-export function Onboarding({ onDone }: { onDone(): void }) {
-  const [name, setName] = useState('');
-  return (
-    <div className="desktop">
-      <form
-        className="window welcome"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (await attempt(() => bridge.init(name).then(() => true))) onDone();
-        }}
-      >
-        <div className="title-bar">
-          <div className="title-bar-text">Welcome to Weave</div>
-        </div>
-        <div className="window-body">
-          <div className="welcome-head">
-            <WeaveMark size={48} />
-            <p>Your space, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
-          </div>
-          <div className="field-row-stacked">
-            <label htmlFor="welcome-name">What should people call you?</label>
-            <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="buttons">
-            <button className="default">Create my space</button>
-          </div>
-        </div>
-      </form>
-    </div>
   );
 }
 

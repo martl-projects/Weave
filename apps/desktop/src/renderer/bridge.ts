@@ -9,7 +9,9 @@ export interface AppState {
 
 interface Bridge {
   state(): Promise<AppState>;
-  init(name: string): Promise<void>;
+  /** Create the identity; resolves to the recovery words, shown once. */
+  init(name: string): Promise<string | undefined>;
+  restore(words: string): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
 }
@@ -27,6 +29,9 @@ declare global {
  */
 const webBridge: Bridge = {
   state: () => fetch('/state').then((r) => r.json()),
+  restore: async () => {
+    throw new Error('restore with "weave restore" when using the web preview');
+  },
   init: async () => {
     throw new Error('create your identity with "weave init" when using the web preview');
   },

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { MembershipRequestInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
+import { KeysView, Onboarding } from './keys.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, bridge, bump, isActive, isUnread, navigate, shortDid, useApi, useRoute, useTick, type AppState } from './lib.ts';
 import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
@@ -17,7 +18,6 @@ import {
   LonePost,
   NewDialog,
   NotConnected,
-  Onboarding,
   Page,
   PeopleView,
   ProjectHome,
@@ -344,7 +344,7 @@ function Shell() {
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
+  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', keys: 'Keys & devices', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
@@ -358,6 +358,7 @@ function Shell() {
     else if (route[0] === 'space') center = <SpaceView who={route[1]} meDid={me.did} />;
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} />;
+    else if (route[0] === 'keys') center = <KeysView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
     else if (route[0] === 'saved')
@@ -410,6 +411,7 @@ function Shell() {
             { label: 'Inbox', onClick: () => navigate('#/inbox') },
             { label: 'People', onClick: () => navigate('#/people') },
             { label: 'My space', onClick: () => navigate('#/space') },
+            { label: 'Keys & devices', onClick: () => navigate('#/keys') },
             'sep',
             { label: 'Refresh', onClick: bump },
           ]}

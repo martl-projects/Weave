@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
-import { createIdentity, ensureDaemon, hasIdentity, type RunningDaemon } from './daemon.ts';
+import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
@@ -44,7 +44,14 @@ const unreachable = (error: unknown) => /ECONNREFUSED|ECONNRESET|socket hang up/
 ipcMain.handle('weave:state', () => ({ home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined }));
 
 ipcMain.handle('weave:init', async (_event, name: string) => {
-  if (!hasIdentity(home)) await createIdentity(home, name);
+  const words = hasIdentity(home) ? undefined : await createIdentity(home, name);
+  if (!daemon) await connect();
+  return words;
+});
+
+ipcMain.handle('weave:restore', async (_event, words: string) => {
+  if (hasIdentity(home)) throw new Error('this computer already has an identity');
+  await restoreIdentity(home, words);
   if (!daemon) await connect();
 });
 

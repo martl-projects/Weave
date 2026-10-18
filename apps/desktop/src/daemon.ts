@@ -16,8 +16,21 @@ const NODE = process.env.WEAVE_NODE ?? 'node';
 
 export const hasIdentity = (home: Home): boolean => existsSync(home.identity);
 
-export async function createIdentity(home: Home, name: string): Promise<void> {
-  await promisify(execFile)(NODE, [CLI, '--home', home.dir, 'init', name]);
+/** Create the identity; returns the 24 recovery words to show once. */
+export async function createIdentity(home: Home, name: string): Promise<string> {
+  const { stdout } = await promisify(execFile)(NODE, [CLI, '--home', home.dir, '--json', 'init', name]);
+  return (JSON.parse(stdout) as { words: string }).words;
+}
+
+/** Set this computer up as another device of an identity; the words go in on stdin, never on the command line. */
+export function restoreIdentity(home: Home, words: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(NODE, [CLI, '--home', home.dir, 'restore'], { timeout: 60_000 }, (error, _stdout, stderr) => {
+      if (error) reject(new Error(stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message));
+      else resolve();
+    });
+    child.stdin?.end(words);
+  });
 }
 
 export interface RunningDaemon {

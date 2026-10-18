@@ -5,6 +5,7 @@ import type { FeedItem } from '@weave/node/client';
 contextBridge.exposeInMainWorld('weave', {
   state: () => ipcRenderer.invoke('weave:state'),
   init: (name: string) => ipcRenderer.invoke('weave:init', name),
+  restore: (words: string) => ipcRenderer.invoke('weave:restore', words),
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('weave:call', method, args),
   onEvent: (listener: (item: FeedItem) => void) => {
     ipcRenderer.on('weave:event', (_event, item: FeedItem) => listener(item));
