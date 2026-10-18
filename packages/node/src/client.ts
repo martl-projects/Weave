@@ -1,5 +1,26 @@
 import { request as httpRequest } from 'node:http';
-import type { AgentInfo, Backend, EdgeInput, FeedItem, FeedQuery, GroupInfo, MemberInfo, Profile, ProfileInput, PublishInput, Social, Status, Whoami } from './backend.ts';
+import type { Choice, IssueStatus } from '@weave/core';
+import type {
+  AgentInfo,
+  Backend,
+  EdgeInput,
+  FeedItem,
+  FeedQuery,
+  GroupInfo,
+  InGroup,
+  IssueInfo,
+  MemberInfo,
+  MessageInfo,
+  Profile,
+  ProfileInput,
+  ProposalInfo,
+  PublishInput,
+  ReplyInfo,
+  Social,
+  Status,
+  ThreadInfo,
+  Whoami,
+} from './backend.ts';
 import { readJson, type Home } from './home.ts';
 
 export interface DaemonInfo {
@@ -124,6 +145,60 @@ export class ApiClient implements Backend {
 
   directory(): Promise<Profile[]> {
     return this.#request('GET', '/directory');
+  }
+
+  threads(group: string): Promise<ThreadInfo[]> {
+    return this.#request('GET', `/threads?${new URLSearchParams({ group })}`);
+  }
+
+  startThread(input: InGroup & { title: string; text?: string }): Promise<ThreadInfo> {
+    return this.#request('POST', '/threads', input);
+  }
+
+  reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
+    return this.#request('POST', '/replies', input);
+  }
+
+  messages(group: string, limit?: number): Promise<MessageInfo[]> {
+    const params = new URLSearchParams({ group });
+    if (limit !== undefined) params.set('limit', String(limit));
+    return this.#request('GET', `/messages?${params}`);
+  }
+
+  say(input: InGroup & { text: string }): Promise<MessageInfo> {
+    return this.#request('POST', '/messages', input);
+  }
+
+  issues(group: string): Promise<IssueInfo[]> {
+    return this.#request('GET', `/issues?${new URLSearchParams({ group })}`);
+  }
+
+  openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
+    return this.#request('POST', '/issues', input);
+  }
+
+  claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo> {
+    return this.#request('POST', '/issues/claim', input);
+  }
+
+  setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo> {
+    return this.#request('POST', '/issues/status', input);
+  }
+
+  proposals(group: string): Promise<ProposalInfo[]> {
+    return this.#request('GET', `/proposals?${new URLSearchParams({ group })}`);
+  }
+
+  propose(input: InGroup & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
+    return this.#request('POST', '/proposals', input);
+  }
+
+  vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo> {
+    return this.#request('POST', '/votes', input);
+  }
+
+  async delegateVote(input: { group: string; who?: string }): Promise<void> {
+    await this.#request('POST', '/votes/delegate', input);
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {

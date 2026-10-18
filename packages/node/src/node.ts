@@ -1,5 +1,6 @@
 import {
   b64u,
+  CHOICES,
   currentEpoch,
   decodeInvite,
   delegation,
@@ -13,20 +14,33 @@ import {
   groupState,
   groupTopic,
   isDid,
+  ISSUE_STATUSES,
+  issuesOf,
   KIND_BLOCK,
   KIND_FOLLOW,
   KIND_GROUP_CREATE,
   KIND_INVITE,
+  KIND_ISSUE,
+  KIND_ISSUE_CLAIM,
+  KIND_ISSUE_STATUS,
   KIND_JOIN,
+  KIND_MSG,
   KIND_MUTE,
+  KIND_PROPOSAL,
   KIND_REKEY,
   KIND_REMOVE,
+  KIND_REPLY,
   KIND_SEALED,
+  KIND_THREAD,
+  KIND_VOTE,
+  KIND_VOTE_DELEGATE,
+  messagesOf,
   newGroup,
   open,
   openGroupEvent,
   openRekey,
   permits,
+  proposalsOf,
   randomBytes,
   rekey,
   Replica,
@@ -34,32 +48,47 @@ import {
   sealForGroup,
   selfKey,
   socialGraph,
+  threadsOf,
   visibleIn,
+  type Choice,
   type Did,
   type EdgeEvent,
+  type Entry,
   type EventFields,
   type GroupState,
   type Inner,
+  type Issue,
+  type IssueStatus,
   type Json,
+  type Proposal,
+  type Reply,
   type Sealed,
   type SigningIdentity,
+  type Thread,
   type WeaveEvent,
 } from '@weave/core';
 import { SwarmNode } from '@weave/net';
 import type {
+  Actor,
   AgentInfo,
   Backend,
   EdgeInput,
   FeedItem,
   FeedQuery,
   GroupInfo,
+  InGroup,
+  IssueInfo,
   MemberInfo,
+  MessageInfo,
   Person,
   Profile,
   ProfileInput,
+  ProposalInfo,
   PublishInput,
+  ReplyInfo,
   Social,
   Status,
+  ThreadInfo,
   Whoami,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -96,6 +125,8 @@ export class WeaveNode implements Backend {
   #agents: AgentKey[];
   #groups = new Map<string, StoredGroup>();
   #swarm?: SwarmNode;
+  /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
+  #decoded?: Decoded[];
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
@@ -108,6 +139,7 @@ export class WeaveNode implements Backend {
     // Pick up new group keys handed to us, now and whenever they arrive.
     for (const event of this.replica.events((e) => e.kind === KIND_REKEY)) this.#takeRekey(event);
     this.replica.onAppend((event) => {
+      this.#decoded = undefined;
       if (event.kind === KIND_REKEY) this.#takeRekey(event);
     });
   }
@@ -373,6 +405,90 @@ export class WeaveNode implements Backend {
     return sanitizeTheme(theme);
   }
 
+  // ---------------------------------------------------------------- working together
+
+  async threads(groupRef: string): Promise<ThreadInfo[]> {
+    return threadsOf(this.#entries(this.#group(groupRef))).map((t) => this.#threadInfo(t));
+  }
+
+  async startThread(input: InGroup & { title: string; text?: string }): Promise<ThreadInfo> {
+    if (!input.title?.trim()) throw new Error('a thread needs a title');
+    const { id } = await this.publish({ kind: KIND_THREAD, body: { title: input.title.trim(), text: input.text ?? '' }, group: input.group, as: input.as });
+    return (await this.threads(input.group)).find((t) => t.id === id)!;
+  }
+
+  async reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
+    if (!input.text?.trim()) throw new Error('a reply needs text');
+    const target = this.#find(input.target, [KIND_THREAD, KIND_ISSUE, KIND_PROPOSAL]);
+    const item = await this.publish({ kind: KIND_REPLY, body: { target: target.id, text: input.text.trim() }, group: target.group?.id, as: input.as });
+    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
+  }
+
+  async messages(groupRef: string, limit = 200): Promise<MessageInfo[]> {
+    return messagesOf(this.#entries(this.#group(groupRef)))
+      .slice(-limit)
+      .map((m) => ({ id: m.id, by: this.#actor(m.author, m.signer), text: m.text, time: m.time }));
+  }
+
+  async say(input: InGroup & { text: string }): Promise<MessageInfo> {
+    if (!input.text?.trim()) throw new Error('a message needs text');
+    const item = await this.publish({ kind: KIND_MSG, body: { text: input.text.trim() }, group: input.group, as: input.as });
+    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
+  }
+
+  async issues(groupRef: string): Promise<IssueInfo[]> {
+    return issuesOf(this.#entries(this.#group(groupRef))).map((i) => this.#issueInfo(i));
+  }
+
+  async openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
+    if (!input.title?.trim()) throw new Error('an issue needs a title');
+    const body = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
+    const { id } = await this.publish({ kind: KIND_ISSUE, body, group: input.group, as: input.as });
+    return (await this.issues(input.group)).find((i) => i.id === id)!;
+  }
+
+  async claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo> {
+    const issue = this.#find(input.issue, [KIND_ISSUE]);
+    await this.publish({ kind: KIND_ISSUE_CLAIM, body: { issue: issue.id }, group: issue.group?.id, as: input.as });
+    return this.#issueById(issue);
+  }
+
+  async setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo> {
+    if (!ISSUE_STATUSES.includes(input.status)) throw new Error(`status must be one of ${ISSUE_STATUSES.join(', ')}`);
+    const issue = this.#find(input.issue, [KIND_ISSUE]);
+    await this.publish({ kind: KIND_ISSUE_STATUS, body: { issue: issue.id, status: input.status }, group: issue.group?.id, as: input.as });
+    return this.#issueById(issue);
+  }
+
+  async proposals(groupRef: string): Promise<ProposalInfo[]> {
+    const group = this.#group(groupRef);
+    const members = new Set(this.#groupState(group).members.keys());
+    return proposalsOf(this.#entries(group), members).map((p) => this.#proposalInfo(p));
+  }
+
+  async propose(input: InGroup & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
+    if (!input.title?.trim()) throw new Error('a proposal needs a title');
+    const deadline = new Date(Date.now() + (input.hours ?? 72) * 3600_000).toISOString();
+    const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', deadline };
+    if (input.quorum) body.quorum = input.quorum;
+    const { id } = await this.publish({ kind: KIND_PROPOSAL, body, group: input.group, as: input.as });
+    return (await this.proposals(input.group)).find((p) => p.id === id)!;
+  }
+
+  async vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo> {
+    if (!CHOICES.includes(input.choice)) throw new Error(`vote ${CHOICES.join(', ')}`);
+    const proposal = this.#find(input.proposal, [KIND_PROPOSAL]);
+    if (!proposal.group) throw new Error('votes happen inside groups');
+    await this.publish({ kind: KIND_VOTE, body: { proposal: proposal.id, choice: input.choice }, group: proposal.group.id, as: input.as });
+    return (await this.proposals(proposal.group.id)).find((p) => p.id === proposal.id)!;
+  }
+
+  async delegateVote(input: { group: string; who?: string }): Promise<void> {
+    const to = input.who ? this.resolve(input.who) : null;
+    if (to === this.identity.author) throw new Error('you cannot delegate to yourself');
+    await this.publish({ kind: KIND_VOTE_DELEGATE, body: { to }, group: input.group });
+  }
+
   /** A did:key, or the name of someone whose profile this node has seen. */
   resolve(who: string): Did {
     if (isDid(who)) return who;
@@ -413,6 +529,7 @@ export class WeaveNode implements Backend {
   }
 
   #saveGroup(group: StoredGroup): void {
+    this.#decoded = undefined;
     this.#groups.set(group.id, group);
     saveGroup(this.home, group);
   }
@@ -477,10 +594,11 @@ export class WeaveNode implements Backend {
   }
 
   #decodeAll(): Decoded[] {
-    return this.replica.events().flatMap((event) => {
+    this.#decoded ??= this.replica.events().flatMap((event) => {
       const decoded = this.#decode(event);
       return decoded ? [decoded] : [];
     });
+    return this.#decoded;
   }
 
   #graph() {
@@ -494,6 +612,80 @@ export class WeaveNode implements Backend {
   #hiddenAuthors(): Set<Did> {
     const mine = this.#graph().get(this.identity.author);
     return new Set([...(mine?.blocked ?? []), ...(mine?.muted ?? [])]);
+  }
+
+  /** A group's readable events from members, as entries for the collaboration functions. */
+  #entries(group: StoredGroup): Entry[] {
+    const state = this.#groupState(group);
+    return this.#decodeAll()
+      .filter((d) => d.group?.id === group.id && visibleIn(state, d.event, d.inner))
+      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+  }
+
+  /** An event by full id or a unique prefix (at least 6 characters), limited to some kinds. */
+  #find(ref: string, kinds: string[]): Decoded & { id: string } {
+    if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
+    const matches = this.#decodeAll()
+      .filter((d) => kinds.includes(d.inner.kind))
+      .map((d) => ({ ...d, id: eventId(d.event) }))
+      .filter((d) => d.id.startsWith(ref));
+    if (matches.length === 0) throw new Error(`nothing found with id ${ref}`);
+    if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
+    return matches[0];
+  }
+
+  async #issueById(issue: Decoded & { id: string }): Promise<IssueInfo> {
+    if (!issue.group) throw new Error('issues live inside groups');
+    return (await this.issues(issue.group.id)).find((i) => i.id === issue.id)!;
+  }
+
+  #actor(author: Did, signer: Did): Actor {
+    const actor: Actor = { did: author };
+    const name = this.nameOf(author);
+    if (name) actor.name = name;
+    if (signer !== author) {
+      const agent = this.replica.authority.grant(signer)?.name;
+      if (agent) actor.agent = agent;
+    }
+    return actor;
+  }
+
+  #replyInfo = (r: Reply): ReplyInfo => ({ id: r.id, by: this.#actor(r.author, r.signer), text: r.text, time: r.time });
+
+  #threadInfo(t: Thread): ThreadInfo {
+    return { id: t.id, short: t.id.slice(0, 8), by: this.#actor(t.author, t.signer), title: t.title, text: t.text, time: t.time, active: t.active, replies: t.replies.map(this.#replyInfo) };
+  }
+
+  #issueInfo(i: Issue): IssueInfo {
+    return {
+      id: i.id,
+      short: i.id.slice(0, 8),
+      by: this.#actor(i.author, i.signer),
+      title: i.title,
+      text: i.text,
+      labels: i.labels,
+      status: i.status,
+      ...(i.assignee ? { assignee: this.#actor(i.assignee.author, i.assignee.signer) } : {}),
+      time: i.time,
+      replies: i.replies.map(this.#replyInfo),
+    };
+  }
+
+  #proposalInfo(p: Proposal): ProposalInfo {
+    const { votes, ...t } = p.tally;
+    const mine = votes.get(this.identity.author);
+    return {
+      id: p.id,
+      short: p.id.slice(0, 8),
+      by: this.#actor(p.author, p.signer),
+      title: p.title,
+      text: p.text,
+      deadline: p.deadline,
+      time: p.time,
+      ...t,
+      ...(mine ? { myVote: { choice: mine.choice, ...(mine.via ? { via: this.#actor(mine.via, mine.via) } : {}) } } : {}),
+      replies: p.replies.map(this.#replyInfo),
+    };
   }
 
   #toItem({ event, inner, group, private: isPrivate }: Decoded): FeedItem {

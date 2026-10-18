@@ -1,4 +1,27 @@
-export type { AgentInfo, Backend, Edge, EdgeInput, FeedItem, FeedQuery, GroupInfo, MemberInfo, Person, Profile, ProfileInput, PublishInput, Social, Status, Whoami } from './backend.ts';
+export type {
+  Actor,
+  AgentInfo,
+  Backend,
+  Edge,
+  EdgeInput,
+  FeedItem,
+  FeedQuery,
+  GroupInfo,
+  InGroup,
+  IssueInfo,
+  MemberInfo,
+  MessageInfo,
+  Person,
+  Profile,
+  ProfileInput,
+  ProposalInfo,
+  PublishInput,
+  ReplyInfo,
+  Social,
+  Status,
+  ThreadInfo,
+  Whoami,
+} from './backend.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { ApiClient, connectDaemon, type DaemonInfo } from './client.ts';
 export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';

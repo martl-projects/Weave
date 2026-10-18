@@ -1,4 +1,4 @@
-import type { Did, Json } from '@weave/core';
+import type { Choice, Did, IssueStatus, Json } from '@weave/core';
 import type { Theme } from './theme.ts';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
@@ -107,6 +107,80 @@ export interface ProfileInput {
   theme?: Partial<Theme>;
 }
 
+/** Who did something: the person, and the agent if one acted for them. */
+export interface Actor {
+  did: Did;
+  name?: string;
+  agent?: string;
+}
+
+export interface ReplyInfo {
+  id: string;
+  by: Actor;
+  text: string;
+  time: string;
+}
+
+export interface ThreadInfo {
+  id: string;
+  /** First characters of the id; enough to refer to it in the CLI. */
+  short: string;
+  by: Actor;
+  title: string;
+  text: string;
+  time: string;
+  active: string;
+  replies: ReplyInfo[];
+}
+
+export interface MessageInfo {
+  id: string;
+  by: Actor;
+  text: string;
+  time: string;
+}
+
+export interface IssueInfo {
+  id: string;
+  short: string;
+  by: Actor;
+  title: string;
+  text: string;
+  labels: string[];
+  status: IssueStatus;
+  assignee?: Actor;
+  time: string;
+  replies: ReplyInfo[];
+}
+
+export interface ProposalInfo {
+  id: string;
+  short: string;
+  by: Actor;
+  title: string;
+  text: string;
+  deadline: string;
+  time: string;
+  yes: number;
+  no: number;
+  abstain: number;
+  voted: number;
+  eligible: number;
+  quorum: number;
+  quorumReached: boolean;
+  closed: boolean;
+  passed: boolean;
+  /** How your vote counts: directly, or through the member you delegated to. */
+  myVote?: { choice: Choice; via?: Actor };
+  replies: ReplyInfo[];
+}
+
+/** Common to everything you can post into a group: the group, and optionally an agent to sign with. */
+export interface InGroup {
+  group: string;
+  as?: string;
+}
+
 export interface Social {
   following: Person[];
   followers: Person[];
@@ -158,4 +232,23 @@ export interface Backend {
   setProfile(input: ProfileInput): Promise<Profile>;
   /** Everyone whose profile this node has seen, yourself excluded. */
   directory(): Promise<Profile[]>;
+
+  threads(group: string): Promise<ThreadInfo[]>;
+  startThread(input: InGroup & { title: string; text?: string }): Promise<ThreadInfo>;
+  /** Reply to a thread, issue or proposal (full or short id); it lands in the same group. */
+  reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
+
+  messages(group: string, limit?: number): Promise<MessageInfo[]>;
+  say(input: InGroup & { text: string }): Promise<MessageInfo>;
+
+  issues(group: string): Promise<IssueInfo[]>;
+  openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo>;
+  claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
+  setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
+
+  proposals(group: string): Promise<ProposalInfo[]>;
+  propose(input: InGroup & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo>;
+  vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo>;
+  /** Let someone's votes in this group count for you when you don't vote; `who` undefined clears it. */
+  delegateVote(input: { group: string; who?: string }): Promise<void>;
 }

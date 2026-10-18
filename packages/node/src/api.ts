@@ -82,6 +82,35 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
       return send(res, 200, await backend.setProfile(await readBody(req)));
     case 'GET /v1/directory':
       return send(res, 200, await backend.directory());
+    case 'GET /v1/threads':
+      return send(res, 200, await backend.threads(url.searchParams.get('group') ?? ''));
+    case 'POST /v1/threads':
+      return send(res, 200, await backend.startThread(await readBody(req)));
+    case 'POST /v1/replies':
+      return send(res, 200, await backend.reply(await readBody(req)));
+    case 'GET /v1/messages': {
+      const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
+      return send(res, 200, await backend.messages(url.searchParams.get('group') ?? '', limit));
+    }
+    case 'POST /v1/messages':
+      return send(res, 200, await backend.say(await readBody(req)));
+    case 'GET /v1/issues':
+      return send(res, 200, await backend.issues(url.searchParams.get('group') ?? ''));
+    case 'POST /v1/issues':
+      return send(res, 200, await backend.openIssue(await readBody(req)));
+    case 'POST /v1/issues/claim':
+      return send(res, 200, await backend.claimIssue(await readBody(req)));
+    case 'POST /v1/issues/status':
+      return send(res, 200, await backend.setIssueStatus(await readBody(req)));
+    case 'GET /v1/proposals':
+      return send(res, 200, await backend.proposals(url.searchParams.get('group') ?? ''));
+    case 'POST /v1/proposals':
+      return send(res, 200, await backend.propose(await readBody(req)));
+    case 'POST /v1/votes':
+      return send(res, 200, await backend.vote(await readBody(req)));
+    case 'POST /v1/votes/delegate':
+      await backend.delegateVote(await readBody(req));
+      return send(res, 200, { ok: true });
     case 'GET /v1/social':
       return send(res, 200, await backend.social());
     case 'POST /v1/publish':
