@@ -3,6 +3,8 @@ import type { EventFields, WeaveEvent } from './events.ts';
 
 export const KIND_DELEGATE = 'weave.delegate';
 export const KIND_REVOKE = 'weave.revoke';
+/** An encrypted event; its real kind is inside and is checked by whoever can decrypt it. */
+export const KIND_SEALED = 'weave.sealed';
 
 /** Kinds only a root identity may sign itself. */
 const ROOT_ONLY = new Set([KIND_DELEGATE, KIND_REVOKE]);
@@ -83,6 +85,9 @@ export class Authority {
     if (grant.revokedAfter !== undefined && event.seq > grant.revokedAfter) {
       return { ok: false, reason: 'signer revoked', retry: false };
     }
+    // Relays can't see a sealed event's kind; any delegated key may carry one, and
+    // readers drop the event after decrypting if its inner kind isn't permitted.
+    if (event.kind === KIND_SEALED && grant.permissions.length > 0) return { ok: true };
     if (!permits(grant.permissions, event.kind)) {
       return { ok: false, reason: `signer may not sign ${event.kind}`, retry: false };
     }
