@@ -7,9 +7,9 @@ import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast } from './
 
 // ---------------------------------------------------------------- names and links
 
-const PREFIX: Record<SpaceRef['kind'], string> = { community: 'r', project: 'p', group: 'g' };
+const PREFIX: Record<SpaceRef['kind'], string> = { community: 'r', project: 'p', group: 'g', direct: 'd' };
 
-export const spaceLabel = (s: Pick<SpaceRef, 'kind' | 'name'>) => `${PREFIX[s.kind]}/${s.name}`;
+export const spaceLabel = (s: Pick<SpaceRef, 'kind' | 'name'>) => (s.kind === 'direct' ? `@${s.name}` : `${PREFIX[s.kind]}/${s.name}`);
 export const spaceHref = (s: Pick<SpaceRef, 'kind' | 'id'>) => `#/${PREFIX[s.kind]}/${s.id}`;
 
 export function postHref(p: PostInfo): string {
@@ -17,6 +17,15 @@ export function postHref(p: PostInfo): string {
   if (p.space?.kind === 'community') return `#/r/${p.space.id}/post/${p.id}`;
   if (p.space?.kind === 'project') return `#/p/${p.space.id}/b/${p.board}/${p.id}`;
   return `#/post/${p.id}`;
+}
+
+/** Open (or start) the direct chat with a friend. */
+export async function startChat(did: string): Promise<void> {
+  const chat = await attempt(() => api<SpaceInfo>('openChat', did));
+  if (chat) {
+    bump();
+    navigate(`#/d/${chat.id}`);
+  }
 }
 
 export const actorName = (a: Actor, meDid: string) => (a.did === meDid && !a.agent ? 'you' : (a.name ?? shortDid(a.did)));

@@ -264,6 +264,31 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     run(async ({ space }: { space: string }) => backend.boards(space)),
   );
 
+  // ---------------------------------------------------------------- direct chats
+
+  server.registerTool(
+    'weave_chats',
+    {
+      title: 'Direct chats',
+      description: "The person's direct chats with friends, most recent first. Read one with weave_chat (space = the chat's space id).",
+      annotations: { readOnlyHint: true },
+    },
+    run(async () => (await backend.chats()).map((c) => ({ space: c.space.id, with: c.peer.name ?? c.peer.did, friend: c.friend, last: c.last }))),
+  );
+
+  server.registerTool(
+    'weave_dm',
+    {
+      title: 'Message a friend',
+      description: 'Send a direct message to a friend (someone the person follows who follows back). Signed as this agent, so the friend sees it came from the agent.',
+      inputSchema: { who: z.string().describe('Name or did:key'), text: z.string().min(1), reply_to: z.string().min(6).optional() },
+    },
+    run(async ({ who, text, reply_to }: { who: string; text: string; reply_to?: string }) => {
+      const chat = await backend.openChat(who);
+      return backend.say({ space: chat.id, text, replyTo: reply_to, as });
+    }),
+  );
+
   // ---------------------------------------------------------------- discussion and chat
 
   server.registerTool(

@@ -65,5 +65,18 @@ export function openBox(secretKey: Uint8Array, publicKey: Uint8Array, box: Box):
 const boxKey = (shared: Uint8Array, epk: Uint8Array, recipientX: Uint8Array): Uint8Array =>
   sha256(concat(utf8('weave/box-key/v1'), shared, epk, recipientX));
 
+/**
+ * A key two identities share without ever exchanging it: each side combines its
+ * own secret key with the other's public key (X25519), so both arrive at the
+ * same value. Used for direct chats between friends.
+ */
+export function pairKey(secretKey: Uint8Array, publicKey: Uint8Array, peer: Did): Uint8Array {
+  const mine = ed25519.utils.toMontgomery(publicKey);
+  const theirs = ed25519.utils.toMontgomery(publicKeyFromDid(peer));
+  const shared = x25519.getSharedSecret(ed25519.utils.toMontgomerySecret(secretKey), theirs);
+  const [a, b] = [mine, theirs].sort((x, y) => b64u.encode(x).localeCompare(b64u.encode(y)));
+  return sha256(concat(utf8('weave/pair-key/v1'), shared, a, b));
+}
+
 /** Key for encrypting things only your own nodes may read (private follows, blocks, mutes). */
 export const selfKey = (secretKey: Uint8Array): Uint8Array => sha256(concat(utf8('weave/self-key/v1'), secretKey));

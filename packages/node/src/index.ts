@@ -5,6 +5,7 @@ export type {
   Backend,
   BoardInfo,
   ChannelInfo,
+  ChatInfo,
   CommunityInfo,
   Edge,
   EdgeInput,

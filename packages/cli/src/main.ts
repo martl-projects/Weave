@@ -91,6 +91,11 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board drop <name>          remove a board; its posts stay in the logs
   pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
 
+direct chats with friends (people you follow who follow you back):
+  chats                      your chats, most recent first
+  dm <who>                   read your chat with a friend     [-n <count>]
+  dm <who> <text...>         send them a message              [--reply <id>]
+
 chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
   chat                       recent messages            [-c <channel>] [-n <count>]
   say <text...>              send a message             [-c <channel>] [--reply <id>]
@@ -203,7 +208,7 @@ function needSpace(): string {
   return space;
 }
 
-const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', group: 'g' }[p.space.kind]}/${p.space.name}${p.board && p.space.kind === 'project' ? `/${p.board}` : ''}` : `u/${p.by.name ?? p.by.did.slice(8, 20)}`);
+const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', group: 'g', direct: '@' }[p.space.kind]}/${p.space.name}${p.board && p.space.kind === 'project' ? `/${p.board}` : ''}` : `u/${p.by.name ?? p.by.did.slice(8, 20)}`);
 const postLine = (p: PostInfo) => {
   const vote = p.myVote > 0 ? '▲' : p.myVote < 0 ? '▼' : ' ';
   const marks = [p.pinned && 'pinned', p.saved === 'pinned' ? 'on your home' : p.saved, p.issue && `[${p.issue.status}]`, p.proposal && (p.proposal.closed ? (p.proposal.passed ? '[passed]' : '[rejected]') : '[voting]')].filter(Boolean).join(' ');
@@ -246,7 +251,7 @@ function line(item: FeedItem): string {
   const time = new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const body = typeof item.body === 'string' ? item.body : (item.body as { text?: unknown } | null)?.text ?? JSON.stringify(item.body);
   const kind = item.kind === 'weave.post' ? '' : `[${item.kind}] `;
-  const place = item.space ? `${{ group: 'g', project: 'p', community: 'r' }[item.space.kind]}/${item.space.name} ` : item.private ? '(private) ' : '';
+  const place = item.space ? `${{ group: 'g', project: 'p', community: 'r', direct: '@' }[item.space.kind]}/${item.space.name} ` : item.private ? '(private) ' : '';
   return `${time}  ${who(item).padEnd(20)}  ${place}${kind}${body}`;
 }
 
@@ -628,6 +633,28 @@ async function main(): Promise<void> {
       if (!target || !words.length) throw new Error('usage: weave reply <id> <text...>');
       const r = await (await backend()).reply({ target, text: words.join(' '), as: values.as });
       return out(r, () => `replied as ${actor(r.by)}`);
+    }
+
+    case 'chats': {
+      const chats = await (await backend()).chats();
+      return out(chats, () =>
+        chats
+          .map((c) => `${(c.peer.name ?? c.peer.did).padEnd(20)} ${c.last ? `${c.last.mine ? 'you: ' : ''}${c.last.text.slice(0, 60)}` : '(no messages yet)'}${c.friend ? '' : '  (no longer friends)'}`)
+          .join('\n') || '(no friends yet: follow people who follow you back)',
+      );
+    }
+
+    case 'dm': {
+      const [person, ...words] = args;
+      if (!person) throw new Error('usage: weave dm <who> [text...]');
+      const b = await backend();
+      const chat = await b.openChat(person);
+      if (words.length) {
+        const m = await b.say({ space: chat.id, text: words.join(' '), replyTo: values.reply, as: values.as });
+        return out(m, () => `to ${chat.name}: ${m.text}`);
+      }
+      const messages = await b.messages(chat.id, { limit: values.n ? Number(values.n) : 30 });
+      return out(messages, () => messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${m.short}  ${actor(m.by).padEnd(16)}  ${m.text}`).join('\n') || `(no messages with ${chat.name} yet)`);
     }
 
     case 'chat': {

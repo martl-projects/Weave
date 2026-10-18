@@ -15,12 +15,13 @@ export {
 export { Authority, delegation, KIND_DELEGATE, KIND_REVOKE, KIND_SEALED, permits, revocation, type Check, type Grant, type Role } from './authority.ts';
 export { MemoryStore, type LogStore } from './store.ts';
 export { Replica, type IngestResult } from './replica.ts';
-export { boxTo, open, openBox, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
+export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {
   canManage,
   canonicalKind,
   currentEpoch,
   decodeInvite,
+  directSpace,
   encodeInvite,
   gift,
   KIND_ADMIT,

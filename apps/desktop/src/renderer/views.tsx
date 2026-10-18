@@ -3,7 +3,7 @@ import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, MemberInfo, 
 import { ChatView } from './chat.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useApi } from './lib.ts';
-import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, SubmitDialog, VoteBox } from './posts.tsx';
+import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
 
 const textOf = (item: FeedItem): string => {
@@ -132,6 +132,11 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           </div>
           {!p.me && (
             <div className="space-actions">
+              {p.following && p.followsMe && (
+                <button className="default" onClick={() => startChat(p.did)}>
+                  <Icon name="message" /> Message
+                </button>
+              )}
               {edge('follow', !p.following, p.following ? 'Unfollow' : 'Follow')}
               {edge('mute', !p.muted, p.muted ? 'Unmute' : 'Mute')}
               {edge('block', !p.blocked, p.blocked ? 'Unblock' : 'Block')}
@@ -304,6 +309,11 @@ export function PeopleView() {
                 {p.contact && <span className="tag">in your contacts</span>}
               </div>
             </div>
+            {p.following && p.followsMe && (
+              <button onClick={() => startChat(p.did)}>
+                <Icon name="message" /> Message
+              </button>
+            )}
             <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>{p.following ? 'Unfollow' : 'Follow'}</AsyncButton>
           </div>
         ))}

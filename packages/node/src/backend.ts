@@ -181,6 +181,16 @@ export interface PostsQuery {
   limit?: number;
 }
 
+/** A direct chat with a friend. */
+export interface ChatInfo {
+  /** The chat as a space: use its id with messages, say and react. */
+  space: SpaceInfo;
+  peer: Person;
+  /** Still friends; if not, the chat is read-only. */
+  friend: boolean;
+  last?: { text: string; time: string; mine: boolean };
+}
+
 /** Someone a project's maintainers are asked about. */
 export interface Admission {
   project: SpaceRef;
@@ -439,6 +449,12 @@ export interface Backend {
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
   addContact(link: string): Promise<Profile>;
 
+  // direct chats between friends
+  /** Your direct chats: every friend, and anyone you've written to, most recent first. */
+  chats(): Promise<ChatInfo[]>;
+  /** The direct chat with a friend (someone you follow who follows you back). */
+  openChat(who: string): Promise<SpaceInfo>;
+
   // chat, in channels and in posts
   channels(space: string): Promise<ChannelInfo[]>;
   createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
@@ -476,6 +492,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
+  'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',
   'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',

@@ -11,6 +11,7 @@ import {
   currentEpoch,
   decodeContact,
   decodeInvite,
+  directSpace,
   DEFAULT_CHANNEL,
   delegation,
   edgeBody,
@@ -84,6 +85,7 @@ import {
   threadsOf,
   visibleIn,
   type Board,
+  type Member,
   type BoardType,
   type Choice,
   type Did,
@@ -118,6 +120,7 @@ import {
   type AgentInfo,
   type Backend,
   type BoardInfo,
+  type ChatInfo,
   type ChannelInfo,
   type CommunityInfo,
   type EdgeInput,
@@ -191,6 +194,9 @@ export class WeaveNode implements Backend {
   #releaseLock: () => void;
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
+  /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
+  #directs = new Map<string, { space: StoredSpace; peer: Did }>();
+  #directByPeer = new Map<Did, StoredSpace>();
   #contactCache?: { from: Decoded[]; map: Map<Did, string | undefined> };
 
   private constructor(home: Home, identity: SigningIdentity) {
@@ -238,6 +244,7 @@ export class WeaveNode implements Backend {
       topics.add(spaceTopic(space));
       for (const topic of space.entry.topics) topics.add(topic);
     }
+    for (const friend of this.#friends()) topics.add(spaceTopic(this.#direct(friend)));
     return [...topics];
   }
 
@@ -359,6 +366,7 @@ export class WeaveNode implements Backend {
   async invite(ref: string, hours = 24 * 7): Promise<string> {
     const space = this.#space(ref);
     const state = this.#state(space);
+    if (space.kind === 'direct') throw new Error('a direct chat is between two people; start a group to talk with more');
     const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
     if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
     const invite = b64u.encode(randomBytes(12));
@@ -405,7 +413,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (!canManage(state, this.identity.author)) {
-      throw new Error({ project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members' }[space.kind]);
+      throw new Error({ project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
     }
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
@@ -815,6 +823,37 @@ export class WeaveNode implements Backend {
       }));
   }
 
+  // ---------------------------------------------------------------- direct chats between friends
+
+  async chats(): Promise<ChatInfo[]> {
+    const friends = new Set(this.#friends());
+    this.#decodeAll();
+    const chats: ChatInfo[] = [];
+    for (const { space, peer } of this.#directs.values()) {
+      const messages = messagesOf(this.#entries(space));
+      const friend = friends.has(peer);
+      const wrote = messages.some((m) => m.author === this.identity.author);
+      if (!friend && !wrote) continue; // only friends can start a chat with you
+      const last = messages.at(-1);
+      chats.push({
+        space: this.#spaceInfo(space),
+        peer: { did: peer, name: this.nameOf(peer) },
+        friend,
+        ...(last ? { last: { text: last.text.slice(0, 140), time: last.time, mine: last.author === this.identity.author } } : {}),
+      });
+    }
+    return chats.sort((a, b) => (b.last?.time ?? '').localeCompare(a.last?.time ?? '') || (a.peer.name ?? a.peer.did).localeCompare(b.peer.name ?? b.peer.did));
+  }
+
+  async openChat(who: string): Promise<SpaceInfo> {
+    const peer = this.resolve(who);
+    if (peer === this.identity.author) throw new Error('that is you');
+    if (!this.#friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
+    const space = this.#direct(peer);
+    await this.#swarm?.join(spaceTopic(space));
+    return this.#spaceInfo(space);
+  }
+
   // ---------------------------------------------------------------- chat
 
   async channels(ref: string): Promise<ChannelInfo[]> {
@@ -846,6 +885,8 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { text };
     const chat = input.post ? await this.#chatOf(input.post) : undefined;
     const space = chat?.space ?? this.#space(input.space ?? '');
+    const peer = this.#directs.get(space.id)?.peer;
+    if (peer && !this.#friends().includes(peer)) throw new Error(`${this.nameOf(peer) ?? 'they'} and you aren't friends any more, so this chat is read-only`);
     if (chat?.post) body.post = chat.post;
     else {
       const channel = input.channel ? channelName(input.channel) : undefined;
@@ -995,7 +1036,7 @@ export class WeaveNode implements Backend {
 
   /** A space by id or name, optionally of one kind. */
   #space(ref: string, kind?: SpaceKind): StoredSpace {
-    const byId = this.#spaces.get(ref);
+    const byId = this.#spaces.get(ref) ?? (this.#decodeAll(), this.#directs.get(ref)?.space);
     if (byId && (!kind || byId.kind === kind)) return byId;
     const byName = [...this.#spaces.values()].filter((s) => (!kind || s.kind === kind) && s.name.toLowerCase() === ref.toLowerCase());
     if (byName.length === 1) return byName[0];
@@ -1136,6 +1177,12 @@ export class WeaveNode implements Backend {
   }
 
   #state(space: StoredSpace): SpaceState {
+    const direct = this.#directs.get(space.id);
+    if (direct) {
+      // Two people, no membership events: the key itself says who is in.
+      const member = (did: Did): [Did, Member] => [did, { did, since: '' }];
+      return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map() };
+    }
     const opened = this.#decodeAll().filter((d) => d.space?.id === space.id);
     return spaceState(space.kind, space.founder, opened);
   }
@@ -1158,12 +1205,41 @@ export class WeaveNode implements Backend {
     return {
       id: space.id,
       kind: space.kind,
-      name: space.name,
+      name: this.#spaceName(space),
       founder: space.founder,
       founderName: this.nameOf(space.founder),
       members: this.#state(space).members.size,
       epoch: currentEpoch(space),
     };
+  }
+
+  /** A space's name; a direct chat is named after the other person. */
+  #spaceName(space: StoredSpace): string {
+    const peer = this.#directs.get(space.id)?.peer;
+    return peer ? (this.nameOf(peer) ?? `${peer.slice(8, 16)}…`) : space.name;
+  }
+
+  /** Friends: people I follow who follow me back. */
+  #friends(): Did[] {
+    return friendsOf(this.#graph(), this.identity.author);
+  }
+
+  /** The direct chat with someone, derived once and remembered for this run. */
+  #direct(peer: Did): StoredSpace {
+    let space = this.#directByPeer.get(peer);
+    if (!space) {
+      space = { ...directSpace(this.identity, peer), entry: { topics: [peer], bootstrap: [] } };
+      this.#directByPeer.set(peer, space);
+      this.#directs.set(space.id, { space, peer });
+    }
+    return space;
+  }
+
+  /** Derive the direct chats with everyone whose log we hold (people, not their agents' keys). */
+  #ensureDirects(): void {
+    for (const author of Object.keys(this.replica.heads()) as Did[]) {
+      if (author !== this.identity.author && !this.#directByPeer.has(author) && !this.replica.authority.grant(author)) this.#direct(author);
+    }
   }
 
   // ---------------------------------------------------------------- internals: posts
@@ -1339,7 +1415,13 @@ export class WeaveNode implements Backend {
         return undefined;
       }
     } else {
-      const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
+      const scope = parseScope(event.scope);
+      let space = this.#spaces.get(scope?.id ?? '') ?? this.#directs.get(scope?.id ?? '')?.space;
+      // A direct message from someone new: their chat with us is the one derived from their key.
+      if (!space && scope?.kind === 'direct' && event.author !== this.identity.author && !this.replica.authority.grant(event.author)) {
+        const candidate = this.#direct(event.author);
+        if (candidate.id === scope.id) space = candidate;
+      }
       const inner = space && openIn(space, event);
       if (!inner) return undefined;
       decoded = { event, inner, space };
@@ -1353,6 +1435,7 @@ export class WeaveNode implements Backend {
   }
 
   #decodeAll(): Decoded[] {
+    if (!this.#decoded) this.#ensureDirects();
     this.#decoded ??= this.replica.events().flatMap((event) => {
       const decoded = this.#decode(event);
       return decoded ? [decoded] : [];
@@ -1494,7 +1577,7 @@ export class WeaveNode implements Backend {
       const signerName = this.replica.authority.grant(event.signer)?.name;
       if (signerName) item.signerName = signerName;
     }
-    if (space) item.space = { id: space.id, kind: space.kind, name: space.name };
+    if (space) item.space = { id: space.id, kind: space.kind, name: this.#spaceName(space) };
     if (isPrivate) item.private = true;
     return item;
   }

@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { KIND_SEALED } from './authority.ts';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
-import { boxTo, open, openBox, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
+import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
 import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
 import { isDid, type Did } from './keys.ts';
 
@@ -11,6 +11,8 @@ import { isDid, type Did } from './keys.ts';
  *   group      a collection of people with their own chat; can be invited into projects
  *   project    something being built: a post with chat and boards (issues, ideas, releases, …)
  *   community  a board of posts that people join, like a subreddit, with its own chat
+ *   direct     a chat between two friends; its key is derived from their two identities,
+ *              so it needs no invite, and it has no membership events
  *
  * All use the same machinery (v1): a shared symmetric key per epoch; removing
  * someone starts a new epoch whose key is boxed to everyone who stays. MLS
@@ -43,7 +45,7 @@ export const KIND_RULE = 'weave.project.rule';
 export const KIND_ADMIT = 'weave.project.admit';
 export const KIND_DECLINE = 'weave.project.decline';
 
-export const SPACE_KINDS = ['group', 'project', 'community'] as const;
+export const SPACE_KINDS = ['group', 'project', 'community', 'direct'] as const;
 export type SpaceKind = (typeof SPACE_KINDS)[number];
 const isSpaceKind = (kind: unknown): kind is SpaceKind => SPACE_KINDS.includes(kind as SpaceKind);
 
@@ -94,6 +96,17 @@ export function newSpace(kind: SpaceKind, name: string, founder: Did): SpaceKeys
     secret: b64u.encode(randomBytes(32)),
     keys: { '0': b64u.encode(randomBytes(32)) },
   };
+}
+
+/**
+ * The direct chat between `me` and `peer`. Both of them derive the same space
+ * (id, topic secret and key) on their own; nobody else can.
+ */
+export function directSpace(me: SigningIdentity, peer: Did): SpaceKeys {
+  const key = pairKey(me.keys.secretKey, me.keys.publicKey, peer);
+  const derive = (label: string) => b64u.encode(sha256(new Uint8Array([...utf8(`weave/direct/${label}/v1`), ...key])));
+  const [first] = [me.author, peer].sort();
+  return { kind: 'direct', id: derive('id').slice(0, 22), name: '', founder: first, secret: derive('topic'), keys: { '0': b64u.encode(key) } };
 }
 
 export const currentEpoch = (space: SpaceKeys): number => Math.max(...Object.keys(space.keys).map(Number));
@@ -163,7 +176,7 @@ export function openGift(event: WeaveEvent, me: SigningIdentity): { space: Space
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: SpaceKeys; entry?: Invite['entry'] };
     const space = opened.space;
-    if (!space || !isSpaceKind(space.kind) || !isDid(space.founder) || !space.keys) return undefined;
+    if (!space || !isSpaceKind(space.kind) || space.kind === 'direct' || !isDid(space.founder) || !space.keys) return undefined;
     return { space, entry: opened.entry ?? { topics: [], bootstrap: [] } };
   } catch {
     return undefined;
@@ -200,7 +213,7 @@ export function decodeInvite(text: string): Invite {
     throw new Error('invite is damaged');
   }
   const s = invite?.space;
-  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
+  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
     throw new Error('invite is damaged or from an older Weave version');
   }
   if (Date.parse(invite.expires) < Date.now()) throw new Error('invite has expired');

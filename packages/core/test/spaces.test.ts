@@ -5,6 +5,7 @@ import {
   createSubKey,
   decodeInvite,
   delegation,
+  directSpace,
   edgeBody,
   encodeInvite,
   friendsOf,
@@ -196,6 +197,19 @@ describe('spaces', () => {
       ...opened().slice(1),
     ]);
     expect([...legacy.members.keys()]).toEqual([founder.did, bob.did]);
+  });
+
+  it('derives the same direct chat on both sides, and nobody else can', () => {
+    const [ada, bob, eve] = [createIdentity(), createIdentity(), createIdentity()];
+    const fromAda = directSpace(ada, bob.did);
+    const fromBob = directSpace(bob, ada.did);
+    expect(fromAda).toEqual(fromBob);
+    expect(fromAda.kind).toBe('direct');
+    expect(directSpace(eve, bob.did).keys['0']).not.toBe(fromAda.keys['0']);
+    const replica = new Replica();
+    const sealed = replica.append(ada, sealFor(fromAda, { kind: 'weave.msg', body: { text: 'hi Bob' } }));
+    expect(openIn(fromBob, sealed)?.body).toEqual({ text: 'hi Bob' });
+    expect(openIn({ ...directSpace(eve, ada.did), id: fromAda.id }, sealed)).toBeUndefined();
   });
 
   it('drops sealed events whose inner kind a delegated agent may not sign', () => {

@@ -233,7 +233,7 @@ function Composer({
           ref={area}
           rows={1}
           value={text}
-          placeholder={post ? 'Chat about this post…' : `Message #${channel}`}
+          placeholder={post ? 'Chat about this post…' : space.kind === 'direct' ? `Message @${space.name}` : `Message #${channel}`}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -305,7 +305,12 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
       <div className="chat-scroll" ref={setScroller}>
         {messages && rows.length === 0 && (
           <div className="channel-intro">
-            {post ? (
+            {space.kind === 'direct' ? (
+              <>
+                <h2>{space.name}</h2>
+                <p className="muted">This is the start of your chat with {space.name}. It's end-to-end encrypted: only the two of you can read it.</p>
+              </>
+            ) : post ? (
               <p className="muted">No messages yet. Start the conversation: only {space.kind === 'project' ? 'participants' : 'members'} of {space.name} can read it.</p>
             ) : (
               <>

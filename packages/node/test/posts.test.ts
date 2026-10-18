@@ -35,6 +35,41 @@ describe('contact links', () => {
   });
 });
 
+describe('direct chats', () => {
+  it('lets friends chat privately, without any setup, and keeps everyone else out', async () => {
+    const martin = person('Martin');
+    const ada = person('Ada');
+    const eve = person('Eve');
+    await expect(martin.openChat(ada.identity.did)).rejects.toThrow(/friends/);
+    await martin.setEdge({ edge: 'follow', who: ada.identity.did, on: true });
+    await ada.setEdge({ edge: 'follow', who: martin.identity.did, on: true });
+    sync(martin, ada);
+    sync(ada, martin);
+
+    const chat = await martin.openChat('Ada');
+    expect(chat).toMatchObject({ kind: 'direct', name: 'Ada', members: 2 });
+    await martin.say({ space: chat.id, text: 'Hey Ada, coffee later?' });
+    sync(martin, ada);
+    sync(martin, eve);
+
+    const [adas] = await ada.chats();
+    expect(adas).toMatchObject({ space: { id: chat.id, name: 'Martin' }, peer: { name: 'Martin' }, friend: true, last: { text: 'Hey Ada, coffee later?', mine: false } });
+    const hey = (await ada.messages(adas.space.id))[0];
+    await ada.say({ space: adas.space.id, text: 'Yes! ☕', replyTo: hey.short });
+    sync(ada, martin);
+    expect((await martin.messages(chat.id)).map((m) => m.text)).toEqual(['Hey Ada, coffee later?', 'Yes! ☕']);
+
+    expect(await eve.chats()).toEqual([]); // Eve holds the events but can't read them
+    expect((await eve.feed({ limit: 100 })).some((i) => i.kind === 'weave.msg')).toBe(false);
+    expect((await martin.spaces()).some((s) => s.kind === 'direct')).toBe(false); // chats aren't listed as spaces
+
+    await ada.setEdge({ edge: 'follow', who: martin.identity.did, on: false });
+    sync(ada, martin);
+    expect((await martin.chats())[0].friend).toBe(false);
+    await expect(martin.say({ space: chat.id, text: 'hello?' })).rejects.toThrow(/read-only/);
+  });
+});
+
 describe('posts, boards and communities', () => {
   it('treats a project as a post with boards, and turns issue and proposal boards into work and votes', async () => {
     const node = person('Martin');

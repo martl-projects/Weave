@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { Admission, BoardInfo, ChannelInfo, MemberInfo, PostInfo, Profile, SpaceInfo, Status } from '@weave/node/client';
+import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, bridge, bump, isActive, isUnread, navigate, shortDid, useApi, useRoute, useTick, type AppState } from './lib.ts';
@@ -27,11 +27,11 @@ type Dialog = { kind: 'new' } | { kind: 'invite'; space: SpaceInfo } | { kind: '
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, label, on, unread, badge, depth = 0 }: { href: string; icon?: IconName; sprite?: string; label: ReactNode; on: boolean; unread?: boolean; badge?: number; depth?: number }) {
+function TreeLink({ href, icon, sprite, face, label, on, unread, badge, depth = 0 }: { href: string; icon?: IconName; sprite?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; depth?: number }) {
   return (
     <li style={{ paddingLeft: depth * 14 }}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
-        {sprite ? <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
+        {sprite ? <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
         {!!badge && <span className="badge">{badge}</span>}
       </a>
@@ -74,7 +74,8 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   );
 }
 
-function Places({ spaces, route, waiting, onNew }: { spaces: SpaceInfo[]; route: string[]; waiting: Admission[]; onNew(): void }) {
+function Places({ spaces, chats, route, waiting, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; onNew(): void }) {
+  useTick(); // unread state lives in localStorage
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
     const list = spaces.filter((s) => s.kind === kind);
     return (
@@ -99,6 +100,21 @@ function Places({ spaces, route, waiting, onNew }: { spaces: SpaceInfo[]; route:
         <TreeLink href="#/saved" icon="bookmark" label="Saved" on={route[0] === 'saved'} />
         <TreeLink href="#/inbox" icon="inbox" label={`Inbox${waiting.length ? ` (${waiting.length})` : ''}`} on={route[0] === 'inbox'} />
         <TreeLink href="#/people" icon="users" label="People" on={route[0] === 'people'} />
+        <li className="tree-head">
+          <Icon name="message" /> Chats
+        </li>
+        {chats.map((c) => (
+          <TreeLink
+            key={c.space.id}
+            href={`#/d/${c.space.id}`}
+            sprite={c.peer.did}
+            face
+            label={c.peer.name ?? shortDid(c.peer.did)}
+            on={route[0] === 'd' && route[1] === c.space.id}
+            unread={!!c.last && !c.last.mine && route[1] !== c.space.id && isUnread(`${c.space.id}/general`, c.last.time)}
+          />
+        ))}
+        {chats.length === 0 && <li className="tree-none">friends show up here</li>}
         {section('community', 'Communities', 'community')}
         {section('project', 'Projects', 'zap')}
         {section('group', 'Groups', 'users')}
@@ -257,6 +273,34 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   );
 }
 
+/** A direct chat with a friend: just the chat, Discord-DM style. */
+function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
+  const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
+  const name = chat.peer.name ?? shortDid(chat.peer.did);
+  return (
+    <div className="center">
+      {!chat.friend && (
+        <div className="notice">
+          <Icon name="lock" /> You and {name} aren't friends any more, so this chat is read-only.
+        </div>
+      )}
+      <section className="pane-main">
+        <header className="pane-head">
+          <b>
+            <Icon name="message" /> @{name}
+          </b>
+          <span className="pane-tools">
+            <button onClick={() => navigate(`#/space/${encodeURIComponent(chat.peer.did)}`)}>
+              <Icon name="user" /> Space
+            </button>
+          </span>
+        </header>
+        <ChatView space={chat.space} channel="general" meDid={me.did} meName={me.name} members={members ?? []} />
+      </section>
+    </div>
+  );
+}
+
 function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: SpaceInfo[] }) {
   const { data, error } = useApi(() => api<PostInfo>('post', id), [id]);
   if (error) return <Page title="Post">{error}</Page>;
@@ -289,19 +333,23 @@ function Shell() {
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
   const { data: waiting } = useApi(() => api<Admission[]>('admissions'), []);
+  const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const [dialog, setDialog] = useState<Dialog>();
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
-  const where = space ? spaceLabel(space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
+  const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
+  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
   let body: ReactNode;
   if (space) body = <SpaceScreen space={space} spaces={spaces} route={route} me={me} waiting={waiting ?? []} open={setDialog} />;
+  else if (chat) body = <DirectScreen chat={chat} me={me} />;
   else {
     let center: ReactNode;
-    if (['p', 'g', 'r'].includes(route[0])) center = <Page title="Not here">You're not in this {({ p: 'project', g: 'group', r: 'community' } as Record<string, string>)[route[0]]}.</Page>;
+    if (route[0] === 'd') center = <Page title="Chat">{chats ? 'This chat is not here.' : null}</Page>;
+    else if (['p', 'g', 'r'].includes(route[0])) center = <Page title="Not here">You're not in this {({ p: 'project', g: 'group', r: 'community' } as Record<string, string>)[route[0]]}.</Page>;
     else if (route[0] === 'space') center = <SpaceView who={route[1]} meDid={me.did} />;
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} />;
@@ -395,7 +443,7 @@ function Shell() {
         </div>
       </div>
       <div className="panes">
-        <Places spaces={spaces} route={route} waiting={waiting ?? []} onNew={() => setDialog({ kind: 'new' })} />
+        <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} onNew={() => setDialog({ kind: 'new' })} />
         {body}
       </div>
       <div className="status-bar">

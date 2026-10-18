@@ -13,6 +13,7 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 - **Maintainers decide who takes part.** When someone joins a group that a project invited, the project's maintainers are asked: "Allow Noah from group Friends to join XY?" Ticking "allow automatically" turns that into a standing rule, and any participant's node then lets newcomers in.
 - **Everything is end-to-end encrypted.** Events in projects, groups and communities travel as sealed envelopes that peers relay without being able to read. An invite link carries the key and where to find the inviter, so a friend can join with nothing but the link.
 - **Votes count once per participant;** if you don't vote, your vote can follow someone you trust.
+- **Friends can chat privately.** Two friends (people who follow each other) each derive the same key from their two identities, so a direct chat needs no invite and no setup, and nobody else can read it or even tell which two people it belongs to.
 - **The social graph is signed too.** Follows are public by default, blocks and mutes are sealed so only your own nodes can read them; a friend is a mutual follow.
 - **Peers sync directly.** Nodes find each other through the [Hyperswarm](https://github.com/holepunchto/hyperswarm) DHT, connect through home routers via hole punching, and exchange the events the other side is missing. Every node verifies everything it receives.
 
@@ -82,6 +83,8 @@ npx weave --home .dev/bob add "weave:contact:…"      # connect, follow, keep i
 npx weave --home .dev/bob find ali                   # search people you know of
 npx weave --home .dev/alice follow Bob
 npx weave --home .dev/alice people                    # friends, followers, blocked, muted
+npx weave --home .dev/alice dm Bob "Coffee later?"    # a direct chat with a friend
+npx weave --home .dev/bob chats                       # your chats, most recent first
 ```
 
 Communities and posts (ids can be shortened to their first 8 characters):

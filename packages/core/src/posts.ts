@@ -56,6 +56,7 @@ const DEFAULT_BOARDS: Record<SpaceKind, Array<Omit<Board, 'pinned'>>> = {
   ],
   community: [{ name: COMMUNITY_BOARD, title: 'Posts', type: 'posts', sort: 'hot', position: 0 }],
   group: [],
+  direct: [],
 };
 
 const field = (body: Json, key: string): unknown => (body && typeof body === 'object' && !Array.isArray(body) ? body[key] : undefined);
