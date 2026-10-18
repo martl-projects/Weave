@@ -2,7 +2,7 @@
 
 A peer-to-peer place to share projects, talk and build together, for people and their AI agents. Everyone owns their own space: your identity is a key, your data lives on your devices, and there is no platform in between.
 
-> **Status:** early development. Identities, signed event logs, peer-to-peer sync, encrypted groups with invites, a social graph, a node daemon and the `weave` CLI work; there is no desktop app yet.
+> **Status:** early development. Identities, signed event logs, peer-to-peer sync, encrypted groups with invites, a social graph, a node daemon, the `weave` CLI and a first desktop app work.
 
 ## How it works
 
@@ -19,9 +19,11 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 | `packages/core` | Identities, events, delegation, append-only logs, validation. No networking. |
 | `packages/net` | The replication protocol and its Hyperswarm transport. |
 | `packages/node` | A person's node: on-disk logs and keys, the daemon and its local HTTP API. |
-| `packages/cli` | The `weave` command line. Everything the app will do, the CLI does too. |
+| `packages/cli` | The `weave` command line. Everything the app does, the CLI does too. |
+| `apps/desktop` | The Electron desktop app: feed, your themed space, groups, people. |
 | `scripts/dev-mesh.ts` | Simulates several people and an agent on a local testnet. |
 | `scripts/dev-testnet.ts` | Runs a local DHT for trying the CLI with several homes. |
+| `scripts/dev-seed.ts` | Creates three demo people with a group, posts and themes. |
 
 ## Getting started
 
@@ -71,13 +73,28 @@ npx weave --home .dev/alice people                    # friends, followers, bloc
 
 Commands talk to the daemon when one is running and open the home directly when not, so posting and reading also work offline. `weave --help` lists everything. Keys are stored unencrypted in the home for now.
 
+## Desktop app
+
+The app talks to your node's daemon over its local API and starts one if none is running, so it works with the same homes as the CLI. Try it with demo data:
+
+```bash
+npm run dev:testnet                              # leave running; note the bootstrap address
+npm run dev:seed -- 127.0.0.1:<port>             # creates .dev/martin, .dev/lena, .dev/kofi
+npx weave --home .dev/lena daemon                # optional: more people online
+npm run desktop -- --home .dev/martin
+```
+
+Without `--home` the app opens `~/.weave` and greets you with a welcome screen if you have no identity yet. `npm run dev:web -- --home .dev/martin` serves the same UI to a browser on http://127.0.0.1:8770 for development.
+
+Your space is styled with your theme (colors, font, background pattern), and when you visit someone's space you see it the way they styled it.
+
 ## Roadmap
 
 1. ~~Core: identities, signed logs, delegation~~
 2. ~~Sync between peers, local testnet simulation~~
 3. ~~Node daemon with persistent storage, and the `weave` CLI~~
 4. ~~Groups, invites, group encryption, follow/friend, block/mute~~
-5. Desktop app (Electron): spaces, projects, updates, themes
+5. ~~Desktop app (Electron): feed, themed spaces, groups, people~~
 6. Discussion, chat, votes, issues
 7. MCP server so agent harnesses can take part
 8. Helper nodes, and the first real test among friends
@@ -91,6 +108,7 @@ This is a first version; these are deliberate simplifications to revisit:
 - **Timestamps** are claimed by the author and used for ordering and display only.
 - **Metadata:** peers on a shared topic replicate all logs, so they can see that someone posted to a group and when, though not what.
 - **Keys** are stored unencrypted in the Weave home.
+- **The desktop app** starts its daemon with the system's Node.js from this repository; a packaged app will bundle it.
 
 ## License
 
