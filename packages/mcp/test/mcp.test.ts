@@ -62,6 +62,17 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('lets the agent react and reply in channels', async () => {
+    const { node, call, close } = await setup(['weave.msg', 'weave.react']);
+    const hello = await node.say({ group: 'Weave', text: 'can someone check the build?' });
+    await call('weave_react', { target: hello.short, emoji: '👀' });
+    await call('weave_say', { group: 'Weave', text: 'on it', reply_to: hello.short });
+    const [first, second] = await node.messages('Weave');
+    expect(first.reactions[0]).toMatchObject({ emoji: '👀', by: ['Martin · forge'] });
+    expect(second).toMatchObject({ text: 'on it', replyTo: { id: hello.id } });
+    close();
+  });
+
   it('reports permission errors as tool errors', async () => {
     const { node, call, close } = await setup();
     const proposal = await node.propose({ group: 'Weave', title: 'Ship it' });

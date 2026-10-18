@@ -1,6 +1,9 @@
 import {
   b64u,
+  channelName,
+  channelsOf,
   CHOICES,
+  DEFAULT_CHANNEL,
   currentEpoch,
   decodeInvite,
   delegation,
@@ -17,6 +20,7 @@ import {
   ISSUE_STATUSES,
   issuesOf,
   KIND_BLOCK,
+  KIND_CHANNEL,
   KIND_FOLLOW,
   KIND_GROUP_CREATE,
   KIND_INVITE,
@@ -27,6 +31,7 @@ import {
   KIND_MSG,
   KIND_MUTE,
   KIND_PROPOSAL,
+  KIND_REACT,
   KIND_REKEY,
   KIND_REMOVE,
   KIND_REPLY,
@@ -60,7 +65,9 @@ import {
   type Issue,
   type IssueStatus,
   type Json,
+  type Message,
   type Proposal,
+  type Reaction,
   type Reply,
   type Sealed,
   type SigningIdentity,
@@ -72,6 +79,7 @@ import type {
   Actor,
   AgentInfo,
   Backend,
+  ChannelInfo,
   EdgeInput,
   FeedItem,
   FeedQuery,
@@ -85,6 +93,7 @@ import type {
   ProfileInput,
   ProposalInfo,
   PublishInput,
+  ReactionInfo,
   ReplyInfo,
   Social,
   Status,
@@ -319,12 +328,23 @@ export class WeaveNode implements Backend {
   }
 
   async members(groupRef: string): Promise<MemberInfo[]> {
-    const state = this.#groupState(this.#group(groupRef));
+    const group = this.#group(groupRef);
+    const state = this.#groupState(group);
+    const lastActive = new Map<Did, string>();
+    const agents = new Map<Did, Set<string>>();
+    for (const entry of this.#entries(group)) {
+      const { author, signer, time } = entry.event;
+      if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
+      const agent = signer !== author ? this.replica.authority.grant(signer)?.name : undefined;
+      if (agent) agents.set(author, (agents.get(author) ?? new Set()).add(agent));
+    }
     return [...state.members.values()].map((m) => ({
       did: m.did,
       name: this.nameOf(m.did),
       since: m.since,
       ...(m.invitedBy ? { invitedBy: m.invitedBy, invitedByName: this.nameOf(m.invitedBy) } : {}),
+      ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
+      agents: [...(agents.get(m.did) ?? [])],
     }));
   }
 
@@ -433,16 +453,46 @@ export class WeaveNode implements Backend {
     return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
   }
 
-  async messages(groupRef: string, limit = 200): Promise<MessageInfo[]> {
-    return messagesOf(this.#entries(this.#group(groupRef)))
-      .slice(-limit)
-      .map((m) => ({ id: m.id, by: this.#actor(m.author, m.signer), text: m.text, time: m.time }));
+  async channels(groupRef: string): Promise<ChannelInfo[]> {
+    return channelsOf(this.#entries(this.#group(groupRef)));
   }
 
-  async say(input: InGroup & { text: string }): Promise<MessageInfo> {
-    if (!input.text?.trim()) throw new Error('a message needs text');
-    const item = await this.publish({ kind: KIND_MSG, body: { text: input.text.trim() }, group: input.group, as: input.as });
-    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
+  async createChannel(input: InGroup & { name: string; topic?: string }): Promise<ChannelInfo> {
+    const name = channelName(input.name);
+    if (!name) throw new Error('channel names use letters, digits and dashes');
+    if ((await this.channels(input.group)).some((c) => c.name === name)) throw new Error(`#${name} already exists`);
+    await this.publish({ kind: KIND_CHANNEL, body: { name, topic: input.topic ?? '' }, group: input.group, as: input.as });
+    return (await this.channels(input.group)).find((c) => c.name === name)!;
+  }
+
+  async messages(groupRef: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
+    const entries = this.#entries(this.#group(groupRef));
+    const all = messagesOf(entries);
+    const byId = new Map(all.map((m) => [m.id, m]));
+    const channel = options.channel ? channelName(options.channel) ?? DEFAULT_CHANNEL : undefined;
+    return all
+      .filter((m) => !channel || m.channel === channel)
+      .slice(-(options.limit ?? 200))
+      .map((m) => this.#messageInfo(m, byId));
+  }
+
+  async say(input: InGroup & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
+    const text = input.text?.trim();
+    if (!text) throw new Error('a message needs text');
+    const body: Record<string, Json> = { text };
+    const channel = input.channel ? channelName(input.channel) : undefined;
+    if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
+    if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
+    if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG]).id;
+    const { id } = await this.publish({ kind: KIND_MSG, body, group: input.group, as: input.as });
+    return (await this.messages(input.group)).find((m) => m.id === id)!;
+  }
+
+  async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
+    const emoji = input.emoji?.trim();
+    if (!emoji || emoji.length > 16) throw new Error('react with one emoji');
+    const target = this.#find(input.target, [KIND_MSG, 'weave.post', KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
+    await this.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, group: target.group?.id, as: input.as });
   }
 
   async issues(groupRef: string): Promise<IssueInfo[]> {
@@ -673,6 +723,30 @@ export class WeaveNode implements Backend {
       if (agent) actor.agent = agent;
     }
     return actor;
+  }
+
+  #reactionInfo = (r: Reaction): ReactionInfo => ({
+    emoji: r.emoji,
+    count: r.by.length,
+    mine: r.by.some((who) => who.author === this.identity.author),
+    by: r.by.map((who) => {
+      const actor = this.#actor(who.author, who.signer);
+      return `${actor.name ?? actor.did.slice(8, 16)}${actor.agent ? ` · ${actor.agent}` : ''}`;
+    }),
+  });
+
+  #messageInfo(m: Message, byId: Map<string, Message>): MessageInfo {
+    const parent = m.replyTo ? byId.get(m.replyTo) : undefined;
+    return {
+      id: m.id,
+      short: m.id.slice(0, 8),
+      by: this.#actor(m.author, m.signer),
+      text: m.text,
+      time: m.time,
+      channel: m.channel,
+      ...(parent ? { replyTo: { id: parent.id, by: this.#actor(parent.author, parent.signer), text: parent.text.slice(0, 140) } } : {}),
+      reactions: m.reactions.map(this.#reactionInfo),
+    };
   }
 
   #replyInfo = (r: Reply): ReplyInfo => ({ id: r.id, by: this.#actor(r.author, r.signer), text: r.text, time: r.time });

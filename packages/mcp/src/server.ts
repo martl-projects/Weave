@@ -13,6 +13,8 @@ export interface InboxItem {
   short: string;
   kind: string;
   group?: string;
+  /** Chat channel, for messages. */
+  channel?: string;
   by: string;
   text: string;
   time: string;
@@ -73,6 +75,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         short: item.id.slice(0, 8),
         kind: item.kind,
         ...(item.group ? { group: item.group.name } : {}),
+        ...(item.kind === 'weave.msg' ? { channel: ((item.body as { channel?: string } | null)?.channel ?? 'general') } : {}),
         by: `${item.authorName ?? item.author}${item.signerName ? ` (agent ${item.signerName})` : ''}`,
         text,
         time: item.time,
@@ -201,14 +204,44 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
 
   server.registerTool(
     'weave_chat',
-    { title: 'Read chat', description: 'Recent chat messages in a group, oldest first.', inputSchema: { group: z.string(), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
-    run(async ({ group, limit }: { group: string; limit?: number }) => backend.messages(group, limit ?? 50)),
+    {
+      title: 'Read chat',
+      description: 'Recent chat messages in a group, oldest first, with replies and reactions. Omit channel for all channels.',
+      inputSchema: { group: z.string(), channel: z.string().optional(), limit: z.number().int().min(1).max(200).optional() },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ group, channel, limit }: { group: string; channel?: string; limit?: number }) => backend.messages(group, { channel, limit: limit ?? 50 })),
   );
 
   server.registerTool(
     'weave_say',
-    { title: 'Send a chat message', description: 'Send a short chat message to a group.', inputSchema: { group: z.string(), text: z.string().min(1) } },
-    run(async ({ group, text }: { group: string; text: string }) => backend.say({ group, text, as })),
+    {
+      title: 'Send a chat message',
+      description: 'Send a short chat message to a group channel (default "general"), optionally as a reply to a message id.',
+      inputSchema: { group: z.string(), text: z.string().min(1), channel: z.string().optional(), reply_to: z.string().min(6).optional() },
+    },
+    run(async ({ group, text, channel, reply_to }: { group: string; text: string; channel?: string; reply_to?: string }) =>
+      backend.say({ group, text, channel, replyTo: reply_to, as }),
+    ),
+  );
+
+  server.registerTool(
+    'weave_channels',
+    { title: 'Chat channels', description: 'The chat channels of a group.', inputSchema: { group: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ group }: { group: string }) => backend.channels(group)),
+  );
+
+  server.registerTool(
+    'weave_react',
+    {
+      title: 'React with an emoji',
+      description: 'React to a message, post, thread, reply, issue or proposal with an emoji, e.g. 👀 when you start on something and ✅ when it is done. Set on to false to take a reaction back.',
+      inputSchema: { target: z.string().min(6), emoji: z.string().min(1).max(16), on: z.boolean().optional() },
+    },
+    run(async ({ target, emoji, on }: { target: string; emoji: string; on?: boolean }) => {
+      await backend.react({ target, emoji, on, as });
+      return { ok: true };
+    }),
   );
 
   // ---------------------------------------------------------------- issues

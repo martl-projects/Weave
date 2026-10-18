@@ -90,8 +90,16 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
       return send(res, 200, await backend.reply(await readBody(req)));
     case 'GET /v1/messages': {
       const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
-      return send(res, 200, await backend.messages(url.searchParams.get('group') ?? '', limit));
+      const channel = url.searchParams.get('channel') ?? undefined;
+      return send(res, 200, await backend.messages(url.searchParams.get('group') ?? '', { channel, limit }));
     }
+    case 'GET /v1/channels':
+      return send(res, 200, await backend.channels(url.searchParams.get('group') ?? ''));
+    case 'POST /v1/channels':
+      return send(res, 200, await backend.createChannel(await readBody(req)));
+    case 'POST /v1/reactions':
+      await backend.react(await readBody(req));
+      return send(res, 200, { ok: true });
     case 'POST /v1/messages':
       return send(res, 200, await backend.say(await readBody(req)));
     case 'GET /v1/issues':

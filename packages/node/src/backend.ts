@@ -73,12 +73,31 @@ export interface GroupInfo {
   epoch: number;
 }
 
+export interface ReactionInfo {
+  emoji: string;
+  count: number;
+  /** You (or one of your agents) reacted with this. */
+  mine: boolean;
+  /** Display names of who reacted, agents as "Martin · forge". */
+  by: string[];
+}
+
+export interface ChannelInfo {
+  name: string;
+  topic: string;
+  last?: string;
+}
+
 export interface MemberInfo {
   did: Did;
   name?: string;
   invitedBy?: Did;
   invitedByName?: string;
   since: string;
+  /** Time of their latest event in the group. */
+  lastActive?: string;
+  /** Names of their agents seen acting in the group. */
+  agents: string[];
 }
 
 export interface Person {
@@ -135,9 +154,14 @@ export interface ThreadInfo {
 
 export interface MessageInfo {
   id: string;
+  short: string;
   by: Actor;
   text: string;
   time: string;
+  channel: string;
+  /** The message this one answers, if it is still known. */
+  replyTo?: { id: string; by: Actor; text: string };
+  reactions: ReactionInfo[];
 }
 
 export interface IssueInfo {
@@ -238,8 +262,12 @@ export interface Backend {
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same group. */
   reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
 
-  messages(group: string, limit?: number): Promise<MessageInfo[]>;
-  say(input: InGroup & { text: string }): Promise<MessageInfo>;
+  channels(group: string): Promise<ChannelInfo[]>;
+  createChannel(input: InGroup & { name: string; topic?: string }): Promise<ChannelInfo>;
+  messages(group: string, options?: { channel?: string; limit?: number }): Promise<MessageInfo[]>;
+  say(input: InGroup & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo>;
+  /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
+  react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void>;
 
   issues(group: string): Promise<IssueInfo[]>;
   openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo>;

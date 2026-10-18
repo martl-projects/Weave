@@ -46,8 +46,10 @@ working together in a group (ids: the first 8 characters are enough):
   thread list -g <group>              discussions, most active first
   thread show <id>                    a discussion with its replies
   reply <id> <text...>                reply to a thread, issue or proposal
-  chat -g <group>                     recent chat messages [-n <count>]
-  say <text...> -g <group>            send a chat message
+  chat -g <group>                     recent chat messages [-c <channel>] [-n <count>]
+  say <text...> -g <group>            send a chat message  [-c <channel>] [--reply <id>]
+  channels -g <group>                 chat channels; add one with: channels add <name> -g <group> [--text <topic>]
+  react <id> <emoji>                  react to a message, post, thread or issue; --off to take it back
   issue open <title> -g <group>       open an issue        [--text <t>] [--label a,b]
   issue list -g <group>               issues with status and assignee
   issue claim <id>                    take an issue on
@@ -81,6 +83,9 @@ const { values, positionals } = parseArgs({
     clear: { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
+    channel: { type: 'string', short: 'c' },
+    reply: { type: 'string' },
+    off: { type: 'boolean', default: false },
     group: { type: 'string', short: 'g' },
     hours: { type: 'string' },
     text: { type: 'string' },
@@ -305,17 +310,41 @@ async function main(): Promise<void> {
     }
 
     case 'chat': {
-      const messages = await (await backend()).messages(needGroup(), values.n ? Number(values.n) : 30);
+      const messages = await (await backend()).messages(needGroup(), { channel: values.channel, limit: values.n ? Number(values.n) : 30 });
       return out(messages, () =>
-        messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${actor(m.by).padEnd(20)}  ${m.text}`).join('\n') || '(quiet so far)',
+        messages
+          .map((m) => {
+            const time = new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const reply = m.replyTo ? `  ↪ ${actor(m.replyTo.by)}: ${m.replyTo.text.slice(0, 40)}\n` : '';
+            const reactions = m.reactions.length ? `  ${m.reactions.map((r) => `${r.emoji}${r.count}`).join(' ')}` : '';
+            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel ? '' : `#${m.channel} `}${m.text}${reactions}`;
+          })
+          .join('\n') || '(quiet so far)',
       );
     }
 
     case 'say': {
       const text = args.join(' ').trim();
       if (!text) throw new Error('usage: weave say <text...> -g <group>');
-      const m = await (await backend()).say({ group: needGroup(), text, as: values.as });
+      const m = await (await backend()).say({ group: needGroup(), text, channel: values.channel, replyTo: values.reply, as: values.as });
       return out(m, () => `${actor(m.by)}: ${m.text}`);
+    }
+
+    case 'channels': {
+      const b = await backend();
+      if (args[0] === 'add' && args[1]) {
+        const c = await b.createChannel({ group: needGroup(), name: args.slice(1).join(' '), topic: values.text, as: values.as });
+        return out(c, () => `created #${c.name}`);
+      }
+      const channels = await b.channels(needGroup());
+      return out(channels, () => channels.map((c) => `#${c.name}${c.topic ? `  — ${c.topic}` : ''}`).join('\n'));
+    }
+
+    case 'react': {
+      const [target, emoji] = args;
+      if (!target || !emoji) throw new Error('usage: weave react <id> <emoji> [--off]');
+      await (await backend()).react({ target, emoji, on: !values.off, as: values.as });
+      return out({ target, emoji, on: !values.off }, () => (values.off ? `took back ${emoji}` : `reacted ${emoji}`));
     }
 
     case 'issue': {

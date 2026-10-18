@@ -38,6 +38,27 @@ describe('working together in a group', () => {
     expect((await node.messages('Weave')).map((m) => m.text)).toEqual(['morning!', 'build is green']);
   });
 
+  it('chats in channels with replies and reactions from people and agents', async () => {
+    const node = await setup();
+    await node.addAgent('pixel', ['weave.msg', 'weave.react']);
+    await node.createChannel({ group: 'Weave', name: 'Build Log', topic: 'CI' });
+    const hello = await node.say({ group: 'Weave', text: 'hello' });
+    await node.say({ group: 'Weave', channel: 'build-log', text: 'green', as: 'pixel' });
+    await node.say({ group: 'Weave', text: 'hi back', replyTo: hello.short, as: 'pixel' });
+    await node.react({ target: hello.short, emoji: '🎉' });
+    await node.react({ target: hello.id, emoji: '🎉', as: 'pixel' });
+
+    expect((await node.channels('Weave')).map((c) => c.name)).toEqual(['general', 'build-log']);
+    const general = await node.messages('Weave', { channel: 'general' });
+    expect(general.map((m) => m.text)).toEqual(['hello', 'hi back']);
+    expect(general[0].reactions).toEqual([{ emoji: '🎉', count: 2, mine: true, by: ['Martin', 'Martin · pixel'] }]);
+    expect(general[1].replyTo).toMatchObject({ id: hello.id, text: 'hello' });
+    expect((await node.messages('Weave', { channel: 'build-log' }))[0].by.agent).toBe('pixel');
+    const forgeMembers = (await node.members('Weave'))[0];
+    expect(forgeMembers.agents).toEqual(['pixel']);
+    expect(forgeMembers.lastActive).toBeDefined();
+  });
+
   it('tracks issues claimed and finished by an agent', async () => {
     const node = await setup();
     const issue = await node.openIssue({ group: 'Weave', title: 'Encrypt keys at rest', labels: ['security'] });

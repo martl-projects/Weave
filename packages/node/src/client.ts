@@ -4,6 +4,7 @@ import type {
   Actor,
   AgentInfo,
   Backend,
+  ChannelInfo,
   EdgeInput,
   FeedItem,
   FeedQuery,
@@ -160,14 +161,27 @@ export class ApiClient implements Backend {
     return this.#request('POST', '/replies', input);
   }
 
-  messages(group: string, limit?: number): Promise<MessageInfo[]> {
+  channels(group: string): Promise<ChannelInfo[]> {
+    return this.#request('GET', `/channels?${new URLSearchParams({ group })}`);
+  }
+
+  createChannel(input: InGroup & { name: string; topic?: string }): Promise<ChannelInfo> {
+    return this.#request('POST', '/channels', input);
+  }
+
+  messages(group: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
     const params = new URLSearchParams({ group });
-    if (limit !== undefined) params.set('limit', String(limit));
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.channel) params.set('channel', options.channel);
     return this.#request('GET', `/messages?${params}`);
   }
 
-  say(input: InGroup & { text: string }): Promise<MessageInfo> {
+  say(input: InGroup & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
     return this.#request('POST', '/messages', input);
+  }
+
+  async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
+    await this.#request('POST', '/reactions', input);
   }
 
   issues(group: string): Promise<IssueInfo[]> {
