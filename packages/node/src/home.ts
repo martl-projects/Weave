@@ -8,7 +8,7 @@ import { dirname, join, resolve } from 'node:path';
  *
  *   identity.json   root key (plaintext for now — to be encrypted)
  *   agents/*.json   delegated agent keys
- *   groups/*.json   keys of groups you belong to (secret)
+ *   groups/*.json   keys of the groups and projects you belong to (secret)
  *   config.json     topics to join, bootstrap nodes
  *   logs/*.jsonl    one append-only file per signing key
  *   daemon.json     port and token of the running daemon

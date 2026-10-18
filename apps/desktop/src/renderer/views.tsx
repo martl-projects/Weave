@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import type { Actor, FeedItem, GroupInfo, IssueInfo, MemberInfo, Profile, ProposalInfo, Social, Theme, ThreadInfo } from '@weave/node/client';
+import type { Actor, Admission, FeedItem, IssueInfo, MemberInfo, Profile, ProjectInfo, ProjectStatus, ProposalInfo, Social, SpaceInfo, Theme, ThreadInfo } from '@weave/node/client';
 import { ago, api, applyAppTheme, bridge, bump, navigate, renderMarkdown, shortDid, themeVars, useApi } from './lib.ts';
 import { attempt, AsyncButton, Avatar, Modal, toast, WeaveMark } from './ui.tsx';
 
@@ -42,7 +42,7 @@ function useForm<T extends Record<string, string>>(initial: T) {
 
 // ---------------------------------------------------------------- posts
 
-function PostCard({ item, meDid, inGroup }: { item: FeedItem; meDid: string; inGroup?: boolean }) {
+function PostCard({ item, meDid, inSpace }: { item: FeedItem; meDid: string; inSpace?: boolean }) {
   return (
     <article className="card post">
       <a href={`#/space/${encodeURIComponent(item.author)}`}>
@@ -54,9 +54,9 @@ function PostCard({ item, meDid, inGroup }: { item: FeedItem; meDid: string; inG
             {item.author === meDid && !item.signerName ? 'You' : (item.authorName ?? shortDid(item.author))}
           </a>
           {item.signerName && <span className="agent-tag">{item.signerName} · AGENT</span>}
-          {item.group && !inGroup && (
-            <a className="badge group" href={`#/g/${item.group.id}`}>
-              {item.group.name}
+          {item.space && !inSpace && (
+            <a className="badge group" href={`#/${item.space.kind === 'project' ? 'p' : 'g'}/${item.space.id}`}>
+              {item.space.name}
             </a>
           )}
           <time>{ago(item.time)}</time>
@@ -67,24 +67,24 @@ function PostCard({ item, meDid, inGroup }: { item: FeedItem; meDid: string; inG
   );
 }
 
-function PostComposer({ groups, groupId }: { groups: GroupInfo[]; groupId?: string }) {
-  const { values, field, reset } = useForm({ text: '', group: groupId ?? '' });
+function PostComposer({ spaces, spaceId }: { spaces: SpaceInfo[]; spaceId?: string }) {
+  const { values, field, reset } = useForm({ text: '', space: spaceId ?? '' });
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!values.text.trim()) return;
-    const done = await attempt(() => api('publish', { kind: 'weave.post', body: { text: values.text }, group: values.group || undefined }));
+    const done = await attempt(() => api('publish', { kind: 'weave.post', body: { text: values.text }, space: values.space || undefined }));
     if (done) reset();
   };
   return (
     <form className="card composer-card" onSubmit={submit}>
       <textarea rows={2} placeholder="Share what you're working on…" {...field('text')} />
       <div className="row">
-        {groupId ? (
-          <span className="muted small">Only members of this group can read it.</span>
+        {spaceId ? (
+          <span className="muted small">Only participants can read it.</span>
         ) : (
-          <select {...field('group')}>
+          <select {...field('space')}>
             <option value="">Everyone (public)</option>
-            {groups.map((g) => (
+            {spaces.map((g) => (
               <option key={g.id} value={g.id}>
                 {g.name} (members only)
               </option>
@@ -97,26 +97,26 @@ function PostComposer({ groups, groupId }: { groups: GroupInfo[]; groupId?: stri
   );
 }
 
-export function FeedView({ groups, meDid }: { groups: GroupInfo[]; meDid: string }) {
+export function FeedView({ spaces, meDid }: { spaces: SpaceInfo[]; meDid: string }) {
   const { data } = useApi(() => api<FeedItem[]>('feed', { kinds: ['weave.post'], limit: 100 }), []);
   return (
-    <Page title="Feed" subtitle="Public posts from people you're connected with, and the posts in your groups.">
-      <PostComposer groups={groups} />
+    <Page title="Feed" subtitle="Public posts from people you're connected with, and the posts in your projects and groups.">
+      <PostComposer spaces={spaces} />
       <section className="stream">
         {[...(data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} />)}
-        {data?.length === 0 && <p className="empty">Nothing here yet. Post something, or join a group with an invite link.</p>}
+        {data?.length === 0 && <p className="empty">Nothing here yet. Post something, or join a project or group with an invite link.</p>}
       </section>
     </Page>
   );
 }
 
-export function GroupPosts({ group, groups, meDid }: { group: GroupInfo; groups: GroupInfo[]; meDid: string }) {
-  const { data } = useApi(() => api<FeedItem[]>('feed', { group: group.id, kinds: ['weave.post'], limit: 200 }), [group.id]);
+export function ProjectUpdates({ project, spaces, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; meDid: string }) {
+  const { data } = useApi(() => api<FeedItem[]>('feed', { space: project.id, kinds: ['weave.post'], limit: 200 }), [project.id]);
   return (
-    <Page title="Posts" subtitle="Updates and show-offs, for members of this group.">
-      <PostComposer groups={groups} groupId={group.id} />
+    <Page title="Updates" subtitle="Progress and show-offs, for everyone taking part.">
+      <PostComposer spaces={spaces} spaceId={project.id} />
       <section className="stream">
-        {[...(data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} inGroup />)}
+        {[...(data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} inSpace />)}
         {data?.length === 0 && <p className="empty">No posts yet.</p>}
       </section>
     </Page>
@@ -196,7 +196,7 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
   );
 }
 
-export function SpaceView({ who, groups, meDid }: { who?: string; groups: GroupInfo[]; meDid: string }) {
+export function SpaceView({ who, spaces, meDid }: { who?: string; spaces: SpaceInfo[]; meDid: string }) {
   const profile = useApi(() => api<Profile>('profile', who), [who]);
   const p = profile.data;
   const posts = useApi(() => (p ? api<FeedItem[]>('feed', { author: p.did, publicOnly: true, kinds: ['weave.post'], limit: 100 }) : Promise.resolve([])), [p?.did]);
@@ -241,7 +241,23 @@ export function SpaceView({ who, groups, meDid }: { who?: string; groups: GroupI
           )}
         </div>
       </header>
-      {p.me && <PostComposer groups={groups} />}
+      {p.projects.length > 0 && (
+        <section className="showcase">
+          <h3>Projects</h3>
+          <div className="project-cards">
+            {p.projects.map((project) => (
+              <article className="card project-card" key={project.id}>
+                <div className="row">
+                  <h4>{project.name}</h4>
+                  <span className={`badge status-${project.status}`}>{project.status}</span>
+                </div>
+                {project.description && <Markdown text={project.description} />}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+      {p.me && <PostComposer spaces={spaces} />}
       <section className="stream">
         {[...(posts.data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} />)}
         {posts.data?.length === 0 && <p className="empty">{p.me ? 'Your public posts show up here.' : `${name} hasn't posted publicly yet.`}</p>}
@@ -300,7 +316,7 @@ export function PeopleView() {
             </AsyncButton>
           </div>
         ))}
-        {everyone.data?.length === 0 && <p className="empty">Nobody yet. Join a group to meet people.</p>}
+        {everyone.data?.length === 0 && <p className="empty">Nobody yet. Join a project or group to meet people.</p>}
       </section>
     </Page>
   );
@@ -308,8 +324,8 @@ export function PeopleView() {
 
 // ---------------------------------------------------------------- discussion
 
-export function DiscussionView({ group, threadId, meDid }: { group: GroupInfo; threadId?: string; meDid: string }) {
-  const { data: threads } = useApi(() => api<ThreadInfo[]>('threads', group.id), [group.id]);
+export function DiscussionView({ project, threadId, meDid }: { project: SpaceInfo; threadId?: string; meDid: string }) {
+  const { data: threads } = useApi(() => api<ThreadInfo[]>('threads', project.id), [project.id]);
   const start = useForm({ title: '', text: '' });
   const reply = useForm({ text: '' });
   const thread = threadId ? threads?.find((t) => t.id === threadId) : undefined;
@@ -330,7 +346,7 @@ export function DiscussionView({ group, threadId, meDid }: { group: GroupInfo; t
       </div>
     );
     return (
-      <Page title={thread.title} subtitle={<a href={`#/g/${group.id}/discussion`}>← All discussions</a>}>
+      <Page title={thread.title} subtitle={<a href={`#/p/${project.id}/discussion`}>← All discussions</a>}>
         <section className="stream">
           {entry(thread.by, thread.text || '_(no details)_', thread.time, thread.id, true)}
           {thread.replies.map((r) => entry(r.by, r.text, r.time, r.id))}
@@ -359,8 +375,8 @@ export function DiscussionView({ group, threadId, meDid }: { group: GroupInfo; t
         onSubmit={async (e) => {
           e.preventDefault();
           if (!start.values.title.trim()) return;
-          const t = await attempt(() => api<ThreadInfo>('startThread', { group: group.id, ...start.values }));
-          if (t) navigate(`#/g/${group.id}/discussion/${t.id}`);
+          const t = await attempt(() => api<ThreadInfo>('startThread', { project: project.id, ...start.values }));
+          if (t) navigate(`#/p/${project.id}/discussion/${t.id}`);
         }}
       >
         <input placeholder="Start a discussion: what should we decide or figure out?" maxLength={200} {...start.field('title')} />
@@ -371,7 +387,7 @@ export function DiscussionView({ group, threadId, meDid }: { group: GroupInfo; t
       </form>
       <section className="stream">
         {(threads ?? []).map((t) => (
-          <a className="card thread-card" key={t.id} href={`#/g/${group.id}/discussion/${t.id}`}>
+          <a className="card thread-card" key={t.id} href={`#/p/${project.id}/discussion/${t.id}`}>
             <h3>{t.title}</h3>
             <p className="muted small">
               {actorName(t.by, meDid)}
@@ -387,12 +403,12 @@ export function DiscussionView({ group, threadId, meDid }: { group: GroupInfo; t
 
 // ---------------------------------------------------------------- votes
 
-export function VotesView({ group, members, meDid }: { group: GroupInfo; members: MemberInfo[]; meDid: string }) {
-  const { data: proposals } = useApi(() => api<ProposalInfo[]>('proposals', group.id), [group.id]);
-  const { data: delegate } = useApi(() => api<Actor | null>('votingDelegate', group.id), [group.id]);
+export function VotesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { data: proposals } = useApi(() => api<ProposalInfo[]>('proposals', project.id), [project.id]);
+  const { data: delegate } = useApi(() => api<Actor | null>('votingDelegate', project.id), [project.id]);
   const form = useForm({ title: '', text: '', hours: '72' });
   return (
-    <Page title="Votes" subtitle="One vote per member. If you don't vote, your vote can follow someone you trust.">
+    <Page title="Votes" subtitle="One vote per participant. If you don't vote, your vote can follow someone you trust.">
       <div className="split">
         <div>
           <form
@@ -400,7 +416,7 @@ export function VotesView({ group, members, meDid }: { group: GroupInfo; members
             onSubmit={async (e) => {
               e.preventDefault();
               if (!form.values.title.trim()) return;
-              if (await attempt(() => api('propose', { group: group.id, title: form.values.title, text: form.values.text, hours: Number(form.values.hours) }))) form.reset();
+              if (await attempt(() => api('propose', { project: project.id, title: form.values.title, text: form.values.text, hours: Number(form.values.hours) }))) form.reset();
             }}
           >
             <input placeholder="Propose something to decide together" maxLength={200} {...form.field('title')} />
@@ -467,10 +483,10 @@ export function VotesView({ group, members, meDid }: { group: GroupInfo; members
         </div>
         <aside className="card">
           <h3>Delegation</h3>
-          <p className="muted small">When you don't vote, your vote can follow someone you trust in this group. Voting yourself always wins.</p>
+          <p className="muted small">When you don't vote, your vote can follow someone you trust in this project. Voting yourself always wins.</p>
           <select
             value={delegate?.did ?? ''}
-            onChange={(e) => attempt(() => api('delegateVote', { group: group.id, who: e.target.value || undefined }).then(bump), e.target.value ? 'Delegation saved' : 'You vote only for yourself now')}
+            onChange={(e) => attempt(() => api('delegateVote', { project: project.id, who: e.target.value || undefined }).then(bump), e.target.value ? 'Delegation saved' : 'You vote only for yourself now')}
           >
             <option value="">Only I vote for me</option>
             {members
@@ -489,8 +505,8 @@ export function VotesView({ group, members, meDid }: { group: GroupInfo; members
 
 // ---------------------------------------------------------------- issues
 
-export function IssuesView({ group, meDid }: { group: GroupInfo; meDid: string }) {
-  const { data: issues } = useApi(() => api<IssueInfo[]>('issues', group.id), [group.id]);
+export function IssuesView({ project, meDid }: { project: SpaceInfo; meDid: string }) {
+  const { data: issues } = useApi(() => api<IssueInfo[]>('issues', project.id), [project.id]);
   const form = useForm({ title: '', labels: '' });
   const column = (title: string, statuses: string[]) => {
     const list = (issues ?? []).filter((i) => statuses.includes(i.status));
@@ -537,7 +553,7 @@ export function IssuesView({ group, meDid }: { group: GroupInfo; meDid: string }
           e.preventDefault();
           if (!form.values.title.trim()) return;
           const labels = form.values.labels.split(',').map((l) => l.trim()).filter(Boolean);
-          if (await attempt(() => api('openIssue', { group: group.id, title: form.values.title, labels }))) form.reset();
+          if (await attempt(() => api('openIssue', { project: project.id, title: form.values.title, labels }))) form.reset();
         }}
       >
         <input placeholder="What needs doing?" maxLength={200} {...form.field('title')} />
@@ -555,57 +571,77 @@ export function IssuesView({ group, meDid }: { group: GroupInfo; meDid: string }
 
 // ---------------------------------------------------------------- dialogs and entry screens
 
-export function GroupDialog({ onClose }: { onClose(): void }) {
-  const create = useForm({ name: '' });
+export function NewDialog({ onClose }: { onClose(): void }) {
+  const project = useForm({ name: '', description: '' });
+  const group = useForm({ name: '' });
   const join = useForm({ invite: '' });
+  const go = (space?: SpaceInfo) => {
+    if (!space) return;
+    onClose();
+    navigate(`#/${space.kind === 'project' ? 'p' : 'g'}/${space.id}`);
+  };
   return (
     <Modal onClose={onClose} wide>
-      <h3>Start or join a group</h3>
-      <p className="muted small">Groups are end-to-end encrypted. Only members can read what's posted in them.</p>
-      <div className="two">
+      <h3>Start something</h3>
+      <p className="muted small">
+        A <b>project</b> is something you build together: chat, discussion, votes, issues and a page. A <b>group</b> is a circle of people with its own chat,
+        which you can invite into projects as a whole. Both are end-to-end encrypted.
+      </p>
+      <div className="three">
         <form
           className="card form"
           onSubmit={async (e) => {
             e.preventDefault();
-            const g = await attempt(() => api<GroupInfo>('createGroup', create.values.name), `Created ${create.values.name}`);
-            if (g) {
-              onClose();
-              navigate(`#/g/${g.id}`);
-            }
+            go(await attempt(() => api<ProjectInfo>('createProject', project.values), `Created ${project.values.name}`));
           }}
         >
-          <h4>Start a group</h4>
-          <input required maxLength={40} placeholder="e.g. Synth makers" {...create.field('name')} />
+          <h4>🛠️ New project</h4>
+          <input required maxLength={40} placeholder="e.g. Modular synth case" {...project.field('name')} />
+          <textarea rows={2} placeholder="What are you building? (optional)" {...project.field('description')} />
+          <button className="btn primary">Create project</button>
+        </form>
+        <form
+          className="card form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            go(await attempt(() => api<SpaceInfo>('createGroup', group.values.name), `Created ${group.values.name}`));
+          }}
+        >
+          <h4>👥 New group</h4>
+          <input required maxLength={40} placeholder="e.g. Synth friends" {...group.field('name')} />
           <button className="btn primary">Create group</button>
         </form>
         <form
           className="card form"
           onSubmit={async (e) => {
             e.preventDefault();
-            const g = await attempt(() => api<GroupInfo>('joinGroup', join.values.invite));
-            if (g) {
-              toast(`Joined ${g.name}`);
-              onClose();
-              navigate(`#/g/${g.id}`);
-            }
+            const space = await attempt(() => api<SpaceInfo>('joinSpace', join.values.invite));
+            if (space) toast(`Joined ${space.name}`);
+            go(space);
           }}
         >
-          <h4>Join with an invite</h4>
+          <h4>🔗 Join with a link</h4>
           <textarea required rows={3} placeholder="weave:invite:…" {...join.field('invite')} />
-          <button className="btn primary">Join group</button>
+          <button className="btn primary">Join</button>
         </form>
       </div>
     </Modal>
   );
 }
 
-export function InviteDialog({ group, onClose }: { group: GroupInfo; onClose(): void }) {
-  const { data: link } = useApi(() => api<string>('invite', group.id), [group.id]);
+export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
+  const { data: link, error } = useApi(() => api<string>('invite', space.id), [space.id]);
   return (
     <Modal onClose={onClose}>
-      <h3>Invite someone to {group.name}</h3>
-      <p className="muted small">Send this link privately. Whoever has it can join and read the group, so treat it like a key. It expires in 7 days.</p>
-      <textarea className="invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
+      <h3>Invite someone to {space.name}</h3>
+      {error ? (
+        <p className="muted">{error}</p>
+      ) : (
+        <>
+          <p className="muted small">Send this link privately. Whoever has it can join and read {space.name}, so treat it like a key. It expires in 7 days.</p>
+          <textarea className="invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
+        </>
+      )}
       <div className="row end">
         <button className="btn ghost" onClick={onClose}>
           Close
@@ -615,6 +651,150 @@ export function InviteDialog({ group, onClose }: { group: GroupInfo; onClose(): 
         </button>
       </div>
     </Modal>
+  );
+}
+
+/** Asking a project's maintainers about group newcomers (and those who left). */
+export function AdmissionCard({ admission }: { admission: Admission }) {
+  const [always, setAlways] = useState(false);
+  const a = admission;
+  const name = a.name ?? shortDid(a.did);
+  if (a.change === 'leave') {
+    return (
+      <div className="admission">
+        <Avatar did={a.did} name={a.name} size={34} />
+        <div className="admission-text">
+          <b>{name}</b> left group <b>{a.group.name}</b>. Remove them from <b>{a.project.name}</b>? The project key rotates.
+        </div>
+        <AsyncButton className="btn small danger" onClick={() => attempt(() => api('removeMember', a.project.id, a.did).then(bump), `Removed ${name}`)}>
+          Remove
+        </AsyncButton>
+      </div>
+    );
+  }
+  return (
+    <div className="admission">
+      <Avatar did={a.did} name={a.name} size={34} />
+      <div className="admission-text">
+        <b>{name}</b> from group <b>{a.group.name}</b> wants into <b>{a.project.name}</b>.
+        <label className="check">
+          <input type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} /> Allow automatically for all projects with group “{a.group.name}”
+        </label>
+      </div>
+      <AsyncButton className="btn small" onClick={() => attempt(() => api('decline', { project: a.project.id, who: a.did, group: a.group.id }).then(bump))}>
+        Decline
+      </AsyncButton>
+      <AsyncButton className="btn small primary" onClick={() => attempt(() => api('admit', { project: a.project.id, who: a.did, group: a.group.id, always }).then(bump), `${name} is in`)}>
+        Allow
+      </AsyncButton>
+    </div>
+  );
+}
+
+const STATUSES: ProjectStatus[] = ['idea', 'active', 'paused', 'shipped', 'archived'];
+
+export function ProjectPageView({ project, spaces, members, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string }) {
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: admissions } = useApi(() => api<Admission[]>('admissions', project.id), [project.id]);
+  const [description, setDescription] = useState<string>();
+  const [inviting, setInviting] = useState('');
+  if (!info) return <div className="page" />;
+  const myGroups = spaces.filter((s) => s.kind === 'group' && !info.groups.some((g) => g.id === s.id));
+  const save = (patch: Partial<ProjectInfo['page']>) => attempt(() => api('setProjectPage', { project: project.id, ...patch }).then(bump), 'Page updated');
+  return (
+    <Page title={info.name} subtitle={<span className={`badge status-${info.page.status}`}>{info.page.status}</span>}>
+      {info.maintainer && (admissions?.length ?? 0) > 0 && (
+        <section className="card admissions">
+          <h3>Waiting for you</h3>
+          {admissions!.map((a) => (
+            <AdmissionCard key={`${a.did}-${a.group.id}-${a.change}`} admission={a} />
+          ))}
+        </section>
+      )}
+      <section className="card">
+        <h3>About</h3>
+        {info.maintainer ? (
+          <>
+            <textarea rows={4} value={description ?? info.page.description} placeholder="What is this project? What will it become?" onChange={(e) => setDescription(e.target.value)} />
+            <div className="row">
+              <select value={info.page.status} onChange={(e) => save({ status: e.target.value as ProjectStatus })}>
+                {STATUSES.map((s) => (
+                  <option key={s}>{s}</option>
+                ))}
+              </select>
+              <label className="check">
+                <input type="checkbox" checked={info.page.public} onChange={(e) => save({ public: e.target.checked })} /> Show this page publicly in my space
+              </label>
+              <button className="btn primary" disabled={description === undefined || description === info.page.description} onClick={() => save({ description }).then(() => setDescription(undefined))}>
+                Save
+              </button>
+            </div>
+          </>
+        ) : info.page.description ? (
+          <Markdown text={info.page.description} />
+        ) : (
+          <p className="muted">No description yet.</p>
+        )}
+        <p className="muted small">Chat, discussion, votes and issues always stay among participants{info.page.public ? '; this page is public' : ''}.</p>
+      </section>
+      <div className="two">
+        <section className="card">
+          <h3>Groups</h3>
+          {info.groups.map((g) => (
+            <div className="row line" key={g.id}>
+              <span>👥 {g.name}</span>
+              {info.maintainer ? (
+                <label className="check small">
+                  <input type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} /> admit newcomers automatically
+                </label>
+              ) : (
+                <span className="muted small">{g.auto ? 'newcomers admitted automatically' : 'newcomers are asked about'}</span>
+              )}
+            </div>
+          ))}
+          {info.groups.length === 0 && <p className="muted small">No groups invited yet.</p>}
+          {info.maintainer && myGroups.length > 0 && (
+            <div className="row">
+              <select value={inviting} onChange={(e) => setInviting(e.target.value)}>
+                <option value="">Invite one of your groups…</option>
+                {myGroups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <AsyncButton
+                className="btn small primary"
+                onClick={async () => {
+                  if (!inviting) return;
+                  await attempt(() => api('inviteGroup', { project: project.id, group: inviting }).then(bump), 'Group invited: its members take part now');
+                  setInviting('');
+                }}
+              >
+                Invite group
+              </AsyncButton>
+            </div>
+          )}
+        </section>
+        <section className="card">
+          <h3>Maintainers</h3>
+          <p className="muted small">Maintainers decide who takes part: they invite, admit and remove, and set rules for groups.</p>
+          {members.map((m) => (
+            <div className="row line" key={m.did}>
+              <span>
+                {m.name ?? shortDid(m.did)}
+                {m.did === meDid ? ' (you)' : ''} {m.maintainer && <span className="badge">maintainer</span>}
+              </span>
+              {info.maintainer && m.did !== info.founder && (
+                <AsyncButton className="btn small ghost" onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>
+                  {m.maintainer ? 'Remove as maintainer' : 'Make maintainer'}
+                </AsyncButton>
+              )}
+            </div>
+          ))}
+        </section>
+      </div>
+    </Page>
   );
 }
 

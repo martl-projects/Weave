@@ -1,39 +1,6 @@
-import type { Backend } from '@weave/node/client';
+import { RPC_METHODS, type RpcMethod } from '@weave/node/client';
 
-/** Backend methods the renderer may call. `watch` is handled separately as an event stream. */
-export const RENDERER_METHODS = [
-  'whoami',
-  'status',
-  'feed',
-  'publish',
-  'groups',
-  'createGroup',
-  'invite',
-  'joinGroup',
-  'members',
-  'removeMember',
-  'setEdge',
-  'social',
-  'profile',
-  'setProfile',
-  'directory',
-  'threads',
-  'startThread',
-  'reply',
-  'channels',
-  'createChannel',
-  'messages',
-  'react',
-  'say',
-  'issues',
-  'openIssue',
-  'claimIssue',
-  'setIssueStatus',
-  'proposals',
-  'propose',
-  'vote',
-  'delegateVote',
-  'votingDelegate',
-] as const satisfies ReadonlyArray<keyof Backend>;
+/** Backend methods the renderer may call: everything but creating agent keys and listening on raw topics. */
+export const RENDERER_METHODS: readonly RpcMethod[] = RPC_METHODS.filter((m) => m !== 'addAgent' && m !== 'join');
 
-export type RendererMethod = (typeof RENDERER_METHODS)[number];
+export type RendererMethod = RpcMethod;

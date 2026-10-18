@@ -1,28 +1,5 @@
 import { request as httpRequest } from 'node:http';
-import type { Choice, IssueStatus } from '@weave/core';
-import type {
-  Actor,
-  AgentInfo,
-  Backend,
-  ChannelInfo,
-  EdgeInput,
-  FeedItem,
-  FeedQuery,
-  GroupInfo,
-  InGroup,
-  IssueInfo,
-  MemberInfo,
-  MessageInfo,
-  Profile,
-  ProfileInput,
-  ProposalInfo,
-  PublishInput,
-  ReplyInfo,
-  Social,
-  Status,
-  ThreadInfo,
-  Whoami,
-} from './backend.ts';
+import { RPC_METHODS, type Backend, type FeedItem, type RpcMethod } from './backend.ts';
 import { readJson, type Home } from './home.ts';
 
 export interface DaemonInfo {
@@ -31,29 +8,39 @@ export interface DaemonInfo {
   token: string;
 }
 
+// Every Backend method is available on an ApiClient (provided by the proxy below).
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface ApiClient extends Omit<Backend, 'watch'> {}
+
 /** Talks to a running daemon over its local HTTP API. */
-export class ApiClient implements Backend {
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export class ApiClient {
   readonly base: string;
   readonly #token: string;
 
   constructor(port: number, token: string) {
     this.base = `http://127.0.0.1:${port}/v1`;
     this.#token = token;
+    return new Proxy(this, {
+      get(target, prop) {
+        if (typeof prop === 'string' && RPC_METHODS.includes(prop as RpcMethod)) return (...args: unknown[]) => target.call(prop as RpcMethod, args);
+        // Bound to the real object: private fields aren't reachable through the proxy.
+        const value = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
   }
 
-  /** One-off request without keep-alive, so a CLI process can exit right after it. */
-  #request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const payload = body === undefined ? undefined : JSON.stringify(body);
+  /** Call one Backend method on the daemon. One-off request without keep-alive, so a CLI process can exit right after it. */
+  call<T = unknown>(method: RpcMethod, args: unknown[]): Promise<T> {
+    const payload = JSON.stringify({ method, args });
     return new Promise((resolve, reject) => {
       const req = httpRequest(
-        this.base + path,
+        `${this.base}/rpc`,
         {
-          method,
+          method: 'POST',
           agent: false,
-          headers: {
-            authorization: `Bearer ${this.#token}`,
-            ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}),
-          },
+          headers: { authorization: `Bearer ${this.#token}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
         },
         (res) => {
           let text = '';
@@ -61,9 +48,9 @@ export class ApiClient implements Backend {
           res.on('data', (chunk: string) => (text += chunk));
           res.on('end', () => {
             try {
-              const data = JSON.parse(text) as T & { error?: string };
+              const data = JSON.parse(text) as { result?: T; error?: string };
               if ((res.statusCode ?? 500) >= 400) reject(new Error(data.error ?? `daemon answered ${res.statusCode}`));
-              else resolve(data);
+              else resolve(data.result as T);
             } catch (error) {
               reject(error);
             }
@@ -73,151 +60,6 @@ export class ApiClient implements Backend {
       req.on('error', reject);
       req.end(payload);
     });
-  }
-
-  whoami(): Promise<Whoami> {
-    return this.#request('GET', '/whoami');
-  }
-
-  status(): Promise<Status> {
-    return this.#request('GET', '/status');
-  }
-
-  feed(query: FeedQuery = {}): Promise<FeedItem[]> {
-    const params = new URLSearchParams();
-    if (query.limit !== undefined) params.set('limit', String(query.limit));
-    if (query.kinds?.length) params.set('kinds', query.kinds.join(','));
-    if (query.group) params.set('group', query.group);
-    if (query.author) params.set('author', query.author);
-    if (query.publicOnly) params.set('public', '1');
-    return this.#request('GET', `/feed?${params}`);
-  }
-
-  publish(input: PublishInput): Promise<FeedItem> {
-    return this.#request('POST', '/publish', input);
-  }
-
-  addAgent(name: string, permissions: string[]): Promise<AgentInfo> {
-    return this.#request('POST', '/agents', { name, permissions });
-  }
-
-  async join(topic: string): Promise<void> {
-    await this.#request('POST', '/join', { topic });
-  }
-
-  createGroup(name: string): Promise<GroupInfo> {
-    return this.#request('POST', '/groups', { name });
-  }
-
-  groups(): Promise<GroupInfo[]> {
-    return this.#request('GET', '/groups');
-  }
-
-  async invite(group: string, hours?: number): Promise<string> {
-    return (await this.#request<{ invite: string }>('POST', '/groups/invite', { group, hours })).invite;
-  }
-
-  joinGroup(invite: string): Promise<GroupInfo> {
-    return this.#request('POST', '/groups/join', { invite });
-  }
-
-  members(group: string): Promise<MemberInfo[]> {
-    return this.#request('GET', `/groups/members?${new URLSearchParams({ group })}`);
-  }
-
-  async removeMember(group: string, who: string): Promise<void> {
-    await this.#request('POST', '/groups/remove', { group, who });
-  }
-
-  async setEdge(input: EdgeInput): Promise<void> {
-    await this.#request('POST', '/edges', input);
-  }
-
-  social(): Promise<Social> {
-    return this.#request('GET', '/social');
-  }
-
-  profile(who?: string): Promise<Profile> {
-    return this.#request('GET', `/profile${who ? `?${new URLSearchParams({ who })}` : ''}`);
-  }
-
-  setProfile(input: ProfileInput): Promise<Profile> {
-    return this.#request('POST', '/profile', input);
-  }
-
-  directory(): Promise<Profile[]> {
-    return this.#request('GET', '/directory');
-  }
-
-  threads(group: string): Promise<ThreadInfo[]> {
-    return this.#request('GET', `/threads?${new URLSearchParams({ group })}`);
-  }
-
-  startThread(input: InGroup & { title: string; text?: string }): Promise<ThreadInfo> {
-    return this.#request('POST', '/threads', input);
-  }
-
-  reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
-    return this.#request('POST', '/replies', input);
-  }
-
-  channels(group: string): Promise<ChannelInfo[]> {
-    return this.#request('GET', `/channels?${new URLSearchParams({ group })}`);
-  }
-
-  createChannel(input: InGroup & { name: string; topic?: string }): Promise<ChannelInfo> {
-    return this.#request('POST', '/channels', input);
-  }
-
-  messages(group: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
-    const params = new URLSearchParams({ group });
-    if (options.limit !== undefined) params.set('limit', String(options.limit));
-    if (options.channel) params.set('channel', options.channel);
-    return this.#request('GET', `/messages?${params}`);
-  }
-
-  say(input: InGroup & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
-    return this.#request('POST', '/messages', input);
-  }
-
-  async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
-    await this.#request('POST', '/reactions', input);
-  }
-
-  issues(group: string): Promise<IssueInfo[]> {
-    return this.#request('GET', `/issues?${new URLSearchParams({ group })}`);
-  }
-
-  openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
-    return this.#request('POST', '/issues', input);
-  }
-
-  claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo> {
-    return this.#request('POST', '/issues/claim', input);
-  }
-
-  setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo> {
-    return this.#request('POST', '/issues/status', input);
-  }
-
-  proposals(group: string): Promise<ProposalInfo[]> {
-    return this.#request('GET', `/proposals?${new URLSearchParams({ group })}`);
-  }
-
-  propose(input: InGroup & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
-    return this.#request('POST', '/proposals', input);
-  }
-
-  vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo> {
-    return this.#request('POST', '/votes', input);
-  }
-
-  async delegateVote(input: { group: string; who?: string }): Promise<void> {
-    await this.#request('POST', '/votes/delegate', input);
-  }
-
-  votingDelegate(group: string): Promise<Actor | null> {
-    return this.#request('GET', `/votes/delegate?${new URLSearchParams({ group })}`);
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {

@@ -10,12 +10,12 @@ import { createWeaveMcp } from '../src/index.ts';
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-/** A node with a group and an agent, and an MCP client connected as that agent. */
+/** A node with a project and an agent, and an MCP client connected as that agent. */
 async function setup(permissions = ['weave.post', 'weave.reply', 'weave.msg', 'weave.issue.*']) {
   const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-'));
   dirs.push(dir);
   const node = WeaveNode.init('Martin', dir);
-  await node.createGroup('Weave');
+  await node.createProject({ name: 'Weave' });
   await node.addAgent('forge', permissions);
 
   const { server, close } = createWeaveMcp(node, { as: 'forge' });
@@ -47,14 +47,14 @@ describe('Weave over MCP', () => {
     const { data } = await call('weave_whoami');
     expect(data.person.name).toBe('Martin');
     expect(data.actingAs).toMatchObject({ agent: 'forge', permissions: expect.arrayContaining(['weave.reply']) });
-    expect(data.groups[0].name).toBe('Weave');
+    expect(data.projects[0].name).toBe('Weave');
     close();
   });
 
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
-    await call('weave_say', { group: 'Weave', text: 'build is green' });
-    const issue = (await call('weave_open_issue', { group: 'Weave', title: 'Write docs' })).data;
+    await call('weave_say', { space: 'Weave', text: 'build is green' });
+    const issue = (await call('weave_open_issue', { project: 'Weave', title: 'Write docs' })).data;
     await call('weave_claim_issue', { issue: issue.short });
 
     expect((await node.messages('Weave'))[0].by).toMatchObject({ name: 'Martin', agent: 'forge' });
@@ -64,9 +64,9 @@ describe('Weave over MCP', () => {
 
   it('lets the agent react and reply in channels', async () => {
     const { node, call, close } = await setup(['weave.msg', 'weave.react']);
-    const hello = await node.say({ group: 'Weave', text: 'can someone check the build?' });
+    const hello = await node.say({ space: 'Weave', text: 'can someone check the build?' });
     await call('weave_react', { target: hello.short, emoji: '👀' });
-    await call('weave_say', { group: 'Weave', text: 'on it', reply_to: hello.short });
+    await call('weave_say', { space: 'Weave', text: 'on it', reply_to: hello.short });
     const [first, second] = await node.messages('Weave');
     expect(first.reactions[0]).toMatchObject({ emoji: '👀', by: ['Martin · forge'] });
     expect(second).toMatchObject({ text: 'on it', replyTo: { id: hello.id } });
@@ -75,7 +75,7 @@ describe('Weave over MCP', () => {
 
   it('reports permission errors as tool errors', async () => {
     const { node, call, close } = await setup();
-    const proposal = await node.propose({ group: 'Weave', title: 'Ship it' });
+    const proposal = await node.propose({ project: 'Weave', title: 'Ship it' });
     const { error } = await call('weave_vote', { proposal: proposal.short, choice: 'yes' });
     expect(error).toMatch(/may not sign weave.vote/);
     close();
@@ -84,9 +84,9 @@ describe('Weave over MCP', () => {
   it('delivers new events through the inbox, flags mentions, and skips its own writes', async () => {
     const { node, call, close } = await setup();
     await new Promise((resolve) => setTimeout(resolve, 50)); // let the watcher start
-    await call('weave_say', { group: 'Weave', text: 'my own message' });
-    await node.say({ group: 'Weave', text: 'just chatting' });
-    await node.startThread({ group: 'Weave', title: 'Benchmarks', text: '@forge can you run them?' });
+    await call('weave_say', { space: 'Weave', text: 'my own message' });
+    await node.say({ space: 'Weave', text: 'just chatting' });
+    await node.startThread({ project: 'Weave', title: 'Benchmarks', text: '@forge can you run them?' });
 
     const mentions = (await call('weave_inbox', { mentions_only: true })).data;
     expect(mentions.items.map((i: { text: string }) => i.text)).toEqual(['Benchmarks — @forge can you run them?']);
@@ -97,7 +97,7 @@ describe('Weave over MCP', () => {
 
   it('waits for something to arrive', async () => {
     const { node, call, close } = await setup();
-    setTimeout(() => void node.say({ group: 'Weave', text: 'late arrival' }), 200);
+    setTimeout(() => void node.say({ space: 'Weave', text: 'late arrival' }), 200);
     const started = Date.now();
     const { data } = await call('weave_inbox', { wait_seconds: 5 });
     expect(data.items[0].text).toBe('late arrival');

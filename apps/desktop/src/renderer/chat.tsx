@@ -2,7 +2,7 @@ import data from '@emoji-mart/data';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import type { GroupInfo, MemberInfo, MessageInfo } from '@weave/node/client';
+import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import { api, clock, dayLabel, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { attempt, Avatar } from './ui.tsx';
 
@@ -136,13 +136,13 @@ function Message({
 }
 
 function Composer({
-  group,
+  space,
   channel,
   replyTo,
   onCancelReply,
   members,
 }: {
-  group: GroupInfo;
+  space: SpaceInfo;
   channel: string;
   replyTo?: MessageInfo;
   onCancelReply(): void;
@@ -157,7 +157,7 @@ function Composer({
     if (replyTo) area.current?.focus();
   }, [replyTo]);
 
-  // @mention suggestions: people in the group and their agents.
+  // @mention suggestions: people here and their agents.
   const names = useMemo(() => {
     const list = new Set<string>();
     for (const m of members) {
@@ -180,7 +180,7 @@ function Composer({
     if (!message) return;
     setText('');
     onCancelReply();
-    const sent = await attempt(() => api('say', { group: group.id, channel, text: message, replyTo: replyTo?.id }));
+    const sent = await attempt(() => api('say', { space: space.id, channel, text: message, replyTo: replyTo?.id }));
     if (sent === undefined) setText(message); // keep it if sending failed
   };
 
@@ -253,8 +253,8 @@ function Composer({
 }
 
 /** A Discord-style channel: grouped messages, reactions, replies, @mentions and a virtualized history. */
-export function ChatView({ group, channel, meDid, meName, members }: { group: GroupInfo; channel: string; meDid: string; meName?: string; members: MemberInfo[] }) {
-  const { data: messages } = useApi(() => api<MessageInfo[]>('messages', group.id, { channel, limit: 1000 }), [group.id, channel]);
+export function ChatView({ space, channel, meDid, meName, members }: { space: SpaceInfo; channel: string; meDid: string; meName?: string; members: MemberInfo[] }) {
+  const { data: messages } = useApi(() => api<MessageInfo[]>('messages', space.id, { channel, limit: 1000 }), [space.id, channel]);
   const [replyTo, setReplyTo] = useState<MessageInfo>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const stuck = useStickToBottom(scroller);
@@ -282,13 +282,13 @@ export function ChatView({ group, channel, meDid, meName, members }: { group: Gr
 
   useEffect(() => {
     const last = messages?.at(-1);
-    if (last) markSeen(`${group.id}/${channel}`, last.time);
-  }, [messages, group.id, channel]);
+    if (last) markSeen(`${space.id}/${channel}`, last.time);
+  }, [messages, space.id, channel]);
 
   useEffect(() => {
     setReplyTo(undefined);
     stuck.current = true;
-  }, [group.id, channel, stuck]);
+  }, [space.id, channel, stuck]);
 
   return (
     <div className="chat">
@@ -297,7 +297,7 @@ export function ChatView({ group, channel, meDid, meName, members }: { group: Gr
           <div className="channel-intro">
             <div className="intro-hash">#</div>
             <h2>Welcome to #{channel}</h2>
-            <p className="muted">This is the start of #{channel} in {group.name}. Only members can read it.</p>
+            <p className="muted">This is the start of #{channel} in {space.name}. Only {space.kind === 'project' ? 'participants' : 'members'} can read it.</p>
           </div>
         )}
         <div className="virtual" style={{ height: virtualizer.getTotalSize() }}>
@@ -317,7 +317,7 @@ export function ChatView({ group, channel, meDid, meName, members }: { group: Gr
           })}
         </div>
       </div>
-      <Composer group={group} channel={channel} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} />
+      <Composer space={space} channel={channel} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} />
     </div>
   );
 }

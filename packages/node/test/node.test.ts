@@ -72,7 +72,7 @@ describe('spaces', () => {
 
     await node.createGroup('Secret');
     await node.publish({ kind: 'weave.post', body: { text: 'public' } });
-    await node.publish({ kind: 'weave.post', body: { text: 'in group' }, group: 'Secret' });
+    await node.publish({ kind: 'weave.post', body: { text: 'in group' }, space: 'Secret' });
     const mine = await node.feed({ author: 'Alice', publicOnly: true, kinds: ['weave.post'] });
     expect(mine.map((i) => (i.body as { text: string }).text)).toEqual(['public']);
     expect((await node.profile()).posts).toBe(1); // public posts only
@@ -101,6 +101,12 @@ describe('local API', () => {
       controller.abort();
       await watching;
       await expect(new ApiClient(api.port, 'wrong-token').whoami()).rejects.toThrow(/unauthorized/);
+
+      // Omitted arguments keep their defaults over the wire (an invite valid for a week, not zero hours).
+      await client.createGroup('Friends');
+      const { decodeInvite } = await import('@weave/core');
+      const invite = decodeInvite(await client.invite('Friends'));
+      expect(Date.parse(invite.expires) - Date.now()).toBeGreaterThan(6 * 86_400_000);
     } finally {
       await api.close();
     }

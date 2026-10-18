@@ -22,6 +22,15 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   writeJson(home.daemon, info);
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
 
+  // Carry out standing admission rules shortly after new events arrive.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const reconcile = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => node.reconcile().catch((error: Error) => console.error(`weave: ${error.message}`)), 500);
+  };
+  const unsubscribe = node.replica.onAppend(reconcile);
+  reconcile();
+
   let stopped = false;
   return {
     node,
@@ -29,6 +38,8 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
     async stop() {
       if (stopped) return;
       stopped = true;
+      unsubscribe();
+      clearTimeout(timer);
       rmSync(home.daemon, { force: true });
       await api.close();
       await online;

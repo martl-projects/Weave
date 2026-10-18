@@ -12,7 +12,8 @@ export interface InboxItem {
   id: string;
   short: string;
   kind: string;
-  group?: string;
+  /** The project or group it happened in. */
+  space?: string;
   /** Chat channel, for messages. */
   channel?: string;
   by: string;
@@ -44,7 +45,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
 };
 
 /**
- * An MCP server that lets an agent harness take part in Weave: read groups,
+ * An MCP server that lets an agent harness take part in Weave: read projects and groups,
  * discussions, chat, issues and votes, write into them, and pick up what's new
  * through an inbox. It talks to a node through the Backend interface, so it
  * works against a running daemon or a node opened directly.
@@ -74,7 +75,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         id: item.id,
         short: item.id.slice(0, 8),
         kind: item.kind,
-        ...(item.group ? { group: item.group.name } : {}),
+        ...(item.space ? { space: `${item.space.kind} ${item.space.name}` } : {}),
         ...(item.kind === 'weave.msg' ? { channel: ((item.body as { channel?: string } | null)?.channel ?? 'general') } : {}),
         by: `${item.authorName ?? item.author}${item.signerName ? ` (agent ${item.signerName})` : ''}`,
         text,
@@ -91,7 +92,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     {
       title: 'What is new',
       description:
-        'New events since the last call: posts, chat messages, discussion threads, replies, issues and proposals from the groups this node belongs to. ' +
+        'New events since the last call: posts, chat messages, discussion threads, replies, issues and proposals from the projects and groups this node belongs to. ' +
         'Returned items are removed from the inbox. Use wait_seconds to wait for something to arrive. ' +
         'Items where mentionsMe is true address this agent directly (@name) and usually deserve a reply.',
       inputSchema: {
@@ -127,41 +128,53 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_whoami',
     {
       title: 'Who am I',
-      description: 'The person this node belongs to, the agent identity you act as (if any) with its permissions, and the groups you can work in.',
+      description: 'The person this node belongs to, the agent identity you act as (if any) with its permissions, the projects you can work in and the groups you are in.',
       annotations: { readOnlyHint: true },
     },
     run(async () => {
-      const [me, groups] = await Promise.all([backend.whoami(), backend.groups()]);
+      const [me, spaces] = await Promise.all([backend.whoami(), backend.spaces()]);
       const agent = as ? me.agents.find((a) => a.name === as) : undefined;
       if (as && !agent) throw new Error(`this node has no agent named "${as}"`);
       return {
         person: { name: me.name, did: me.did },
         actingAs: agent ? { agent: agent.name, did: agent.did, permissions: agent.permissions } : 'the person themself',
-        groups: groups.map((g) => ({ id: g.id, name: g.name, members: g.members })),
+        projects: spaces.filter((p) => p.kind === 'project').map((p) => ({ id: p.id, name: p.name, participants: p.members })),
+        groups: spaces.filter((g) => g.kind === 'group').map((g) => ({ id: g.id, name: g.name, members: g.members })),
       };
     }),
   );
 
   server.registerTool(
     'weave_members',
-    { title: 'Group members', description: 'Members of a group and who invited whom.', inputSchema: { group: z.string() }, annotations: { readOnlyHint: true } },
-    run(async ({ group }: { group: string }) => backend.members(group)),
+    {
+      title: 'Members',
+      description: 'Participants of a project (and through which group they came) or members of a group.',
+      inputSchema: { space: z.string().describe('Project or group name or id') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ space }: { space: string }) => backend.members(space)),
+  );
+
+  server.registerTool(
+    'weave_project',
+    { title: 'Project page', description: "A project's page: description, status, maintainers and invited groups.", inputSchema: { project: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ project }: { project: string }) => backend.project(project)),
   );
 
   server.registerTool(
     'weave_feed',
     {
       title: 'Recent posts',
-      description: 'Recent posts, either public or in one group, oldest first.',
-      inputSchema: { group: z.string().optional().describe('Group name or id; omit for everything'), limit: z.number().int().min(1).max(200).optional() },
+      description: 'Recent posts, either public or in one project or group, oldest first.',
+      inputSchema: { space: z.string().optional().describe('Project or group name or id; omit for everything'), limit: z.number().int().min(1).max(200).optional() },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ group, limit }: { group?: string; limit?: number }) =>
-      (await backend.feed({ group, kinds: ['weave.post'], limit: limit ?? 30 })).map((i) => ({
+    run(async ({ space, limit }: { space?: string; limit?: number }) =>
+      (await backend.feed({ space, kinds: ['weave.post'], limit: limit ?? 30 })).map((i) => ({
         id: i.id,
         by: i.authorName ?? i.author,
         agent: i.signerName,
-        group: i.group?.name,
+        space: i.space?.name,
         text: textOf(i.body),
         time: i.time,
       })),
@@ -172,24 +185,24 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_post',
     {
       title: 'Post an update',
-      description: 'Publish a post: show progress or results. Inside a group only members can read it; without a group it is public.',
-      inputSchema: { text: z.string().min(1), group: z.string().optional() },
+      description: 'Publish a post: show progress or results. Inside a project or group only its members can read it; without one it is public.',
+      inputSchema: { text: z.string().min(1), space: z.string().optional().describe('Project or group name or id') },
     },
-    run(async ({ text, group }: { text: string; group?: string }) => backend.publish({ kind: 'weave.post', body: { text }, group, as })),
+    run(async ({ text, space }: { text: string; space?: string }) => backend.publish({ kind: 'weave.post', body: { text }, space, as })),
   );
 
   // ---------------------------------------------------------------- discussion and chat
 
   server.registerTool(
     'weave_threads',
-    { title: 'Discussions', description: 'Discussion threads in a group with their replies, most recently active first.', inputSchema: { group: z.string() }, annotations: { readOnlyHint: true } },
-    run(async ({ group }: { group: string }) => backend.threads(group)),
+    { title: 'Discussions', description: 'Discussion threads in a project with their replies, most recently active first.', inputSchema: { project: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ project }: { project: string }) => backend.threads(project)),
   );
 
   server.registerTool(
     'weave_start_thread',
-    { title: 'Start a discussion', description: 'Start a discussion thread in a group.', inputSchema: { group: z.string(), title: z.string().min(1), text: z.string().optional() } },
-    run(async ({ group, title, text }: { group: string; title: string; text?: string }) => backend.startThread({ group, title, text, as })),
+    { title: 'Start a discussion', description: 'Start a discussion thread in a project.', inputSchema: { project: z.string(), title: z.string().min(1), text: z.string().optional() } },
+    run(async ({ project, title, text }: { project: string; title: string; text?: string }) => backend.startThread({ project, title, text, as })),
   );
 
   server.registerTool(
@@ -206,29 +219,29 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_chat',
     {
       title: 'Read chat',
-      description: 'Recent chat messages in a group, oldest first, with replies and reactions. Omit channel for all channels.',
-      inputSchema: { group: z.string(), channel: z.string().optional(), limit: z.number().int().min(1).max(200).optional() },
+      description: 'Recent chat messages in a project or group, oldest first, with replies and reactions. Omit channel for all channels.',
+      inputSchema: { space: z.string().describe('Project or group name or id'), channel: z.string().optional(), limit: z.number().int().min(1).max(200).optional() },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ group, channel, limit }: { group: string; channel?: string; limit?: number }) => backend.messages(group, { channel, limit: limit ?? 50 })),
+    run(async ({ space, channel, limit }: { space: string; channel?: string; limit?: number }) => backend.messages(space, { channel, limit: limit ?? 50 })),
   );
 
   server.registerTool(
     'weave_say',
     {
       title: 'Send a chat message',
-      description: 'Send a short chat message to a group channel (default "general"), optionally as a reply to a message id.',
-      inputSchema: { group: z.string(), text: z.string().min(1), channel: z.string().optional(), reply_to: z.string().min(6).optional() },
+      description: 'Send a short chat message to a channel (default "general") of a project or group, optionally as a reply to a message id.',
+      inputSchema: { space: z.string().describe('Project or group name or id'), text: z.string().min(1), channel: z.string().optional(), reply_to: z.string().min(6).optional() },
     },
-    run(async ({ group, text, channel, reply_to }: { group: string; text: string; channel?: string; reply_to?: string }) =>
-      backend.say({ group, text, channel, replyTo: reply_to, as }),
+    run(async ({ space, text, channel, reply_to }: { space: string; text: string; channel?: string; reply_to?: string }) =>
+      backend.say({ space, text, channel, replyTo: reply_to, as }),
     ),
   );
 
   server.registerTool(
     'weave_channels',
-    { title: 'Chat channels', description: 'The chat channels of a group.', inputSchema: { group: z.string() }, annotations: { readOnlyHint: true } },
-    run(async ({ group }: { group: string }) => backend.channels(group)),
+    { title: 'Chat channels', description: 'The chat channels of a project or group.', inputSchema: { space: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ space }: { space: string }) => backend.channels(space)),
   );
 
   server.registerTool(
@@ -248,14 +261,14 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
 
   server.registerTool(
     'weave_issues',
-    { title: 'Issues', description: 'Issues in a group with status (open, in-progress, done, closed) and assignee.', inputSchema: { group: z.string() }, annotations: { readOnlyHint: true } },
-    run(async ({ group }: { group: string }) => backend.issues(group)),
+    { title: 'Issues', description: 'Issues in a project with status (open, in-progress, done, closed) and assignee.', inputSchema: { project: z.string() }, annotations: { readOnlyHint: true } },
+    run(async ({ project }: { project: string }) => backend.issues(project)),
   );
 
   server.registerTool(
     'weave_open_issue',
-    { title: 'Open an issue', description: 'Open an issue in a group.', inputSchema: { group: z.string(), title: z.string().min(1), text: z.string().optional(), labels: z.array(z.string()).optional() } },
-    run(async ({ group, title, text, labels }: { group: string; title: string; text?: string; labels?: string[] }) => backend.openIssue({ group, title, text, labels, as })),
+    { title: 'Open an issue', description: 'Open an issue in a project.', inputSchema: { project: z.string(), title: z.string().min(1), text: z.string().optional(), labels: z.array(z.string()).optional() } },
+    run(async ({ project, title, text, labels }: { project: string; title: string; text?: string; labels?: string[] }) => backend.openIssue({ project, title, text, labels, as })),
   );
 
   server.registerTool(
@@ -280,11 +293,11 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     'weave_proposals',
     {
       title: 'Proposals',
-      description: 'Proposals in a group with their current tally, quorum and deadline. Agents usually only read these; voting needs the weave.vote permission.',
-      inputSchema: { group: z.string() },
+      description: 'Proposals in a project with their current tally, quorum and deadline. Agents usually only read these; voting needs the weave.vote permission.',
+      inputSchema: { project: z.string() },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ group }: { group: string }) => backend.proposals(group)),
+    run(async ({ project }: { project: string }) => backend.proposals(project)),
   );
 
   server.registerTool(

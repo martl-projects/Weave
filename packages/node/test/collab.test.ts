@@ -11,7 +11,7 @@ async function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'weave-collab-'));
   dirs.push(dir);
   const node = WeaveNode.init('Martin', dir);
-  await node.createGroup('Weave');
+  await node.createProject({ name: 'Weave' });
   await node.addAgent('forge', ['weave.reply', 'weave.msg', 'weave.issue.*']);
   return node;
 }
@@ -19,7 +19,7 @@ async function setup() {
 describe('working together in a group', () => {
   it('runs threads with replies, by short id, from people and agents', async () => {
     const node = await setup();
-    const thread = await node.startThread({ group: 'Weave', title: 'Should we use Hypercore?', text: 'For the logs' });
+    const thread = await node.startThread({ project: 'Weave', title: 'Should we use Hypercore?', text: 'For the logs' });
     await node.reply({ target: thread.short, text: 'Leaning yes' });
     await node.reply({ target: thread.id, text: 'Benchmarks look good', as: 'forge' });
 
@@ -33,18 +33,18 @@ describe('working together in a group', () => {
 
   it('keeps a chat', async () => {
     const node = await setup();
-    await node.say({ group: 'Weave', text: 'morning!' });
-    await node.say({ group: 'Weave', text: 'build is green', as: 'forge' });
+    await node.say({ space: 'Weave', text: 'morning!' });
+    await node.say({ space: 'Weave', text: 'build is green', as: 'forge' });
     expect((await node.messages('Weave')).map((m) => m.text)).toEqual(['morning!', 'build is green']);
   });
 
   it('chats in channels with replies and reactions from people and agents', async () => {
     const node = await setup();
     await node.addAgent('pixel', ['weave.msg', 'weave.react']);
-    await node.createChannel({ group: 'Weave', name: 'Build Log', topic: 'CI' });
-    const hello = await node.say({ group: 'Weave', text: 'hello' });
-    await node.say({ group: 'Weave', channel: 'build-log', text: 'green', as: 'pixel' });
-    await node.say({ group: 'Weave', text: 'hi back', replyTo: hello.short, as: 'pixel' });
+    await node.createChannel({ space: 'Weave', name: 'Build Log', topic: 'CI' });
+    const hello = await node.say({ space: 'Weave', text: 'hello' });
+    await node.say({ space: 'Weave', channel: 'build-log', text: 'green', as: 'pixel' });
+    await node.say({ space: 'Weave', text: 'hi back', replyTo: hello.short, as: 'pixel' });
     await node.react({ target: hello.short, emoji: '🎉' });
     await node.react({ target: hello.id, emoji: '🎉', as: 'pixel' });
 
@@ -61,7 +61,7 @@ describe('working together in a group', () => {
 
   it('tracks issues claimed and finished by an agent', async () => {
     const node = await setup();
-    const issue = await node.openIssue({ group: 'Weave', title: 'Encrypt keys at rest', labels: ['security'] });
+    const issue = await node.openIssue({ project: 'Weave', title: 'Encrypt keys at rest', labels: ['security'] });
     expect(issue.status).toBe('open');
     const claimed = await node.claimIssue({ issue: issue.short, as: 'forge' });
     expect(claimed).toMatchObject({ status: 'in-progress', assignee: { name: 'Martin', agent: 'forge' } });
@@ -74,15 +74,15 @@ describe('working together in a group', () => {
     const dir = mkdtempSync(join(tmpdir(), 'weave-collab-'));
     dirs.push(dir);
     const joiner = WeaveNode.init('Lena', dir);
-    await joiner.joinGroup(await founder.invite('Weave'));
-    const issue = await joiner.openIssue({ group: 'Weave', title: 'Written offline' });
+    await joiner.joinSpace(await founder.invite('Weave'));
+    const issue = await joiner.openIssue({ project: 'Weave', title: 'Written offline' });
     expect(issue.title).toBe('Written offline');
-    expect((await joiner.feed({ group: 'Weave', kinds: ['weave.issue'] })).length).toBe(1);
+    expect((await joiner.feed({ space: 'Weave', kinds: ['weave.issue'] })).length).toBe(1);
   });
 
   it('votes on proposals, and agents without the permission cannot', async () => {
     const node = await setup();
-    const proposal = await node.propose({ group: 'Weave', title: 'Ship M5', hours: 1 });
+    const proposal = await node.propose({ project: 'Weave', title: 'Ship M5', hours: 1 });
     expect(proposal).toMatchObject({ eligible: 1, quorum: 1, voted: 0, closed: false });
     const after = await node.vote({ proposal: proposal.short, choice: 'yes' });
     expect(after).toMatchObject({ yes: 1, quorumReached: true, myVote: { choice: 'yes' } });

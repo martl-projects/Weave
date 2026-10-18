@@ -1,11 +1,12 @@
 import {
   b64u,
+  canManage,
   channelName,
   channelsOf,
   CHOICES,
-  DEFAULT_CHANNEL,
   currentEpoch,
   decodeInvite,
+  DEFAULT_CHANNEL,
   delegation,
   edgeBody,
   EDGE_KINDS,
@@ -13,46 +14,55 @@ import {
   eventId,
   followersOf,
   friendsOf,
-  groupIdOf,
-  groupState,
-  groupTopic,
+  gift,
   isDid,
   ISSUE_STATUSES,
   issuesOf,
+  KIND_ADMIT,
   KIND_BLOCK,
   KIND_CHANNEL,
+  KIND_DECLINE,
   KIND_FOLLOW,
-  KIND_GROUP_CREATE,
+  KIND_GIFT,
   KIND_INVITE,
   KIND_ISSUE,
   KIND_ISSUE_CLAIM,
   KIND_ISSUE_STATUS,
   KIND_JOIN,
+  KIND_MAINTAINER,
   KIND_MSG,
   KIND_MUTE,
+  KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
   KIND_REACT,
   KIND_REKEY,
   KIND_REMOVE,
   KIND_REPLY,
+  KIND_RULE,
   KIND_SEALED,
+  KIND_SPACE_CREATE,
   KIND_THREAD,
   KIND_VOTE,
   KIND_VOTE_DELEGATE,
   messagesOf,
-  newGroup,
+  newSpace,
   open,
-  openGroupEvent,
+  openGift,
+  openIn,
   openRekey,
+  parseScope,
   permits,
   proposalsOf,
   randomBytes,
   rekey,
   Replica,
   seal,
-  sealForGroup,
+  sealFor,
   selfKey,
   socialGraph,
+  spaceScope,
+  spaceState,
+  spaceTopic,
   threadsOf,
   visibleIn,
   type Choice,
@@ -60,8 +70,8 @@ import {
   type EdgeEvent,
   type Entry,
   type EventFields,
-  type GroupState,
   type Inner,
+  type Invite,
   type Issue,
   type IssueStatus,
   type Json,
@@ -71,61 +81,76 @@ import {
   type Reply,
   type Sealed,
   type SigningIdentity,
+  type SpaceKind,
+  type SpaceState,
   type Thread,
   type WeaveEvent,
 } from '@weave/core';
 import { SwarmNode } from '@weave/net';
-import type {
-  Actor,
-  AgentInfo,
-  Backend,
-  ChannelInfo,
-  EdgeInput,
-  FeedItem,
-  FeedQuery,
-  GroupInfo,
-  InGroup,
-  IssueInfo,
-  MemberInfo,
-  MessageInfo,
-  Person,
-  Profile,
-  ProfileInput,
-  ProposalInfo,
-  PublishInput,
-  ReactionInfo,
-  ReplyInfo,
-  Social,
-  Status,
-  ThreadInfo,
-  Whoami,
+import {
+  PROJECT_STATUSES,
+  type Actor,
+  type Admission,
+  type AgentInfo,
+  type Backend,
+  type ChannelInfo,
+  type EdgeInput,
+  type FeedItem,
+  type FeedQuery,
+  type InProject,
+  type InSpace,
+  type IssueInfo,
+  type MemberInfo,
+  type MessageInfo,
+  type Person,
+  type Profile,
+  type ProfileInput,
+  type ProjectInfo,
+  type ProjectPage,
+  type ProjectStatus,
+  type ProposalInfo,
+  type PublicProject,
+  type PublishInput,
+  type ReactionInfo,
+  type ReplyInfo,
+  type Social,
+  type SpaceInfo,
+  type SpaceRef,
+  type Status,
+  type ThreadInfo,
+  type Whoami,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
-import { loadGroups, saveGroup, type StoredGroup } from './groupstore.ts';
 import { resolveHome, type Home } from './home.ts';
 import { createAndSaveAgent, createAndSaveIdentity, loadAgents, loadIdentity, type AgentKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
+import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
 export const KIND_PROFILE = 'weave.profile';
+/** A project's page, sealed inside the project; the latest one by a maintainer counts. */
+export const KIND_PAGE = 'weave.project.page';
+/** A public copy of a project's page, published by a maintainer when the project is public. */
+export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 const SELF_SCOPE = 'self';
 
 /** An event as this node can read it, before names are resolved. */
 interface Decoded {
   event: WeaveEvent;
   inner: Inner;
-  group?: StoredGroup;
+  space?: StoredSpace;
   private?: true;
 }
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
+const DEFAULT_PAGE: ProjectPage = { description: '', status: 'active', public: false };
 
 /**
  * One person's node: their keys, their replica of the logs they know, the
- * groups they belong to, and optionally a live connection to peers. The CLI
- * uses it directly when no daemon runs; the daemon wraps it with networking
- * and the HTTP API.
+ * groups and projects they belong to, and optionally a live connection to
+ * peers. The CLI uses it directly when no daemon runs; the daemon wraps it
+ * with networking and the HTTP API.
  */
 export class WeaveNode implements Backend {
   readonly home: Home;
@@ -133,7 +158,7 @@ export class WeaveNode implements Backend {
   readonly replica: Replica;
   config: Config;
   #agents: AgentKey[];
-  #groups = new Map<string, StoredGroup>();
+  #spaces = new Map<string, StoredSpace>();
   #swarm?: SwarmNode;
   #releaseLock: () => void;
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -146,13 +171,13 @@ export class WeaveNode implements Backend {
     this.replica = new Replica(new FileStore(home.logs));
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
-    for (const group of loadGroups(home)) this.#groups.set(group.id, group);
+    for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
-    // Pick up new group keys handed to us, now and whenever they arrive.
-    for (const event of this.replica.events((e) => e.kind === KIND_REKEY)) this.#takeRekey(event);
+    // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
+    for (const event of this.replica.events((e) => e.kind === KIND_REKEY || e.kind === KIND_GIFT)) this.#takeKeys(event);
     this.replica.onAppend((event) => {
       this.#decoded = undefined;
-      if (event.kind === KIND_REKEY) this.#takeRekey(event);
+      if (event.kind === KIND_REKEY || event.kind === KIND_GIFT) this.#takeKeys(event);
     });
   }
 
@@ -176,12 +201,12 @@ export class WeaveNode implements Backend {
     return this.#swarm !== undefined;
   }
 
-  /** Every DHT topic this node listens on: its own identity, configured topics, its groups and their entry points. */
+  /** Every DHT topic this node listens on: its identity, configured topics, its spaces and their entry points. */
   get topics(): string[] {
     const topics = new Set([this.identity.author, ...this.config.topics]);
-    for (const group of this.#groups.values()) {
-      topics.add(groupTopic(group));
-      for (const topic of group.entry.topics) topics.add(topic);
+    for (const space of this.#spaces.values()) {
+      topics.add(spaceTopic(space));
+      for (const topic of space.entry.topics) topics.add(topic);
     }
     return [...topics];
   }
@@ -215,28 +240,28 @@ export class WeaveNode implements Backend {
       throw new Error(`agent "${input.as}" may not sign ${input.kind}`);
     }
     const inner: Inner = { kind: input.kind, body: input.body ?? null };
-    const fields: EventFields = input.group ? sealForGroup(this.#group(input.group), inner) : inner;
+    const fields: EventFields = input.space ? sealFor(this.#space(input.space), inner) : inner;
     const event = this.replica.append(signer, fields);
     return this.itemFor(event)!;
   }
 
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
     const kinds = query.kinds?.length ? new Set(query.kinds) : undefined;
-    const onlyGroup = query.group ? this.#group(query.group) : undefined;
+    const onlySpace = query.space ? this.#space(query.space) : undefined;
     const onlyAuthor = query.author ? this.resolve(query.author) : undefined;
     const hidden = this.#hiddenAuthors();
-    const states = new Map<string, GroupState>();
+    const states = new Map<string, SpaceState>();
 
     const items: FeedItem[] = [];
     for (const decoded of this.#decodeAll()) {
-      if (onlyGroup && decoded.group?.id !== onlyGroup.id) continue;
+      if (onlySpace && decoded.space?.id !== onlySpace.id) continue;
       if (onlyAuthor && decoded.event.author !== onlyAuthor) continue;
-      if (query.publicOnly && (decoded.group || decoded.private)) continue;
+      if (query.publicOnly && (decoded.space || decoded.private)) continue;
       if (kinds && !kinds.has(decoded.inner.kind)) continue;
       if (hidden.has(decoded.event.author)) continue;
-      if (decoded.group) {
-        if (!states.has(decoded.group.id)) states.set(decoded.group.id, this.#groupState(decoded.group));
-        if (!this.#mine(decoded.event) && !visibleIn(states.get(decoded.group.id)!, decoded.event, decoded.inner)) continue;
+      if (decoded.space) {
+        if (!states.has(decoded.space.id)) states.set(decoded.space.id, this.#state(decoded.space));
+        if (!this.#mine(decoded.event) && !visibleIn(states.get(decoded.space.id)!, decoded.event, decoded.inner)) continue;
       }
       items.push(this.#toItem(decoded));
     }
@@ -260,12 +285,14 @@ export class WeaveNode implements Backend {
 
   async status(): Promise<Status> {
     const heads = this.replica.heads();
+    const spaces = [...this.#spaces.values()];
     return {
       did: this.identity.did,
       name: this.nameOf(this.identity.did),
       online: this.online,
       topics: this.config.topics,
-      groups: this.#groups.size,
+      groups: spaces.filter((s) => s.kind === 'group').length,
+      projects: spaces.filter((s) => s.kind === 'project').length,
       peers: this.#swarm?.sessions.size ?? 0,
       logs: Object.keys(heads).length,
       events: Object.values(heads).reduce((sum, seq) => sum + seq, 0),
@@ -282,57 +309,50 @@ export class WeaveNode implements Backend {
     unsubscribe();
   }
 
-  // ---------------------------------------------------------------- groups
+  // ---------------------------------------------------------------- groups and projects
 
-  async createGroup(name: string): Promise<GroupInfo> {
-    const group: StoredGroup = { ...newGroup(name, this.identity.author), entry: { topics: [], bootstrap: [] } };
-    this.#saveGroup(group);
-    this.replica.append(this.identity, sealForGroup(group, { kind: KIND_GROUP_CREATE, body: { name } }));
-    await this.#swarm?.join(groupTopic(group));
-    return this.#groupInfo(group);
+  async spaces(kind?: SpaceKind): Promise<SpaceInfo[]> {
+    return [...this.#spaces.values()].filter((s) => !kind || s.kind === kind).map((s) => this.#spaceInfo(s));
   }
 
-  async groups(): Promise<GroupInfo[]> {
-    return [...this.#groups.values()].map((g) => this.#groupInfo(g));
+  async createGroup(name: string): Promise<SpaceInfo> {
+    return this.#spaceInfo(await this.#createSpace('group', name));
   }
 
-  async invite(groupRef: string, hours = 24 * 7): Promise<string> {
-    const group = this.#group(groupRef);
+  async createProject(input: { name: string; description?: string }): Promise<ProjectInfo> {
+    const project = await this.#createSpace('project', input.name);
+    if (input.description) this.replica.append(this.identity, sealFor(project, { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, description: input.description } }));
+    return this.project(project.id);
+  }
+
+  async invite(ref: string, hours = 24 * 7): Promise<string> {
+    const space = this.#space(ref);
+    const state = this.#state(space);
+    const allowed = space.kind === 'group' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
+    if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
     const invite = b64u.encode(randomBytes(12));
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
-    this.replica.append(this.identity, sealForGroup(group, { kind: KIND_INVITE, body: { invite, expires } }));
-    const { entry: _entry, ...keys } = group;
-    return encodeInvite({
-      v: 1,
-      group: keys,
-      invite,
-      inviter: this.identity.author,
-      expires,
-      entry: { topics: [this.identity.author], bootstrap: this.config.bootstrap },
-    });
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_INVITE, body: { invite, expires } }));
+    const { entry: _entry, ...keys } = space;
+    return encodeInvite({ v: 2, space: keys, invite, inviter: this.identity.author, expires, entry: this.#entryPoint() });
   }
 
-  async joinGroup(text: string): Promise<GroupInfo> {
+  async joinSpace(text: string): Promise<SpaceInfo> {
     const invite = decodeInvite(text);
-    if (this.#groups.has(invite.group.id)) throw new Error(`already in group "${invite.group.name}"`);
-    // Someone on a private network (e.g. a local testnet) brings us onto it.
-    if (!this.config.bootstrap.length && invite.entry.bootstrap.length) {
-      this.config = { ...this.config, bootstrap: invite.entry.bootstrap };
-      saveConfig(this.home, this.config);
-    }
-    const group: StoredGroup = { ...invite.group, entry: invite.entry };
-    this.#saveGroup(group);
-    this.replica.append(this.identity, sealForGroup(group, { kind: KIND_JOIN, body: { invite: invite.invite } }));
-    if (this.#swarm) await Promise.all([groupTopic(group), ...invite.entry.topics].map((t) => this.#swarm!.join(t)));
-    return this.#groupInfo(group);
+    if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
+    this.#adoptBootstrap(invite.entry);
+    const space: StoredSpace = { ...invite.space, entry: invite.entry };
+    await this.#addSpace(space);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_JOIN, body: { invite: invite.invite } }));
+    return this.#spaceInfo(space);
   }
 
-  async members(groupRef: string): Promise<MemberInfo[]> {
-    const group = this.#group(groupRef);
-    const state = this.#groupState(group);
+  async members(ref: string): Promise<MemberInfo[]> {
+    const space = this.#space(ref);
+    const state = this.#state(space);
     const lastActive = new Map<Did, string>();
     const agents = new Map<Did, Set<string>>();
-    for (const entry of this.#entries(group)) {
+    for (const entry of this.#entries(space)) {
       const { author, signer, time } = entry.event;
       if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
       const agent = signer !== author ? this.replica.authority.grant(signer)?.name : undefined;
@@ -343,27 +363,164 @@ export class WeaveNode implements Backend {
       name: this.nameOf(m.did),
       since: m.since,
       ...(m.invitedBy ? { invitedBy: m.invitedBy, invitedByName: this.nameOf(m.invitedBy) } : {}),
+      ...(m.via ? { via: this.#groupRef(m.via, state) } : {}),
+      ...(space.kind === 'project' && state.maintainers.has(m.did) ? { maintainer: true as const } : {}),
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
     }));
   }
 
-  async removeMember(groupRef: string, who: string): Promise<void> {
-    const group = this.#group(groupRef);
-    if (group.founder !== this.identity.author) throw new Error('only the group founder can remove members (for now)');
+  async removeMember(ref: string, who: string): Promise<void> {
+    const space = this.#space(ref);
+    const state = this.#state(space);
+    if (!canManage(state, this.identity.author)) {
+      throw new Error(space.kind === 'project' ? 'only maintainers can remove people from a project' : 'only the group founder can remove members');
+    }
     const member = this.resolve(who);
-    const state = this.#groupState(group);
-    if (!state.members.has(member)) throw new Error(`${who} is not a member of "${group.name}"`);
-
-    this.replica.append(this.identity, sealForGroup(group, { kind: KIND_REMOVE, body: { member } }));
+    if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
+    if (member === space.founder) throw new Error(`the founder can't be removed from ${space.name}`);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_REMOVE, body: { member } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
-    const { fields, epoch, key } = rekey(group, remaining);
-    group.keys[String(epoch)] = key;
-    this.#saveGroup(group);
+    const { fields, epoch, key } = rekey(space, remaining);
+    space.keys[String(epoch)] = key;
+    this.#saveSpace(space);
     this.replica.append(this.identity, fields);
   }
 
-  // ---------------------------------------------------------------- social graph
+  // ---------------------------------------------------------------- projects
+
+  async project(ref: string): Promise<ProjectInfo> {
+    const project = this.#project(ref);
+    const state = this.#state(project);
+    return {
+      ...this.#spaceInfo(project),
+      kind: 'project',
+      page: this.#page(project, state),
+      maintainers: [...state.maintainers].map((did) => this.#actor(did, did)),
+      groups: [...state.groups.values()].map((g) => ({ id: g.id, name: this.#spaces.get(g.id)?.name ?? g.name, auto: g.auto })),
+      maintainer: state.maintainers.has(this.identity.author),
+    };
+  }
+
+  async setProjectPage(input: { project: string } & Partial<ProjectPage>): Promise<ProjectInfo> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    if (input.status !== undefined && !PROJECT_STATUSES.includes(input.status)) throw new Error(`status is one of ${PROJECT_STATUSES.join(', ')}`);
+    const before = this.#page(project, state);
+    const page: ProjectPage = {
+      description: input.description ?? before.description,
+      status: input.status ?? before.status,
+      public: input.public ?? before.public,
+    };
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_PAGE, body: { ...page } }));
+    // Public projects keep a public copy of their page; making it private publishes a withdrawal.
+    if (page.public || before.public) {
+      const body: Record<string, Json> = page.public
+        ? { project: project.id, name: project.name, description: page.description, status: page.status, public: true }
+        : { project: project.id, public: false };
+      this.replica.append(this.identity, { kind: KIND_PUBLIC_PROJECT, body });
+    }
+    return this.project(project.id);
+  }
+
+  async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const member = this.resolve(input.who);
+    if (input.on && !state.members.has(member)) throw new Error(`${input.who} doesn't take part in ${project.name}`);
+    if (!input.on && member === project.founder) throw new Error('the founder always stays a maintainer');
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_MAINTAINER, body: { member, on: input.on } }));
+  }
+
+  async inviteGroup(input: { project: string; group: string }): Promise<void> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const group = this.#space(input.group, 'group');
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: true } }));
+    // Inviting the group is the consent for everyone in it right now.
+    const newcomers = [...this.#state(group).members.keys()].filter((did) => !state.members.has(did));
+    this.#admitAll(project, group, newcomers);
+  }
+
+  async uninviteGroup(input: { project: string; group: string }): Promise<void> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const group = this.#knownGroup(project, input.group);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: false } }));
+  }
+
+  async setRule(input: { project: string; group: string; auto: boolean }): Promise<void> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const group = this.#knownGroup(project, input.group);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_RULE, body: { group: group.id, auto: input.auto } }));
+  }
+
+  async admissions(ref?: string): Promise<Admission[]> {
+    const projects = ref ? [this.#project(ref)] : [...this.#spaces.values()].filter((s) => s.kind === 'project');
+    const out: Admission[] = [];
+    for (const project of projects) {
+      const state = this.#state(project);
+      if (!state.maintainers.has(this.identity.author)) continue;
+      for (const change of this.#changes(project, state)) out.push(change);
+    }
+    return out;
+  }
+
+  async admit(input: { project: string; who: string; group: string; always?: boolean }): Promise<void> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const group = this.#space(input.group, 'group');
+    if (!state.groups.has(group.id)) throw new Error(`${group.name} is not invited to ${project.name}`);
+    // "Allow for all projects with this group": a standing rule in every project we maintain that invited it.
+    if (input.always) {
+      for (const other of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
+        const otherState = this.#state(other);
+        if (otherState.maintainers.has(this.identity.author) && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
+          this.replica.append(this.identity, sealFor(other, { kind: KIND_RULE, body: { group: group.id, auto: true } }));
+        }
+      }
+    }
+    const did = this.resolve(input.who);
+    if (!state.members.has(did)) this.#admitAll(project, group, [did]);
+  }
+
+  async decline(input: { project: string; who: string; group: string }): Promise<void> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const group = this.#knownGroup(project, input.group);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_DECLINE, body: { member: this.resolve(input.who), via: group.id } }));
+  }
+
+  /**
+   * Carry out standing rules: admit newcomers of auto-admitted groups (any
+   * participant may), and remove those who left them (maintainers only).
+   * The daemon calls this whenever new events arrive. Returns how many people
+   * were admitted or removed.
+   */
+  async reconcile(): Promise<number> {
+    let changed = 0;
+    for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
+      const state = this.#state(project);
+      if (!state.members.has(this.identity.author)) continue;
+      const joins = new Map<string, Did[]>();
+      for (const change of this.#changes(project, state)) {
+        if (!state.groups.get(change.group.id)?.auto) continue;
+        if (change.change === 'join') joins.set(change.group.id, [...(joins.get(change.group.id) ?? []), change.did]);
+        else if (state.maintainers.has(this.identity.author)) {
+          await this.removeMember(project.id, change.did);
+          changed++;
+        }
+      }
+      for (const [groupId, dids] of joins) {
+        this.#admitAll(project, this.#spaces.get(groupId)!, dids);
+        changed += dids.length;
+      }
+    }
+    return changed;
+  }
+
+  // ---------------------------------------------------------------- people
 
   async setEdge(input: EdgeInput): Promise<void> {
     const subject = this.resolve(input.who);
@@ -387,8 +544,6 @@ export class WeaveNode implements Backend {
     };
   }
 
-  // ---------------------------------------------------------------- spaces
-
   async profile(who?: string): Promise<Profile> {
     const did = who ? this.resolve(who) : this.identity.author;
     const graph = this.#graph();
@@ -404,6 +559,7 @@ export class WeaveNode implements Backend {
       blocked: mine?.blocked.has(did) ?? false,
       muted: mine?.muted.has(did) ?? false,
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
+      projects: this.publicProjectsOf(did),
     };
   }
 
@@ -434,40 +590,40 @@ export class WeaveNode implements Backend {
     return sanitizeTheme(theme);
   }
 
-  // ---------------------------------------------------------------- working together
-
-  async threads(groupRef: string): Promise<ThreadInfo[]> {
-    return threadsOf(this.#entries(this.#group(groupRef))).map((t) => this.#threadInfo(t));
+  /** Projects someone shows publicly: their latest public page per project, unless withdrawn. */
+  publicProjectsOf(author: Did): PublicProject[] {
+    const latest = new Map<string, { body: Record<string, unknown>; time: string }>();
+    for (const event of this.replica.store.range(author, 1)) {
+      const body = event.body as Record<string, unknown> | null;
+      if (event.kind === KIND_PUBLIC_PROJECT && typeof body?.project === 'string') latest.set(body.project, { body, time: event.time });
+    }
+    return [...latest.values()]
+      .filter(({ body }) => body.public === true && typeof body.name === 'string')
+      .map(({ body, time }) => ({
+        id: body.project as string,
+        name: body.name as string,
+        description: typeof body.description === 'string' ? body.description : '',
+        status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
+        time,
+      }));
   }
 
-  async startThread(input: InGroup & { title: string; text?: string }): Promise<ThreadInfo> {
-    if (!input.title?.trim()) throw new Error('a thread needs a title');
-    const { id } = await this.publish({ kind: KIND_THREAD, body: { title: input.title.trim(), text: input.text ?? '' }, group: input.group, as: input.as });
-    return (await this.threads(input.group)).find((t) => t.id === id)!;
+  // ---------------------------------------------------------------- chat
+
+  async channels(ref: string): Promise<ChannelInfo[]> {
+    return channelsOf(this.#entries(this.#space(ref)));
   }
 
-  async reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
-    if (!input.text?.trim()) throw new Error('a reply needs text');
-    const target = this.#find(input.target, [KIND_THREAD, KIND_ISSUE, KIND_PROPOSAL]);
-    const item = await this.publish({ kind: KIND_REPLY, body: { target: target.id, text: input.text.trim() }, group: target.group?.id, as: input.as });
-    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
-  }
-
-  async channels(groupRef: string): Promise<ChannelInfo[]> {
-    return channelsOf(this.#entries(this.#group(groupRef)));
-  }
-
-  async createChannel(input: InGroup & { name: string; topic?: string }): Promise<ChannelInfo> {
+  async createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo> {
     const name = channelName(input.name);
     if (!name) throw new Error('channel names use letters, digits and dashes');
-    if ((await this.channels(input.group)).some((c) => c.name === name)) throw new Error(`#${name} already exists`);
-    await this.publish({ kind: KIND_CHANNEL, body: { name, topic: input.topic ?? '' }, group: input.group, as: input.as });
-    return (await this.channels(input.group)).find((c) => c.name === name)!;
+    if ((await this.channels(input.space)).some((c) => c.name === name)) throw new Error(`#${name} already exists`);
+    await this.publish({ kind: KIND_CHANNEL, body: { name, topic: input.topic ?? '' }, space: input.space, as: input.as });
+    return (await this.channels(input.space)).find((c) => c.name === name)!;
   }
 
-  async messages(groupRef: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
-    const entries = this.#entries(this.#group(groupRef));
-    const all = messagesOf(entries);
+  async messages(ref: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
+    const all = messagesOf(this.#entries(this.#space(ref)));
     const byId = new Map(all.map((m) => [m.id, m]));
     const channel = options.channel ? channelName(options.channel) ?? DEFAULT_CHANNEL : undefined;
     return all
@@ -476,7 +632,7 @@ export class WeaveNode implements Backend {
       .map((m) => this.#messageInfo(m, byId));
   }
 
-  async say(input: InGroup & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
+  async say(input: InSpace & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
     const text = input.text?.trim();
     if (!text) throw new Error('a message needs text');
     const body: Record<string, Json> = { text };
@@ -484,76 +640,97 @@ export class WeaveNode implements Backend {
     if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
     if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
     if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG]).id;
-    const { id } = await this.publish({ kind: KIND_MSG, body, group: input.group, as: input.as });
-    return (await this.messages(input.group)).find((m) => m.id === id)!;
+    const { id } = await this.publish({ kind: KIND_MSG, body, space: input.space, as: input.as });
+    return (await this.messages(input.space)).find((m) => m.id === id)!;
   }
 
   async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
     const emoji = input.emoji?.trim();
     if (!emoji || emoji.length > 16) throw new Error('react with one emoji');
     const target = this.#find(input.target, [KIND_MSG, 'weave.post', KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
-    await this.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, group: target.group?.id, as: input.as });
+    await this.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, space: target.space?.id, as: input.as });
   }
 
-  async issues(groupRef: string): Promise<IssueInfo[]> {
-    return issuesOf(this.#entries(this.#group(groupRef))).map((i) => this.#issueInfo(i));
+  // ---------------------------------------------------------------- working together, in projects
+
+  async threads(ref: string): Promise<ThreadInfo[]> {
+    return threadsOf(this.#entries(this.#project(ref))).map((t) => this.#threadInfo(t));
   }
 
-  async openIssue(input: InGroup & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
+  async startThread(input: InProject & { title: string; text?: string }): Promise<ThreadInfo> {
+    if (!input.title?.trim()) throw new Error('a thread needs a title');
+    const project = this.#project(input.project);
+    const { id } = await this.publish({ kind: KIND_THREAD, body: { title: input.title.trim(), text: input.text ?? '' }, space: project.id, as: input.as });
+    return (await this.threads(project.id)).find((t) => t.id === id)!;
+  }
+
+  async reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
+    if (!input.text?.trim()) throw new Error('a reply needs text');
+    const target = this.#find(input.target, [KIND_THREAD, KIND_ISSUE, KIND_PROPOSAL]);
+    const item = await this.publish({ kind: KIND_REPLY, body: { target: target.id, text: input.text.trim() }, space: target.space?.id, as: input.as });
+    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
+  }
+
+  async issues(ref: string): Promise<IssueInfo[]> {
+    return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
+  }
+
+  async openIssue(input: InProject & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
     if (!input.title?.trim()) throw new Error('an issue needs a title');
+    const project = this.#project(input.project);
     const body = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
-    const { id } = await this.publish({ kind: KIND_ISSUE, body, group: input.group, as: input.as });
-    return (await this.issues(input.group)).find((i) => i.id === id)!;
+    const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
+    return (await this.issues(project.id)).find((i) => i.id === id)!;
   }
 
   async claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo> {
     const issue = this.#find(input.issue, [KIND_ISSUE]);
-    await this.publish({ kind: KIND_ISSUE_CLAIM, body: { issue: issue.id }, group: issue.group?.id, as: input.as });
+    await this.publish({ kind: KIND_ISSUE_CLAIM, body: { issue: issue.id }, space: issue.space?.id, as: input.as });
     return this.#issueById(issue);
   }
 
   async setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo> {
     if (!ISSUE_STATUSES.includes(input.status)) throw new Error(`status must be one of ${ISSUE_STATUSES.join(', ')}`);
     const issue = this.#find(input.issue, [KIND_ISSUE]);
-    await this.publish({ kind: KIND_ISSUE_STATUS, body: { issue: issue.id, status: input.status }, group: issue.group?.id, as: input.as });
+    await this.publish({ kind: KIND_ISSUE_STATUS, body: { issue: issue.id, status: input.status }, space: issue.space?.id, as: input.as });
     return this.#issueById(issue);
   }
 
-  async proposals(groupRef: string): Promise<ProposalInfo[]> {
-    const group = this.#group(groupRef);
-    const members = new Set(this.#groupState(group).members.keys());
-    return proposalsOf(this.#entries(group), members).map((p) => this.#proposalInfo(p));
+  async proposals(ref: string): Promise<ProposalInfo[]> {
+    const project = this.#project(ref);
+    const participants = new Set(this.#state(project).members.keys());
+    return proposalsOf(this.#entries(project), participants).map((p) => this.#proposalInfo(p));
   }
 
-  async propose(input: InGroup & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
+  async propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
     if (!input.title?.trim()) throw new Error('a proposal needs a title');
+    const project = this.#project(input.project);
     const deadline = new Date(Date.now() + (input.hours ?? 72) * 3600_000).toISOString();
     const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', deadline };
     if (input.quorum) body.quorum = input.quorum;
-    const { id } = await this.publish({ kind: KIND_PROPOSAL, body, group: input.group, as: input.as });
-    return (await this.proposals(input.group)).find((p) => p.id === id)!;
+    const { id } = await this.publish({ kind: KIND_PROPOSAL, body, space: project.id, as: input.as });
+    return (await this.proposals(project.id)).find((p) => p.id === id)!;
   }
 
   async vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo> {
     if (!CHOICES.includes(input.choice)) throw new Error(`vote ${CHOICES.join(', ')}`);
     const proposal = this.#find(input.proposal, [KIND_PROPOSAL]);
-    if (!proposal.group) throw new Error('votes happen inside groups');
-    await this.publish({ kind: KIND_VOTE, body: { proposal: proposal.id, choice: input.choice }, group: proposal.group.id, as: input.as });
-    return (await this.proposals(proposal.group.id)).find((p) => p.id === proposal.id)!;
+    if (proposal.space?.kind !== 'project') throw new Error('votes happen inside projects');
+    await this.publish({ kind: KIND_VOTE, body: { proposal: proposal.id, choice: input.choice }, space: proposal.space.id, as: input.as });
+    return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
   }
 
-  async delegateVote(input: { group: string; who?: string }): Promise<void> {
+  async delegateVote(input: { project: string; who?: string }): Promise<void> {
+    const project = this.#project(input.project);
     const to = input.who ? this.resolve(input.who) : null;
     if (to === this.identity.author) throw new Error('you cannot delegate to yourself');
-    await this.publish({ kind: KIND_VOTE_DELEGATE, body: { to }, group: input.group });
+    await this.publish({ kind: KIND_VOTE_DELEGATE, body: { to }, space: project.id });
   }
 
-  async votingDelegate(groupRef: string): Promise<Actor | null> {
+  async votingDelegate(ref: string): Promise<Actor | null> {
     let to: unknown = null;
-    for (const entry of this.#entries(this.#group(groupRef))) {
-      if (entry.kind === KIND_VOTE_DELEGATE && entry.event.author === this.identity.author) {
-        to = (entry.body as { to?: unknown } | null)?.to ?? null;
-      }
+    for (const entry of this.#entries(this.#project(ref))) {
+      if (entry.kind === KIND_VOTE_DELEGATE && entry.event.author === this.identity.author) to = (entry.body as { to?: unknown } | null)?.to ?? null;
     }
     return isDid(to) ? this.#actor(to, to) : null;
   }
@@ -581,53 +758,170 @@ export class WeaveNode implements Backend {
     return name;
   }
 
-  /** The event as this node can read it, or undefined if it can't (someone else's group or private data). */
+  /** The event as this node can read it, or undefined if it can't (someone else's space or private data). */
   itemFor(event: WeaveEvent): FeedItem | undefined {
     const decoded = this.#decode(event);
     return decoded && this.#toItem(decoded);
   }
 
-  // ---------------------------------------------------------------- internals
+  // ---------------------------------------------------------------- internals: spaces
 
-  #group(ref: string): StoredGroup {
-    const byId = this.#groups.get(ref);
-    if (byId) return byId;
-    const byName = [...this.#groups.values()].filter((g) => g.name.toLowerCase() === ref.toLowerCase());
+  /** A space by id or name, optionally of one kind. */
+  #space(ref: string, kind?: SpaceKind): StoredSpace {
+    const byId = this.#spaces.get(ref);
+    if (byId && (!kind || byId.kind === kind)) return byId;
+    const byName = [...this.#spaces.values()].filter((s) => (!kind || s.kind === kind) && s.name.toLowerCase() === ref.toLowerCase());
     if (byName.length === 1) return byName[0];
-    throw new Error(byName.length ? `several groups are named "${ref}" — use its id` : `you are not in a group "${ref}"`);
+    const what = kind ?? 'group or project';
+    throw new Error(byName.length ? `several ${what}s are named "${ref}" — use its id` : `you are not in a ${what} "${ref}"`);
   }
 
-  #saveGroup(group: StoredGroup): void {
+  #project(ref: string): StoredSpace {
+    const space = this.#space(ref);
+    if (space.kind !== 'project') throw new Error(`${space.name} is a group; discussions, votes and issues live in projects`);
+    return space;
+  }
+
+  #maintainerState(project: StoredSpace): SpaceState {
+    const state = this.#state(project);
+    if (!state.maintainers.has(this.identity.author)) throw new Error(`only maintainers of ${project.name} can do that`);
+    return state;
+  }
+
+  /** A group invited to a project, by name or id, even if this node isn't in that group. */
+  #knownGroup(project: StoredSpace, ref: string): { id: string; name: string } {
+    const invited = [...this.#state(project).groups.values()];
+    const match = invited.find((g) => g.id === ref) ?? invited.find((g) => (this.#spaces.get(g.id)?.name ?? g.name).toLowerCase() === ref.toLowerCase());
+    if (!match) throw new Error(`no group "${ref}" is invited to ${project.name}`);
+    return { id: match.id, name: this.#spaces.get(match.id)?.name ?? match.name };
+  }
+
+  #groupRef(id: string, state: SpaceState): SpaceRef {
+    return { id, kind: 'group', name: this.#spaces.get(id)?.name ?? state.groups.get(id)?.name ?? 'group' };
+  }
+
+  #mineFounder = (space: StoredSpace) => space.founder === this.identity.author;
+
+  async #createSpace(kind: SpaceKind, name: string): Promise<StoredSpace> {
+    if (!name?.trim()) throw new Error(`a ${kind} needs a name`);
+    const space: StoredSpace = { ...newSpace(kind, name.trim(), this.identity.author), entry: { topics: [], bootstrap: [] } };
+    await this.#addSpace(space);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_SPACE_CREATE, body: { name: space.name } }));
+    return space;
+  }
+
+  async #addSpace(space: StoredSpace): Promise<void> {
+    this.#saveSpace(space);
+    if (this.#swarm) await Promise.all([spaceTopic(space), ...space.entry.topics].map((t) => this.#swarm!.join(t)));
+  }
+
+  #saveSpace(space: StoredSpace): void {
     this.#decoded = undefined;
-    this.#groups.set(group.id, group);
-    saveGroup(this.home, group);
+    this.#spaces.set(space.id, space);
+    saveSpace(this.home, space);
   }
 
-  #takeRekey(event: WeaveEvent): void {
-    const group = this.#groups.get(groupIdOf(event.scope) ?? '');
-    if (!group || event.author !== group.founder) return;
-    const opened = openRekey(event, this.identity);
-    if (opened && !group.keys[String(opened.epoch)]) {
-      group.keys[String(opened.epoch)] = opened.key;
-      this.#saveGroup(group);
+  #entryPoint(): Invite['entry'] {
+    return { topics: [this.identity.author], bootstrap: this.config.bootstrap };
+  }
+
+  /** Someone on a private network (e.g. a local testnet) brings us onto it. */
+  #adoptBootstrap(entry: Invite['entry']): void {
+    if (!this.config.bootstrap.length && entry.bootstrap.length) {
+      this.config = { ...this.config, bootstrap: entry.bootstrap };
+      saveConfig(this.home, this.config);
     }
   }
 
-  #groupState(group: StoredGroup): GroupState {
-    const opened = this.#decodeAll().filter((d) => d.group?.id === group.id);
-    return groupState(group.founder, opened);
+  /** Record admissions into a project and hand the newcomers its keys through the group they came by. */
+  #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
+    if (!dids.length) return;
+    for (const member of dids) this.replica.append(this.identity, sealFor(project, { kind: KIND_ADMIT, body: { member, via: group.id } }));
+    const { entry: _entry, ...keys } = project;
+    this.replica.append(this.identity, gift({ ...keys }, dids, spaceScope(group), this.#entryPoint()));
   }
 
-  #groupInfo(group: StoredGroup): GroupInfo {
+  /** Joins to and departures from a project's invited groups that this node can see (it must be in the group). */
+  #changes(project: StoredSpace, state: SpaceState): Admission[] {
+    const changes: Admission[] = [];
+    const projectRef: SpaceRef = { id: project.id, kind: 'project', name: project.name };
+    for (const invited of state.groups.values()) {
+      const group = this.#spaces.get(invited.id);
+      if (!group) continue;
+      const groupMembers = this.#state(group).members;
+      const groupRef: SpaceRef = { id: group.id, kind: 'group', name: group.name };
+      for (const did of groupMembers.keys()) {
+        if (!state.members.has(did) && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
+      }
+      for (const member of state.members.values()) {
+        if (member.via === group.id && !groupMembers.has(member.did) && member.did !== project.founder) {
+          changes.push({ project: projectRef, did: member.did, name: this.nameOf(member.did), group: groupRef, change: 'leave' });
+        }
+      }
+    }
+    return changes;
+  }
+
+  /** New epoch keys from a rekey, or a whole space gifted to us when a project admitted us. */
+  #takeKeys(event: WeaveEvent): void {
+    if (event.kind === KIND_REKEY) {
+      const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
+      if (!space || !canManage(this.#state(space), event.author)) return;
+      const opened = openRekey(event, this.identity);
+      if (opened && !space.keys[String(opened.epoch)]) {
+        space.keys[String(opened.epoch)] = opened.key;
+        this.#saveSpace(space);
+      }
+      return;
+    }
+    const opened = openGift(event, this.identity);
+    if (!opened) return;
+    // Only accept gifts posted in a group we're in, by someone in that group.
+    const via = this.#spaces.get(parseScope(event.scope)?.id ?? '');
+    if (!via || via.kind !== 'group' || !this.#state(via).members.has(event.author)) return;
+    const known = this.#spaces.get(opened.space.id);
+    if (known) {
+      let added = false;
+      for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch]) (known.keys[epoch] = key), (added = true);
+      if (added) this.#saveSpace(known);
+      return;
+    }
+    this.#adoptBootstrap(opened.entry);
+    void this.#addSpace({ ...opened.space, entry: opened.entry });
+  }
+
+  #state(space: StoredSpace): SpaceState {
+    const opened = this.#decodeAll().filter((d) => d.space?.id === space.id);
+    return spaceState(space.kind, space.founder, opened);
+  }
+
+  #page(project: StoredSpace, state: SpaceState): ProjectPage {
+    let page = DEFAULT_PAGE;
+    for (const d of this.#decodeAll()) {
+      if (d.space?.id !== project.id || d.inner.kind !== KIND_PAGE || !state.maintainers.has(d.event.author)) continue;
+      const body = d.inner.body as Partial<ProjectPage> | null;
+      page = {
+        description: typeof body?.description === 'string' ? body.description.slice(0, 5000) : page.description,
+        status: PROJECT_STATUSES.includes(body?.status as ProjectStatus) ? (body!.status as ProjectStatus) : page.status,
+        public: body?.public === true,
+      };
+    }
+    return page;
+  }
+
+  #spaceInfo(space: StoredSpace): SpaceInfo {
     return {
-      id: group.id,
-      name: group.name,
-      founder: group.founder,
-      founderName: this.nameOf(group.founder),
-      members: this.#groupState(group).members.size,
-      epoch: currentEpoch(group),
+      id: space.id,
+      kind: space.kind,
+      name: space.name,
+      founder: space.founder,
+      founderName: this.nameOf(space.founder),
+      members: this.#state(space).members.size,
+      epoch: currentEpoch(space),
     };
   }
+
+  // ---------------------------------------------------------------- internals: reading
 
   #sealForSelf(inner: Inner): EventFields {
     const key = selfKey(this.identity.keys.secretKey);
@@ -635,7 +929,7 @@ export class WeaveNode implements Backend {
   }
 
   #decode(event: WeaveEvent): Decoded | undefined {
-    if (event.kind === KIND_REKEY) return undefined; // key plumbing, not content
+    if (event.kind === KIND_REKEY || event.kind === KIND_GIFT) return undefined; // key plumbing, not content
     if (event.kind !== KIND_SEALED) return { event, inner: { kind: event.kind, body: event.body } };
 
     let decoded: Decoded | undefined;
@@ -649,10 +943,10 @@ export class WeaveNode implements Backend {
         return undefined;
       }
     } else {
-      const group = this.#groups.get(groupIdOf(event.scope) ?? '');
-      const inner = group && openGroupEvent(group, event);
+      const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
+      const inner = space && openIn(space, event);
       if (!inner) return undefined;
-      decoded = { event, inner, group };
+      decoded = { event, inner, space };
     }
     // A delegated key may carry sealed events, but only of kinds it was granted.
     if (event.signer !== event.author) {
@@ -689,11 +983,11 @@ export class WeaveNode implements Backend {
    */
   #mine = (event: WeaveEvent): boolean => event.author === this.identity.author;
 
-  /** A group's readable events from members, as entries for the collaboration functions. */
-  #entries(group: StoredGroup): Entry[] {
-    const state = this.#groupState(group);
+  /** A space's readable events from members, as entries for the collaboration functions. */
+  #entries(space: StoredSpace): Entry[] {
+    const state = this.#state(space);
     return this.#decodeAll()
-      .filter((d) => d.group?.id === group.id && (this.#mine(d.event) || visibleIn(state, d.event, d.inner)))
+      .filter((d) => d.space?.id === space.id && (this.#mine(d.event) || visibleIn(state, d.event, d.inner)))
       .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
   }
 
@@ -710,8 +1004,8 @@ export class WeaveNode implements Backend {
   }
 
   async #issueById(issue: Decoded & { id: string }): Promise<IssueInfo> {
-    if (!issue.group) throw new Error('issues live inside groups');
-    return (await this.issues(issue.group.id)).find((i) => i.id === issue.id)!;
+    if (issue.space?.kind !== 'project') throw new Error('issues live inside projects');
+    return (await this.issues(issue.space.id)).find((i) => i.id === issue.id)!;
   }
 
   #actor(author: Did, signer: Did): Actor {
@@ -787,7 +1081,7 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #toItem({ event, inner, group, private: isPrivate }: Decoded): FeedItem {
+  #toItem({ event, inner, space, private: isPrivate }: Decoded): FeedItem {
     const item: FeedItem = {
       id: eventId(event),
       time: event.time,
@@ -804,7 +1098,7 @@ export class WeaveNode implements Backend {
       const signerName = this.replica.authority.grant(event.signer)?.name;
       if (signerName) item.signerName = signerName;
     }
-    if (group) item.group = { id: group.id, name: group.name };
+    if (space) item.space = { id: space.id, kind: space.kind, name: space.name };
     if (isPrivate) item.private = true;
     return item;
   }
