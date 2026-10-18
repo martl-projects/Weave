@@ -31,6 +31,14 @@ describe('contact links', () => {
     await expect(ada.addContact(link)).rejects.toThrow(/your own/);
     await expect(martin.addContact('weave:contact:garbage')).rejects.toThrow(/damaged/);
     await martin.addContact(link); // twice is fine
+
+    // A link from a private test network doesn't silently move an established node there.
+    const tester = person('Tester');
+    tester.config = { ...tester.config, bootstrap: [{ host: '127.0.0.1', port: 49737 }] };
+    await expect(martin.addContact(await tester.contactLink())).rejects.toThrow(/private network at 127.0.0.1:49737.*public network/);
+    expect(martin.config.bootstrap).toEqual([]);
+    await tester.createGroup('Testers');
+    await expect(martin.joinSpace(await tester.invite('Testers'))).rejects.toThrow(/weave bootstrap 127.0.0.1:49737/);
     expect(martin.replica.events().filter((e) => e.author === martin.identity.did && e.scope === 'self').length).toBe(1);
   });
 });

@@ -1310,10 +1310,22 @@ export class WeaveNode implements Backend {
 
   /** Someone on a private network (e.g. a local testnet) brings us onto it. */
   #adoptBootstrap(entry: Invite['entry']): void {
-    if (!this.config.bootstrap.length && entry.bootstrap.length) {
+    const key = (list: Invite['entry']['bootstrap']) => JSON.stringify(list.map((b) => `${b.host}:${b.port}`).sort());
+    if (key(entry.bootstrap) === key(this.config.bootstrap)) return;
+    const describe = (list: Invite['entry']['bootstrap']) => (list.length ? `the private network at ${list.map((b) => `${b.host}:${b.port}`).join(', ')}` : 'the public network');
+    // A brand-new node may follow its first link onto a private network (handy for test networks):
+    // it has nothing there yet to lose. An established node never switches silently.
+    const fresh = this.config.bootstrap.length === 0 && this.#spaces.size === 0 && this.#contacts().size === 0 && !(this.#graph().get(this.identity.author)?.following.size);
+    if (fresh && entry.bootstrap.length) {
       this.config = { ...this.config, bootstrap: entry.bootstrap };
       saveConfig(this.home, this.config);
+      return;
     }
+    const fix = entry.bootstrap.length ? `weave bootstrap ${entry.bootstrap.map((b) => `${b.host}:${b.port}`).join(' ')}` : 'weave bootstrap --clear';
+    throw new Error(
+      `this link comes from ${describe(entry.bootstrap)}, but your node uses ${describe(this.config.bootstrap)}, so you couldn't reach each other. ` +
+        `To switch on purpose: "${fix}", restart your node, then use the link again.`,
+    );
   }
 
   /** Record admissions into a project and hand the newcomers its keys through the group they came by. */
@@ -1372,7 +1384,6 @@ export class WeaveNode implements Backend {
       if (added) this.#saveSpace(known);
       return;
     }
-    this.#adoptBootstrap(opened.entry);
     void this.#addSpace({ ...opened.space, entry: opened.entry });
   }
 
