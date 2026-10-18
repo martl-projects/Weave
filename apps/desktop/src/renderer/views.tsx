@@ -192,17 +192,12 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
 
 // ---------------------------------------------------------------- people and inbox
 
-/** Ways to send a link: WhatsApp, email, or the clipboard. */
-export function SendButtons({ text, subject, what }: { text: string; subject: string; what: string }) {
+/** Close, and copy a link to paste into any messenger. */
+function CopyButtons({ text, what, onClose }: { text?: string; what: string; onClose(): void }) {
   return (
-    <div className="buttons send">
-      <a className="button" href={`https://wa.me/?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
-        <Icon name="message" /> WhatsApp
-      </a>
-      <a className="button" href={`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
-        <Icon name="mail" /> Email
-      </a>
-      <button className="default" onClick={() => copy(text, `${what} copied`)}>
+    <div className="buttons">
+      <button onClick={onClose}>Close</button>
+      <button className="default" disabled={!text} onClick={() => copy(text!, `${what} copied`)}>
         <Icon name="copy" /> Copy
       </button>
     </div>
@@ -216,11 +211,11 @@ export function ContactDialog({ onClose }: { onClose(): void }) {
   return (
     <Modal title="My contact link" onClose={onClose}>
       <p className="small">
-        Your Weave address, like a phone number. Send it however you like: whoever adds it can find your node, follow you and see your public space. It holds no keys,
+        Your Weave address, like a phone number. Copy it and paste it into any chat: whoever adds it can find your node, follow you and see your public space. It holds no keys,
         and nothing private is shared until you invite them somewhere.
       </p>
       <textarea className="wide invite" readOnly rows={4} value={message || 'Making your link…'} />
-      {link && <SendButtons text={message} subject="Add me on Weave" what="Contact link" />}
+      <CopyButtons text={link && message} what="Contact link" onClose={onClose} />
     </Modal>
   );
 }
@@ -801,7 +796,7 @@ export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): 
           <textarea className="wide invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
         </>
       )}
-      {link && <SendButtons text={`Join ${spaceLabel(space)} on Weave: ${link}`} subject={`Join ${spaceLabel(space)} on Weave`} what="Invite link" />}
+      <CopyButtons text={link} what="Invite link" onClose={onClose} />
     </Modal>
   );
 }

@@ -61,7 +61,7 @@ async function createWindow(): Promise<void> {
     },
   });
   // Links in messages open in the system browser, never inside the app.
-  const external = (url: string) => /^(https?:\/\/|mailto:)/.test(url) && void shell.openExternal(url);
+  const external = (url: string) => /^https?:\/\//.test(url) && void shell.openExternal(url);
   window.webContents.setWindowOpenHandler(({ url }) => {
     external(url);
     return { action: 'deny' };

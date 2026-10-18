@@ -332,5 +332,3 @@ menu[role='tablist'] { margin-bottom: 0; }
 /* ---------- people search and sending links */
 .search-row { margin-bottom: 10px; flex-wrap: nowrap; }
 .search-row input { flex: 1; height: 24px; }
-a.button { display: inline-flex; align-items: center; gap: 4px; min-height: 23px; padding: 0 12px; background: silver; color: #000; text-decoration: none; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px grey, inset 2px 2px #dfdfdf; }
-a.button:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; }
