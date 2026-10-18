@@ -48,6 +48,17 @@ describe('working together in a group', () => {
     expect(done.status).toBe('done');
   });
 
+  it('shows your own group events right after joining offline, before membership has synced', async () => {
+    const founder = await setup();
+    const dir = mkdtempSync(join(tmpdir(), 'weave-collab-'));
+    dirs.push(dir);
+    const joiner = WeaveNode.init('Lena', dir);
+    await joiner.joinGroup(await founder.invite('Weave'));
+    const issue = await joiner.openIssue({ group: 'Weave', title: 'Written offline' });
+    expect(issue.title).toBe('Written offline');
+    expect((await joiner.feed({ group: 'Weave', kinds: ['weave.issue'] })).length).toBe(1);
+  });
+
   it('votes on proposals, and agents without the permission cannot', async () => {
     const node = await setup();
     const proposal = await node.propose({ group: 'Weave', title: 'Ship M5', hours: 1 });

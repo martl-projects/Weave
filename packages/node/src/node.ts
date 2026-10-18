@@ -218,7 +218,7 @@ export class WeaveNode implements Backend {
       if (hidden.has(decoded.event.author)) continue;
       if (decoded.group) {
         if (!states.has(decoded.group.id)) states.set(decoded.group.id, this.#groupState(decoded.group));
-        if (!visibleIn(states.get(decoded.group.id)!, decoded.event, decoded.inner)) continue;
+        if (!this.#mine(decoded.event) && !visibleIn(states.get(decoded.group.id)!, decoded.event, decoded.inner)) continue;
       }
       items.push(this.#toItem(decoded));
     }
@@ -614,11 +614,17 @@ export class WeaveNode implements Backend {
     return new Set([...(mine?.blocked ?? []), ...(mine?.muted ?? [])]);
   }
 
+  /**
+   * Your own events are always shown to you: after joining offline, your node
+   * can't confirm your membership until it has synced the founder's events.
+   */
+  #mine = (event: WeaveEvent): boolean => event.author === this.identity.author;
+
   /** A group's readable events from members, as entries for the collaboration functions. */
   #entries(group: StoredGroup): Entry[] {
     const state = this.#groupState(group);
     return this.#decodeAll()
-      .filter((d) => d.group?.id === group.id && visibleIn(state, d.event, d.inner))
+      .filter((d) => d.group?.id === group.id && (this.#mine(d.event) || visibleIn(state, d.event, d.inner)))
       .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
   }
 
