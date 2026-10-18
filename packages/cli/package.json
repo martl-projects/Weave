@@ -1,0 +1,12 @@
+{
+  "name": "@weave/cli",
+  "version": "0.0.1",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": { "weave": "./src/main.ts" },
+  "dependencies": {
+    "@weave/core": "*",
+    "@weave/node": "*"
+  }
+}
