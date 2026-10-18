@@ -9,7 +9,7 @@ import type { Did } from './keys.ts';
  *
  *   weave.thread        {title, text}                     start a discussion
  *   weave.reply         {target, text}                    reply to a thread, issue or proposal
- *   weave.msg           {text, channel, replyTo}          chat message in a channel (default "general"), optionally replying to one
+ *   weave.msg           {text, channel, post, replyTo}    chat message in a channel (default "general") or in a post's chat, optionally replying to one
  *   weave.channel       {name, topic}                     create a chat channel
  *   weave.react         {target, emoji, on}               add or remove an emoji reaction on any event
  *   weave.issue         {title, text, labels}             open an issue
@@ -99,6 +99,8 @@ export interface Message {
   text: string;
   time: string;
   channel: string;
+  /** Set for messages in a post's chat; they belong to no channel. */
+  post?: string;
   replyTo?: string;
   reactions: Reaction[];
 }
@@ -153,7 +155,7 @@ export function channelsOf(entries: Entry[]): Channel[] {
     const name = channelName(field(e.body, 'name'));
     if (name && !channels.has(name)) channels.set(name, { name, topic: str(e.body, 'topic', 200) });
   }
-  for (const e of entries.filter((x) => x.kind === KIND_MSG)) {
+  for (const e of entries.filter((x) => x.kind === KIND_MSG && !str(x.body, 'post', 200))) {
     const name = channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL;
     const channel = channels.get(name) ?? { name, topic: '' };
     if (!channel.last || e.event.time > channel.last) channel.last = e.event.time;
@@ -196,13 +198,17 @@ export function threadsOf(entries: Entry[]): Thread[] {
     .sort((a, b) => b.active.localeCompare(a.active));
 }
 
-/** Chat messages, oldest first. */
-export function messagesOf(entries: Entry[], channel?: string): Message[] {
+/**
+ * Chat messages, oldest first: in one channel, or in one post's chat. Replies
+ * (weave.reply, from before posts had chats) show up in their target's chat.
+ */
+export function messagesOf(entries: Entry[], where: { channel?: string; post?: string } = {}): Message[] {
   const reactions = reactionsOf(entries);
   return entries
-    .filter((e) => e.kind === KIND_MSG && str(e.body, 'text'))
+    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && str(e.body, 'text'))
     .map((e) => {
       const replyTo = str(e.body, 'replyTo', 200);
+      const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);
       return {
         id: e.id,
         author: e.event.author,
@@ -210,12 +216,13 @@ export function messagesOf(entries: Entry[], channel?: string): Message[] {
         text: str(e.body, 'text'),
         time: e.event.time,
         channel: channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL,
+        ...(post ? { post } : {}),
         ...(replyTo ? { replyTo } : {}),
         reactions: reactions.get(e.id) ?? [],
         _sort: e,
       };
     })
-    .filter((m) => !channel || m.channel === channel)
+    .filter((m) => (where.post ? m.post === where.post : !m.post && (!where.channel || m.channel === where.channel)))
     .sort((a, b) => byTime(a._sort, b._sort))
     .map(({ _sort, ...message }) => message);
 }

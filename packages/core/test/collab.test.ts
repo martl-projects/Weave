@@ -63,11 +63,11 @@ describe('chat channels, replies and reactions', () => {
     post(alice, 'weave.react', { target: hello, emoji: '👀', on: false });
 
     expect(channelsOf(entries).map((c) => [c.name, c.topic])).toEqual([['general', ''], ['build-log', 'CI results']]);
-    const general = messagesOf(entries, 'general');
+    const general = messagesOf(entries, { channel: 'general' });
     expect(general.map((m) => m.text)).toEqual(['hello', 'hi!']);
     expect(general[1].replyTo).toBe(hello);
     expect(general[0].reactions).toEqual([{ emoji: '🎉', by: [{ author: bob.did, signer: bob.did }, { author: alice.did, signer: forge.did }] }]);
-    expect(messagesOf(entries, 'build-log').map((m) => m.text)).toEqual(['green']);
+    expect(messagesOf(entries, { channel: 'build-log' }).map((m) => m.text)).toEqual(['green']);
   });
 
   it('normalizes channel names', () => {

@@ -6,22 +6,23 @@ import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
 import { isDid, type Did } from './keys.ts';
 
 /*
- * Spaces are the encrypted rooms of Weave. There are two kinds:
+ * Spaces are the encrypted rooms of Weave. There are three kinds:
  *
- *   group    a collection of people with their own chat; can be invited into projects
- *   project  something being built: chat, discussion, votes, issues and a page
+ *   group      a collection of people with their own chat; can be invited into projects
+ *   project    something being built: a post with chat and boards (issues, ideas, releases, …)
+ *   community  a board of posts that people join, like a subreddit, with its own chat
  *
- * Both use the same machinery (v1): a shared symmetric key per epoch; removing
+ * All use the same machinery (v1): a shared symmetric key per epoch; removing
  * someone starts a new epoch whose key is boxed to everyone who stays. MLS
  * replaces this later.
  *
  * Membership events, sealed inside the space:
  *   weave.space.create      {name}             the founder, first event
- *   weave.invite            {invite, expires}  group: any member · project: maintainers
+ *   weave.invite            {invite, expires}  group, community: any member · project: maintainers
  *   weave.space.join        {invite}           the newcomer, citing an invite link
- *   weave.space.remove      {member}           group: founder · project: maintainers
+ *   weave.space.remove      {member}           group: founder · project, community: maintainers (moderators)
+ *   weave.project.maintainer {member, on}      projects and communities: maintainers (moderators) appoint or drop others
  * projects only:
- *   weave.project.maintainer {member, on}      maintainers appoint or drop maintainers
  *   weave.project.group      {group, name, on} maintainers invite (or uninvite) a whole group
  *   weave.project.rule       {group, auto}     maintainers: admit that group's newcomers without asking
  *   weave.project.admit      {member, via}     maintainers, or anyone in the project when a rule allows
@@ -42,7 +43,9 @@ export const KIND_RULE = 'weave.project.rule';
 export const KIND_ADMIT = 'weave.project.admit';
 export const KIND_DECLINE = 'weave.project.decline';
 
-export type SpaceKind = 'group' | 'project';
+export const SPACE_KINDS = ['group', 'project', 'community'] as const;
+export type SpaceKind = (typeof SPACE_KINDS)[number];
+const isSpaceKind = (kind: unknown): kind is SpaceKind => SPACE_KINDS.includes(kind as SpaceKind);
 
 /** Names used before groups and projects were told apart; still read so older spaces keep working. */
 const LEGACY_KINDS: Record<string, string> = {
@@ -76,7 +79,7 @@ export const spaceScope = (space: Pick<SpaceKeys, 'kind' | 'id'>): string => `${
 
 export function parseScope(scope: string): { kind: SpaceKind; id: string } | undefined {
   const [kind, id] = scope.split(':');
-  return (kind === 'group' || kind === 'project') && id ? { kind, id } : undefined;
+  return isSpaceKind(kind) && id ? { kind, id } : undefined;
 }
 
 /** Topic name for the DHT, derived from the space secret. */
@@ -160,7 +163,7 @@ export function openGift(event: WeaveEvent, me: SigningIdentity): { space: Space
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: SpaceKeys; entry?: Invite['entry'] };
     const space = opened.space;
-    if (!space || (space.kind !== 'group' && space.kind !== 'project') || !isDid(space.founder) || !space.keys) return undefined;
+    if (!space || !isSpaceKind(space.kind) || !isDid(space.founder) || !space.keys) return undefined;
     return { space, entry: opened.entry ?? { topics: [], bootstrap: [] } };
   } catch {
     return undefined;
@@ -197,7 +200,7 @@ export function decodeInvite(text: string): Invite {
     throw new Error('invite is damaged');
   }
   const s = invite?.space;
-  if (invite?.v !== 2 || !s || (s.kind !== 'group' && s.kind !== 'project') || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
+  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
     throw new Error('invite is damaged or from an older Weave version');
   }
   if (Date.parse(invite.expires) < Date.now()) throw new Error('invite has expired');
@@ -229,7 +232,7 @@ export interface SpaceState {
   members: Map<Did, Member>;
   /** Removed member → time of removal. Their earlier events stay visible. */
   removed: Map<Did, string>;
-  /** Projects: who may invite, admit, remove and set rules. Groups: just the founder. */
+  /** Projects: who may invite, admit, remove and set rules. Communities: moderators. Groups: just the founder. */
   maintainers: Set<Did>;
   /** Projects: groups invited as a whole. */
   groups: Map<string, InvitedGroup>;
@@ -242,13 +245,14 @@ const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.t
 /**
  * Membership from a space's decrypted events, applied in time order. The rules
  * differ by kind: in groups any member invites and the founder removes; in
- * projects maintainers do both, invite whole groups, and set rules that let
- * group newcomers in automatically.
+ * communities any member invites and moderators remove; in projects
+ * maintainers do both, invite whole groups, and set rules that let group
+ * newcomers in automatically.
  */
 export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: WeaveEvent; inner: Inner }>): SpaceState {
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map() };
   const invites = new Map<string, { by: Did; expires: string }>();
-  const may = (author: Did) => (kind === 'group' ? state.members.has(author) : state.maintainers.has(author));
+  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.members.has(author));
   const admit = (did: Did, time: string, invitedBy?: Did, via?: string) => {
     state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}) });
     state.removed.delete(did);
@@ -284,7 +288,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         break;
       }
       case KIND_MAINTAINER:
-        if (kind === 'project' && state.maintainers.has(author) && isDid(body.member) && body.member !== founder) {
+        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== founder) {
           if (body.on === false) state.maintainers.delete(body.member);
           else if (state.members.has(body.member)) state.maintainers.add(body.member);
         }
@@ -327,5 +331,5 @@ export function visibleIn(state: SpaceState, event: WeaveEvent, inner: Inner): b
   return removedAt !== undefined && event.time < removedAt;
 }
 
-/** May this person remove members and rotate keys? */
+/** May this person remove members and rotate keys (and, in projects and communities, curate boards)? */
 export const canManage = (state: SpaceState, did: Did): boolean => (state.kind === 'group' ? did === state.founder : state.maintainers.has(did));

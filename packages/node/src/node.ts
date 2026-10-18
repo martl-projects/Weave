@@ -1,10 +1,13 @@
 import {
   b64u,
+  boardName,
+  boardsOf,
   canManage,
   canonicalKind,
   channelName,
   channelsOf,
   CHOICES,
+  COMMUNITY_BOARD,
   currentEpoch,
   decodeInvite,
   DEFAULT_CHANNEL,
@@ -20,6 +23,8 @@ import {
   ISSUE_STATUSES,
   issuesOf,
   KIND_ADMIT,
+  KIND_BOARD,
+  KIND_CURATE,
   KIND_BLOCK,
   KIND_CHANNEL,
   KIND_DECLINE,
@@ -33,6 +38,7 @@ import {
   KIND_MAINTAINER,
   KIND_MSG,
   KIND_MUTE,
+  KIND_POST,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
   KIND_REACT,
@@ -40,9 +46,11 @@ import {
   KIND_REMOVE,
   KIND_REPLY,
   KIND_RULE,
+  KIND_SAVE,
   KIND_SEALED,
   KIND_SPACE_CREATE,
   KIND_THREAD,
+  KIND_UPVOTE,
   KIND_VOTE,
   KIND_VOTE_DELEGATE,
   messagesOf,
@@ -53,10 +61,16 @@ import {
   openRekey,
   parseScope,
   permits,
+  POST_SORTS,
+  postsOf,
   proposalsOf,
   randomBytes,
+  rank,
   rekey,
   Replica,
+  SAVE_MODES,
+  savesOf,
+  scoresOf,
   seal,
   sealFor,
   selfKey,
@@ -66,6 +80,8 @@ import {
   spaceTopic,
   threadsOf,
   visibleIn,
+  type Board,
+  type BoardType,
   type Choice,
   type Did,
   type EdgeEvent,
@@ -77,9 +93,13 @@ import {
   type IssueStatus,
   type Json,
   type Message,
+  type Post,
+  type PostSort,
   type Proposal,
   type Reaction,
   type Reply,
+  type SaveMode,
+  type Score,
   type Sealed,
   type SigningIdentity,
   type SpaceKind,
@@ -94,7 +114,9 @@ import {
   type Admission,
   type AgentInfo,
   type Backend,
+  type BoardInfo,
   type ChannelInfo,
+  type CommunityInfo,
   type EdgeInput,
   type FeedItem,
   type FeedQuery,
@@ -104,6 +126,8 @@ import {
   type MemberInfo,
   type MessageInfo,
   type Person,
+  type PostInfo,
+  type PostsQuery,
   type Profile,
   type ProfileInput,
   type ProjectInfo,
@@ -295,6 +319,7 @@ export class WeaveNode implements Backend {
       topics: this.config.topics,
       groups: spaces.filter((s) => s.kind === 'group').length,
       projects: spaces.filter((s) => s.kind === 'project').length,
+      communities: spaces.filter((s) => s.kind === 'community').length,
       peers: this.#swarm?.sessions.size ?? 0,
       logs: Object.keys(heads).length,
       events: Object.values(heads).reduce((sum, seq) => sum + seq, 0),
@@ -330,7 +355,7 @@ export class WeaveNode implements Backend {
   async invite(ref: string, hours = 24 * 7): Promise<string> {
     const space = this.#space(ref);
     const state = this.#state(space);
-    const allowed = space.kind === 'group' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
+    const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
     if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
     const invite = b64u.encode(randomBytes(12));
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
@@ -376,7 +401,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (!canManage(state, this.identity.author)) {
-      throw new Error(space.kind === 'project' ? 'only maintainers can remove people from a project' : 'only the group founder can remove members');
+      throw new Error({ project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members' }[space.kind]);
     }
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
@@ -387,6 +412,164 @@ export class WeaveNode implements Backend {
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
     this.replica.append(this.identity, fields);
+  }
+
+  // ---------------------------------------------------------------- communities
+
+  async createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo> {
+    const community = await this.#createSpace('community', input.name);
+    if (input.description) this.replica.append(this.identity, sealFor(community, { kind: KIND_PAGE, body: { description: input.description } }));
+    return this.community(community.id);
+  }
+
+  async community(ref: string): Promise<CommunityInfo> {
+    const community = this.#space(ref, 'community');
+    const state = this.#state(community);
+    return {
+      ...this.#spaceInfo(community),
+      kind: 'community',
+      description: this.#page(community, state).description,
+      moderators: [...state.maintainers].map((did) => this.#actor(did, did)),
+      moderator: state.maintainers.has(this.identity.author),
+    };
+  }
+
+  async setCommunity(input: { community: string; description: string }): Promise<CommunityInfo> {
+    const community = this.#space(input.community, 'community');
+    this.#maintainerState(community);
+    this.replica.append(this.identity, sealFor(community, { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
+    return this.community(community.id);
+  }
+
+  async setModerator(input: { community: string; who: string; on: boolean }): Promise<void> {
+    this.#appoint(this.#space(input.community, 'community'), input.who, input.on);
+  }
+
+  // ---------------------------------------------------------------- posts, boards and upvotes
+
+  async posts(query: PostsQuery = {}): Promise<PostInfo[]> {
+    const sort = query.sort ?? 'hot';
+    if (!POST_SORTS.includes(sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);
+    let posts: PostInfo[];
+    let pinned: string[] = [];
+    if (query.space) {
+      const space = this.#space(query.space);
+      if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
+      const { posts: all, boards } = this.#spacePosts(space);
+      const board = query.board ? this.#board(space, boards, query.board) : undefined;
+      posts = board ? all.filter((p) => p.board === board.name) : all;
+      pinned = board?.pinned ?? boards.flatMap((b) => b.pinned);
+      if (board && !query.sort) return rank(posts, board.sort, pinned).slice(0, query.limit ?? 200);
+    } else if (query.saved) {
+      posts = this.#allPosts().filter((p) => p.saved);
+    } else {
+      posts = this.#homePosts();
+      pinned = posts.filter((p) => p.saved === 'pinned').map((p) => p.id);
+    }
+    if (query.saved) posts = posts.filter((p) => p.saved);
+    return rank(posts, sort, pinned).slice(0, query.limit ?? 200);
+  }
+
+  async post(ref: string): Promise<PostInfo> {
+    if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
+    const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
+    if (matches.length === 0) throw new Error(`no post found with id ${ref}`);
+    if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
+    return matches[0];
+  }
+
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; as?: string }): Promise<PostInfo> {
+    const title = input.title?.trim();
+    if (!title) throw new Error('a post needs a title');
+    if (title.length > 200) throw new Error('titles are at most 200 characters');
+    const link = input.link?.trim();
+    if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
+    const space = this.#space(input.space);
+    if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
+    const body: Record<string, Json> = { title, text: input.text ?? '' };
+    if (link) body.link = link;
+    if (space.kind === 'project') {
+      const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
+      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as })).id);
+      if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as })).id);
+      body.board = board.name;
+    }
+    const { id } = await this.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
+    return this.post(id);
+  }
+
+  async upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo> {
+    if (![1, 0, -1].includes(input.value)) throw new Error('upvote with 1, -1, or 0 to take it back');
+    const post = await this.post(input.target);
+    await this.publish({ kind: KIND_UPVOTE, body: { target: post.id, value: input.value }, space: post.space?.id, as: input.as });
+    return this.post(post.id);
+  }
+
+  async save(input: { target: string; mode: SaveMode | null }): Promise<void> {
+    if (input.mode !== null && !SAVE_MODES.includes(input.mode)) throw new Error(`save as ${SAVE_MODES.join(' or ')}, or null to forget`);
+    const post = await this.post(input.target);
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_SAVE, body: { target: post.id, mode: input.mode } }));
+  }
+
+  async share(input: { post: string; to: string; text?: string }): Promise<PostInfo> {
+    const post = await this.post(input.post);
+    const project = post.project ? { id: post.project.id, name: post.project.name, description: post.project.description, status: post.project.status } : undefined;
+    const text = input.text?.trim() || post.text;
+    if (input.to === 'followers') {
+      const page = project && this.#spaces.has(project.id) ? this.#page(this.#spaces.get(project.id)!, this.#state(this.#spaces.get(project.id)!)) : undefined;
+      if (!project || !page?.public) throw new Error('only projects with a public page can be shared with your followers; share other posts into a community');
+      const { id } = await this.publish({ kind: KIND_POST, body: { title: post.title, text, share: { post: post.id, project } } });
+      return this.post(id);
+    }
+    const target = this.#space(input.to);
+    if (target.kind !== 'community') throw new Error(`share into a community (or "followers"); ${target.name} is a ${target.kind}`);
+    const share: Record<string, Json> = { post: post.id, ...(post.space ? { space: { ...post.space } } : {}), ...(project ? { project } : {}) };
+    const body: Record<string, Json> = { title: post.title, text, share };
+    if (post.link) body.link = post.link;
+    const { id } = await this.publish({ kind: KIND_POST, body, space: target.id });
+    return this.post(id);
+  }
+
+  async boards(ref: string): Promise<BoardInfo[]> {
+    const space = this.#space(ref);
+    const { posts, boards } = this.#spacePosts(space);
+    return boards.map((b) => {
+      const inBoard = posts.filter((p) => p.board === b.name);
+      const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
+      return { ...b, count: inBoard.length, ...(active ? { active } : {}) };
+    });
+  }
+
+  async setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const name = boardName(input.name);
+    if (!name) throw new Error('board names use letters, digits and dashes');
+    if (input.sort !== undefined && !POST_SORTS.includes(input.sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);
+    const body: Record<string, Json> = { name };
+    const isNew = !(await this.boards(project.id)).some((b) => b.name === name);
+    const title = input.title ?? (isNew ? input.name : undefined);
+    if (title !== undefined) body.title = title.trim().slice(0, 40);
+    if (input.type !== undefined) body.type = input.type;
+    if (input.sort !== undefined) body.sort = input.sort;
+    if (input.position !== undefined) body.position = input.position;
+    if (input.on === false) body.on = false;
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_BOARD, body }));
+    return this.boards(project.id);
+  }
+
+  async curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]> {
+    const space = this.#space(input.space);
+    this.#maintainerState(space);
+    const { posts, boards } = this.#spacePosts(space);
+    const board = this.#board(space, boards, input.board ?? (space.kind === 'community' ? COMMUNITY_BOARD : ''));
+    const pinned = (input.pinned ?? []).map((ref) => {
+      const match = posts.filter((p) => p.board === board.name && p.id.startsWith(ref));
+      if (match.length !== 1) throw new Error(`no single post ${ref} in ${board.title}`);
+      return match[0].id;
+    });
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_CURATE, body: { board: board.name, pinned } }));
+    return this.boards(space.id);
   }
 
   // ---------------------------------------------------------------- projects
@@ -426,12 +609,7 @@ export class WeaveNode implements Backend {
   }
 
   async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const member = this.resolve(input.who);
-    if (input.on && !state.members.has(member)) throw new Error(`${input.who} doesn't take part in ${project.name}`);
-    if (!input.on && member === project.founder) throw new Error('the founder always stays a maintainer');
-    this.replica.append(this.identity, sealFor(project, { kind: KIND_MAINTAINER, body: { member, on: input.on } }));
+    this.#appoint(this.#project(input.project), input.who, input.on);
   }
 
   async inviteGroup(input: { project: string; group: string }): Promise<void> {
@@ -624,32 +802,38 @@ export class WeaveNode implements Backend {
     return (await this.channels(input.space)).find((c) => c.name === name)!;
   }
 
-  async messages(ref: string, options: { channel?: string; limit?: number } = {}): Promise<MessageInfo[]> {
-    const all = messagesOf(this.#entries(this.#space(ref)));
-    const byId = new Map(all.map((m) => [m.id, m]));
-    const channel = options.channel ? channelName(options.channel) ?? DEFAULT_CHANNEL : undefined;
-    return all
-      .filter((m) => !channel || m.channel === channel)
+  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number } = {}): Promise<MessageInfo[]> {
+    const chat = options.post ? await this.#chatOf(options.post) : undefined;
+    const space = chat?.space ?? this.#space(ref ?? '');
+    const entries = this.#entries(space);
+    const byId = new Map(messagesOf(entries, {}).concat(chat?.post ? messagesOf(entries, { post: chat.post }) : []).map((m) => [m.id, m]));
+    const channel = options.channel ? (channelName(options.channel) ?? DEFAULT_CHANNEL) : undefined;
+    return messagesOf(entries, chat?.post ? { post: chat.post } : { channel })
       .slice(-(options.limit ?? 200))
       .map((m) => this.#messageInfo(m, byId));
   }
 
-  async say(input: InSpace & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo> {
+  async say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo> {
     const text = input.text?.trim();
     if (!text) throw new Error('a message needs text');
     const body: Record<string, Json> = { text };
-    const channel = input.channel ? channelName(input.channel) : undefined;
-    if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
-    if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
-    if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG]).id;
-    const { id } = await this.publish({ kind: KIND_MSG, body, space: input.space, as: input.as });
-    return (await this.messages(input.space)).find((m) => m.id === id)!;
+    const chat = input.post ? await this.#chatOf(input.post) : undefined;
+    const space = chat?.space ?? this.#space(input.space ?? '');
+    if (chat?.post) body.post = chat.post;
+    else {
+      const channel = input.channel ? channelName(input.channel) : undefined;
+      if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
+      if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
+    }
+    if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
+    const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
+    return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
   }
 
   async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
     const emoji = input.emoji?.trim();
     if (!emoji || emoji.length > 16) throw new Error('react with one emoji');
-    const target = this.#find(input.target, [KIND_MSG, 'weave.post', KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
+    const target = this.#find(input.target, [KIND_MSG, KIND_POST, KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
     await this.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, space: target.space?.id, as: input.as });
   }
 
@@ -774,19 +958,19 @@ export class WeaveNode implements Backend {
     if (byId && (!kind || byId.kind === kind)) return byId;
     const byName = [...this.#spaces.values()].filter((s) => (!kind || s.kind === kind) && s.name.toLowerCase() === ref.toLowerCase());
     if (byName.length === 1) return byName[0];
-    const what = kind ?? 'group or project';
+    const what = kind ?? 'group, project or community';
     throw new Error(byName.length ? `several ${what}s are named "${ref}" — use its id` : `you are not in a ${what} "${ref}"`);
   }
 
   #project(ref: string): StoredSpace {
     const space = this.#space(ref);
-    if (space.kind !== 'project') throw new Error(`${space.name} is a group; discussions, votes and issues live in projects`);
+    if (space.kind !== 'project') throw new Error(`${space.name} is a ${space.kind}; discussions, votes and issues live in projects`);
     return space;
   }
 
   #maintainerState(project: StoredSpace): SpaceState {
     const state = this.#state(project);
-    if (!state.maintainers.has(this.identity.author)) throw new Error(`only maintainers of ${project.name} can do that`);
+    if (!state.maintainers.has(this.identity.author)) throw new Error(`only ${project.kind === 'community' ? 'moderators' : 'maintainers'} of ${project.name} can do that`);
     return state;
   }
 
@@ -803,6 +987,24 @@ export class WeaveNode implements Backend {
   }
 
   #mineFounder = (space: StoredSpace) => space.founder === this.identity.author;
+
+  /** Make someone a maintainer (project) or moderator (community), or drop them. */
+  #appoint(space: StoredSpace, who: string, on: boolean): void {
+    const state = this.#maintainerState(space);
+    const member = this.resolve(who);
+    const role = space.kind === 'community' ? 'moderator' : 'maintainer';
+    if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
+    if (!on && member === space.founder) throw new Error(`the founder always stays a ${role}`);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_MAINTAINER, body: { member, on } }));
+  }
+
+  /** A board of a space, by name or title. */
+  #board(space: StoredSpace, boards: Board[], ref: string): Board {
+    const name = boardName(ref);
+    const board = boards.find((b) => b.name === name) ?? boards.find((b) => b.title.toLowerCase() === ref.trim().toLowerCase());
+    if (!board) throw new Error(`${space.name} has no board "${ref}" — it has ${boards.map((b) => b.name).join(', ')}`);
+    return board;
+  }
 
   async #createSpace(kind: SpaceKind, name: string): Promise<StoredSpace> {
     if (!name?.trim()) throw new Error(`a ${kind} needs a name`);
@@ -921,6 +1123,157 @@ export class WeaveNode implements Backend {
       members: this.#state(space).members.size,
       epoch: currentEpoch(space),
     };
+  }
+
+  // ---------------------------------------------------------------- internals: posts
+
+  /** Your saves, from your self-sealed events. */
+  #saves(): Map<string, SaveMode> {
+    const mine = this.#decodeAll()
+      .filter((d) => d.private && d.inner.kind === KIND_SAVE)
+      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    return savesOf(mine);
+  }
+
+  /** How many messages each post's chat has, and when the latest came. */
+  #chats(entries: Entry[]): Map<string, { count: number; last: string }> {
+    const chats = new Map<string, { count: number; last: string }>();
+    for (const e of entries) {
+      const body = e.body as { post?: unknown; target?: unknown } | null;
+      const post = e.kind === KIND_MSG ? body?.post : e.kind === KIND_REPLY ? body?.target : undefined;
+      if (typeof post !== 'string') continue;
+      const chat = chats.get(post) ?? { count: 0, last: '' };
+      chat.count++;
+      if (e.event.time > chat.last) chat.last = e.event.time;
+      chats.set(post, chat);
+    }
+    return chats;
+  }
+
+  /** All posts in a project's boards or a community, and its boards. */
+  #spacePosts(space: StoredSpace): { posts: PostInfo[]; boards: Board[] } {
+    const entries = this.#entries(space);
+    const state = this.#state(space);
+    const boards = boardsOf(space.kind, entries, state.maintainers);
+    const known = new Set(boards.map((b) => b.name));
+    const pinned = new Set(boards.flatMap((b) => b.pinned));
+    const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
+    const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, new Set(state.members.keys())).map((p) => [p.id, p]) : []);
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves() };
+    const posts = postsOf(space.kind, entries)
+      .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
+      .map((p) => {
+        const info = this.#postInfo(p, space, ctx);
+        if (pinned.has(p.id)) info.pinned = true;
+        const issue = issues.get(p.id);
+        if (issue) info.issue = { status: issue.status, labels: issue.labels, ...(issue.assignee ? { assignee: this.#actor(issue.assignee.author, issue.assignee.signer) } : {}) };
+        const proposal = proposals.get(p.id);
+        if (proposal) info.proposal = this.#proposalInfo(proposal);
+        return info;
+      });
+    return { posts, boards };
+  }
+
+  /** A project shown as a post: its id is the event that created it. */
+  #projectPost(project: StoredSpace): PostInfo | undefined {
+    const entries = this.#entries(project);
+    const created = entries.find((e) => canonicalKind(e.kind) === KIND_SPACE_CREATE && e.event.author === project.founder);
+    if (!created) return undefined;
+    const state = this.#state(project);
+    const page = this.#page(project, state);
+    const score = scoresOf(entries).get(created.id);
+    const messages = entries.filter((e) => e.kind === KIND_MSG);
+    const active = [created.event.time, ...entries.map((e) => e.event.time)].reduce((a, b) => (b > a ? b : a));
+    const saved = this.#saves().get(created.id);
+    return {
+      id: created.id,
+      short: created.id.slice(0, 8),
+      type: 'project',
+      space: { id: project.id, kind: 'project', name: project.name },
+      by: this.#actor(project.founder, project.founder),
+      title: project.name,
+      text: page.description,
+      time: created.event.time,
+      active,
+      score: score?.score ?? 0,
+      myVote: score?.votes.get(this.identity.author) ?? 0,
+      chat: messages.length,
+      pinned: false,
+      ...(saved ? { saved } : {}),
+      project: { id: project.id, name: project.name, description: page.description, status: page.status, participants: state.members.size, member: true },
+    };
+  }
+
+  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode> }): PostInfo {
+    const score = ctx.scores.get(p.id);
+    const chat = ctx.chats.get(p.id);
+    const saved = ctx.saves.get(p.id);
+    const info: PostInfo = {
+      id: p.id,
+      short: p.id.slice(0, 8),
+      type: p.type,
+      ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
+      by: this.#actor(p.author, p.signer),
+      title: p.title,
+      text: p.text,
+      ...(p.link ? { link: p.link } : {}),
+      time: p.time,
+      active: chat && chat.last > p.time ? chat.last : p.time,
+      score: score?.score ?? 0,
+      myVote: score?.votes.get(this.identity.author) ?? 0,
+      chat: chat?.count ?? 0,
+      pinned: false,
+      ...(saved ? { saved } : {}),
+    };
+    if (p.share) {
+      info.share = { ...(p.share.space ? { space: p.share.space } : {}), post: p.share.post, member: !!p.share.space && this.#spaces.has(p.share.space.id) };
+      if (p.share.project) {
+        const mine = this.#spaces.get(p.share.project.id);
+        info.project = { ...p.share.project, member: !!mine, ...(mine ? { participants: this.#state(mine).members.size } : {}) };
+      }
+    }
+    return info;
+  }
+
+  /** Public posts by you and the people you follow, upvoted in public. */
+  #publicPosts(): PostInfo[] {
+    const following = this.#graph().get(this.identity.author)?.following ?? new Set<Did>();
+    const hidden = this.#hiddenAuthors();
+    const entries = this.#decodeAll()
+      .filter((d) => !d.space && !d.private)
+      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves() };
+    return postsOf(undefined, entries)
+      .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
+      .map((p) => this.#postInfo(p, undefined, ctx));
+  }
+
+  /** Home: your communities' posts, your projects, and public posts from people you follow. */
+  #homePosts(): PostInfo[] {
+    const hidden = this.#hiddenAuthors();
+    const posts: PostInfo[] = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind === 'community') posts.push(...this.#spacePosts(space).posts);
+      if (space.kind === 'project') {
+        const post = this.#projectPost(space);
+        if (post) posts.push(post);
+      }
+    }
+    return [...posts.filter((p) => !hidden.has(p.by.did)), ...this.#publicPosts()];
+  }
+
+  /** Everything that can be shown as a post, including every board of every project. */
+  #allPosts(): PostInfo[] {
+    const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
+    return [...this.#homePosts(), ...boardPosts];
+  }
+
+  /** Where a post's chat lives; a project's own chat is its channels. */
+  async #chatOf(ref: string): Promise<{ space: StoredSpace; post?: string }> {
+    const post = await this.post(ref);
+    const space = post.space && this.#spaces.get(post.space.id);
+    if (!space) throw new Error('public posts have no chat; share them into a community to talk about them');
+    return post.type === 'project' ? { space } : { space, post: post.id };
   }
 
   // ---------------------------------------------------------------- internals: reading

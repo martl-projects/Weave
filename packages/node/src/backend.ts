@@ -1,4 +1,4 @@
-import type { Choice, Did, IssueStatus, Json, SpaceKind } from '@weave/core';
+import type { BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
 import type { Theme } from './theme.ts';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
@@ -45,6 +45,7 @@ export interface Status {
   topics: string[];
   groups: number;
   projects: number;
+  communities: number;
   peers: number;
   logs: number;
   events: number;
@@ -54,7 +55,7 @@ export interface Status {
 export interface PublishInput {
   kind: string;
   body?: Json;
-  /** Group or project (name or id); the event is encrypted for its members. */
+  /** Group, project or community (name or id); the event is encrypted for its members. */
   space?: string;
   /** Agent name to sign with instead of the root identity. */
   as?: string;
@@ -71,7 +72,7 @@ export interface FeedQuery {
   publicOnly?: boolean;
 }
 
-/** A group or project this node belongs to. */
+/** A group, project or community this node belongs to. */
 export interface SpaceInfo extends SpaceRef {
   founder: Did;
   founderName?: string;
@@ -106,6 +107,76 @@ export interface PublicProject {
   description: string;
   status: ProjectStatus;
   time: string;
+}
+
+export interface CommunityInfo extends SpaceInfo {
+  kind: 'community';
+  description: string;
+  moderators: Actor[];
+  /** You may pin posts, remove members and appoint moderators. */
+  moderator: boolean;
+}
+
+/** A board of posts inside a project (or the one board of a community). */
+export interface BoardInfo {
+  name: string;
+  title: string;
+  /** posts: ordinary posts · issues: the issue tracker · proposals: formal votes. */
+  type: BoardType;
+  /** The order the maintainers chose; readers may sort differently. */
+  sort: PostSort;
+  position: number;
+  /** Pinned post ids, in order. */
+  pinned: string[];
+  count: number;
+  /** Time of the latest post or chat message in the board. */
+  active?: string;
+}
+
+/**
+ * Something shown as a post: a post in a community or a project's board, an
+ * issue, a proposal, a public post, or a whole project (whose id is the id of
+ * the event that created it).
+ */
+export interface PostInfo {
+  id: string;
+  short: string;
+  type: 'post' | 'project' | 'issue' | 'proposal';
+  /** Where it lives; undefined for public posts. */
+  space?: SpaceRef;
+  board?: string;
+  by: Actor;
+  title: string;
+  text: string;
+  link?: string;
+  time: string;
+  /** Latest activity: the post or its chat. */
+  active: string;
+  score: number;
+  /** Your upvote: 1, -1 or 0. */
+  myVote: number;
+  /** Messages in its chat. */
+  chat: number;
+  /** Pinned in its board by the maintainers or moderators. */
+  pinned: boolean;
+  /** You saved it, or pinned it to the top of your home. */
+  saved?: SaveMode;
+  /** For projects and shared projects. */
+  project?: { id: string; name: string; description: string; status: string; participants?: number; member: boolean };
+  /** For shared posts: where the original lives, and whether you can open it. */
+  share?: { space?: SpaceRef; post: string; member: boolean };
+  issue?: { status: IssueStatus; labels: string[]; assignee?: Actor };
+  proposal?: ProposalInfo;
+}
+
+export interface PostsQuery {
+  /** A project or community; without one, your home: communities, projects and shares from people you follow. */
+  space?: string;
+  board?: string;
+  sort?: PostSort;
+  /** Only posts you saved or pinned. */
+  saved?: boolean;
+  limit?: number;
 }
 
 /** Someone a project's maintainers are asked about. */
@@ -309,6 +380,31 @@ export interface Backend {
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
 
+  // communities
+  createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
+  community(ref: string): Promise<CommunityInfo>;
+  /** Moderators: change the description. */
+  setCommunity(input: { community: string; description: string }): Promise<CommunityInfo>;
+  setModerator(input: { community: string; who: string; on: boolean }): Promise<void>;
+
+  // posts, boards and upvotes
+  posts(query?: PostsQuery): Promise<PostInfo[]>;
+  /** One post by id (full or short), including projects. */
+  post(ref: string): Promise<PostInfo>;
+  /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; as?: string }): Promise<PostInfo>;
+  /** 1 up, -1 down, 0 to take your vote back. */
+  upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo>;
+  /** Save a post for later, pin it to the top of your home, or (null) forget it. Only you can see this. */
+  save(input: { target: string; mode: SaveMode | null }): Promise<void>;
+  /** Share a post into a community or group you're in; projects can also go to your followers when their page is public. */
+  share(input: { post: string; to: string; text?: string }): Promise<PostInfo>;
+  boards(space: string): Promise<BoardInfo[]>;
+  /** Maintainers: add, rename, re-sort, move (position) or drop (on: false) a board. */
+  setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]>;
+  /** Maintainers or moderators: pin posts to the top of a board, in this order (empty unpins all). */
+  curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]>;
+
   // projects
   project(ref: string): Promise<ProjectInfo>;
   setProjectPage(input: { project: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
@@ -335,11 +431,12 @@ export interface Backend {
   /** Everyone whose profile this node has seen, yourself excluded. */
   directory(): Promise<Profile[]>;
 
-  // chat, in groups and projects
+  // chat, in channels and in posts
   channels(space: string): Promise<ChannelInfo[]>;
   createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
-  messages(space: string, options?: { channel?: string; limit?: number }): Promise<MessageInfo[]>;
-  say(input: InSpace & { text: string; channel?: string; replyTo?: string }): Promise<MessageInfo>;
+  /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
+  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
+  say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
   react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void>;
 
@@ -367,6 +464,8 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'members', 'removeMember',
+  'createCommunity', 'community', 'setCommunity', 'setModerator',
+  'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory',
   'channels', 'createChannel', 'messages', 'say', 'react',
