@@ -10,7 +10,7 @@ You're invited to try Weave while it's young. It's a peer-to-peer place to show 
 ## 1. Get it running
 
 ```bash
-git clone <the repo you were invited to> weave
+git clone https://github.com/martldennl/Weave.git weave
 cd weave
 npm install
 npm test          # optional: should end with every test passing
