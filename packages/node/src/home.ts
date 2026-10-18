@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
  *   config.json     topics to join, bootstrap nodes
  *   logs/*.jsonl    one append-only file per signing key
  *   daemon.json     port and token of the running daemon
+ *   node.lock       pid of the one process writing to this home
  */
 export interface Home {
   dir: string;
@@ -21,6 +22,7 @@ export interface Home {
   config: string;
   logs: string;
   daemon: string;
+  lock: string;
 }
 
 export function resolveHome(dir?: string): Home {
@@ -33,6 +35,7 @@ export function resolveHome(dir?: string): Home {
     config: join(root, 'config.json'),
     logs: join(root, 'logs'),
     daemon: join(root, 'daemon.json'),
+    lock: join(root, 'node.lock'),
   };
 }
 

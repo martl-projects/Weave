@@ -16,10 +16,11 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   if (await connectDaemon(home)) throw new Error(`a daemon is already running for ${home.dir}`);
 
   const node = WeaveNode.open(home.dir);
-  await node.goOnline();
+  // Serve the API right away; joining the DHT can take a while (or never finish when offline).
   const api = await startApi(node, options.port);
   const info: DaemonInfo = { pid: process.pid, port: api.port, token: api.token };
   writeJson(home.daemon, info);
+  const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
 
   let stopped = false;
   return {
@@ -30,7 +31,8 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
       stopped = true;
       rmSync(home.daemon, { force: true });
       await api.close();
-      await node.goOffline();
+      await online;
+      await node.close();
     },
   };
 }

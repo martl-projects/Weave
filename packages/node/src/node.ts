@@ -96,6 +96,7 @@ import { FileStore } from './filestore.ts';
 import { loadGroups, saveGroup, type StoredGroup } from './groupstore.ts';
 import { resolveHome, type Home } from './home.ts';
 import { createAndSaveAgent, createAndSaveIdentity, loadAgents, loadIdentity, type AgentKey } from './keystore.ts';
+import { acquireLock } from './lock.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
 export const KIND_PROFILE = 'weave.profile';
@@ -125,12 +126,14 @@ export class WeaveNode implements Backend {
   #agents: AgentKey[];
   #groups = new Map<string, StoredGroup>();
   #swarm?: SwarmNode;
+  #releaseLock: () => void;
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
     this.identity = identity;
+    this.#releaseLock = acquireLock(home);
     this.replica = new Replica(new FileStore(home.logs));
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
@@ -184,6 +187,12 @@ export class WeaveNode implements Backend {
   async goOffline(): Promise<void> {
     await this.#swarm?.destroy();
     this.#swarm = undefined;
+  }
+
+  /** Go offline and release the home for other processes. */
+  async close(): Promise<void> {
+    await this.goOffline();
+    this.#releaseLock();
   }
 
   async whoami(): Promise<Whoami> {

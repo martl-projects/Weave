@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -39,6 +39,21 @@ describe('WeaveNode', () => {
     const dir = tempHome();
     WeaveNode.init('alice', dir);
     expect(() => WeaveNode.init('again', dir)).toThrow(/already exists/);
+  });
+
+  it('lets only one process write to a home at a time', async () => {
+    const dir = tempHome();
+    const node = WeaveNode.init('alice', dir);
+    await node.close();
+    const lock = join(dir, 'node.lock');
+
+    writeFileSync(lock, String(process.ppid)); // a live process that isn't us
+    expect(() => WeaveNode.open(dir)).toThrow(/in use by another process/);
+
+    writeFileSync(lock, '999999'); // a process that is gone
+    const reopened = WeaveNode.open(dir);
+    expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+    await reopened.close();
   });
 
   it('enforces agent permissions', async () => {
