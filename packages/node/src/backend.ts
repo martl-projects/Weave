@@ -1,4 +1,6 @@
 import type { AppManifest, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
+
+export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */

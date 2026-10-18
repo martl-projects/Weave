@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { MembershipRequestInfo } from '@weave/node/client';
-import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SpaceInfo, Status } from '@weave/node/client';
+import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
+import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, bridge, bump, isActive, isUnread, navigate, shortDid, useApi, useRoute, useTick, type AppState } from './lib.ts';
 import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
@@ -48,6 +49,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const open = route[1] === space.id;
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
+  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<RoomInfo[]>('rooms', space.id) : Promise.resolve([])), [space.id]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   return (
@@ -68,6 +70,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
             />
           ))}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="zap" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
         </>
@@ -255,6 +258,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           empty={<>Nothing in {board?.title ?? arg} yet.</>}
         />
       );
+  } else if (view === 'live') {
+    body = <RoomsView project={space} members={list} meDid={me.did} />;
   } else if (view === 'settings') {
     body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} />;
   } else {

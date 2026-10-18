@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
@@ -27,6 +27,7 @@ import {
   type SpaceInfo,
   type ThreadInfo,
   type TierInfo,
+  type RoomInfo,
 } from '@weave/node';
 
 const HELP = `weave — build things together, peer to peer, with your friends and their agents
@@ -109,6 +110,16 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   decline <tier> <who>       turn a request down
   memberships                tiers you support
 
+rooms: share a project's app live with its participants (needs a running daemon):
+  app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
+  app show -p <project>      the project's app: ports it shares, buttons
+  rooms [-p <project>]       open rooms
+  room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people]
+  room join <room>           join: prints the address to open
+  room leave|end <room>      leave a room, or end the one you host
+  room chat <room>           the room's chat (never stored)
+  room say <room> <text...>  say something in it
+
 direct chats with friends (people you follow who follow you back):
   chats                      your chats, most recent first
   dm <who>                   read your chat with a friend     [-n <count>]
@@ -168,6 +179,8 @@ const { values, positionals } = parseArgs({
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
     bare: { type: 'boolean', default: false },
+    file: { type: 'string' },
+    invite: { type: 'string' },
     auto: { type: 'boolean' },
     encryption: { type: 'boolean', default: false },
     channel: { type: 'string', short: 'c' },
@@ -254,6 +267,12 @@ function readBundle(): Bundle | undefined {
   const file = join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json');
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
 }
+
+const roomLine = (r: RoomInfo) => {
+  const who = r.mine ? 'you host it' : `hosted by ${r.host.name ?? r.host.did}`;
+  const state = r.joined ? (r.connected ? `${r.peers.length} in it` : 'connecting…') : r.mayJoin ? 'join with: weave room join ' + r.id.slice(0, 8) : 'not invited';
+  return `${r.id.slice(0, 8)}  ${r.name}  · p/${r.project.name} · ${who} · ${state}${r.url ? `\n          ${r.service?.label ?? 'open'}: ${r.url}` : ''}`;
+};
 
 /** The recovery words, numbered in four columns, for writing down. */
 const numbered = (words: string) => {
@@ -811,6 +830,58 @@ async function main(): Promise<void> {
     case 'memberships': {
       const tiers = await (await backend()).memberships();
       return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(you support nobody yet)');
+    }
+
+    case 'app': {
+      const [sub] = args;
+      const b = await backend();
+      if (sub === 'publish') {
+        const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
+        if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
+        return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
+      }
+      if (sub === 'show') {
+        const app = await b.projectApp(needProject());
+        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start ? `\n  start: ${app.start.hint}` : ''}` : '(no app published)'));
+      }
+      throw new Error('usage: weave app publish|show -p <project>');
+    }
+
+    case 'rooms': {
+      const rooms = await (await backend()).rooms(values.project);
+      return out(rooms, () => rooms.map(roomLine).join('\n') || '(no open rooms)');
+    }
+
+    case 'room': {
+      const [sub, ref, ...words] = args;
+      const b = await backend({ needsDaemon: sub !== 'chat' });
+      if (sub === 'host' && ref) {
+        const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean) });
+        return out(r, () => `${roomLine(r)}${r.service?.ready ? '' : `\n  start the app first${r.app?.startHint ? `: ${r.app.startHint}` : ''}`}`);
+      }
+      if (sub === 'join' && ref) {
+        await b.joinRoom(ref);
+        let r: RoomInfo | undefined;
+        for (let i = 0; i < 100 && !r?.url; i++) {
+          r = (await b.rooms()).find((x) => x.id.startsWith(ref) || x.name.toLowerCase() === ref.toLowerCase());
+          if (!r?.url) await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        return out(r, () => (r?.url ? `joined ${r.name}: open ${r.url}\n(the tunnel stays open until you leave: weave room leave "${r.name}")` : 'joined, but the host is not reachable yet; try "weave rooms" in a moment'));
+      }
+      if ((sub === 'leave' || sub === 'end') && ref) {
+        await (sub === 'end' ? b.endRoom(ref) : b.leaveRoom(ref));
+        return out({ [sub]: ref }, () => (sub === 'end' ? 'room ended' : 'left the room'));
+      }
+      if (sub === 'chat' && ref) {
+        const messages = await b.roomChat(ref);
+        return out(messages, () => messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${(m.by.name ?? m.by.did).padEnd(16)}  ${m.text}`).join('\n') || '(quiet; room chats are never stored)');
+      }
+      if (sub === 'say' && ref && words.length) {
+        await b.sayInRoom({ room: ref, text: words.join(' ') });
+        return out({ said: words.join(' ') }, () => 'said');
+      }
+      throw new Error('usage: weave room host|join|leave|end|chat|say — see "weave --help"');
     }
 
     case 'chats': {

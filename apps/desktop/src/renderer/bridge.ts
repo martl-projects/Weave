@@ -12,6 +12,8 @@ interface Bridge {
   /** Create the identity; resolves to the recovery words, shown once. */
   init(name: string): Promise<string | undefined>;
   restore(words: string): Promise<void>;
+  /** Open a room's shared app in its own window. */
+  openApp(url: string, title: string): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
 }
@@ -29,6 +31,9 @@ declare global {
  */
 const webBridge: Bridge = {
   state: () => fetch('/state').then((r) => r.json()),
+  openApp: async (url) => {
+    window.open(url, '_blank', 'noopener');
+  },
   restore: async () => {
     throw new Error('restore with "weave restore" when using the web preview');
   },

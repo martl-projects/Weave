@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -66,6 +66,35 @@ ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknow
     await connect();
     return run();
   }
+});
+
+/** Only the apps rooms share: the host's own port, or a room tunnel on this computer. */
+const APP_ADDRESS = /^http:\/\/(localhost|[a-z0-9-]+\.weave\.localhost):\d+\//;
+
+/** A shared app in its own window: no address bar, its own storage, and a question before it uses the microphone or camera. */
+ipcMain.handle('weave:open-app', (_event, url: string, title: string) => {
+  if (typeof url !== 'string' || !APP_ADDRESS.test(url)) throw new Error('not an app address');
+  const name = String(title ?? 'App').slice(0, 80);
+  const appWindow = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: name,
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, partition: `persist:app-${new URL(url).hostname}` },
+  });
+  const session = appWindow.webContents.session;
+  session.setPermissionRequestHandler((_contents, permission, callback) => {
+    if (permission !== 'media') return callback(false);
+    void dialog
+      .showMessageBox(appWindow, { type: 'question', buttons: ['Allow', 'Deny'], defaultId: 0, cancelId: 1, message: `${name} wants to use your microphone or camera.` })
+      .then(({ response }) => callback(response === 0));
+  });
+  appWindow.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (/^https?:\/\//.test(target)) void shell.openExternal(target);
+    return { action: 'deny' };
+  });
+  appWindow.on('page-title-updated', (event) => event.preventDefault()); // keep "App · Room" as the title
+  void appWindow.loadURL(url);
 });
 
 async function createWindow(): Promise<void> {
