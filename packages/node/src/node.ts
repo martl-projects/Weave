@@ -577,6 +577,7 @@ export class WeaveNode implements Backend {
   async project(ref: string): Promise<ProjectInfo> {
     const project = this.#project(ref);
     const state = this.#state(project);
+    const post = this.#projectPost(project);
     return {
       ...this.#spaceInfo(project),
       kind: 'project',
@@ -584,6 +585,7 @@ export class WeaveNode implements Backend {
       maintainers: [...state.maintainers].map((did) => this.#actor(did, did)),
       groups: [...state.groups.values()].map((g) => ({ id: g.id, name: this.#spaces.get(g.id)?.name ?? g.name, auto: g.auto })),
       maintainer: state.maintainers.has(this.identity.author),
+      ...(post ? { post } : {}),
     };
   }
 

@@ -98,6 +98,8 @@ export interface ProjectInfo extends SpaceInfo {
   groups: Array<{ id: string; name: string; auto: boolean }>;
   /** You may invite, admit, remove and change the page. */
   maintainer: boolean;
+  /** The project as a post: its score, chat size and your saves. */
+  post?: PostInfo;
 }
 
 /** A project shown publicly in someone's space. */
