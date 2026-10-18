@@ -214,8 +214,8 @@ async function main(): Promise<void> {
 
     case 'mcp': {
       // stdout belongs to the MCP protocol from here on; messages for people go to stderr.
-      const b = await backend();
-      if (b instanceof WeaveNode) console.error('weave mcp: no daemon running, working offline. Start "weave daemon" to reach peers.');
+      // The daemon is the one process writing to the home, and the only way to see what peers send.
+      const b = await backend({ needsDaemon: true });
       const { serveStdio } = await import('@weave/mcp');
       return serveStdio(b, { as: values.as });
     }
