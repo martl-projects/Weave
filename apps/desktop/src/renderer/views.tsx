@@ -1,32 +1,27 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import type { Actor, Admission, FeedItem, IssueInfo, MemberInfo, Profile, ProjectInfo, ProjectStatus, ProposalInfo, Social, SpaceInfo, Theme, ThreadInfo } from '@weave/node/client';
-import { ago, api, applyAppTheme, bridge, bump, navigate, renderMarkdown, shortDid, themeVars, useApi } from './lib.ts';
-import { attempt, AsyncButton, Avatar, Modal, toast, WeaveMark } from './ui.tsx';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
+import { ChatView } from './chat.tsx';
+import { Icon } from './icons.tsx';
+import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useApi } from './lib.ts';
+import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, SubmitDialog, VoteBox } from './posts.tsx';
+import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
 
 const textOf = (item: FeedItem): string => {
-  const body = item.body as { text?: unknown } | string | null;
-  return typeof body === 'string' ? body : typeof body?.text === 'string' ? body.text : JSON.stringify(body);
+  const body = item.body as { text?: unknown; title?: unknown } | string | null;
+  if (typeof body === 'string') return body;
+  return [body?.title, body?.text].filter((x) => typeof x === 'string' && x).join('\n\n') || JSON.stringify(body);
 };
 
-const actorName = (a: Actor, meDid: string) => (a.did === meDid && !a.agent ? 'You' : (a.name ?? shortDid(a.did)));
-
-function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
-  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-function Page({ title, subtitle, actions, children }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
+/** A scrolling page inside the main pane, under a title bar. */
+export function Page({ title, actions, children }: { title: ReactNode; actions?: ReactNode; children: ReactNode }) {
   return (
-    <div className="page">
-      <header className="page-head">
-        <div>
-          <h1>{title}</h1>
-          {subtitle && <p className="muted">{subtitle}</p>}
-        </div>
-        {actions}
+    <section className="pane-main">
+      <header className="pane-head">
+        <b>{title}</b>
+        {actions && <span className="pane-tools">{actions}</span>}
       </header>
-      {children}
-    </div>
+      <div className="pane-scroll sunken page">{children}</div>
+    </section>
   );
 }
 
@@ -40,147 +35,55 @@ function useForm<T extends Record<string, string>>(initial: T) {
   return { values, field, reset: () => setValues(initial) };
 }
 
-// ---------------------------------------------------------------- posts
-
-function PostCard({ item, meDid, inSpace }: { item: FeedItem; meDid: string; inSpace?: boolean }) {
-  return (
-    <article className="card post">
-      <a href={`#/space/${encodeURIComponent(item.author)}`}>
-        <Avatar did={item.author} name={item.authorName} />
-      </a>
-      <div className="post-main">
-        <div className="post-meta">
-          <a className="name" href={`#/space/${encodeURIComponent(item.author)}`}>
-            {item.author === meDid && !item.signerName ? 'You' : (item.authorName ?? shortDid(item.author))}
-          </a>
-          {item.signerName && <span className="agent-tag">{item.signerName} · AGENT</span>}
-          {item.space && !inSpace && (
-            <a className="badge group" href={`#/${item.space.kind === 'project' ? 'p' : 'g'}/${item.space.id}`}>
-              {item.space.name}
-            </a>
-          )}
-          <time>{ago(item.time)}</time>
-        </div>
-        <Markdown text={textOf(item)} />
-      </div>
-    </article>
-  );
-}
-
-function PostComposer({ spaces, spaceId }: { spaces: SpaceInfo[]; spaceId?: string }) {
-  const { values, field, reset } = useForm({ text: '', space: spaceId ?? '' });
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!values.text.trim()) return;
-    const done = await attempt(() => api('publish', { kind: 'weave.post', body: { text: values.text }, space: values.space || undefined }));
-    if (done) reset();
-  };
-  return (
-    <form className="card composer-card" onSubmit={submit}>
-      <textarea rows={2} placeholder="Share what you're working on…" {...field('text')} />
-      <div className="row">
-        {spaceId ? (
-          <span className="muted small">Only participants can read it.</span>
-        ) : (
-          <select {...field('space')}>
-            <option value="">Everyone (public)</option>
-            {spaces.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name} (members only)
-              </option>
-            ))}
-          </select>
-        )}
-        <button className="btn primary">Post</button>
-      </div>
-    </form>
-  );
-}
-
-export function FeedView({ spaces, meDid }: { spaces: SpaceInfo[]; meDid: string }) {
-  const { data } = useApi(() => api<FeedItem[]>('feed', { kinds: ['weave.post'], limit: 100 }), []);
-  return (
-    <Page title="Feed" subtitle="Public posts from people you're connected with, and the posts in your projects and groups.">
-      <PostComposer spaces={spaces} />
-      <section className="stream">
-        {[...(data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} />)}
-        {data?.length === 0 && <p className="empty">Nothing here yet. Post something, or join a project or group with an invite link.</p>}
-      </section>
-    </Page>
-  );
-}
-
-export function ProjectUpdates({ project, spaces, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; meDid: string }) {
-  const { data } = useApi(() => api<FeedItem[]>('feed', { space: project.id, kinds: ['weave.post'], limit: 200 }), [project.id]);
-  return (
-    <Page title="Updates" subtitle="Progress and show-offs, for everyone taking part.">
-      <PostComposer spaces={spaces} spaceId={project.id} />
-      <section className="stream">
-        {[...(data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} inSpace />)}
-        {data?.length === 0 && <p className="empty">No posts yet.</p>}
-      </section>
-    </Page>
-  );
-}
-
-// ---------------------------------------------------------------- spaces
+// ---------------------------------------------------------------- your space (MySpace-style, in the person's theme)
 
 function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
   const [theme, setTheme] = useState<Theme>(me.theme);
   const [name, setName] = useState(me.name ?? '');
-  const update = (patch: Partial<Theme>) => {
-    const next = { ...theme, ...patch };
-    setTheme(next);
-    applyAppTheme(next); // live preview
-  };
-  const close = () => {
-    applyAppTheme(me.theme);
-    onClose();
-  };
   const color = (key: 'accent' | 'background' | 'surface' | 'text', label: string) => (
     <label className="color">
-      {label}
-      <input type="color" value={theme[key]} onChange={(e) => update({ [key]: e.target.value })} />
+      <input type="color" value={theme[key]} onChange={(e) => setTheme({ ...theme, [key]: e.target.value })} /> {label}
     </label>
   );
   return (
-    <Modal onClose={close}>
-      <h3>Customize your space</h3>
-      <p className="muted small">Your theme is public: friends see your space the way you style it.</p>
-      <label className="field">
-        Name
-        <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <div className="colors">
-        {color('accent', 'Accent')}
-        {color('background', 'Background')}
-        {color('surface', 'Cards')}
-        {color('text', 'Text')}
+    <Modal title="Customize your space" onClose={onClose}>
+      <p className="small">Your theme is public: friends see your space the way you style it.</p>
+      <div className="field-row-stacked">
+        <label htmlFor="me-name">Name</label>
+        <input id="me-name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
       </div>
-      <div className="two">
-        <label className="field">
-          Font
-          <select value={theme.font} onChange={(e) => update({ font: e.target.value as Theme['font'] })}>
-            {['sans', 'serif', 'mono', 'rounded'].map((f) => (
-              <option key={f}>{f}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          Background
-          <select value={theme.pattern} onChange={(e) => update({ pattern: e.target.value as Theme['pattern'] })}>
-            {['none', 'weave', 'dots', 'glow'].map((p) => (
-              <option key={p}>{p}</option>
-            ))}
-          </select>
-        </label>
+      <fieldset>
+        <legend>Colors</legend>
+        <div className="colors">
+          {color('accent', 'Accent')}
+          {color('background', 'Background')}
+          {color('surface', 'Boxes')}
+          {color('text', 'Text')}
+        </div>
+      </fieldset>
+      <div className="field-row">
+        <label htmlFor="me-font">Font</label>
+        <select id="me-font" value={theme.font} onChange={(e) => setTheme({ ...theme, font: e.target.value as Theme['font'] })}>
+          {['sans', 'serif', 'mono', 'rounded'].map((f) => (
+            <option key={f}>{f}</option>
+          ))}
+        </select>
+        <label htmlFor="me-pattern">Wallpaper</label>
+        <select id="me-pattern" value={theme.pattern} onChange={(e) => setTheme({ ...theme, pattern: e.target.value as Theme['pattern'] })}>
+          {['none', 'weave', 'dots', 'glow'].map((p) => (
+            <option key={p}>{p}</option>
+          ))}
+        </select>
       </div>
-      <div className="row end">
-        <button className="btn ghost" onClick={close}>
-          Cancel
-        </button>
+      <div className="space-preview" style={themeVars(theme) as React.CSSProperties} data-pattern={theme.pattern}>
+        <div className="space-box">
+          <b style={{ color: 'var(--accent)' }}>{name || 'You'}</b>'s space
+        </div>
+      </div>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
         <AsyncButton
-          className="btn primary"
+          className="default"
           onClick={async () => {
             const saved = await attempt(() => api<Profile>('setProfile', { name, theme }), 'Your space is updated');
             if (saved) {
@@ -196,461 +99,152 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
   );
 }
 
-export function SpaceView({ who, spaces, meDid }: { who?: string; spaces: SpaceInfo[]; meDid: string }) {
+export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
   const profile = useApi(() => api<Profile>('profile', who), [who]);
   const p = profile.data;
   const posts = useApi(() => (p ? api<FeedItem[]>('feed', { author: p.did, publicOnly: true, kinds: ['weave.post'], limit: 100 }) : Promise.resolve([])), [p?.did]);
   const [editing, setEditing] = useState(false);
-  if (!p) return <div className="page" />;
+  const [text, setText] = useState('');
+  if (!p) return <Page title="Space">{null}</Page>;
   const name = p.name ?? shortDid(p.did);
-  const edge = (kind: 'follow' | 'mute' | 'block', on: boolean, label: string, className = 'btn ghost') => (
-    <AsyncButton className={className} onClick={() => attempt(() => api('setEdge', { edge: kind, who: p.did, on }).then(bump))}>
-      {label}
-    </AsyncButton>
+  const edge = (kind: 'follow' | 'mute' | 'block', on: boolean, label: string) => (
+    <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: kind, who: p.did, on }).then(bump))}>{label}</AsyncButton>
   );
   return (
-    <div className="space" style={p.me ? undefined : (themeVars(p.theme) as React.CSSProperties)} data-pattern={p.me ? undefined : p.theme.pattern}>
-      <header className="space-head">
-        <Avatar did={p.did} name={p.name} size={84} />
-        <div className="space-id">
-          <h1>{name}</h1>
-          <button className="did" title="Copy identity" onClick={() => navigator.clipboard.writeText(p.did).then(() => toast('Copied'))}>
-            {p.did}
-          </button>
-          <div className="badges">
-            {p.following && p.followsMe && <span className="badge friend">Friend</span>}
-            {!p.me && p.followsMe && !p.following && <span className="badge">Follows you</span>}
-            {p.blocked && <span className="badge warn">Blocked</span>}
-            {p.muted && <span className="badge">Muted</span>}
-            <span className="muted small">
-              {p.posts} public post{p.posts === 1 ? '' : 's'}
-            </span>
-          </div>
-        </div>
-        <div className="space-actions">
-          {p.me ? (
-            <button className="btn" onClick={() => setEditing(true)}>
-              Customize your space
+    <Page title={<>{p.me ? 'My space' : `${name}'s space`}</>} actions={p.me && <button onClick={() => setEditing(true)}>Customize…</button>}>
+      <div className="space" style={themeVars(p.theme) as React.CSSProperties} data-pattern={p.theme.pattern}>
+        <header className="space-box space-head">
+          <Avatar did={p.did} size={96} />
+          <div className="space-id">
+            <h1>{name}</h1>
+            <button className="did" title="Copy identity" onClick={() => copy(p.did, 'Identity copied')}>
+              {p.did}
             </button>
-          ) : (
-            <>
-              {edge('follow', !p.following, p.following ? 'Unfollow' : 'Follow', p.following ? 'btn' : 'btn primary')}
-              {edge('mute', !p.muted, p.muted ? 'Unmute' : 'Mute')}
-              {edge('block', !p.blocked, p.blocked ? 'Unblock' : 'Block', 'btn ghost danger')}
-            </>
-          )}
-        </div>
-      </header>
-      {p.projects.length > 0 && (
-        <section className="showcase">
-          <h3>Projects</h3>
-          <div className="project-cards">
-            {p.projects.map((project) => (
-              <article className="card project-card" key={project.id}>
-                <div className="row">
-                  <h4>{project.name}</h4>
-                  <span className={`badge status-${project.status}`}>{project.status}</span>
-                </div>
-                {project.description && <Markdown text={project.description} />}
-              </article>
-            ))}
+            <div className="badges">
+              {p.following && p.followsMe && <span className="tag friend">friend</span>}
+              {!p.me && p.followsMe && !p.following && <span className="tag">follows you</span>}
+              {p.blocked && <span className="tag rejected">blocked</span>}
+              {p.muted && <span className="tag">muted</span>}
+              <span className="small">
+                {p.posts} public post{p.posts === 1 ? '' : 's'}
+              </span>
+            </div>
           </div>
+          {!p.me && (
+            <div className="space-actions">
+              {edge('follow', !p.following, p.following ? 'Unfollow' : 'Follow')}
+              {edge('mute', !p.muted, p.muted ? 'Unmute' : 'Mute')}
+              {edge('block', !p.blocked, p.blocked ? 'Unblock' : 'Block')}
+            </div>
+          )}
+        </header>
+        {p.projects.length > 0 && (
+          <section className="space-box">
+            <h3>{name}'s projects</h3>
+            <div className="showcase">
+              {p.projects.map((project) => (
+                <article className="showcase-item" key={project.id}>
+                  <Sprite seed={project.id} size={48} />
+                  <div>
+                    <b>{project.name}</b> <span className={`tag status-${project.status}`}>{project.status}</span>
+                    {project.description && <Markdown text={project.description} />}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+        <section className="space-box">
+          <h3>Posts</h3>
+          {p.me && (
+            <form
+              className="space-compose"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (text.trim() && (await attempt(() => api('publish', { kind: 'weave.post', body: { text } }), 'Posted publicly'))) setText('');
+              }}
+            >
+              <textarea rows={2} placeholder="A public note for everyone who follows you…" value={text} onChange={(e) => setText(e.target.value)} />
+              <button>Post</button>
+            </form>
+          )}
+          {[...(posts.data ?? [])].reverse().map((item) => (
+            <div className="space-post" key={item.id}>
+              <small>{ago(item.time)}</small>
+              <Markdown text={textOf(item)} />
+            </div>
+          ))}
+          {posts.data?.length === 0 && <p className="small">{p.me ? 'Your public posts show up here.' : `${name} hasn't posted publicly yet.`}</p>}
         </section>
+      </div>
+      {editing && (
+        <ThemeEditor
+          me={p}
+          onClose={() => {
+            setEditing(false);
+            applyAppTheme(p.theme);
+          }}
+        />
       )}
-      {p.me && <PostComposer spaces={spaces} />}
-      <section className="stream">
-        {[...(posts.data ?? [])].reverse().map((item) => <PostCard key={item.id} item={item} meDid={meDid} />)}
-        {posts.data?.length === 0 && <p className="empty">{p.me ? 'Your public posts show up here.' : `${name} hasn't posted publicly yet.`}</p>}
-      </section>
-      {editing && <ThemeEditor me={p} onClose={() => setEditing(false)} />}
-    </div>
+    </Page>
   );
 }
 
-// ---------------------------------------------------------------- people
+// ---------------------------------------------------------------- people and inbox
 
 export function PeopleView() {
   const social = useApi(() => api<Social>('social'), []);
   const everyone = useApi(() => api<Profile[]>('directory'), []);
   const s = social.data;
   return (
-    <Page title="People" subtitle="Everyone whose profile reached you. A friend is someone you follow who follows you back.">
+    <Page title={<><Icon name="users" /> People</>}>
       {s && (
         <div className="stats">
-          <div>
-            <b>{s.friends.length}</b>
-            <span>friends</span>
-          </div>
-          <div>
-            <b>{s.following.length}</b>
-            <span>following</span>
-          </div>
-          <div>
-            <b>{s.followers.length}</b>
-            <span>followers</span>
-          </div>
-          <div>
-            <b>{s.blocked.length + s.muted.length}</b>
-            <span>blocked or muted</span>
-          </div>
+          {[
+            [s.friends.length, 'friends'],
+            [s.following.length, 'following'],
+            [s.followers.length, 'followers'],
+            [s.blocked.length + s.muted.length, 'blocked or muted'],
+          ].map(([n, label]) => (
+            <div className="stat sunken" key={label}>
+              <b>{n}</b>
+              <span>{label}</span>
+            </div>
+          ))}
         </div>
       )}
-      <section className="card people">
+      <p className="small">Everyone whose profile reached you. A friend is someone you follow who follows you back.</p>
+      <div className="people">
         {(everyone.data ?? []).map((p) => (
           <div className="person" key={p.did}>
-            <a href={`#/space/${encodeURIComponent(p.did)}`}>
-              <Avatar did={p.did} name={p.name} />
-            </a>
-            <div className="person-main">
-              <a className="name" href={`#/space/${encodeURIComponent(p.did)}`}>
-                {p.name ?? shortDid(p.did)}
+            <Avatar did={p.did} size={40} />
+            <div className="grow">
+              <a href={`#/space/${encodeURIComponent(p.did)}`}>
+                <b>{p.name ?? shortDid(p.did)}</b>
               </a>
-              <div className="badges">
-                {p.following && p.followsMe ? <span className="badge friend">Friend</span> : p.followsMe ? <span className="badge">Follows you</span> : p.following ? <span className="badge">Following</span> : null}
-                {p.blocked && <span className="badge warn">Blocked</span>}
-                {p.muted && <span className="badge">Muted</span>}
+              <div>
+                {p.following && p.followsMe ? <span className="tag friend">friend</span> : p.followsMe ? <span className="tag">follows you</span> : p.following ? <span className="tag">following</span> : null}
+                {p.blocked && <span className="tag rejected">blocked</span>}
+                {p.muted && <span className="tag">muted</span>}
               </div>
             </div>
-            <AsyncButton className={`btn small${p.following ? '' : ' primary'}`} onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>
-              {p.following ? 'Unfollow' : 'Follow'}
-            </AsyncButton>
+            <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>{p.following ? 'Unfollow' : 'Follow'}</AsyncButton>
           </div>
         ))}
-        {everyone.data?.length === 0 && <p className="empty">Nobody yet. Join a project or group to meet people.</p>}
-      </section>
-    </Page>
-  );
-}
-
-// ---------------------------------------------------------------- discussion
-
-export function DiscussionView({ project, threadId, meDid }: { project: SpaceInfo; threadId?: string; meDid: string }) {
-  const { data: threads } = useApi(() => api<ThreadInfo[]>('threads', project.id), [project.id]);
-  const start = useForm({ title: '', text: '' });
-  const reply = useForm({ text: '' });
-  const thread = threadId ? threads?.find((t) => t.id === threadId) : undefined;
-
-  if (threadId) {
-    if (!thread) return <Page title="Discussion">{threads && <p className="empty">This discussion isn't here (yet).</p>}</Page>;
-    const entry = (by: Actor, text: string, time: string, key: string, lead = false) => (
-      <div className={`card entry${lead ? ' lead' : ''}`} key={key}>
-        <Avatar did={by.did} name={by.name} size={34} />
-        <div className="post-main">
-          <div className="post-meta">
-            <span className="name">{actorName(by, meDid)}</span>
-            {by.agent && <span className="agent-tag">{by.agent} · AGENT</span>}
-            <time>{ago(time)}</time>
-          </div>
-          <Markdown text={text} />
-        </div>
-      </div>
-    );
-    return (
-      <Page title={thread.title} subtitle={<a href={`#/p/${project.id}/discussion`}>← All discussions</a>}>
-        <section className="stream">
-          {entry(thread.by, thread.text || '_(no details)_', thread.time, thread.id, true)}
-          {thread.replies.map((r) => entry(r.by, r.text, r.time, r.id))}
-        </section>
-        <form
-          className="card composer-card"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (!reply.values.text.trim()) return;
-            if (await attempt(() => api('reply', { target: thread.id, text: reply.values.text }))) reply.reset();
-          }}
-        >
-          <textarea rows={2} placeholder="Reply…" {...reply.field('text')} />
-          <div className="row end">
-            <button className="btn primary">Reply</button>
-          </div>
-        </form>
-      </Page>
-    );
-  }
-
-  return (
-    <Page title="Discussion" subtitle="Longer conversations that need a decision or some thought.">
-      <form
-        className="card composer-card"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!start.values.title.trim()) return;
-          const t = await attempt(() => api<ThreadInfo>('startThread', { project: project.id, ...start.values }));
-          if (t) navigate(`#/p/${project.id}/discussion/${t.id}`);
-        }}
-      >
-        <input placeholder="Start a discussion: what should we decide or figure out?" maxLength={200} {...start.field('title')} />
-        <textarea rows={2} placeholder="Details (optional)" {...start.field('text')} />
-        <div className="row end">
-          <button className="btn primary">Start discussion</button>
-        </div>
-      </form>
-      <section className="stream">
-        {(threads ?? []).map((t) => (
-          <a className="card thread-card" key={t.id} href={`#/p/${project.id}/discussion/${t.id}`}>
-            <h3>{t.title}</h3>
-            <p className="muted small">
-              {actorName(t.by, meDid)}
-              {t.by.agent ? ` · ${t.by.agent}` : ''} · {t.replies.length} repl{t.replies.length === 1 ? 'y' : 'ies'} · active {ago(t.active)}
-            </p>
-          </a>
-        ))}
-        {threads?.length === 0 && <p className="empty">No discussions yet.</p>}
-      </section>
-    </Page>
-  );
-}
-
-// ---------------------------------------------------------------- votes
-
-export function VotesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
-  const { data: proposals } = useApi(() => api<ProposalInfo[]>('proposals', project.id), [project.id]);
-  const { data: delegate } = useApi(() => api<Actor | null>('votingDelegate', project.id), [project.id]);
-  const form = useForm({ title: '', text: '', hours: '72' });
-  return (
-    <Page title="Votes" subtitle="One vote per participant. If you don't vote, your vote can follow someone you trust.">
-      <div className="split">
-        <div>
-          <form
-            className="card composer-card"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!form.values.title.trim()) return;
-              if (await attempt(() => api('propose', { project: project.id, title: form.values.title, text: form.values.text, hours: Number(form.values.hours) }))) form.reset();
-            }}
-          >
-            <input placeholder="Propose something to decide together" maxLength={200} {...form.field('title')} />
-            <textarea rows={2} placeholder="Why? What changes if it passes?" {...form.field('text')} />
-            <div className="row">
-              <select {...form.field('hours')}>
-                <option value="24">Vote for 1 day</option>
-                <option value="72">Vote for 3 days</option>
-                <option value="168">Vote for a week</option>
-              </select>
-              <button className="btn primary">Put to a vote</button>
-            </div>
-          </form>
-          <section className="stream">
-            {(proposals ?? []).map((p) => {
-              const total = Math.max(1, p.yes + p.no + p.abstain);
-              const vote = (choice: 'yes' | 'no' | 'abstain', label: string) => (
-                <AsyncButton
-                  className={`btn small vote-${choice}${p.myVote?.choice === choice && !p.myVote.via ? ' chosen' : ''}`}
-                  onClick={() => attempt(() => api('vote', { proposal: p.id, choice }).then(bump))}
-                >
-                  {label}
-                </AsyncButton>
-              );
-              return (
-                <article className="card proposal" key={p.id}>
-                  <div className="row">
-                    <h3>{p.title}</h3>
-                    {p.closed ? <span className={`badge ${p.passed ? 'friend' : 'warn'}`}>{p.passed ? 'Passed' : 'Not passed'}</span> : <span className="muted small">open until {new Date(p.deadline).toLocaleString()}</span>}
-                  </div>
-                  {p.text && <Markdown text={p.text} />}
-                  <div className="tally">
-                    <span className="yes" style={{ width: `${(p.yes / total) * 100}%` }} />
-                    <span className="no" style={{ width: `${(p.no / total) * 100}%` }} />
-                    <span className="abstain" style={{ width: `${(p.abstain / total) * 100}%` }} />
-                  </div>
-                  <p className="muted small">
-                    Yes {p.yes} · No {p.no} · Abstain {p.abstain} · {p.voted} of {p.eligible} counted · quorum {p.quorum} {p.quorumReached ? '✓' : ''} · proposed by {actorName(p.by, meDid)}
-                  </p>
-                  <div className="row">
-                    <span className="muted small">
-                      {p.myVote ? (
-                        <>
-                          Your vote: <b>{p.myVote.choice}</b>
-                          {p.myVote.via ? ` (via ${p.myVote.via.name ?? 'someone'})` : ''}
-                        </>
-                      ) : (
-                        'You have not voted.'
-                      )}
-                    </span>
-                    {!p.closed && (
-                      <span className="vote-buttons">
-                        {vote('yes', 'Yes')}
-                        {vote('no', 'No')}
-                        {vote('abstain', 'Abstain')}
-                      </span>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-            {proposals?.length === 0 && <p className="empty">No proposals yet.</p>}
-          </section>
-        </div>
-        <aside className="card">
-          <h3>Delegation</h3>
-          <p className="muted small">When you don't vote, your vote can follow someone you trust in this project. Voting yourself always wins.</p>
-          <select
-            value={delegate?.did ?? ''}
-            onChange={(e) => attempt(() => api('delegateVote', { project: project.id, who: e.target.value || undefined }).then(bump), e.target.value ? 'Delegation saved' : 'You vote only for yourself now')}
-          >
-            <option value="">Only I vote for me</option>
-            {members
-              .filter((m) => m.did !== meDid)
-              .map((m) => (
-                <option key={m.did} value={m.did}>
-                  Follow {m.name ?? shortDid(m.did)}
-                </option>
-              ))}
-          </select>
-        </aside>
+        {everyone.data?.length === 0 && <p className="empty">Nobody yet. Join a community or project to meet people.</p>}
       </div>
     </Page>
   );
 }
 
-// ---------------------------------------------------------------- issues
-
-export function IssuesView({ project, meDid }: { project: SpaceInfo; meDid: string }) {
-  const { data: issues } = useApi(() => api<IssueInfo[]>('issues', project.id), [project.id]);
-  const form = useForm({ title: '', labels: '' });
-  const column = (title: string, statuses: string[]) => {
-    const list = (issues ?? []).filter((i) => statuses.includes(i.status));
-    return (
-      <div className="column">
-        <h3>
-          {title} <span className="muted">{list.length}</span>
-        </h3>
-        {list.map((i) => (
-          <article className="card issue" key={i.id}>
-            <h4>{i.title}</h4>
-            {i.labels.length > 0 && (
-              <div className="badges">
-                {i.labels.map((l) => (
-                  <span className="badge" key={l}>
-                    {l}
-                  </span>
-                ))}
-              </div>
-            )}
-            <p className="muted small">{i.assignee ? `→ ${actorName(i.assignee, meDid)}${i.assignee.agent ? ` · ${i.assignee.agent}` : ''}` : 'Nobody on it yet'}</p>
-            <div className="row">
-              {!(i.assignee?.did === meDid && !i.assignee.agent) && i.status !== 'done' && i.status !== 'closed' && (
-                <AsyncButton className="btn small" onClick={() => attempt(() => api('claimIssue', { issue: i.id }).then(bump), "It's yours")}>
-                  Take it
-                </AsyncButton>
-              )}
-              <select value={i.status} onChange={(e) => attempt(() => api('setIssueStatus', { issue: i.id, status: e.target.value }).then(bump))}>
-                {['open', 'in-progress', 'done', 'closed'].map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-          </article>
-        ))}
-      </div>
-    );
-  };
+export function InboxView({ admissions }: { admissions: Admission[] }) {
   return (
-    <Page title="Issues" subtitle="What needs doing, and who (or which agent) is on it.">
-      <form
-        className="card composer-card inline"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!form.values.title.trim()) return;
-          const labels = form.values.labels.split(',').map((l) => l.trim()).filter(Boolean);
-          if (await attempt(() => api('openIssue', { project: project.id, title: form.values.title, labels }))) form.reset();
-        }}
-      >
-        <input placeholder="What needs doing?" maxLength={200} {...form.field('title')} />
-        <input placeholder="labels, comma separated" {...form.field('labels')} />
-        <button className="btn primary">Open issue</button>
-      </form>
-      <div className="board">
-        {column('Open', ['open'])}
-        {column('In progress', ['in-progress'])}
-        {column('Done', ['done', 'closed'])}
-      </div>
+    <Page title={<><Icon name="inbox" /> Inbox</>}>
+      {admissions.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.map((a) => (
+        <AdmissionCard key={`${a.project.id}-${a.did}-${a.group.id}-${a.change}`} admission={a} />
+      ))}
     </Page>
-  );
-}
-
-// ---------------------------------------------------------------- dialogs and entry screens
-
-export function NewDialog({ onClose }: { onClose(): void }) {
-  const project = useForm({ name: '', description: '' });
-  const group = useForm({ name: '' });
-  const join = useForm({ invite: '' });
-  const go = (space?: SpaceInfo) => {
-    if (!space) return;
-    onClose();
-    navigate(`#/${space.kind === 'project' ? 'p' : 'g'}/${space.id}`);
-  };
-  return (
-    <Modal onClose={onClose} wide>
-      <h3>Start something</h3>
-      <p className="muted small">
-        A <b>project</b> is something you build together: chat, discussion, votes, issues and a page. A <b>group</b> is a circle of people with its own chat,
-        which you can invite into projects as a whole. Both are end-to-end encrypted.
-      </p>
-      <div className="three">
-        <form
-          className="card form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            go(await attempt(() => api<ProjectInfo>('createProject', project.values), `Created ${project.values.name}`));
-          }}
-        >
-          <h4>🛠️ New project</h4>
-          <input required maxLength={40} placeholder="e.g. Modular synth case" {...project.field('name')} />
-          <textarea rows={2} placeholder="What are you building? (optional)" {...project.field('description')} />
-          <button className="btn primary">Create project</button>
-        </form>
-        <form
-          className="card form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            go(await attempt(() => api<SpaceInfo>('createGroup', group.values.name), `Created ${group.values.name}`));
-          }}
-        >
-          <h4>👥 New group</h4>
-          <input required maxLength={40} placeholder="e.g. Synth friends" {...group.field('name')} />
-          <button className="btn primary">Create group</button>
-        </form>
-        <form
-          className="card form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const space = await attempt(() => api<SpaceInfo>('joinSpace', join.values.invite));
-            if (space) toast(`Joined ${space.name}`);
-            go(space);
-          }}
-        >
-          <h4>🔗 Join with a link</h4>
-          <textarea required rows={3} placeholder="weave:invite:…" {...join.field('invite')} />
-          <button className="btn primary">Join</button>
-        </form>
-      </div>
-    </Modal>
-  );
-}
-
-export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
-  const { data: link, error } = useApi(() => api<string>('invite', space.id), [space.id]);
-  return (
-    <Modal onClose={onClose}>
-      <h3>Invite someone to {space.name}</h3>
-      {error ? (
-        <p className="muted">{error}</p>
-      ) : (
-        <>
-          <p className="muted small">Send this link privately. Whoever has it can join and read {space.name}, so treat it like a key. It expires in 7 days.</p>
-          <textarea className="invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
-        </>
-      )}
-      <div className="row end">
-        <button className="btn ghost" onClick={onClose}>
-          Close
-        </button>
-        <button className="btn primary" disabled={!link} onClick={() => navigator.clipboard.writeText(link!).then(() => toast('Invite link copied'))}>
-          Copy link
-        </button>
-      </div>
-    </Modal>
   );
 }
 
@@ -659,73 +253,221 @@ export function AdmissionCard({ admission }: { admission: Admission }) {
   const [always, setAlways] = useState(false);
   const a = admission;
   const name = a.name ?? shortDid(a.did);
+  const id = `always-${a.project.id}-${a.did}`;
   if (a.change === 'leave') {
     return (
-      <div className="admission">
-        <Avatar did={a.did} name={a.name} size={34} />
-        <div className="admission-text">
-          <b>{name}</b> left group <b>{a.group.name}</b>. Remove them from <b>{a.project.name}</b>? The project key rotates.
+      <div className="admission window">
+        <div className="window-body">
+          <Avatar did={a.did} size={32} />
+          <div className="grow">
+            <b>{name}</b> left group <b>{a.group.name}</b>. Remove them from <b>{a.project.name}</b>? The project key rotates.
+          </div>
+          <AsyncButton onClick={() => attempt(() => api('removeMember', a.project.id, a.did).then(bump), `Removed ${name}`)}>Remove</AsyncButton>
         </div>
-        <AsyncButton className="btn small danger" onClick={() => attempt(() => api('removeMember', a.project.id, a.did).then(bump), `Removed ${name}`)}>
-          Remove
-        </AsyncButton>
       </div>
     );
   }
   return (
-    <div className="admission">
-      <Avatar did={a.did} name={a.name} size={34} />
-      <div className="admission-text">
-        <b>{name}</b> from group <b>{a.group.name}</b> wants into <b>{a.project.name}</b>.
-        <label className="check">
-          <input type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} /> Allow automatically for all projects with group “{a.group.name}”
-        </label>
+    <div className="admission window">
+      <div className="window-body">
+        <Avatar did={a.did} size={32} />
+        <div className="grow">
+          Do you allow <b>{name}</b> from group <b>{a.group.name}</b> to join <b>{a.project.name}</b>?
+          <div>
+            <input id={id} type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} />
+            <label htmlFor={id}>Allow for all projects with group “{a.group.name}”</label>
+          </div>
+        </div>
+        <AsyncButton onClick={() => attempt(() => api('decline', { project: a.project.id, who: a.did, group: a.group.id }).then(bump))}>Decline</AsyncButton>
+        <AsyncButton className="default" onClick={() => attempt(() => api('admit', { project: a.project.id, who: a.did, group: a.group.id, always }).then(bump), `${name} is in`)}>
+          Allow
+        </AsyncButton>
       </div>
-      <AsyncButton className="btn small" onClick={() => attempt(() => api('decline', { project: a.project.id, who: a.did, group: a.group.id }).then(bump))}>
-        Decline
-      </AsyncButton>
-      <AsyncButton className="btn small primary" onClick={() => attempt(() => api('admit', { project: a.project.id, who: a.did, group: a.group.id, always }).then(bump), `${name} is in`)}>
-        Allow
-      </AsyncButton>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- projects
+
+/** A project's front page: the project as a post, with its general chat below. */
+export function ProjectHome({ project, members, meDid, meName, spaces, onInvite }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void }) {
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
+  const [sharing, setSharing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  return (
+    <section className="pane-main">
+      <header className="pane-head">
+        <b>p/{project.name}</b>
+        <span className="pane-tools">
+          <button onClick={() => setSubmitting(true)}>
+            <Icon name="pencil" /> Post
+          </button>
+          <button onClick={onInvite}>
+            <Icon name="userPlus" /> Invite
+          </button>
+        </span>
+      </header>
+      <div className="project-split">
+        <div className="banner">
+          <Sprite seed={project.id} size={88} className="banner-art" />
+          <div className="banner-text">
+            <h1>{project.name}</h1>
+            {info && <span className={`tag status-${info.page.status}`}>{info.page.status}</span>} <span className="small">{members.length} participants · by {info?.founderName ?? '…'}</span>
+            {info?.page.description ? <Markdown text={info.page.description} /> : <p className="small muted">No description yet{info?.maintainer ? ': add one in Settings.' : '.'}</p>}
+          </div>
+          {info?.post && (
+            <div className="banner-side">
+              <VoteBox post={info.post} />
+              <button onClick={() => setSharing(true)}>
+                <Icon name="share" /> Share
+              </button>
+              <button onClick={() => attempt(() => api('save', { target: info.post!.id, mode: info.post!.saved === 'pinned' ? null : 'pinned' }).then(bump), info.post!.saved === 'pinned' ? 'Unpinned' : 'Pinned to your home')}>
+                <Icon name="mapPin" /> {info.post.saved === 'pinned' ? 'Unpin' : 'Pin'}
+              </button>
+            </div>
+          )}
+        </div>
+        {boards && (
+          <nav className="board-strip">
+            {boards.map((b) => (
+              <a key={b.name} className="board-chip" href={`#/p/${project.id}/b/${b.name}`}>
+                <Icon name={boardIcon(b)} /> {b.title} <span className="count">{b.count}</span>
+              </a>
+            ))}
+          </nav>
+        )}
+        <ChatView space={project} channel="general" meDid={meDid} meName={meName} members={members} />
+      </div>
+      {sharing && info?.post && <ShareDialog post={info.post} spaces={spaces} onClose={() => setSharing(false)} />}
+      {submitting && <SubmitDialog spaces={spaces} space={project.id} onClose={() => setSubmitting(false)} />}
+    </section>
+  );
+}
+
+/** Above the proposals board: whose vote counts for yours when you don't vote. */
+export function DelegationBar({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { data: delegate } = useApi(() => api<Actor | null>('votingDelegate', project.id), [project.id]);
+  return (
+    <div className="board-intro">
+      <Icon name="flag" /> One vote per participant. When you don't vote, your vote can follow:{' '}
+      <select
+        value={delegate?.did ?? ''}
+        onChange={(e) => attempt(() => api('delegateVote', { project: project.id, who: e.target.value || undefined }).then(bump), e.target.value ? 'Delegation saved' : 'You vote only for yourself now')}
+      >
+        <option value="">nobody (only I vote for me)</option>
+        {members
+          .filter((m) => m.did !== meDid)
+          .map((m) => (
+            <option key={m.did} value={m.did}>
+              {m.name ?? shortDid(m.did)}
+            </option>
+          ))}
+      </select>
     </div>
   );
 }
 
 const STATUSES: ProjectStatus[] = ['idea', 'active', 'paused', 'shipped', 'archived'];
 
-export function ProjectPageView({ project, spaces, members, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string }) {
+function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
+  const add = useForm({ name: '', type: 'posts' });
+  const set = (name: string, patch: Record<string, unknown>) => attempt(() => api('setBoard', { project: project.id, name, ...patch }).then(bump));
+  const move = (i: number, by: number) => {
+    const other = boards[i + by];
+    if (!other) return;
+    void set(boards[i].name, { position: other.position + (by > 0 ? 0.5 : -0.5) });
+  };
+  return (
+    <fieldset>
+      <legend>Boards</legend>
+      <table className="boards-table">
+        <tbody>
+          {boards.map((b, i) => (
+            <tr key={b.name}>
+              <td>
+                <Icon name={boardIcon(b)} />
+              </td>
+              <td>
+                <input defaultValue={b.title} aria-label={`Title of ${b.name}`} onBlur={(e) => e.target.value !== b.title && set(b.name, { title: e.target.value })} />
+              </td>
+              <td className="small">{b.type}</td>
+              <td>
+                <select value={b.sort} aria-label="Default sort" onChange={(e) => set(b.name, { sort: e.target.value })}>
+                  <option value="hot">hot</option>
+                  <option value="new">new</option>
+                  <option value="top">top</option>
+                </select>
+              </td>
+              <td>
+                <button className="small-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
+                  ▲
+                </button>
+                <button className="small-btn" disabled={i === boards.length - 1} onClick={() => move(i, 1)} title="Move down">
+                  ▼
+                </button>
+                <button className="small-btn" title="Remove board (its posts stay in the logs)" onClick={() => confirm(`Remove the board “${b.title}”?`) && set(b.name, { on: false })}>
+                  ✕
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <form
+        className="field-row"
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          if (await attempt(() => api('setBoard', { project: project.id, name: add.values.name, title: add.values.name, type: add.values.type, position: (boards.at(-1)?.position ?? 0) + 1 }).then(bump))) add.reset();
+        }}
+      >
+        <input placeholder="New board, e.g. Showcase" required maxLength={32} {...add.field('name')} />
+        <select {...add.field('type')} aria-label="Board type">
+          <option value="posts">posts</option>
+          <option value="issues">issues</option>
+          <option value="proposals">proposals</option>
+        </select>
+        <button>Add board</button>
+      </form>
+    </fieldset>
+  );
+}
+
+export function ProjectSettings({ project, spaces, members, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string }) {
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: admissions } = useApi(() => api<Admission[]>('admissions', project.id), [project.id]);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
   const [description, setDescription] = useState<string>();
   const [inviting, setInviting] = useState('');
-  if (!info) return <div className="page" />;
+  if (!info) return <Page title="Settings">{null}</Page>;
   const myGroups = spaces.filter((s) => s.kind === 'group' && !info.groups.some((g) => g.id === s.id));
   const save = (patch: Partial<ProjectInfo['page']>) => attempt(() => api('setProjectPage', { project: project.id, ...patch }).then(bump), 'Page updated');
   return (
-    <Page title={info.name} subtitle={<span className={`badge status-${info.page.status}`}>{info.page.status}</span>}>
+    <Page title={<><Icon name="gear" /> Settings · p/{info.name}</>}>
       {info.maintainer && (admissions?.length ?? 0) > 0 && (
-        <section className="card admissions">
-          <h3>Waiting for you</h3>
+        <fieldset>
+          <legend>Waiting for you</legend>
           {admissions!.map((a) => (
             <AdmissionCard key={`${a.did}-${a.group.id}-${a.change}`} admission={a} />
           ))}
-        </section>
+        </fieldset>
       )}
-      <section className="card">
-        <h3>About</h3>
+      <fieldset>
+        <legend>About</legend>
         {info.maintainer ? (
           <>
-            <textarea rows={4} value={description ?? info.page.description} placeholder="What is this project? What will it become?" onChange={(e) => setDescription(e.target.value)} />
-            <div className="row">
-              <select value={info.page.status} onChange={(e) => save({ status: e.target.value as ProjectStatus })}>
+            <textarea rows={4} className="wide" value={description ?? info.page.description} placeholder="What is this project? What will it become?" onChange={(e) => setDescription(e.target.value)} />
+            <div className="field-row">
+              <label htmlFor="status">Status</label>
+              <select id="status" value={info.page.status} onChange={(e) => save({ status: e.target.value as ProjectStatus })}>
                 {STATUSES.map((s) => (
                   <option key={s}>{s}</option>
                 ))}
               </select>
-              <label className="check">
-                <input type="checkbox" checked={info.page.public} onChange={(e) => save({ public: e.target.checked })} /> Show this page publicly in my space
-              </label>
-              <button className="btn primary" disabled={description === undefined || description === info.page.description} onClick={() => save({ description }).then(() => setDescription(undefined))}>
+              <input id="public" type="checkbox" checked={info.page.public} onChange={(e) => save({ public: e.target.checked })} />
+              <label htmlFor="public">Show the page publicly in my space</label>
+              <span className="grow" />
+              <button className="default" disabled={description === undefined || description === info.page.description} onClick={() => save({ description }).then(() => setDescription(undefined))}>
                 Save
               </button>
             </div>
@@ -733,67 +475,257 @@ export function ProjectPageView({ project, spaces, members, meDid }: { project: 
         ) : info.page.description ? (
           <Markdown text={info.page.description} />
         ) : (
-          <p className="muted">No description yet.</p>
+          <p className="small">No description yet.</p>
         )}
-        <p className="muted small">Chat, discussion, votes and issues always stay among participants{info.page.public ? '; this page is public' : ''}.</p>
-      </section>
-      <div className="two">
-        <section className="card">
-          <h3>Groups</h3>
-          {info.groups.map((g) => (
-            <div className="row line" key={g.id}>
-              <span>👥 {g.name}</span>
+        <p className="small">Chat, boards and votes always stay among participants{info.page.public ? '; the page is public' : ''}.</p>
+      </fieldset>
+      {info.maintainer && boards && <BoardSettings project={project} boards={boards} />}
+      <fieldset>
+        <legend>Groups</legend>
+        {info.groups.map((g) => {
+          const id = `auto-${g.id}`;
+          return (
+            <div className="field-row" key={g.id}>
+              <Icon name="users" /> <b>{g.name}</b>
               {info.maintainer ? (
-                <label className="check small">
-                  <input type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} /> admit newcomers automatically
-                </label>
+                <>
+                  <input id={id} type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} />
+                  <label htmlFor={id}>admit newcomers automatically</label>
+                </>
               ) : (
-                <span className="muted small">{g.auto ? 'newcomers admitted automatically' : 'newcomers are asked about'}</span>
+                <span className="small">{g.auto ? 'newcomers admitted automatically' : 'newcomers are asked about'}</span>
               )}
             </div>
-          ))}
-          {info.groups.length === 0 && <p className="muted small">No groups invited yet.</p>}
-          {info.maintainer && myGroups.length > 0 && (
-            <div className="row">
-              <select value={inviting} onChange={(e) => setInviting(e.target.value)}>
-                <option value="">Invite one of your groups…</option>
-                {myGroups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-              <AsyncButton
-                className="btn small primary"
-                onClick={async () => {
-                  if (!inviting) return;
-                  await attempt(() => api('inviteGroup', { project: project.id, group: inviting }).then(bump), 'Group invited: its members take part now');
-                  setInviting('');
-                }}
-              >
-                Invite group
+          );
+        })}
+        {info.groups.length === 0 && <p className="small">No groups invited yet.</p>}
+        {info.maintainer && myGroups.length > 0 && (
+          <div className="field-row">
+            <select value={inviting} onChange={(e) => setInviting(e.target.value)} aria-label="Group to invite">
+              <option value="">Invite one of your groups…</option>
+              {myGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <AsyncButton
+              onClick={async () => {
+                if (!inviting) return;
+                await attempt(() => api('inviteGroup', { project: project.id, group: inviting }).then(bump), 'Group invited: its members take part now');
+                setInviting('');
+              }}
+            >
+              Invite group
+            </AsyncButton>
+          </div>
+        )}
+      </fieldset>
+      <fieldset>
+        <legend>Maintainers</legend>
+        <p className="small">Maintainers decide who takes part, keep the boards and pin posts.</p>
+        {members.map((m) => (
+          <div className="field-row" key={m.did}>
+            <Avatar did={m.did} size={16} />
+            <span className="grow">
+              {m.name ?? shortDid(m.did)}
+              {m.did === meDid ? ' (you)' : ''} {m.maintainer && <span className="tag">maintainer</span>}
+            </span>
+            {info.maintainer && m.did !== info.founder && (
+              <AsyncButton onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>{m.maintainer ? 'Drop maintainer' : 'Make maintainer'}</AsyncButton>
+            )}
+          </div>
+        ))}
+      </fieldset>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------- communities
+
+export function CommunityBanner({ community, onInvite, onSubmit }: { community: SpaceInfo; onInvite(): void; onSubmit(): void }) {
+  const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
+  return (
+    <div className="banner community">
+      <Sprite seed={community.id} size={64} className="banner-art" />
+      <div className="banner-text">
+        <h1>r/{community.name}</h1>
+        <span className="small">
+          {community.members} member{community.members === 1 ? '' : 's'} · moderated by {info?.moderators.map((m) => m.name ?? shortDid(m.did)).join(', ') ?? '…'}
+        </span>
+        {info?.description && <Markdown text={info.description} />}
+      </div>
+      <div className="banner-side">
+        <button className="default" onClick={onSubmit}>
+          <Icon name="pencil" /> Submit post
+        </button>
+        <button onClick={onInvite}>
+          <Icon name="userPlus" /> Invite
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function CommunityAbout({ community, members, meDid }: { community: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
+  const [description, setDescription] = useState<string>();
+  if (!info) return <Page title="About">{null}</Page>;
+  return (
+    <Page title={<><Icon name="gear" /> About r/{info.name}</>}>
+      <fieldset>
+        <legend>Description</legend>
+        {info.moderator ? (
+          <>
+            <textarea className="wide" rows={4} value={description ?? info.description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this community about?" />
+            <div className="buttons">
+              <AsyncButton className="default" onClick={() => attempt(() => api('setCommunity', { community: community.id, description: description ?? info.description }).then(bump), 'Saved')}>
+                Save
               </AsyncButton>
             </div>
-          )}
-        </section>
-        <section className="card">
-          <h3>Maintainers</h3>
-          <p className="muted small">Maintainers decide who takes part: they invite, admit and remove, and set rules for groups.</p>
-          {members.map((m) => (
-            <div className="row line" key={m.did}>
-              <span>
+          </>
+        ) : info.description ? (
+          <Markdown text={info.description} />
+        ) : (
+          <p className="small">No description yet.</p>
+        )}
+        <p className="small">Communities are private for now: invite-only and end-to-end encrypted. Any member can invite; moderators pin posts and remove people.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Moderators</legend>
+        {members.map((m) => {
+          const isMod = info.moderators.some((x) => x.did === m.did);
+          return (
+            <div className="field-row" key={m.did}>
+              <Avatar did={m.did} size={16} />
+              <span className="grow">
                 {m.name ?? shortDid(m.did)}
-                {m.did === meDid ? ' (you)' : ''} {m.maintainer && <span className="badge">maintainer</span>}
+                {m.did === meDid ? ' (you)' : ''} {isMod && <span className="tag">moderator</span>}
               </span>
-              {info.maintainer && m.did !== info.founder && (
-                <AsyncButton className="btn small ghost" onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>
-                  {m.maintainer ? 'Remove as maintainer' : 'Make maintainer'}
-                </AsyncButton>
+              {info.moderator && m.did !== info.founder && (
+                <AsyncButton onClick={() => attempt(() => api('setModerator', { community: community.id, who: m.did, on: !isMod }).then(bump))}>{isMod ? 'Drop moderator' : 'Make moderator'}</AsyncButton>
               )}
             </div>
-          ))}
-        </section>
+          );
+        })}
+      </fieldset>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------- dialogs and entry screens
+
+export function NewDialog({ onClose }: { onClose(): void }) {
+  const [tab, setTab] = useState<'project' | 'community' | 'group' | 'join'>('project');
+  const form = useForm({ name: '', description: '', invite: '' });
+  const go = (space?: SpaceInfo) => {
+    if (!space) return;
+    onClose();
+    bump();
+    navigate(spaceHref(space));
+  };
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    const { name, description, invite } = form.values;
+    if (tab === 'project') go(await attempt(() => api<ProjectInfo>('createProject', { name, description }), `Created p/${name}`));
+    if (tab === 'community') go(await attempt(() => api<CommunityInfo>('createCommunity', { name, description }), `Created r/${name}`));
+    if (tab === 'group') go(await attempt(() => api<SpaceInfo>('createGroup', name), `Created g/${name}`));
+    if (tab === 'join') {
+      const space = await attempt(() => api<SpaceInfo>('joinSpace', invite));
+      if (space) toast(`Joined ${spaceLabel(space)}`);
+      go(space);
+    }
+  };
+  const tabs = [
+    ['project', 'Project'],
+    ['community', 'Community'],
+    ['group', 'Group'],
+    ['join', 'Join with link'],
+  ] as const;
+  const blurb = {
+    project: 'Something you build together. It shows up as a post with its own chat, and boards for releases, ideas, issues and proposals.',
+    community: 'A board of posts that people join, like a subreddit. Every post gets its own chat. Private and invite-only for now.',
+    group: 'A circle of people with its own chat. You can invite a whole group into a project.',
+    join: 'Paste an invite link someone sent you.',
+  }[tab];
+  return (
+    <Modal title="New" onClose={onClose}>
+      <menu role="tablist">
+        {tabs.map(([key, label]) => (
+          <li key={key} role="tab" aria-selected={tab === key}>
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setTab(key);
+              }}
+            >
+              {label}
+            </a>
+          </li>
+        ))}
+      </menu>
+      <form className="window tab-body form" role="tabpanel" onSubmit={create}>
+        <div className="window-body">
+          <p className="small">{blurb}</p>
+          {tab === 'join' ? (
+            <textarea required rows={4} className="wide" placeholder="weave:invite:…" {...form.field('invite')} />
+          ) : (
+            <>
+              <div className="field-row-stacked">
+                <label htmlFor="new-name">Name</label>
+                <input id="new-name" required autoFocus maxLength={40} placeholder={{ project: 'Modular synth case', community: 'Synths', group: 'Synth friends' }[tab]} {...form.field('name')} />
+              </div>
+              {tab !== 'group' && (
+                <div className="field-row-stacked">
+                  <label htmlFor="new-description">Description (optional)</label>
+                  <textarea id="new-description" rows={3} {...form.field('description')} />
+                </div>
+              )}
+            </>
+          )}
+          <p className="small">
+            <Icon name="lock" /> End-to-end encrypted: only the people inside can read it.
+          </p>
+          <div className="buttons">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="default">{tab === 'join' ? 'Join' : 'Create'}</button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
+  const { data: link, error } = useApi(() => api<string>('invite', space.id), [space.id]);
+  return (
+    <Modal title={`Invite someone to ${spaceLabel(space)}`} onClose={onClose}>
+      {error ? (
+        <p>{error}</p>
+      ) : (
+        <>
+          <p className="small">Send this link privately. Whoever has it can join and read {space.name}, so treat it like a key. It expires in 7 days.</p>
+          <textarea className="wide invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
+        </>
+      )}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+        <button className="default" disabled={!link} onClick={() => copy(link!, 'Invite link copied')}>
+          <Icon name="copy" /> Copy link
+        </button>
       </div>
+    </Modal>
+  );
+}
+
+/** A post opened from the home feed or a link, in any space or public. */
+export function LonePost({ post, meDid, spaces }: { post: PostInfo; meDid: string; spaces: SpaceInfo[] }) {
+  return (
+    <Page title={post.title}>
+      <PostHeader post={post} meDid={meDid} spaces={spaces} />
     </Page>
   );
 }
@@ -801,22 +733,30 @@ export function ProjectPageView({ project, spaces, members, meDid }: { project: 
 export function Onboarding({ onDone }: { onDone(): void }) {
   const [name, setName] = useState('');
   return (
-    <div className="onboarding">
+    <div className="desktop">
       <form
-        className="card form welcome"
+        className="window welcome"
         onSubmit={async (e) => {
           e.preventDefault();
           if (await attempt(() => bridge.init(name).then(() => true))) onDone();
         }}
       >
-        <WeaveMark size={48} />
-        <h1>Welcome to Weave</h1>
-        <p className="muted">Your space, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
-        <label className="field">
-          What should people call you?
-          <input required maxLength={40} autoFocus placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <button className="btn primary">Create my space</button>
+        <div className="title-bar">
+          <div className="title-bar-text">Welcome to Weave</div>
+        </div>
+        <div className="window-body">
+          <div className="welcome-head">
+            <WeaveMark size={48} />
+            <p>Your space, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
+          </div>
+          <div className="field-row-stacked">
+            <label htmlFor="welcome-name">What should people call you?</label>
+            <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="buttons">
+            <button className="default">Create my space</button>
+          </div>
+        </div>
       </form>
     </div>
   );
@@ -824,14 +764,21 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
 export function NotConnected({ home, onRetry }: { home: string; onRetry(): void }) {
   return (
-    <div className="onboarding">
-      <div className="card welcome">
-        <h1>Can't reach your node</h1>
-        <p className="muted">The Weave daemon for {home} isn't running and couldn't be started.</p>
-        <button className="btn primary" onClick={onRetry}>
-          Try again
-        </button>
+    <div className="desktop">
+      <div className="window welcome">
+        <div className="title-bar">
+          <div className="title-bar-text">Weave</div>
+        </div>
+        <div className="window-body">
+          <p>⚠ Can't reach your node. The Weave daemon for {home} isn't running and couldn't be started.</p>
+          <div className="buttons">
+            <button className="default" onClick={onRetry}>
+              Try again
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+

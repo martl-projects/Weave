@@ -36,8 +36,17 @@ await Promise.all([
     minify: true,
     sourcemap: true,
     define: { 'process.env.NODE_ENV': '"production"' },
+    loader: { '.svg': 'text' },
+  }),
+  // Styles, with 98.css and its pixel font inlined.
+  build({
+    entryPoints: ['src/renderer/styles.css'],
+    outfile: 'dist/renderer/styles.css',
+    bundle: true,
+    minify: true,
+    loader: { '.woff': 'dataurl', '.woff2': 'dataurl' },
   }),
 ]);
 
-for (const file of ['index.html', 'styles.css']) copyFileSync(`src/renderer/${file}`, `dist/renderer/${file}`);
+copyFileSync('src/renderer/index.html', 'dist/renderer/index.html');
 console.log('desktop app built');

@@ -14,7 +14,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick(emoji: string): void; 
   useEffect(() => {
     const picker = new Picker({
       data,
-      theme: 'dark',
+      theme: 'light',
       previewPosition: 'none',
       skinTonePosition: 'search',
       maxFrequentRows: 1,
@@ -138,12 +138,14 @@ function Message({
 function Composer({
   space,
   channel,
+  post,
   replyTo,
   onCancelReply,
   members,
 }: {
   space: SpaceInfo;
   channel: string;
+  post?: string;
   replyTo?: MessageInfo;
   onCancelReply(): void;
   members: MemberInfo[];
@@ -180,7 +182,7 @@ function Composer({
     if (!message) return;
     setText('');
     onCancelReply();
-    const sent = await attempt(() => api('say', { space: space.id, channel, text: message, replyTo: replyTo?.id }));
+    const sent = await attempt(() => api('say', post ? { post, text: message, replyTo: replyTo?.id } : { space: space.id, channel, text: message, replyTo: replyTo?.id }));
     if (sent === undefined) setText(message); // keep it if sending failed
   };
 
@@ -230,7 +232,7 @@ function Composer({
           ref={area}
           rows={1}
           value={text}
-          placeholder={`Message #${channel}`}
+          placeholder={post ? 'Chat about this post…' : `Message #${channel}`}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -252,9 +254,16 @@ function Composer({
   );
 }
 
-/** A Discord-style channel: grouped messages, reactions, replies, @mentions and a virtualized history. */
-export function ChatView({ space, channel, meDid, meName, members }: { space: SpaceInfo; channel: string; meDid: string; meName?: string; members: MemberInfo[] }) {
-  const { data: messages } = useApi(() => api<MessageInfo[]>('messages', space.id, { channel, limit: 1000 }), [space.id, channel]);
+/**
+ * A Discord-style chat: grouped messages, reactions, replies, @mentions and a
+ * virtualized history. Either a channel of a space, or the chat of one post.
+ */
+export function ChatView({ space, channel = 'general', post, meDid, meName, members }: { space: SpaceInfo; channel?: string; post?: string; meDid: string; meName?: string; members: MemberInfo[] }) {
+  const { data: messages } = useApi(
+    () => api<MessageInfo[]>('messages', post ? null : space.id, post ? { post, limit: 1000 } : { channel, limit: 1000 }),
+    [space.id, channel, post],
+  );
+  const seenKey = post ? `post/${post}` : `${space.id}/${channel}`;
   const [replyTo, setReplyTo] = useState<MessageInfo>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const stuck = useStickToBottom(scroller);
@@ -282,22 +291,29 @@ export function ChatView({ space, channel, meDid, meName, members }: { space: Sp
 
   useEffect(() => {
     const last = messages?.at(-1);
-    if (last) markSeen(`${space.id}/${channel}`, last.time);
-  }, [messages, space.id, channel]);
+    if (last) markSeen(seenKey, last.time);
+  }, [messages, seenKey]);
 
   useEffect(() => {
     setReplyTo(undefined);
     stuck.current = true;
-  }, [space.id, channel, stuck]);
+  }, [seenKey, stuck]);
 
   return (
     <div className="chat">
       <div className="chat-scroll" ref={setScroller}>
         {messages && rows.length === 0 && (
           <div className="channel-intro">
-            <div className="intro-hash">#</div>
-            <h2>Welcome to #{channel}</h2>
-            <p className="muted">This is the start of #{channel} in {space.name}. Only {space.kind === 'project' ? 'participants' : 'members'} can read it.</p>
+            {post ? (
+              <p className="muted">No messages yet. Start the conversation: only {space.kind === 'project' ? 'participants' : 'members'} of {space.name} can read it.</p>
+            ) : (
+              <>
+                <h2>Welcome to #{channel}</h2>
+                <p className="muted">
+                  This is the start of #{channel} in {space.name}. Only {space.kind === 'project' ? 'participants' : 'members'} can read it.
+                </p>
+              </>
+            )}
           </div>
         )}
         <div className="virtual" style={{ height: virtualizer.getTotalSize() }}>
@@ -317,7 +333,7 @@ export function ChatView({ space, channel, meDid, meName, members }: { space: Sp
           })}
         </div>
       </div>
-      <Composer space={space} channel={channel} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} />
+      <Composer space={space} channel={channel} post={post} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} />
     </div>
   );
 }
