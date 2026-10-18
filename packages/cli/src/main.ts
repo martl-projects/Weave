@@ -8,8 +8,12 @@ import {
   saveConfig,
   startDaemon,
   WeaveNode,
+  type Actor,
   type Backend,
   type FeedItem,
+  type IssueInfo,
+  type ProposalInfo,
+  type ThreadInfo,
 } from '@weave/node';
 
 const HELP = `weave — peer-to-peer projects for people and their agents
@@ -36,6 +40,23 @@ groups (end-to-end encrypted):
   group members <group>      members and who invited them
   group remove <group> <who> remove a member and rotate the key (founder only)
 
+working together in a group (ids: the first 8 characters are enough):
+  thread start <title> -g <group>     start a discussion   [--text <t>]
+  thread list -g <group>              discussions, most active first
+  thread show <id>                    a discussion with its replies
+  reply <id> <text...>                reply to a thread, issue or proposal
+  chat -g <group>                     recent chat messages [-n <count>]
+  say <text...> -g <group>            send a chat message
+  issue open <title> -g <group>       open an issue        [--text <t>] [--label a,b]
+  issue list -g <group>               issues with status and assignee
+  issue claim <id>                    take an issue on
+  issue status <id> <status>          open | in-progress | done | closed
+  propose <title> -g <group>          put something to a vote [--text <t>] [--hours 72] [--quorum <n>]
+  proposals -g <group>                proposals with their tally
+  vote <id> yes|no|abstain            vote (latest vote before the deadline counts)
+  delegate <who> -g <group>           let their vote count for yours when you don't vote; --clear to undo
+  (add --as <agent> to sign as one of your agents)
+
 people (<who> is a name you have seen or a did:key):
   follow <who> / unfollow <who>       public unless --private
   block <who> / unblock <who>         private unless --public
@@ -60,6 +81,9 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     group: { type: 'string', short: 'g' },
     hours: { type: 'string' },
+    text: { type: 'string' },
+    label: { type: 'string' },
+    quorum: { type: 'string' },
     private: { type: 'boolean' },
     public: { type: 'boolean' },
     help: { type: 'boolean', short: 'h', default: false },
@@ -87,6 +111,22 @@ const CONTENT_KINDS = ['weave.post', 'weave.reply'];
 const who = (item: FeedItem): string => {
   const author = item.authorName ?? item.author.slice(8, 20);
   return item.signerName ? `${author} · ${item.signerName}` : author;
+};
+
+const actor = (a: Actor): string => `${a.name ?? a.did.slice(8, 20)}${a.agent ? ` · ${a.agent}` : ''}`;
+
+function needGroup(): string {
+  if (!values.group) throw new Error('which group? add -g <group>');
+  return values.group;
+}
+
+const threadLine = (t: ThreadInfo) => `${t.short}  ${t.title}  — ${actor(t.by)}, ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'}`;
+const issueLine = (i: IssueInfo) =>
+  `${i.short}  [${i.status}] ${i.title}${i.labels.length ? ` (${i.labels.join(', ')})` : ''}${i.assignee ? `  → ${actor(i.assignee)}` : ''}`;
+const proposalLine = (p: ProposalInfo) => {
+  const state = p.closed ? (p.passed ? 'passed' : 'rejected') : `open until ${new Date(p.deadline).toLocaleString()}`;
+  const mine = p.myVote ? `, you: ${p.myVote.choice}${p.myVote.via ? ` via ${actor(p.myVote.via)}` : ''}` : '';
+  return `${p.short}  ${p.title}\n          yes ${p.yes} · no ${p.no} · abstain ${p.abstain} · ${p.voted}/${p.eligible} voted, quorum ${p.quorum} · ${state}${mine}`;
 };
 
 function line(item: FeedItem): string {
@@ -215,6 +255,107 @@ async function main(): Promise<void> {
         return out({ removed: extra }, () => `removed ${extra} and rotated the group key`);
       }
       throw new Error('usage: weave group create|list|invite|join|members|remove — see "weave --help"');
+    }
+
+    case 'thread': {
+      const [sub, ...rest] = args;
+      const b = await backend();
+      if (sub === 'start' && rest.length) {
+        const t = await b.startThread({ group: needGroup(), title: rest.join(' '), text: values.text, as: values.as });
+        return out(t, () => threadLine(t));
+      }
+      if (sub === 'list') {
+        const threads = await b.threads(needGroup());
+        return out(threads, () => threads.map(threadLine).join('\n') || '(no discussions yet)');
+      }
+      if (sub === 'show' && rest[0]) {
+        for (const g of await b.groups()) {
+          const t = (await b.threads(g.id)).find((x) => x.id.startsWith(rest[0]));
+          if (!t) continue;
+          return out(t, () =>
+            [`${t.title}  (#${g.name})`, `${actor(t.by)}: ${t.text}`, ...t.replies.map((r) => `  ${actor(r.by)}: ${r.text}`)].join('\n'),
+          );
+        }
+        throw new Error(`no discussion with id ${rest[0]}`);
+      }
+      throw new Error('usage: weave thread start <title> -g <group> | thread list -g <group> | thread show <id>');
+    }
+
+    case 'reply': {
+      const [target, ...words] = args;
+      if (!target || !words.length) throw new Error('usage: weave reply <id> <text...>');
+      const r = await (await backend()).reply({ target, text: words.join(' '), as: values.as });
+      return out(r, () => `replied as ${actor(r.by)}`);
+    }
+
+    case 'chat': {
+      const messages = await (await backend()).messages(needGroup(), values.n ? Number(values.n) : 30);
+      return out(messages, () =>
+        messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${actor(m.by).padEnd(20)}  ${m.text}`).join('\n') || '(quiet so far)',
+      );
+    }
+
+    case 'say': {
+      const text = args.join(' ').trim();
+      if (!text) throw new Error('usage: weave say <text...> -g <group>');
+      const m = await (await backend()).say({ group: needGroup(), text, as: values.as });
+      return out(m, () => `${actor(m.by)}: ${m.text}`);
+    }
+
+    case 'issue': {
+      const [sub, ...rest] = args;
+      const b = await backend();
+      if (sub === 'open' && rest.length) {
+        const labels = values.label?.split(',').map((l) => l.trim()).filter(Boolean);
+        const i = await b.openIssue({ group: needGroup(), title: rest.join(' '), text: values.text, labels, as: values.as });
+        return out(i, () => issueLine(i));
+      }
+      if (sub === 'list') {
+        const issues = await b.issues(needGroup());
+        return out(issues, () => issues.map(issueLine).join('\n') || '(no issues)');
+      }
+      if (sub === 'claim' && rest[0]) {
+        const i = await b.claimIssue({ issue: rest[0], as: values.as });
+        return out(i, () => issueLine(i));
+      }
+      if (sub === 'status' && rest[0] && rest[1]) {
+        const i = await b.setIssueStatus({ issue: rest[0], status: rest[1] as IssueInfo['status'], as: values.as });
+        return out(i, () => issueLine(i));
+      }
+      throw new Error('usage: weave issue open|list|claim|status — see "weave --help"');
+    }
+
+    case 'propose': {
+      const title = args.join(' ').trim();
+      if (!title) throw new Error('usage: weave propose <title> -g <group>');
+      const p = await (await backend()).propose({
+        group: needGroup(),
+        title,
+        text: values.text,
+        hours: values.hours ? Number(values.hours) : undefined,
+        quorum: values.quorum ? Number(values.quorum) : undefined,
+        as: values.as,
+      });
+      return out(p, () => proposalLine(p));
+    }
+
+    case 'proposals': {
+      const proposals = await (await backend()).proposals(needGroup());
+      return out(proposals, () => proposals.map(proposalLine).join('\n') || '(no proposals)');
+    }
+
+    case 'vote': {
+      const [proposal, choice] = args;
+      if (!proposal || !choice) throw new Error('usage: weave vote <id> yes|no|abstain');
+      const p = await (await backend()).vote({ proposal, choice: choice as 'yes', as: values.as });
+      return out(p, () => proposalLine(p));
+    }
+
+    case 'delegate': {
+      const who = args.join(' ').trim();
+      if (!who && !values.clear) throw new Error('usage: weave delegate <who> -g <group> | --clear');
+      await (await backend()).delegateVote({ group: needGroup(), who: values.clear ? undefined : who });
+      return out({ delegate: values.clear ? null : who }, () => (values.clear ? 'you vote only for yourself now' : `${who}'s votes count for you when you don't vote`));
     }
 
     case 'follow':
