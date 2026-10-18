@@ -44,8 +44,12 @@ createServer(async (req, res) => {
       if (!client) return json(res, 503, { error: 'no daemon running for this home' });
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
       const controller = new AbortController();
-      req.on('close', () => controller.abort());
-      return client.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal);
+      const heartbeat = setInterval(() => res.write(': ping\n\n'), 30_000);
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        controller.abort();
+      });
+      return client.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal).catch(() => res.end());
     }
     const file = normalize(join(STATIC, url.pathname === '/' ? 'index.html' : url.pathname));
     if (!file.startsWith(STATIC) || !existsSync(file)) return json(res, 404, { error: 'not found' });

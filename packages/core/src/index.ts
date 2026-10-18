@@ -116,3 +116,4 @@ export {
   type Score,
   type Share,
 } from './posts.ts';
+export { decodeContact, encodeContact, KIND_CONTACT, type Contact } from './contacts.ts';

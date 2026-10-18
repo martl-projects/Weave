@@ -21,12 +21,14 @@ import inbox from 'pixelarticons/svg/inbox.svg';
 import lightbulb from 'pixelarticons/svg/lightbulb.svg';
 import link from 'pixelarticons/svg/link.svg';
 import lock from 'pixelarticons/svg/lock.svg';
+import mail from 'pixelarticons/svg/mail.svg';
 import mapPin from 'pixelarticons/svg/map-pin.svg';
 import megaphone from 'pixelarticons/svg/megaphone.svg';
 import message from 'pixelarticons/svg/message.svg';
 import notes from 'pixelarticons/svg/notes.svg';
 import pencil from 'pixelarticons/svg/pencil.svg';
 import plus from 'pixelarticons/svg/plus.svg';
+import search from 'pixelarticons/svg/search.svg';
 import share from 'pixelarticons/svg/share.svg';
 import star from 'pixelarticons/svg/star.svg';
 import trophy from 'pixelarticons/svg/trophy.svg';
@@ -58,12 +60,14 @@ const ICONS = {
   lightbulb,
   link,
   lock,
+  mail,
   mapPin,
   megaphone,
   message,
   notes,
   pencil,
   plus,
+  search,
   share,
   star,
   trophy,

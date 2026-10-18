@@ -77,6 +77,9 @@ npx weave --home .dev/alice admissions                # newcomers to Friends, wa
 npx weave --home .dev/alice admit Synths Noah Friends --always # let Noah in, and future newcomers too
 npx weave --home .dev/alice project members Synths    # who let whom in, through which group
 npx weave --home .dev/alice project page Synths --public       # show the project page in your space
+npx weave --home .dev/alice contact                   # your contact link: send it via WhatsApp, email, anything
+npx weave --home .dev/bob add "weave:contact:…"      # connect, follow, keep in the address book
+npx weave --home .dev/bob find ali                   # search people you know of
 npx weave --home .dev/alice follow Bob
 npx weave --home .dev/alice people                    # friends, followers, blocked, muted
 ```

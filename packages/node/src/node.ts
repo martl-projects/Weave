@@ -9,11 +9,13 @@ import {
   CHOICES,
   COMMUNITY_BOARD,
   currentEpoch,
+  decodeContact,
   decodeInvite,
   DEFAULT_CHANNEL,
   delegation,
   edgeBody,
   EDGE_KINDS,
+  encodeContact,
   encodeInvite,
   eventId,
   followersOf,
@@ -27,6 +29,7 @@ import {
   KIND_CURATE,
   KIND_BLOCK,
   KIND_CHANNEL,
+  KIND_CONTACT,
   KIND_DECLINE,
   KIND_FOLLOW,
   KIND_GIFT,
@@ -188,6 +191,7 @@ export class WeaveNode implements Backend {
   #releaseLock: () => void;
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
+  #contactCache?: { from: Decoded[]; map: Map<Did, string | undefined> };
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
@@ -740,6 +744,7 @@ export class WeaveNode implements Backend {
       followsMe: graph.get(did)?.following.has(me) ?? false,
       blocked: mine?.blocked.has(did) ?? false,
       muted: mine?.muted.has(did) ?? false,
+      contact: this.#contacts().has(did),
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
     };
@@ -758,11 +763,31 @@ export class WeaveNode implements Backend {
     return this.profile();
   }
 
-  async directory(): Promise<Profile[]> {
-    const authors = new Set(this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author));
+  async directory(query?: string): Promise<Profile[]> {
+    const authors = new Set([...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
     authors.delete(this.identity.author);
+    const q = query?.trim().toLowerCase();
     const profiles = await Promise.all([...authors].map((did) => this.profile(did)));
-    return profiles.sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
+    return profiles
+      .filter((p) => !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q)))
+      .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
+  }
+
+  async contactLink(): Promise<string> {
+    const name = this.nameOf(this.identity.author);
+    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry: this.#entryPoint() });
+  }
+
+  async addContact(link: string): Promise<Profile> {
+    const contact = decodeContact(link);
+    if (contact.did === this.identity.author) throw new Error("that's your own contact link");
+    this.#adoptBootstrap(contact.entry);
+    for (const topic of new Set([contact.did, ...contact.entry.topics])) await this.join(topic);
+    if (!this.#contacts().has(contact.did)) {
+      this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null } }));
+    }
+    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true });
+    return this.profile(contact.did);
   }
 
   /** A space's theme: the latest theme event its author published. */
@@ -936,14 +961,28 @@ export class WeaveNode implements Backend {
     return [...matches][0];
   }
 
-  /** Display name for an author: the name in their latest profile. */
+  /** Display name for an author: the name in their latest profile, else the one their contact link gave. */
   nameOf(author: Did): string | undefined {
     let name: string | undefined;
     for (const event of this.replica.store.range(author, 1)) {
       const body = event.body as { name?: unknown } | null;
       if (event.kind === KIND_PROFILE && typeof body?.name === 'string') name = body.name;
     }
-    return name;
+    return name ?? this.#contacts().get(author);
+  }
+
+  /** Your address book: people added by contact link, with the name their link gave. */
+  #contacts(): Map<Did, string | undefined> {
+    const decoded = this.#decodeAll();
+    if (this.#contactCache?.from !== decoded) {
+      const map = new Map<Did, string | undefined>();
+      for (const d of decoded) {
+        const body = d.inner.body as { did?: unknown; name?: unknown } | null;
+        if (d.private && d.inner.kind === KIND_CONTACT && isDid(body?.did)) map.set(body.did, typeof body.name === 'string' ? body.name : undefined);
+      }
+      this.#contactCache = { from: decoded, map };
+    }
+    return this.#contactCache.map;
   }
 
   /** The event as this node can read it, or undefined if it can't (someone else's space or private data). */

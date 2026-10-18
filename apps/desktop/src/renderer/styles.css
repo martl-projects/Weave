@@ -328,3 +328,9 @@ menu[role='tablist'] { margin-bottom: 0; }
 .space-post { padding: 6px 0; border-top: 1px dashed color-mix(in srgb, var(--text) 30%, transparent); }
 .space-post small { opacity: 0.7; }
 .badges { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+/* ---------- people search and sending links */
+.search-row { margin-bottom: 10px; flex-wrap: nowrap; }
+.search-row input { flex: 1; height: 24px; }
+a.button { display: inline-flex; align-items: center; gap: 4px; min-height: 23px; padding: 0 12px; background: silver; color: #000; text-decoration: none; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px grey, inset 2px 2px #dfdfdf; }
+a.button:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; }

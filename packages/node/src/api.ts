@@ -56,7 +56,12 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     res.write(': connected\n\n');
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    // A comment every 30 s keeps the stream from looking idle to clients' body timeouts.
+    const heartbeat = setInterval(() => res.write(': ping\n\n'), 30_000);
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      controller.abort();
+    });
     return backend.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal);
   }
   return send(res, 404, { error: `no route ${route}` });

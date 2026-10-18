@@ -16,6 +16,25 @@ function person(name: string) {
 /** Copy every event `from` has into `to`, as replication would. */
 const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
 
+describe('contact links', () => {
+  it('adds someone by their link, even from a chat message, and finds them by name', async () => {
+    const martin = person('Martin');
+    const ada = person('Ada');
+    const link = await ada.contactLink();
+    expect(link).toMatch(/^weave:contact:/);
+    expect(link).not.toContain(ada.identity.did.slice(8)); // encoded, holds no keys either
+    const added = await martin.addContact(`Add me on Weave: ${link} see you!`);
+    expect(added).toMatchObject({ did: ada.identity.did, name: 'Ada', contact: true, following: true });
+    expect(martin.config.topics).toContain(ada.identity.did);
+    expect((await martin.directory('ad')).map((p) => p.name)).toEqual(['Ada']);
+    expect(await martin.directory('zz')).toEqual([]);
+    await expect(ada.addContact(link)).rejects.toThrow(/your own/);
+    await expect(martin.addContact('weave:contact:garbage')).rejects.toThrow(/damaged/);
+    await martin.addContact(link); // twice is fine
+    expect(martin.replica.events().filter((e) => e.author === martin.identity.did && e.scope === 'self').length).toBe(1);
+  });
+});
+
 describe('posts, boards and communities', () => {
   it('treats a project as a post with boards, and turns issue and proposal boards into work and votes', async () => {
     const node = person('Martin');

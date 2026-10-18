@@ -117,6 +117,9 @@ people (<who> is a name you have seen or a did:key):
   block <who> / unblock <who>         private unless --public
   mute <who> / unmute <who>           private unless --public
   people                     following, followers, friends, blocked, muted
+  find <text>                search everyone you know of by name or did:key
+  contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)
+  add <link>                 add someone by their contact link: connect, follow, keep in your address book
 
 global options:
   --home <dir>   Weave home (default: $WEAVE_HOME or ~/.weave)
@@ -735,6 +738,23 @@ async function main(): Promise<void> {
       await (await backend()).setEdge({ edge, who: target, on, private: isPrivate });
       const done = { follow: 'following', block: 'blocked', mute: 'muted' }[edge];
       return out({ edge, who: target, on }, () => `${on ? '' : 'no longer '}${done} ${target}`);
+    }
+
+    case 'find': {
+      const people = await (await backend()).directory(args.join(' '));
+      return out(people, () => people.map((p) => `${(p.name ?? '(no name)').padEnd(20)} ${p.did}${p.following && p.followsMe ? '  friend' : p.following ? '  following' : ''}`).join('\n') || '(nobody found — add people with "weave add <contact link>")');
+    }
+
+    case 'contact': {
+      const link = await (await backend()).contactLink();
+      return out({ link }, () => `${link}\n\nSend this to anyone, however you like. They add you with: weave add <link>\nIt is your address, not a key: it lets people find your node and read your public space.`);
+    }
+
+    case 'add': {
+      const text = args.join(' ').trim();
+      if (!text) throw new Error('usage: weave add <contact link>');
+      const p = await (await backend()).addContact(text);
+      return out(p, () => `added ${p.name ?? p.did} and followed them; their space syncs once your nodes connect (needs a running daemon)`);
     }
 
     case 'people': {

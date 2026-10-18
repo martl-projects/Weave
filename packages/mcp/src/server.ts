@@ -165,6 +165,18 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   );
 
   server.registerTool(
+    'weave_people',
+    {
+      title: 'Find people',
+      description: 'People this node knows of (profiles seen and the address book), optionally matching a name or did:key, with follow and friend state.',
+      inputSchema: { query: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ query }: { query?: string }) =>
+      (await backend.directory(query)).map((p) => ({ name: p.name, did: p.did, following: p.following, followsMe: p.followsMe, friend: p.following && p.followsMe, contact: p.contact }))),
+  );
+
+  server.registerTool(
     'weave_project',
     { title: 'Project page', description: "A project's page: description, status, maintainers and invited groups.", inputSchema: { project: z.string() }, annotations: { readOnlyHint: true } },
     run(async ({ project }: { project: string }) => backend.project(project)),

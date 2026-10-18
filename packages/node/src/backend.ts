@@ -223,6 +223,8 @@ export interface Profile {
   followsMe: boolean;
   blocked: boolean;
   muted: boolean;
+  /** In your address book (added by contact link). */
+  contact: boolean;
   /** Number of public posts. */
   posts: number;
   /** Projects they show publicly. */
@@ -430,8 +432,12 @@ export interface Backend {
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
-  /** Everyone whose profile this node has seen, yourself excluded. */
-  directory(): Promise<Profile[]>;
+  /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
+  directory(query?: string): Promise<Profile[]>;
+  /** Your contact link: your address, to send to people however you like. Holds no keys. */
+  contactLink(): Promise<string>;
+  /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
+  addContact(link: string): Promise<Profile>;
 
   // chat, in channels and in posts
   channels(space: string): Promise<ChannelInfo[]>;
@@ -469,7 +475,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'directory',
+  'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',
   'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',

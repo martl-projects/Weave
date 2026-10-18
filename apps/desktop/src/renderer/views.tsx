@@ -192,12 +192,92 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
 
 // ---------------------------------------------------------------- people and inbox
 
+/** Ways to send a link: WhatsApp, email, or the clipboard. */
+export function SendButtons({ text, subject, what }: { text: string; subject: string; what: string }) {
+  return (
+    <div className="buttons send">
+      <a className="button" href={`https://wa.me/?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
+        <Icon name="message" /> WhatsApp
+      </a>
+      <a className="button" href={`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
+        <Icon name="mail" /> Email
+      </a>
+      <button className="default" onClick={() => copy(text, `${what} copied`)}>
+        <Icon name="copy" /> Copy
+      </button>
+    </div>
+  );
+}
+
+export function ContactDialog({ onClose }: { onClose(): void }) {
+  const { data: link } = useApi(() => api<string>('contactLink'), []);
+  const { data: me } = useApi(() => api<Profile>('profile'), []);
+  const message = link ? `Add me on Weave${me?.name ? ` (${me.name})` : ''}: ${link}` : '';
+  return (
+    <Modal title="My contact link" onClose={onClose}>
+      <p className="small">
+        Your Weave address, like a phone number. Send it however you like: whoever adds it can find your node, follow you and see your public space. It holds no keys,
+        and nothing private is shared until you invite them somewhere.
+      </p>
+      <textarea className="wide invite" readOnly rows={4} value={message || 'Making your link…'} />
+      {link && <SendButtons text={message} subject="Add me on Weave" what="Contact link" />}
+    </Modal>
+  );
+}
+
+export function AddContactDialog({ onClose }: { onClose(): void }) {
+  const [text, setText] = useState('');
+  return (
+    <Modal title="Add someone" onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const p = await attempt(() => api<Profile>('addContact', text), 'Added');
+          if (p) {
+            bump();
+            onClose();
+            navigate(`#/space/${encodeURIComponent(p.did)}`);
+          }
+        }}
+      >
+        <p className="small">Paste the contact link someone sent you, or the whole message it came in.</p>
+        <textarea className="wide" required autoFocus rows={4} placeholder="Add me on Weave: weave:contact:…" value={text} onChange={(e) => setText(e.target.value)} />
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default">Add</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function PeopleView() {
+  const [query, setQuery] = useState('');
+  const [dialog, setDialog] = useState<'contact' | 'add'>();
   const social = useApi(() => api<Social>('social'), []);
-  const everyone = useApi(() => api<Profile[]>('directory'), []);
+  const everyone = useApi(() => api<Profile[]>('directory', query || undefined), [query]);
   const s = social.data;
   return (
-    <Page title={<><Icon name="users" /> People</>}>
+    <Page
+      title={<><Icon name="users" /> People</>}
+      actions={
+        <>
+          <button onClick={() => setDialog('add')}>
+            <Icon name="userPlus" /> Add by link
+          </button>
+          <button onClick={() => setDialog('contact')}>
+            <Icon name="share" /> My contact link
+          </button>
+        </>
+      }
+    >
+      <div className="field-row search-row">
+        <Icon name="search" />
+        <input type="search" autoFocus placeholder="Search people by name…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search people" />
+      </div>
       {s && (
         <div className="stats">
           {[
@@ -226,13 +306,23 @@ export function PeopleView() {
                 {p.following && p.followsMe ? <span className="tag friend">friend</span> : p.followsMe ? <span className="tag">follows you</span> : p.following ? <span className="tag">following</span> : null}
                 {p.blocked && <span className="tag rejected">blocked</span>}
                 {p.muted && <span className="tag">muted</span>}
+                {p.contact && <span className="tag">in your contacts</span>}
               </div>
             </div>
             <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>{p.following ? 'Unfollow' : 'Follow'}</AsyncButton>
           </div>
         ))}
-        {everyone.data?.length === 0 && <p className="empty">Nobody yet. Join a community or project to meet people.</p>}
+        {everyone.data?.length === 0 &&
+          (query ? (
+            <p className="empty">
+              Nobody called “{query}” has reached you yet. Ask them for their contact link and <button className="link" onClick={() => setDialog('add')}>add it</button>.
+            </p>
+          ) : (
+            <p className="empty">Nobody yet. Send your contact link to friends, or join a community or project to meet people.</p>
+          ))}
       </div>
+      {dialog === 'contact' && <ContactDialog onClose={() => setDialog(undefined)} />}
+      {dialog === 'add' && <AddContactDialog onClose={() => setDialog(undefined)} />}
     </Page>
   );
 }
@@ -711,12 +801,7 @@ export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): 
           <textarea className="wide invite" readOnly rows={5} value={link ?? 'Creating invite…'} />
         </>
       )}
-      <div className="buttons">
-        <button onClick={onClose}>Close</button>
-        <button className="default" disabled={!link} onClick={() => copy(link!, 'Invite link copied')}>
-          <Icon name="copy" /> Copy link
-        </button>
-      </div>
+      {link && <SendButtons text={`Join ${spaceLabel(space)} on Weave: ${link}`} subject={`Join ${spaceLabel(space)} on Weave`} what="Invite link" />}
     </Modal>
   );
 }
