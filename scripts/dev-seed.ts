@@ -31,7 +31,7 @@ await kofi.setProfile({ theme: { accent: '#39d0b4', background: '#0b1211', surfa
 await martin.createGroup('Weave');
 await lena.joinGroup(await martin.invite('Weave'));
 await kofi.joinGroup(await lena.invite('Weave'));
-await martin.addAgent('forge', ['weave.post', 'weave.reply', 'weave.msg', 'weave.issue.*']);
+await martin.addAgent('forge', ['weave.post', 'weave.reply', 'weave.msg', 'weave.react', 'weave.issue.*']);
 
 await martin.publish({ kind: 'weave.post', body: { text: 'Started building Weave: a peer-to-peer place to show off projects with friends and agents.' } });
 await lena.publish({ kind: 'weave.post', body: { text: 'Finished the first prototype of my modular synth case. Photos soon!' } });
@@ -49,7 +49,11 @@ await martin.reply({ target: thread.id, text: 'Benchmarked it: replication is ab
 await lena.startThread({ group: 'Weave', title: 'Which fonts should themes offer?', text: 'Four presets for now, custom fonts later?' });
 await martin.say({ group: 'Weave', text: 'Morning! Desktop app is coming along.' });
 await lena.say({ group: 'Weave', text: 'Nice, I pushed the theme editor sketches.' });
-await martin.say({ group: 'Weave', text: 'Build is green on all three platforms.', as: 'forge' });
+const green = await martin.say({ group: 'Weave', text: 'Build is green on all three platforms. ✅', as: 'forge' });
+await martin.react({ target: green.id, emoji: '🎉' });
+await martin.say({ group: 'Weave', text: 'Nice work, **forge**! Can you post the numbers in #builds?', replyTo: green.id });
+await martin.createChannel({ group: 'Weave', name: 'builds', topic: 'CI results and benchmarks' });
+await martin.say({ group: 'Weave', channel: 'builds', text: 'Replication benchmark:\n```\nJSON lines   12.4 MB/s\nHypercore    37.9 MB/s\n```', as: 'forge' });
 const proposal = await martin.propose({ group: 'Weave', title: 'Adopt Hypercore for v1', text: 'Replace our log format with Hypercore; keep Weave event signatures on top.', hours: 72 });
 await martin.vote({ proposal: proposal.id, choice: 'yes' });
 await kofi.delegateVote({ group: 'Weave', who: lena.identity.author });
