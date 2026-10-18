@@ -4,6 +4,7 @@ import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import { api, clock, dayLabel, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
+import { Icon } from './icons.tsx';
 import { attempt, Avatar } from './ui.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
@@ -237,7 +238,7 @@ function Composer({
           onKeyDown={onKeyDown}
         />
         <button className="emoji-btn" title="Emoji" onClick={() => setPicking((p) => !p)}>
-          ☺
+          <Icon name="emoji" />
         </button>
       </div>
       {picking && (

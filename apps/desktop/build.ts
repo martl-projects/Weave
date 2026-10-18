@@ -36,7 +36,7 @@ await Promise.all([
     minify: true,
     sourcemap: true,
     define: { 'process.env.NODE_ENV': '"production"' },
-    loader: { '.svg': 'text' },
+    loader: { '.svg': 'text', '.png': 'dataurl' },
   }),
   // Styles, with 98.css and its pixel font inlined.
   build({

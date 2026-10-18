@@ -332,3 +332,4 @@ menu[role='tablist'] { margin-bottom: 0; }
 /* ---------- people search and sending links */
 .search-row { margin-bottom: 10px; flex-wrap: nowrap; }
 .search-row input { flex: 1; height: 24px; }
+.icon.bitmap { image-rendering: pixelated; vertical-align: -3px; }
