@@ -18,9 +18,27 @@ declare module 'hyperswarm' {
     keyPair?: { publicKey: Buffer; secretKey: Buffer };
   }
 
+  /** An encrypted, hole-punched connection over the DHT. */
+  export interface DhtSocket extends Duplex {
+    remotePublicKey: Buffer;
+    publicKey: Buffer;
+  }
+
+  export interface DhtServer {
+    listen(keyPair: { publicKey: Buffer; secretKey: Buffer }): Promise<void>;
+    close(): Promise<void>;
+    on(event: 'connection', listener: (socket: DhtSocket) => void): this;
+  }
+
+  export interface HyperDHT {
+    createServer(options?: { firewall?: (remotePublicKey: Buffer) => boolean }, onconnection?: (socket: DhtSocket) => void): DhtServer;
+    connect(publicKey: Buffer, options?: { keyPair?: { publicKey: Buffer; secretKey: Buffer } }): DhtSocket;
+  }
+
   export default class Hyperswarm {
     constructor(options?: HyperswarmOptions);
     keyPair: { publicKey: Buffer };
+    dht: HyperDHT;
     connections: Set<Duplex>;
     join(topic: Buffer, options?: { server?: boolean; client?: boolean }): Discovery;
     leave(topic: Buffer): Promise<void>;
@@ -36,4 +54,14 @@ declare module 'hyperdht/testnet.js' {
     destroy(): Promise<void>;
   }
   export default function createTestnet(size?: number): Promise<Testnet>;
+}
+
+declare module 'hyperdht' {
+  import type { DhtSocket } from 'hyperswarm';
+  export default class HyperDHT {
+    constructor(options?: { bootstrap?: Array<{ host: string; port: number }> });
+    static keyPair(seed?: Buffer): { publicKey: Buffer; secretKey: Buffer };
+    connect(publicKey: Buffer): DhtSocket;
+    destroy(): Promise<void>;
+  }
 }

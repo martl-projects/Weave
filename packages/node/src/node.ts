@@ -30,6 +30,7 @@ import {
   issuesOf,
   inception,
   KIND_ADMIT,
+  KIND_APP,
   KIND_BOARD,
   KIND_CURATE,
   KIND_BLOCK,
@@ -57,6 +58,7 @@ import {
   KIND_REKEY,
   KIND_REMOVE,
   KIND_REPLY,
+  KIND_ROOM,
   KIND_RULE,
   KIND_SAVE,
   KIND_SEALED,
@@ -76,6 +78,7 @@ import {
   openIn,
   openMembershipRequest,
   openRekey,
+  parseManifest,
   parseScope,
   permits,
   POST_SORTS,
@@ -87,6 +90,7 @@ import {
   recoveryRoot,
   rank,
   rekey,
+  roomsOf,
   revocation,
   rotation,
   Replica,
@@ -103,6 +107,7 @@ import {
   threadsOf,
   tiersOf,
   visibleIn,
+  type AppManifest,
   type Board,
   type Member,
   type BoardType,
@@ -123,6 +128,7 @@ import {
   type Proposal,
   type Reaction,
   type Reply,
+  type Room,
   type SaveMode,
   type Score,
   type Sealed,
@@ -133,7 +139,7 @@ import {
   type Thread,
   type WeaveEvent,
 } from '@weave/core';
-import { SwarmNode } from '@weave/net';
+import { roomKeyPair, SwarmNode } from '@weave/net';
 import {
   PROJECT_STATUSES,
   type Actor,
@@ -168,6 +174,8 @@ import {
   type PublishInput,
   type ReactionInfo,
   type ReplyInfo,
+  type RoomChatMessage,
+  type RoomInfo,
   type Social,
   type SpaceInfo,
   type SpaceRef,
@@ -179,7 +187,9 @@ import {
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { resolveHome, type Home } from './home.ts';
+import { createHash } from 'node:crypto';
 import { hostname } from 'node:os';
+import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
@@ -220,6 +230,21 @@ export class WeaveNode implements Backend {
   #spaces = new Map<string, StoredSpace>();
   #swarm?: SwarmNode;
   #releaseLock: () => void;
+  #live = new LiveRooms({
+    dht: () => this.#swarm?.swarm.dht,
+    signer: () => this.identity,
+    personOf: (signer) => {
+      const person = this.replica.authority.personOf(signer);
+      const grant = this.replica.authority.grant(signer);
+      return grant && grant.revokedAfter !== undefined ? undefined : person;
+    },
+    mayJoin: (room, person) => this.#mayJoin(room, person),
+    servicePort: (room) => this.#roomService(room)?.port,
+    seed: (roomId) => this.#roomSeed(roomId),
+    nameOf: (did) => this.nameOf(did),
+    changed: () => this.#emitLive(),
+  });
+  #liveListeners = new Set<() => void>();
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
@@ -346,9 +371,12 @@ export class WeaveNode implements Backend {
     if (this.#swarm) return;
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {});
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
+    // Reopen the rooms we host that are still open (their keys come from our own secret).
+    for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
   }
 
   async goOffline(): Promise<void> {
+    await this.#live.close();
     await this.#swarm?.destroy();
     this.#swarm = undefined;
   }
@@ -436,7 +464,12 @@ export class WeaveNode implements Backend {
       const item = this.itemFor(event);
       if (item && !this.#hiddenAuthors().has(item.author)) onItem(item);
     });
+    // Rooms change without events (people come and go, room chat): a notice with no content, so views refresh.
+    const me = this.identity.author;
+    const onLive = () => onItem({ id: `live-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.live', scope: 'live', body: null, author: me, signer: me, seq: 0 });
+    this.#liveListeners.add(onLive);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    this.#liveListeners.delete(onLive);
     unsubscribe();
   }
 
@@ -915,6 +948,158 @@ export class WeaveNode implements Backend {
         status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
         time,
       }));
+  }
+
+  // ---------------------------------------------------------------- rooms and shared apps
+
+  async projectApp(ref: string): Promise<AppManifest | null> {
+    return this.#app(this.#project(ref)) ?? null;
+  }
+
+  async publishApp(input: { project: string; manifest: unknown }): Promise<AppManifest> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const manifest = parseManifest(input.manifest);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
+    return manifest;
+  }
+
+  async rooms(ref?: string): Promise<RoomInfo[]> {
+    const only = ref ? this.#project(ref).id : undefined;
+    const rooms = this.#allRooms().filter(({ room, project }) => room.open && (!only || project.id === only));
+    return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
+  }
+
+  async hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo> {
+    const project = this.#project(input.project);
+    const app = this.#app(project);
+    if (!app) throw new Error(`${project.name} has no app to share yet: a maintainer publishes one with "weave app publish"`);
+    if (!this.#swarm) throw new Error('rooms need your node online: keep the app (or "weave daemon") running');
+    const id = b64u.encode(randomBytes(12));
+    const name = input.name?.trim().slice(0, 60) || `${this.nameOf(this.identity.author) ?? 'Someone'}'s room`;
+    const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : 'participants';
+    const key = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, open: true } }));
+    const room = this.#roomById(id).room;
+    await this.#live.host(room);
+    return this.#roomInfo(room, project);
+  }
+
+  async endRoom(ref: string): Promise<void> {
+    const { room, project } = this.#roomById(ref);
+    if (room.host !== this.identity.author) throw new Error('only the host can end a room');
+    await this.#live.stopHosting(room.id);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_ROOM, body: { room: room.id, open: false } }));
+  }
+
+  async joinRoom(ref: string): Promise<RoomInfo> {
+    const { room, project } = this.#roomById(ref);
+    if (!room.open) throw new Error('this room has ended');
+    if (room.host === this.identity.author) return this.#roomInfo(room, project);
+    if (!this.#mayJoin(room, this.identity.author)) throw new Error("you're not invited to this room");
+    const app = this.#app(project);
+    if (!app) throw new Error(`${project.name} has no app`);
+    await this.#live.join(room, app.app);
+    return this.#roomInfo(room, project);
+  }
+
+  async leaveRoom(ref: string): Promise<void> {
+    await this.#live.leave(this.#roomById(ref).room.id);
+  }
+
+  async roomChat(ref: string): Promise<RoomChatMessage[]> {
+    const { room } = this.#roomById(ref);
+    return this.#live.chat(room.id).map((m) => ({ id: m.id, by: { did: m.from, name: this.nameOf(m.from) ?? m.name }, text: m.text, time: m.time, mine: m.from === this.identity.author }));
+  }
+
+  async sayInRoom(input: { room: string; text: string }): Promise<void> {
+    if (!input.text?.trim()) throw new Error('a message needs text');
+    this.#live.say(this.#roomById(input.room).room.id, input.text);
+  }
+
+  /** A room's key seed, from our own secret: the host can reopen its rooms after a restart. */
+  #roomSeed(roomId: string): Uint8Array {
+    return createHash('sha256').update('weave/room-seed/v1').update(this.#selfSecret()).update(roomId).digest();
+  }
+
+  /** The latest app manifest a maintainer published in a project. */
+  #app(project: StoredSpace): AppManifest | undefined {
+    const state = this.#state(project);
+    let app: AppManifest | undefined;
+    for (const e of this.#entries(project)) {
+      if (e.kind !== KIND_APP || !state.maintainers.has(e.event.author)) continue;
+      try {
+        app = parseManifest(e.body);
+      } catch {
+        // a malformed manifest is ignored; the previous one stays
+      }
+    }
+    return app;
+  }
+
+  #allRooms(): Array<{ room: Room; project: StoredSpace }> {
+    const out: Array<{ room: Room; project: StoredSpace }> = [];
+    for (const project of this.#spaces.values()) {
+      if (project.kind !== 'project') continue;
+      for (const room of roomsOf(this.#entries(project))) out.push({ room, project });
+    }
+    return out;
+  }
+
+  #roomById(ref: string): { room: Room; project: StoredSpace } {
+    const matches = this.#allRooms().filter(({ room }) => room.id === ref || room.id.startsWith(ref) || room.name.toLowerCase() === ref.toLowerCase());
+    if (matches.length === 0) throw new Error(`no room "${ref}"`);
+    const open = matches.filter((m) => m.room.open);
+    if (open.length > 1) throw new Error(`several rooms match "${ref}": use its id`);
+    return open[0] ?? matches[0];
+  }
+
+  /** Participants of the room's project who are invited (or everyone, by default); the host always. */
+  #mayJoin(room: Room, person: Did): boolean {
+    if (person === room.host) return true;
+    const found = this.#allRooms().find((r) => r.room.id === room.id);
+    if (!found || !this.#state(found.project).members.has(person)) return false;
+    return room.invite === 'participants' || room.invite.includes(person);
+  }
+
+  #roomService(room: Room) {
+    const found = this.#allRooms().find((r) => r.room.id === room.id);
+    const app = found && this.#app(found.project);
+    return app?.services.find((s) => s.id === room.service) ?? app?.services[0];
+  }
+
+  async #roomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
+    const me = this.identity.author;
+    const mine = room.host === me;
+    const app = this.#app(project);
+    const service = app?.services.find((s) => s.id === room.service) ?? app?.services[0];
+    const joined = mine ? this.#live.isHosting(room.id) : this.#live.isJoined(room.id);
+    const connected = this.#live.connected(room.id);
+    const ready = mine ? !!service && (await portOpen(service.port)) : connected;
+    const side = mine ? service?.open?.host : service?.open?.joiner;
+    const path = side?.path ?? '/';
+    const localPort = this.#live.localPort(room.id);
+    const url = mine ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && connected && app ? `http://${app.app}.weave.localhost:${localPort}${path}` : undefined;
+    return {
+      id: room.id,
+      project: { id: project.id, kind: 'project', name: project.name },
+      name: room.name,
+      host: { did: room.host, name: this.nameOf(room.host) },
+      mine,
+      open: room.open,
+      mayJoin: this.#mayJoin(room, me),
+      joined,
+      connected,
+      peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
+      ...(app ? { app: { app: app.app, name: app.name, ...(app.start ? { startHint: app.start.hint } : {}) } } : {}),
+      ...(service ? { service: { id: service.id, label: side?.label ?? (mine ? 'Open' : 'Play'), ready } } : {}),
+      ...(url ? { url } : {}),
+      time: room.time,
+    };
+  }
+
+  #emitLive(): void {
+    for (const listener of this.#liveListeners) listener();
   }
 
   // ---------------------------------------------------------------- identity and keys

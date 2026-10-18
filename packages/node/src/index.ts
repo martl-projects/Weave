@@ -6,6 +6,8 @@ export type {
   BoardInfo,
   ChannelInfo,
   ChatInfo,
+  RoomChatMessage,
+  RoomInfo,
   MembershipRequestInfo,
   TierInfo,
   CommunityInfo,

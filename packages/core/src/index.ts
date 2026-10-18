@@ -161,3 +161,4 @@ export {
   recoveryRoot,
   type RecoveryWords,
 } from './recovery.ts';
+export { KIND_APP, KIND_ROOM, parseManifest, roomsOf, type AppManifest, type AppService, type Room } from './rooms.ts';

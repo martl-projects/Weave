@@ -1,4 +1,4 @@
-import type { BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
 import type { Theme } from './theme.ts';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
@@ -248,6 +248,40 @@ export interface MembershipRequestInfo {
   name?: string;
   note: string;
   time: string;
+}
+
+/** A live room in a project: a host shares the project's app, players use it through a tunnel. */
+export interface RoomInfo {
+  id: string;
+  project: SpaceRef;
+  name: string;
+  host: Person;
+  /** You host it. */
+  mine: boolean;
+  open: boolean;
+  /** You are invited (every participant, or named people). */
+  mayJoin: boolean;
+  /** You joined it (players) or are hosting it right now (host). */
+  joined: boolean;
+  /** Players: accepted by the host. Host: listening for players. */
+  connected: boolean;
+  /** Who is in it right now, as far as you can see (only once you're in). */
+  peers: Person[];
+  app?: { app: string; name: string; startHint?: string };
+  /** The shared service, the label of your ▶ button, and (host) whether the app answers on its port. */
+  service?: { id: string; label: string; ready: boolean };
+  /** What ▶ opens, once there is something to open. */
+  url?: string;
+  time: string;
+}
+
+/** A message in a room's chat: never stored, gone when the room ends. */
+export interface RoomChatMessage {
+  id: string;
+  by: Person;
+  text: string;
+  time: string;
+  mine: boolean;
 }
 
 /** A direct chat with a friend. */
@@ -531,6 +565,22 @@ export interface Backend {
   /** Rotate to the next root key from your recovery words; with `encryption`, also to a new encryption key. */
   rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo>;
 
+  // rooms and shared apps: live, never logged (except the room announcement)
+  /** The app a project shares in its rooms, if a maintainer published one. */
+  projectApp(project: string): Promise<AppManifest | null>;
+  /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
+  publishApp(input: { project: string; manifest: unknown }): Promise<AppManifest>;
+  /** Rooms in a project (or all your projects); ended ones are left out. */
+  rooms(project?: string): Promise<RoomInfo[]>;
+  /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
+  hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo>;
+  endRoom(room: string): Promise<void>;
+  /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
+  joinRoom(room: string): Promise<RoomInfo>;
+  leaveRoom(room: string): Promise<void>;
+  roomChat(room: string): Promise<RoomChatMessage[]>;
+  sayInRoom(input: { room: string; text: string }): Promise<void>;
+
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
   createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean }): Promise<TierInfo>;
@@ -592,6 +642,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot',
+  'projectApp', 'publishApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
