@@ -1,4 +1,4 @@
-import { Authority, KIND_DELEGATE, KIND_REVOKE } from './authority.ts';
+import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
 import { eventId, isWellFormedEvent, signEvent, verifyEventSignature, type EventFields, type SigningIdentity, type WeaveEvent } from './events.ts';
 import type { Did } from './keys.ts';
 import { MemoryStore, type LogStore } from './store.ts';
@@ -26,11 +26,15 @@ export class Replica {
   /** A store that already holds events (e.g. loaded from disk) is trusted as-is; delegations in it are re-applied. */
   constructor(store: LogStore = new MemoryStore()) {
     this.store = store;
-    for (const signer of store.signers()) {
-      for (const event of store.range(signer, 1)) {
-        if (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE) this.authority.apply(event);
-      }
-    }
+    // Replay key events in dependency order: identities, then rotations (each needs the one before),
+    // then delegations and revocations (twice: devices delegate agents).
+    const keyEvents = store.signers().flatMap((signer) => store.range(signer, 1).filter((e) => KEY_KINDS.has(e.kind)));
+    const byKind = (kind: string) => keyEvents.filter((e) => e.kind === kind);
+    for (const event of byKind(KIND_IDENTITY)) this.authority.apply(event);
+    const rotations = byKind(KIND_ROTATE);
+    for (let round = 0; round < rotations.length; round++) for (const event of rotations) this.authority.apply(event);
+    const grants = keyEvents.filter((e) => e.kind === KIND_DELEGATE || e.kind === KIND_REVOKE);
+    for (let round = 0; round < 2; round++) for (const event of grants) this.authority.apply(event);
   }
 
   /** Called for every newly accepted event. Returns an unsubscribe function. */
@@ -93,7 +97,7 @@ export class Replica {
 
     this.store.append(event);
     this.#pending.delete(pendingKey(event));
-    if (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE) this.authority.apply(event);
+    if (KEY_KINDS.has(event.kind)) this.authority.apply(event);
     for (const listener of this.#listeners) listener(event);
     return { status: 'accepted' };
   }

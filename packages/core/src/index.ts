@@ -12,7 +12,25 @@ export {
   type UnsignedEvent,
   type WeaveEvent,
 } from './events.ts';
-export { Authority, delegation, KIND_DELEGATE, KIND_REVOKE, KIND_SEALED, permits, revocation, type Check, type Grant, type Role } from './authority.ts';
+export {
+  Authority,
+  delegation,
+  inception,
+  KEY_KINDS,
+  keyCommitment,
+  KIND_DELEGATE,
+  KIND_IDENTITY,
+  KIND_REVOKE,
+  KIND_ROTATE,
+  KIND_SEALED,
+  permits,
+  revocation,
+  rotation,
+  type Check,
+  type Grant,
+  type KeyState,
+  type Role,
+} from './authority.ts';
 export { MemoryStore, type LogStore } from './store.ts';
 export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
@@ -48,7 +66,9 @@ export {
   spaceTopic,
   visibleIn,
   type Inner,
+  type EncryptionKeyOf,
   type Invite,
+  type Recipient,
   type InvitedGroup,
   type Member,
   type SpaceKeys,

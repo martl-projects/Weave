@@ -134,12 +134,23 @@ describe('delegation', () => {
     expect(replica.ingest(vote)).toEqual({ status: 'rejected', reason: 'signer may not sign weave.vote' });
   });
 
-  it('never lets a sub key delegate', () => {
+  it('lets a full device add agents, but not devices; limited keys delegate nothing', () => {
     const alice = createIdentity();
     const laptop = createSubKey(alice.did);
+    const bot = createSubKey(alice.did);
     const replica = new Replica();
     replica.append(alice, delegation(laptop.did, 'device', ['*']));
-    const sneaky = signEvent(laptop, undefined, delegation(createSubKey(alice.did).did, 'agent', ['*']));
+    replica.append(alice, delegation(bot.did, 'agent', ['weave.post']));
+
+    const agent = createSubKey(alice.did);
+    replica.append(laptop, delegation(agent.did, 'agent', ['weave.msg']));
+    expect(replica.authority.grant(agent.did)?.role).toBe('agent');
+
+    const device = createSubKey(alice.did);
+    replica.append(laptop, delegation(device.did, 'device', ['*'])); // accepted into the log, but no effect
+    expect(replica.authority.grant(device.did)).toBeUndefined();
+
+    const sneaky = signEvent(bot, undefined, delegation(createSubKey(alice.did).did, 'agent', ['*']));
     expect(replica.ingest(sneaky).status).toBe('rejected');
   });
 

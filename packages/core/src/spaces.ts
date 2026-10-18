@@ -3,7 +3,7 @@ import { KIND_SEALED } from './authority.ts';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
 import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
-import { isDid, type Did } from './keys.ts';
+import { isDid, type Did, type KeyPair } from './keys.ts';
 import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 
 /*
@@ -103,8 +103,8 @@ export function newSpace(kind: SpaceKind, name: string, founder: Did): SpaceKeys
  * The direct chat between `me` and `peer`. Both of them derive the same space
  * (id, topic secret and key) on their own; nobody else can.
  */
-export function directSpace(me: SigningIdentity, peer: Did): SpaceKeys {
-  const key = pairKey(me.keys.secretKey, me.keys.publicKey, peer);
+export function directSpace(me: Recipient, peer: Did, peerEncryptionKey: Did = peer): SpaceKeys {
+  const key = pairKey(me.keys.secretKey, me.keys.publicKey, peerEncryptionKey);
   const derive = (label: string) => b64u.encode(sha256(new Uint8Array([...utf8(`weave/direct/${label}/v1`), ...key])));
   const [first] = [me.author, peer].sort();
   return { kind: 'direct', id: derive('id').slice(0, 22), name: '', founder: first, secret: derive('topic'), keys: { '0': b64u.encode(key) } };
@@ -137,18 +137,31 @@ export function openIn(space: SpaceKeys, event: WeaveEvent): Inner | undefined {
 }
 
 /** Start a new epoch: a fresh key, boxed to each member who stays. */
-export function rekey(space: SpaceKeys, members: Did[]): { fields: EventFields; epoch: number; key: string } {
+/**
+ * Someone opening what was encrypted to them: the person, and the keys of their
+ * encryption key (for people without a separate one, their root key pair).
+ */
+export interface Recipient {
+  author: Did;
+  keys: KeyPair;
+}
+
+/** Where to encrypt to for a person: their published encryption key (defaults to their identifier). */
+export type EncryptionKeyOf = (person: Did) => Did;
+const sameKey: EncryptionKeyOf = (person) => person;
+
+export function rekey(space: SpaceKeys, members: Did[], encryptionKeyOf: EncryptionKeyOf = sameKey): { fields: EventFields; epoch: number; key: string } {
   const epoch = currentEpoch(space) + 1;
   const key = b64u.encode(randomBytes(32));
   const boxes: Record<string, Box> = {};
-  for (const member of members) boxes[member] = boxTo(member, { space: space.id, epoch, key });
+  for (const member of members) boxes[member] = boxTo(encryptionKeyOf(member), { space: space.id, epoch, key });
   return { fields: { kind: KIND_REKEY, scope: spaceScope(space), body: { epoch, boxes } }, epoch, key };
 }
 
 /** If a rekey event carries a key for `me`, return it. */
-export function openRekey(event: WeaveEvent, me: SigningIdentity): { epoch: number; key: string } | undefined {
+export function openRekey(event: WeaveEvent, me: Recipient): { epoch: number; key: string } | undefined {
   const body = event.body as { epoch?: unknown; boxes?: Record<string, Box> } | null;
-  const box = body?.boxes?.[me.did];
+  const box = body?.boxes?.[me.author];
   if (canonicalKind(event.kind) !== KIND_REKEY || !box) return undefined;
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: string; group?: string; epoch?: number; key?: string };
@@ -163,16 +176,16 @@ export function openRekey(event: WeaveEvent, me: SigningIdentity): { epoch: numb
  * Hand a space's keys to newly admitted people. Posted in a scope they already
  * follow (the group they came through), boxed so only they can open it.
  */
-export function gift(space: SpaceKeys, recipients: Did[], scope: string, entry: Invite['entry']): EventFields {
+export function gift(space: SpaceKeys, recipients: Did[], scope: string, entry: Invite['entry'], encryptionKeyOf: EncryptionKeyOf = sameKey): EventFields {
   const boxes: Record<string, Box> = {};
-  for (const did of recipients) boxes[did] = boxTo(did, { space: space as unknown as Json, entry: entry as unknown as Json });
+  for (const did of recipients) boxes[did] = boxTo(encryptionKeyOf(did), { space: space as unknown as Json, entry: entry as unknown as Json });
   return { kind: KIND_GIFT, scope, body: { space: space.id, boxes } };
 }
 
 /** If a gift event carries a space for `me`, return it. */
-export function openGift(event: WeaveEvent, me: SigningIdentity): { space: SpaceKeys; entry: Invite['entry'] } | undefined {
+export function openGift(event: WeaveEvent, me: Recipient): { space: SpaceKeys; entry: Invite['entry'] } | undefined {
   const body = event.body as { boxes?: Record<string, Box> } | null;
-  const box = body?.boxes?.[me.did];
+  const box = body?.boxes?.[me.author];
   if (event.kind !== KIND_GIFT || !box) return undefined;
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: SpaceKeys; entry?: Invite['entry'] };

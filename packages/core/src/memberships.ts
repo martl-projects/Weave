@@ -1,7 +1,7 @@
 import type { Json } from './bytes.ts';
 import { boxTo, openBox, type Box } from './crypto.ts';
-import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
-import { isDid, type Did } from './keys.ts';
+import type { EventFields, WeaveEvent } from './events.ts';
+import { isDid, type Did, type KeyPair } from './keys.ts';
 
 /*
  * Memberships, Patreon-style. A creator offers tiers; a tier is a group the
@@ -80,13 +80,13 @@ export interface MembershipRequest {
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
 }
 
-/** A request to join a tier, readable only by the creator. */
-export function membershipRequest(creator: Did, request: MembershipRequest): EventFields {
-  return { kind: KIND_MEMBERSHIP_REQUEST, body: { box: boxTo(creator, request as unknown as Json) } };
+/** A request to join a tier, readable only by the creator (encrypted to their encryption key). */
+export function membershipRequest(creatorEncryptionKey: Did, request: MembershipRequest): EventFields {
+  return { kind: KIND_MEMBERSHIP_REQUEST, body: { box: boxTo(creatorEncryptionKey, request as unknown as Json) } };
 }
 
 /** If a request event is addressed to `me`, what it asks for. */
-export function openMembershipRequest(event: WeaveEvent, me: SigningIdentity): MembershipRequest | undefined {
+export function openMembershipRequest(event: WeaveEvent, me: { keys: KeyPair }): MembershipRequest | undefined {
   const box = (event.body as { box?: Box } | null)?.box;
   if (event.kind !== KIND_MEMBERSHIP_REQUEST || !box) return undefined;
   try {
