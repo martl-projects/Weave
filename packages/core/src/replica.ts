@@ -23,8 +23,14 @@ export class Replica {
   #pending = new Map<string, WeaveEvent>();
   #listeners = new Set<(event: WeaveEvent) => void>();
 
+  /** A store that already holds events (e.g. loaded from disk) is trusted as-is; delegations in it are re-applied. */
   constructor(store: LogStore = new MemoryStore()) {
     this.store = store;
+    for (const signer of store.signers()) {
+      for (const event of store.range(signer, 1)) {
+        if (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE) this.authority.apply(event);
+      }
+    }
   }
 
   /** Called for every newly accepted event. Returns an unsubscribe function. */

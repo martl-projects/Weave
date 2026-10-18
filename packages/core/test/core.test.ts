@@ -91,6 +91,18 @@ describe('Replica', () => {
     expect(replica.ingest(e2)).toEqual({ status: 'rejected', reason: 'broken hash chain' });
   });
 
+  it('restores delegations when opened on an existing store', () => {
+    const alice = createIdentity();
+    const laptop = createSubKey(alice.did);
+    const first = new Replica();
+    first.append(alice, delegation(laptop.did, 'device', ['*']));
+    first.append(laptop, { kind: 'weave.post', body: 'hi' });
+
+    const reopened = new Replica(first.store);
+    expect(reopened.authority.grant(laptop.did)?.role).toBe('device');
+    expect(reopened.events()).toHaveLength(2);
+  });
+
   it('rejects malformed input', () => {
     expect(new Replica().ingest({ hello: 'world' }).status).toBe('rejected');
   });
