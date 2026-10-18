@@ -20,14 +20,26 @@ const home = resolveHome(homeArg && resolve(process.env.INIT_CWD ?? process.cwd(
 
 let daemon: RunningDaemon | undefined;
 let window: BrowserWindow | undefined;
-const watching = new AbortController();
+let watching = new AbortController();
+let quitting = false;
 
 async function connect(): Promise<void> {
+  watching.abort();
+  watching = new AbortController();
+  const signal = watching.signal;
   daemon = await ensureDaemon(home);
   daemon.client
-    .watch((item) => window?.webContents.send('weave:event', item), watching.signal)
-    .catch((error: Error) => console.error('weave: event stream ended:', error.message));
+    .watch((item) => window?.webContents.send('weave:event', item), signal)
+    .catch((error: Error) => console.error('weave: event stream ended:', error.message))
+    .finally(() => {
+      // The daemon went away (restarted, crashed): find or start it again, and tell the window to refresh.
+      if (signal.aborted || quitting) return;
+      setTimeout(() => void connect().then(() => window?.webContents.send('weave:event', null), () => {}), 1000);
+    });
 }
+
+/** The daemon can't be reached: it was restarted on another port, or stopped. */
+const unreachable = (error: unknown) => /ECONNREFUSED|ECONNRESET|socket hang up/.test(String((error as Error)?.message ?? error) + String((error as { code?: string })?.code ?? ''));
 
 ipcMain.handle('weave:state', () => ({ home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined }));
 
@@ -39,8 +51,14 @@ ipcMain.handle('weave:init', async (_event, name: string) => {
 ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknown[]) => {
   if (!RENDERER_METHODS.includes(method)) throw new Error(`not allowed: ${method}`);
   if (!daemon) throw new Error('not connected to a Weave daemon');
-  const fn = daemon.client[method] as (...a: unknown[]) => Promise<unknown>;
-  return fn.apply(daemon.client, args) as ReturnType<Backend[RendererMethod]>;
+  const run = () => (daemon!.client[method] as (...a: unknown[]) => Promise<unknown>).apply(daemon!.client, args) as ReturnType<Backend[RendererMethod]>;
+  try {
+    return await run();
+  } catch (error) {
+    if (!unreachable(error)) throw error;
+    await connect();
+    return run();
+  }
 });
 
 async function createWindow(): Promise<void> {
@@ -96,6 +114,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit());
 
 app.on('will-quit', () => {
+  quitting = true;
   watching.abort();
   daemon?.child?.kill();
 });
