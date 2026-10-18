@@ -9,6 +9,7 @@ declare module 'hyperswarm' {
 
   export interface Discovery {
     flushed(): Promise<void>;
+    refresh(options?: { client?: boolean; server?: boolean }): Promise<void>;
     destroy(): Promise<void>;
   }
 
