@@ -48,6 +48,23 @@ describe('WeaveNode', () => {
   });
 });
 
+describe('spaces', () => {
+  it('keeps a sanitized theme and filters a person\'s public posts', async () => {
+    const node = WeaveNode.init('alice', tempHome());
+    const profile = await node.setProfile({ name: 'Alice', theme: { accent: '#FF00AA', font: 'serif', background: 'url(evil)' as never } });
+    expect(profile.name).toBe('Alice');
+    expect(profile.theme).toMatchObject({ accent: '#ff00aa', font: 'serif', background: '#0d0e12' });
+
+    await node.createGroup('Secret');
+    await node.publish({ kind: 'weave.post', body: { text: 'public' } });
+    await node.publish({ kind: 'weave.post', body: { text: 'in group' }, group: 'Secret' });
+    const mine = await node.feed({ author: 'Alice', publicOnly: true, kinds: ['weave.post'] });
+    expect(mine.map((i) => (i.body as { text: string }).text)).toEqual(['public']);
+    expect((await node.profile()).posts).toBe(2);
+    expect(await node.directory()).toEqual([]);
+  });
+});
+
 describe('local API', () => {
   it('serves the backend to an authorized client and streams new events', async () => {
     const node = WeaveNode.init('alice', tempHome());

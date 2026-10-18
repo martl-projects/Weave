@@ -48,7 +48,9 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
       const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
       const kinds = url.searchParams.get('kinds')?.split(',').filter(Boolean);
       const group = url.searchParams.get('group') ?? undefined;
-      return send(res, 200, await backend.feed({ limit, kinds, group }));
+      const author = url.searchParams.get('author') ?? undefined;
+      const publicOnly = url.searchParams.get('public') === '1';
+      return send(res, 200, await backend.feed({ limit, kinds, group, author, publicOnly }));
     }
     case 'GET /v1/groups':
       return send(res, 200, await backend.groups());
@@ -74,6 +76,12 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
     case 'POST /v1/edges':
       await backend.setEdge(await readBody(req));
       return send(res, 200, { ok: true });
+    case 'GET /v1/profile':
+      return send(res, 200, await backend.profile(url.searchParams.get('who') ?? undefined));
+    case 'POST /v1/profile':
+      return send(res, 200, await backend.setProfile(await readBody(req)));
+    case 'GET /v1/directory':
+      return send(res, 200, await backend.directory());
     case 'GET /v1/social':
       return send(res, 200, await backend.social());
     case 'POST /v1/publish':

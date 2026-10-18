@@ -55,6 +55,8 @@ import type {
   GroupInfo,
   MemberInfo,
   Person,
+  Profile,
+  ProfileInput,
   PublishInput,
   Social,
   Status,
@@ -65,6 +67,7 @@ import { FileStore } from './filestore.ts';
 import { loadGroups, saveGroup, type StoredGroup } from './groupstore.ts';
 import { resolveHome, type Home } from './home.ts';
 import { createAndSaveAgent, createAndSaveIdentity, loadAgents, loadIdentity, type AgentKey } from './keystore.ts';
+import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
 export const KIND_PROFILE = 'weave.profile';
 const SELF_SCOPE = 'self';
@@ -170,12 +173,15 @@ export class WeaveNode implements Backend {
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
     const kinds = query.kinds?.length ? new Set(query.kinds) : undefined;
     const onlyGroup = query.group ? this.#group(query.group) : undefined;
+    const onlyAuthor = query.author ? this.resolve(query.author) : undefined;
     const hidden = this.#hiddenAuthors();
     const states = new Map<string, GroupState>();
 
     const items: FeedItem[] = [];
     for (const decoded of this.#decodeAll()) {
       if (onlyGroup && decoded.group?.id !== onlyGroup.id) continue;
+      if (onlyAuthor && decoded.event.author !== onlyAuthor) continue;
+      if (query.publicOnly && (decoded.group || decoded.private)) continue;
       if (kinds && !kinds.has(decoded.inner.kind)) continue;
       if (hidden.has(decoded.event.author)) continue;
       if (decoded.group) {
@@ -318,6 +324,53 @@ export class WeaveNode implements Backend {
       blocked: people(mine?.blocked ?? []),
       muted: people(mine?.muted ?? []),
     };
+  }
+
+  // ---------------------------------------------------------------- spaces
+
+  async profile(who?: string): Promise<Profile> {
+    const did = who ? this.resolve(who) : this.identity.author;
+    const graph = this.#graph();
+    const me = this.identity.author;
+    const mine = graph.get(me);
+    return {
+      did,
+      name: this.nameOf(did),
+      theme: this.themeOf(did),
+      me: did === me,
+      following: mine?.following.has(did) ?? false,
+      followsMe: graph.get(did)?.following.has(me) ?? false,
+      blocked: mine?.blocked.has(did) ?? false,
+      muted: mine?.muted.has(did) ?? false,
+      posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
+    };
+  }
+
+  async setProfile(input: ProfileInput): Promise<Profile> {
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (!name || name.length > 40) throw new Error('names are 1 to 40 characters');
+      if (name !== this.nameOf(this.identity.author)) this.replica.append(this.identity, { kind: KIND_PROFILE, body: { name } });
+    }
+    if (input.theme) {
+      const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
+      this.replica.append(this.identity, { kind: KIND_THEME, body: { ...theme } });
+    }
+    return this.profile();
+  }
+
+  async directory(): Promise<Profile[]> {
+    const authors = new Set(this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author));
+    authors.delete(this.identity.author);
+    const profiles = await Promise.all([...authors].map((did) => this.profile(did)));
+    return profiles.sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
+  }
+
+  /** A space's theme: the latest theme event its author published. */
+  themeOf(author: Did): Theme {
+    let theme: unknown;
+    for (const event of this.replica.store.range(author, 1)) if (event.kind === KIND_THEME) theme = event.body;
+    return sanitizeTheme(theme);
   }
 
   /** A did:key, or the name of someone whose profile this node has seen. */

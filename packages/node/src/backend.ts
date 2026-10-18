@@ -1,4 +1,5 @@
 import type { Did, Json } from '@weave/core';
+import type { Theme } from './theme.ts';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
 export interface FeedItem {
@@ -57,6 +58,10 @@ export interface FeedQuery {
   kinds?: string[];
   /** Group name or id: only that group's events. */
   group?: string;
+  /** Only events by this person (name or did:key). */
+  author?: string;
+  /** Only public events. */
+  publicOnly?: boolean;
 }
 
 export interface GroupInfo {
@@ -79,6 +84,26 @@ export interface MemberInfo {
 export interface Person {
   did: Did;
   name?: string;
+}
+
+/** Someone's space as this node sees it. */
+export interface Profile {
+  did: Did;
+  name?: string;
+  theme: Theme;
+  me: boolean;
+  /** I follow them. */
+  following: boolean;
+  /** They follow me. */
+  followsMe: boolean;
+  blocked: boolean;
+  muted: boolean;
+  posts: number;
+}
+
+export interface ProfileInput {
+  name?: string;
+  theme?: Partial<Theme>;
 }
 
 export interface Social {
@@ -125,4 +150,11 @@ export interface Backend {
 
   setEdge(input: EdgeInput): Promise<void>;
   social(): Promise<Social>;
+
+  /** A person's space; defaults to your own. */
+  profile(who?: string): Promise<Profile>;
+  /** Update your name and/or theme. */
+  setProfile(input: ProfileInput): Promise<Profile>;
+  /** Everyone whose profile this node has seen, yourself excluded. */
+  directory(): Promise<Profile[]>;
 }

@@ -1,5 +1,5 @@
 import { request as httpRequest } from 'node:http';
-import type { AgentInfo, Backend, EdgeInput, FeedItem, FeedQuery, GroupInfo, MemberInfo, PublishInput, Social, Status, Whoami } from './backend.ts';
+import type { AgentInfo, Backend, EdgeInput, FeedItem, FeedQuery, GroupInfo, MemberInfo, Profile, ProfileInput, PublishInput, Social, Status, Whoami } from './backend.ts';
 import { readJson, type Home } from './home.ts';
 
 export interface DaemonInfo {
@@ -65,6 +65,8 @@ export class ApiClient implements Backend {
     if (query.limit !== undefined) params.set('limit', String(query.limit));
     if (query.kinds?.length) params.set('kinds', query.kinds.join(','));
     if (query.group) params.set('group', query.group);
+    if (query.author) params.set('author', query.author);
+    if (query.publicOnly) params.set('public', '1');
     return this.#request('GET', `/feed?${params}`);
   }
 
@@ -110,6 +112,18 @@ export class ApiClient implements Backend {
 
   social(): Promise<Social> {
     return this.#request('GET', '/social');
+  }
+
+  profile(who?: string): Promise<Profile> {
+    return this.#request('GET', `/profile${who ? `?${new URLSearchParams({ who })}` : ''}`);
+  }
+
+  setProfile(input: ProfileInput): Promise<Profile> {
+    return this.#request('POST', '/profile', input);
+  }
+
+  directory(): Promise<Profile[]> {
+    return this.#request('GET', '/directory');
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
