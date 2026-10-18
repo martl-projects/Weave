@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
@@ -29,7 +30,8 @@ const HELP = `weave — build things together, peer to peer, with your friends a
 
 usage: weave <command> [options]
 
-  init <name>                create your identity in the Weave home
+  init <name>                create your identity; shows your 24 recovery words once
+  restore                    set up this computer as another device of your identity, from your recovery words
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   status                     node status: peers, groups, projects, communities
@@ -134,6 +136,11 @@ people (<who> is a name you have seen or a did:key):
   block <who> / unblock <who>         private unless --public
   mute <who> / unmute <who>           private unless --public
   people                     following, followers, friends, blocked, muted
+
+keys (recovery words are read from a prompt or stdin, never from the command line):
+  keys                       your devices and agents, and whether any key was seen in two places
+  revoke <key>               revoke a device (needs your words) or agent: its events after --since are void  [--since <time>]
+  rotate                     rotate your root key with your words  [--encryption: also a new encryption key]
   find <text>                search everyone you know of by name or did:key
   contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)
   add <link>                 add someone by their contact link: connect, follow, keep in your address book
@@ -155,6 +162,8 @@ const { values, positionals } = parseArgs({
     clear: { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
+    since: { type: 'string' },
+    encryption: { type: 'boolean', default: false },
     channel: { type: 'string', short: 'c' },
     reply: { type: 'string' },
     off: { type: 'boolean', default: false },
@@ -234,6 +243,28 @@ const tierLine = (t: TierInfo) => {
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
+/** The recovery words, numbered in four columns, for writing down. */
+const numbered = (words: string) => {
+  const list = words.split(' ');
+  const rows: string[] = [];
+  for (let r = 0; r < 6; r++) rows.push([0, 6, 12, 18].map((c) => `${String(c + r + 1).padStart(2)}. ${list[c + r].padEnd(10)}`).join('  '));
+  return rows.map((row) => `  ${row}`).join('\n');
+};
+
+/** Recovery words from $WEAVE_RECOVERY_WORDS, a prompt, or stdin; never from arguments, which end up in shell history. */
+async function readWords(): Promise<string> {
+  if (process.env.WEAVE_RECOVERY_WORDS) return process.env.WEAVE_RECOVERY_WORDS;
+  if (process.stdin.isTTY) {
+    const prompt = createInterface({ input: process.stdin, output: process.stderr });
+    const words = await prompt.question('Your 24 recovery words: ');
+    prompt.close();
+    return words;
+  }
+  let text = '';
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
+}
+
 const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', group: 'g', direct: '@' }[p.space.kind]}/${p.space.name}${p.board && p.space.kind === 'project' ? `/${p.board}` : ''}` : `u/${p.by.name ?? p.by.did.slice(8, 20)}`);
 const postLine = (p: PostInfo) => {
   const vote = p.myVote > 0 ? '▲' : p.myVote < 0 ? '▼' : ' ';
@@ -288,8 +319,63 @@ async function main(): Promise<void> {
     case 'init': {
       const name = args.join(' ').trim();
       if (!name) throw new Error('usage: weave init <name>');
-      const node = WeaveNode.init(name, home.dir);
-      return out({ did: node.identity.did, name, home: home.dir }, () => `created identity for ${name}\n  ${node.identity.did}\n  in ${home.dir}`);
+      const { node, words } = WeaveNode.create(name, home.dir);
+      await node.close();
+      return out({ did: node.identity.author, name, home: home.dir, words }, () =>
+        [
+          `created identity for ${name}`,
+          `  ${node.identity.author}`,
+          `  in ${home.dir}`,
+          '',
+          'Your recovery words. Write them down on paper now; they are shown only this once:',
+          '',
+          numbered(words),
+          '',
+          'They are your identity: with them you set up new devices, replace a stolen key and',
+          'rotate your root key. Weave never stores them. Keep them away from this computer, from',
+          'chats and from AI agents: whoever has them is you.',
+        ].join('\n'),
+      );
+    }
+
+    case 'restore': {
+      const words = await readWords();
+      console.error('looking for your identity on the network (keep another device or a friend online)…');
+      const node = await WeaveNode.restore(words, home.dir, { online: true });
+      const me = await node.whoami();
+      await node.close();
+      return out(me, () => `this computer is now a device of ${me.name ?? me.did}\n  ${me.did}\n  device key ${me.signer}`);
+    }
+
+    case 'keys': {
+      const b = await backend();
+      const [info, keys] = await Promise.all([b.identityInfo(), b.keys()]);
+      return out({ ...info, keys }, () =>
+        [
+          `${info.did}`,
+          `  ${info.recoverable ? `recovery kit: yes · root rotated ${info.rotations} time${info.rotations === 1 ? '' : 's'}` : 'recovery kit: no (made before recovery kits existed; create a new identity to get one)'}`,
+          ...(info.forks.length ? [`  ⚠ seen signing in two places (possibly stolen): ${info.forks.join(', ')} — revoke with: weave revoke <key> --since <when you last trusted it>`] : []),
+          '',
+          ...keys.map((k) => `${k.role.padEnd(7)} ${(k.name ?? '').padEnd(20)} ${k.did}${k.current ? '  (this device)' : ''}${k.revokedAfter !== undefined ? `  revoked after #${k.revokedAfter}` : ''}${k.forked ? '  ⚠ forked' : ''}  ${k.events} event${k.events === 1 ? '' : 's'}`),
+        ].join('\n'),
+      );
+    }
+
+    case 'revoke': {
+      const key = args[0];
+      if (!key) throw new Error('usage: weave revoke <key or agent name> [--since <time>]');
+      const b = await backend();
+      const target = (await b.keys()).find((k) => k.did === key || k.name?.toLowerCase() === key.toLowerCase());
+      const words = target?.role === 'agent' ? undefined : await readWords();
+      const keys = await b.revokeKey({ key, since: values.since, words });
+      const done = keys.find((k) => k.did === target?.did);
+      return out(keys, () => `revoked ${target?.name ?? key}: its events after #${done?.revokedAfter} are void`);
+    }
+
+    case 'rotate': {
+      const words = await readWords();
+      const info = await (await backend()).rotateRoot({ words, encryption: values.encryption });
+      return out(info, () => `rotated your root key (${info.rotations} rotation${info.rotations === 1 ? '' : 's'} so far)${values.encryption ? ' and your encryption key' : ''}; your words still cover the next ones`);
     }
 
     case 'whoami': {

@@ -60,7 +60,7 @@ describe('identities with a recovery kit', () => {
     const { node, words } = WeaveNode.create('Martin', tempDir());
     const info = await node.rotateRoot({ words });
     expect(info.rotations).toBe(1);
-    await node.setProfile({ name: "Martin S." }); // the device keeps signing after a rotation
+    await node.setProfile({ name: 'Martin S.' }); // the device keeps signing after a rotation
     expect((await node.whoami()).name).toBe('Martin S.');
 
     const old = recoveryRoot(words, 0);
