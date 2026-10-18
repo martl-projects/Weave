@@ -22,6 +22,7 @@ import {
   followersOf,
   friendsOf,
   gift,
+  grantUntil,
   isDid,
   ISSUE_STATUSES,
   issuesOf,
@@ -40,6 +41,10 @@ import {
   KIND_ISSUE_STATUS,
   KIND_JOIN,
   KIND_MAINTAINER,
+  KIND_MEMBERSHIP,
+  KIND_MEMBERSHIP_HANDLED,
+  KIND_MEMBERSHIP_PENDING,
+  KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
   KIND_MUTE,
   KIND_POST,
@@ -54,14 +59,17 @@ import {
   KIND_SEALED,
   KIND_SPACE_CREATE,
   KIND_THREAD,
+  KIND_TIER,
   KIND_UPVOTE,
   KIND_VOTE,
   KIND_VOTE_DELEGATE,
+  membershipRequest,
   messagesOf,
   newSpace,
   open,
   openGift,
   openIn,
+  openMembershipRequest,
   openRekey,
   parseScope,
   permits,
@@ -83,6 +91,7 @@ import {
   spaceState,
   spaceTopic,
   threadsOf,
+  tiersOf,
   visibleIn,
   type Board,
   type Member,
@@ -109,6 +118,7 @@ import {
   type SigningIdentity,
   type SpaceKind,
   type SpaceState,
+  type Tier,
   type Thread,
   type WeaveEvent,
 } from '@weave/core';
@@ -121,6 +131,7 @@ import {
   type Backend,
   type BoardInfo,
   type ChatInfo,
+  type MembershipRequestInfo,
   type ChannelInfo,
   type CommunityInfo,
   type EdgeInput,
@@ -149,6 +160,7 @@ import {
   type SpaceRef,
   type Status,
   type ThreadInfo,
+  type TierInfo,
   type Whoami,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -367,6 +379,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new Error('a direct chat is between two people; start a group to talk with more');
+    if (state.tier && space.founder !== this.identity.author) throw new Error(`only ${this.nameOf(space.founder) ?? 'its creator'} lets people into ${space.name}`);
     const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
     if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
     const invite = b64u.encode(randomBytes(12));
@@ -693,7 +706,7 @@ export class WeaveNode implements Backend {
    * were admitted or removed.
    */
   async reconcile(): Promise<number> {
-    let changed = 0;
+    let changed = await this.#expireMemberships();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -821,6 +834,190 @@ export class WeaveNode implements Backend {
         status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
         time,
       }));
+  }
+
+  // ---------------------------------------------------------------- memberships
+
+  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo> {
+    const group = await this.#createSpace('group', input.name, { tier: true });
+    const position = this.#tierOffers(this.identity.author).length;
+    this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, time: '' }, input);
+    return this.#tierInfo(this.#tierOffer(group.id));
+  }
+
+  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): Promise<TierInfo> {
+    const before = this.#tierOffer(input.tier);
+    if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
+    this.#publishTier(before, input);
+    return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id));
+  }
+
+  async tiers(who?: string): Promise<TierInfo[]> {
+    return this.#tierOffers(who ? this.resolve(who) : this.identity.author).map((t) => this.#tierInfo(t));
+  }
+
+  async requestMembership(input: { tier: string; note?: string }): Promise<void> {
+    const tier = this.#tierOffer(input.tier);
+    if (tier.creator === this.identity.author) throw new Error("that's your own tier");
+    if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
+    await this.join(tier.creator); // the creator's node listens on their identity topic
+    this.replica.append(this.identity, membershipRequest(tier.creator, { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint() }));
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_PENDING, body: { creator: tier.creator, tier: tier.id } }));
+  }
+
+  async membershipRequests(): Promise<MembershipRequestInfo[]> {
+    const handled = new Set(this.#selfBodies(KIND_MEMBERSHIP_HANDLED).map((b) => b.request));
+    const mine = new Map(this.#tierOffers(this.identity.author).map((t) => [t.id, t]));
+    const out: MembershipRequestInfo[] = [];
+    for (const event of this.replica.events((e) => e.kind === KIND_MEMBERSHIP_REQUEST && e.author !== this.identity.author)) {
+      const id = eventId(event);
+      const request = handled.has(id) ? undefined : openMembershipRequest(event, this.identity);
+      const tier = request && mine.get(request.tier);
+      if (!tier) continue;
+      out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time });
+    }
+    return out.sort((a, b) => a.time.localeCompare(b.time));
+  }
+
+  async grantMembership(input: { tier: string; who: string; months: number }): Promise<TierInfo> {
+    const months = Math.round(Number(input.months));
+    if (!(months >= 1 && months <= 36)) throw new Error('grant 1 to 36 months');
+    const group = this.#tierGroup(input.tier);
+    const member = this.resolve(input.who);
+    if (member === this.identity.author) throw new Error("you're in your own tier already");
+    const state = this.#state(group);
+    const current = state.members.get(member);
+    const until = grantUntil(new Date(), months, current?.until);
+    this.replica.append(this.identity, sealFor(group, { kind: KIND_MEMBERSHIP, body: { member, until } }));
+    // New (or returning) members get the tier's keys, posted where their node will look for them.
+    if (!current) {
+      const { entry: _entry, ...keys } = group;
+      this.replica.append(this.identity, gift({ ...keys }, [member], 'gift', this.#entryPoint()));
+    }
+    await this.#answerRequests(group.id, member);
+    return this.#tierInfo(this.#tierOffer(group.id));
+  }
+
+  async declineMembership(input: { tier: string; who: string }): Promise<void> {
+    const group = this.#tierGroup(input.tier);
+    await this.#answerRequests(group.id, this.resolve(input.who));
+  }
+
+  async memberships(): Promise<TierInfo[]> {
+    const out: TierInfo[] = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group' || space.founder === this.identity.author || !this.#state(space).tier) continue;
+      const offer = this.#tierOffers(space.founder).find((t) => t.id === space.id);
+      out.push(this.#tierInfo(offer ?? { id: space.id, creator: space.founder, name: space.name, price: 0, currency: 'EUR', description: '', benefits: [], position: 0, open: false, time: '' }));
+    }
+    return out;
+  }
+
+  /** Remove members whose grants ran out from the tiers we offer, with one key rotation per tier. */
+  async #expireMemberships(): Promise<number> {
+    let removed = 0;
+    const now = new Date().toISOString();
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group' || space.founder !== this.identity.author) continue;
+      const state = this.#state(space);
+      if (!state.tier) continue;
+      const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
+      if (!expired.length) continue;
+      for (const member of expired) this.replica.append(this.identity, sealFor(space, { kind: KIND_REMOVE, body: { member } }));
+      const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
+      const { fields, epoch, key } = rekey(space, remaining);
+      space.keys[String(epoch)] = key;
+      this.#saveSpace(space);
+      this.replica.append(this.identity, fields);
+      removed += expired.length;
+    }
+    return removed;
+  }
+
+  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): void {
+    const price = patch.price ?? before.price;
+    if (!Number.isInteger(price) || price < 0) throw new Error('the price is a whole number of cents, 0 for free');
+    const currency = (patch.currency ?? before.currency).toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) throw new Error('the currency is a three-letter code like EUR');
+    const name = (patch.name ?? before.name).trim();
+    if (!name || name.length > 40) throw new Error('tier names are 1 to 40 characters');
+    const body: Record<string, Json> = {
+      tier: before.id,
+      name,
+      price,
+      currency,
+      description: (patch.description ?? before.description).slice(0, 2000),
+      benefits: (patch.benefits ?? before.benefits).map((b) => b.trim()).filter(Boolean).slice(0, 10),
+      position: patch.position ?? before.position,
+      open: patch.open ?? before.open,
+    };
+    if (patch.hidden) body.hidden = true;
+    this.replica.append(this.identity, { kind: KIND_TIER, body });
+  }
+
+  /** The tiers a creator offers, from their public events. */
+  #tierOffers(creator: Did): Tier[] {
+    return tiersOf([...this.replica.store.range(creator, 1)]);
+  }
+
+  /** A tier anyone offers, by id or name (yours first). */
+  #tierOffer(ref: string): Tier {
+    const all = tiersOf(this.replica.events((e) => e.kind === KIND_TIER));
+    const match = all.find((t) => t.id === ref) ?? all.find((t) => t.creator === this.identity.author && t.name.toLowerCase() === ref.toLowerCase()) ?? all.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
+    if (Array.isArray(match)) {
+      if (match.length === 1) return match[0];
+      throw new Error(match.length ? `several tiers are named "${ref}" — use its id` : `no tier "${ref}" is known`);
+    }
+    return match;
+  }
+
+  /** One of your own tiers' groups. */
+  #tierGroup(ref: string): StoredSpace {
+    const tier = this.#tierOffer(ref);
+    const group = this.#spaces.get(tier.id);
+    if (tier.creator !== this.identity.author || !group) throw new Error(`only ${this.nameOf(tier.creator) ?? 'its creator'} can let people into ${tier.name}`);
+    return group;
+  }
+
+  #tierInfo(tier: Tier): TierInfo {
+    const group = this.#spaces.get(tier.id);
+    const state = group && this.#state(group);
+    const mine = tier.creator === this.identity.author;
+    const me = state?.members.get(this.identity.author);
+    const now = new Date().toISOString();
+    const requested =
+      !mine && !me && this.#selfBodies(KIND_MEMBERSHIP_PENDING).some((b) => b.tier === tier.id && b.creator === tier.creator);
+    return {
+      id: tier.id,
+      creator: { did: tier.creator, name: this.nameOf(tier.creator) },
+      name: tier.name,
+      price: tier.price,
+      currency: tier.currency,
+      description: tier.description,
+      benefits: tier.benefits,
+      position: tier.position,
+      open: tier.open,
+      mine,
+      ...(mine && state ? { members: [...state.members.values()].filter((m) => m.did !== tier.creator && (!m.until || m.until > now)).length } : {}),
+      ...(!mine && me?.until ? { membership: { until: me.until, active: me.until > now } } : {}),
+      ...(requested ? { requested: true } : {}),
+    };
+  }
+
+  /** Mark someone's open requests for a tier as answered. */
+  async #answerRequests(tier: string, member: Did): Promise<void> {
+    for (const request of await this.membershipRequests()) {
+      if (request.tier.id === tier && request.did === member) {
+        this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_HANDLED, body: { request: request.id } }));
+      }
+    }
+  }
+
+  /** Bodies of your own self-sealed events of one kind. */
+  #selfBodies(kind: string): Array<Record<string, unknown>> {
+    return this.#decodeAll()
+      .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
+      .map((d) => d.inner.body as Record<string, unknown>);
   }
 
   // ---------------------------------------------------------------- direct chats between friends
@@ -1088,11 +1285,11 @@ export class WeaveNode implements Backend {
     return board;
   }
 
-  async #createSpace(kind: SpaceKind, name: string): Promise<StoredSpace> {
+  async #createSpace(kind: SpaceKind, name: string, extra: Record<string, Json> = {}): Promise<StoredSpace> {
     if (!name?.trim()) throw new Error(`a ${kind} needs a name`);
     const space: StoredSpace = { ...newSpace(kind, name.trim(), this.identity.author), entry: { topics: [], bootstrap: [] } };
     await this.#addSpace(space);
-    this.replica.append(this.identity, sealFor(space, { kind: KIND_SPACE_CREATE, body: { name: space.name } }));
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_SPACE_CREATE, body: { name: space.name, ...extra } }));
     return space;
   }
 
@@ -1162,9 +1359,12 @@ export class WeaveNode implements Backend {
     }
     const opened = openGift(event, this.identity);
     if (!opened) return;
-    // Only accept gifts posted in a group we're in, by someone in that group.
+    // Only accept gifts posted in a group we're in, by someone in that group,
+    // or a tier's keys from the creator we asked to join it.
     const via = this.#spaces.get(parseScope(event.scope)?.id ?? '');
-    if (!via || via.kind !== 'group' || !this.#state(via).members.has(event.author)) return;
+    const viaGroup = !!via && via.kind === 'group' && this.#state(via).members.has(event.author);
+    const asked = opened.space.kind === 'group' && opened.space.founder === event.author && this.#selfBodies(KIND_MEMBERSHIP_PENDING).some((b) => b.tier === opened.space.id && b.creator === event.author);
+    if (!viaGroup && !asked) return;
     const known = this.#spaces.get(opened.space.id);
     if (known) {
       let added = false;

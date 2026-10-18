@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { WeaveNode } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -32,6 +32,67 @@ describe('contact links', () => {
     await expect(martin.addContact('weave:contact:garbage')).rejects.toThrow(/damaged/);
     await martin.addContact(link); // twice is fine
     expect(martin.replica.events().filter((e) => e.author === martin.identity.did && e.scope === 'self').length).toBe(1);
+  });
+});
+
+describe('memberships', () => {
+  it('lets a supporter ask for a tier, the creator grant it, and the tier key reach the supporter', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const tier = await martin.createTier({ name: 'Supporters', price: 500, description: 'Early builds and the lounge', benefits: ['Supporter lounge', 'Early access to p/Weave'] });
+    expect(tier).toMatchObject({ name: 'Supporters', price: 500, currency: 'EUR', mine: true, members: 0, open: true });
+    await martin.createProject({ name: 'Weave' });
+    await martin.inviteGroup({ project: 'Weave', group: tier.id });
+    await martin.setRule({ project: 'Weave', group: tier.id, auto: true });
+    sync(martin, lena);
+
+    expect((await lena.tiers('Martin')).map((t) => t.name)).toEqual(['Supporters']);
+    await lena.requestMembership({ tier: tier.id, note: 'Sent €5 via PayPal' });
+    expect((await lena.tiers('Martin'))[0].requested).toBe(true);
+    sync(lena, martin);
+
+    const [request] = await martin.membershipRequests();
+    expect(request).toMatchObject({ tier: { name: 'Supporters' }, name: 'Lena', note: 'Sent €5 via PayPal' });
+    expect(martin.replica.events().some((e) => JSON.stringify(e).includes('PayPal'))).toBe(false); // the note is boxed
+    await martin.grantMembership({ tier: tier.id, who: 'Lena', months: 1 });
+    expect(await martin.membershipRequests()).toEqual([]);
+    expect((await martin.tiers())[0].members).toBe(1);
+    await martin.reconcile(); // the tier is invited into Weave with a rule: Lena is admitted there too
+    sync(martin, lena);
+
+    const [mine] = await lena.memberships();
+    expect(mine).toMatchObject({ name: 'Supporters', creator: { name: 'Martin' }, membership: { active: true } });
+    await martin.say({ space: tier.id, text: 'Welcome to the lounge!' });
+    sync(martin, lena);
+    expect((await lena.messages(tier.id)).map((m) => m.text)).toEqual(['Welcome to the lounge!']);
+    expect((await lena.spaces('project')).map((s) => s.name)).toEqual(['Weave']);
+    await expect(lena.invite(tier.id)).rejects.toThrow(); // only the creator lets people into a tier
+  });
+
+  it('removes members whose grant ran out and rotates the tier key', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const tier = await martin.createTier({ name: 'Supporters' });
+    sync(martin, lena);
+    await lena.requestMembership({ tier: tier.id });
+    sync(lena, martin);
+    await martin.grantMembership({ tier: tier.id, who: 'Lena', months: 1 });
+    const group = (await martin.spaces('group'))[0];
+
+    // Two months later the grant has run out.
+    expect(await martin.reconcile()).toBe(0);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 62 * 86_400_000);
+    try {
+      expect(await martin.reconcile()).toBe(1);
+      expect((await martin.members(tier.id)).map((m) => m.name)).toEqual(['Martin']);
+      expect((await martin.spaces('group'))[0].epoch).toBe(group.epoch + 1);
+
+      await martin.grantMembership({ tier: tier.id, who: 'Lena', months: 3 }); // renewing lets her back in
+      expect((await martin.members(tier.id)).map((m) => m.name)).toEqual(['Martin', 'Lena']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

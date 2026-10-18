@@ -4,6 +4,7 @@ import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
 import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
 import { isDid, type Did } from './keys.ts';
+import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 
 /*
  * Spaces are the encrypted rooms of Weave. There are three kinds:
@@ -19,7 +20,7 @@ import { isDid, type Did } from './keys.ts';
  * replaces this later.
  *
  * Membership events, sealed inside the space:
- *   weave.space.create      {name}             the founder, first event
+ *   weave.space.create      {name, tier}       the founder, first event; tier: a membership tier (see memberships.ts)
  *   weave.invite            {invite, expires}  group, community: any member · project: maintainers
  *   weave.space.join        {invite}           the newcomer, citing an invite link
  *   weave.space.remove      {member}           group: founder · project, community: maintainers (moderators)
@@ -228,6 +229,8 @@ export interface Member {
   invitedBy?: Did;
   /** For project participants who came in through a group. */
   via?: string;
+  /** For members of a tier: when their membership runs out. */
+  until?: string;
   since: string;
 }
 
@@ -251,6 +254,8 @@ export interface SpaceState {
   groups: Map<string, InvitedGroup>;
   /** Projects: group newcomers a maintainer turned away (member → group id). */
   declined: Map<Did, string>;
+  /** Groups that are a creator's membership tier: only the founder lets people in. */
+  tier?: true;
 }
 
 const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -265,7 +270,7 @@ const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.t
 export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: WeaveEvent; inner: Inner }>): SpaceState {
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map() };
   const invites = new Map<string, { by: Did; expires: string }>();
-  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.members.has(author));
+  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === founder : state.members.has(author));
   const admit = (did: Did, time: string, invitedBy?: Did, via?: string) => {
     state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}) });
     state.removed.delete(did);
@@ -280,6 +285,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         if (author === founder && state.members.size === 0) {
           admit(founder, event.time);
           if (typeof body.name === 'string') state.name = body.name;
+          if (kind === 'group' && body.tier === true) state.tier = true;
         }
         break;
       case KIND_INVITE:
@@ -325,6 +331,13 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         }
         break;
       }
+      case KIND_MEMBERSHIP:
+        // A tier's founder admits or renews a member until a date (see memberships.ts).
+        if (kind === 'group' && author === founder && isMembershipBody(body)) {
+          if (!state.members.has(body.member)) admit(body.member, event.time, founder);
+          state.members.get(body.member)!.until = body.until;
+        }
+        break;
       case KIND_DECLINE:
         if (kind === 'project' && state.maintainers.has(author) && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {
           state.declined.set(body.member, body.via);

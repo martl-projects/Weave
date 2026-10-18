@@ -6,6 +6,8 @@ export type {
   BoardInfo,
   ChannelInfo,
   ChatInfo,
+  MembershipRequestInfo,
+  TierInfo,
   CommunityInfo,
   Edge,
   EdgeInput,

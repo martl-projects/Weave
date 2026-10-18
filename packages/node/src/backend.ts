@@ -181,6 +181,40 @@ export interface PostsQuery {
   limit?: number;
 }
 
+/** A membership tier a creator offers. */
+export interface TierInfo {
+  /** The tier's group id. */
+  id: string;
+  creator: Person;
+  name: string;
+  /** Per month, in cents (minor units). 0 = free. */
+  price: number;
+  currency: string;
+  description: string;
+  benefits: string[];
+  position: number;
+  /** Accepting new members. */
+  open: boolean;
+  /** You offer this tier. */
+  mine: boolean;
+  /** For the creator: how many active members it has. */
+  members?: number;
+  /** Your own membership, if you have or had one. */
+  membership?: { until: string; active: boolean };
+  /** You asked to join and haven't been answered yet. */
+  requested?: boolean;
+}
+
+/** Someone asking to join one of your tiers. */
+export interface MembershipRequestInfo {
+  id: string;
+  tier: { id: string; name: string };
+  did: Did;
+  name?: string;
+  note: string;
+  time: string;
+}
+
 /** A direct chat with a friend. */
 export interface ChatInfo {
   /** The chat as a space: use its id with messages, say and react. */
@@ -449,6 +483,23 @@ export interface Backend {
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
   addContact(link: string): Promise<Profile>;
 
+  // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
+  /** Offer a tier: a group whose members get its chat and every project it's invited into. */
+  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo>;
+  /** Change a tier, close it to new members (open: false) or take it off your space (hidden: true). */
+  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): Promise<TierInfo>;
+  /** The tiers someone offers (default: you). */
+  tiers(who?: string): Promise<TierInfo[]>;
+  /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
+  requestMembership(input: { tier: string; note?: string }): Promise<void>;
+  /** Requests waiting for you, as a creator. */
+  membershipRequests(): Promise<MembershipRequestInfo[]>;
+  /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
+  grantMembership(input: { tier: string; who: string; months: number }): Promise<TierInfo>;
+  declineMembership(input: { tier: string; who: string }): Promise<void>;
+  /** Tiers you're a member of, as a supporter. */
+  memberships(): Promise<TierInfo[]>;
+
   // direct chats between friends
   /** Your direct chats: every friend, and anyone you've written to, most recent first. */
   chats(): Promise<ChatInfo[]>;
@@ -492,6 +543,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
+  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

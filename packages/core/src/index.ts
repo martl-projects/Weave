@@ -118,3 +118,17 @@ export {
   type Share,
 } from './posts.ts';
 export { decodeContact, encodeContact, KIND_CONTACT, type Contact } from './contacts.ts';
+export {
+  grantUntil,
+  isActive as isMembershipActive,
+  KIND_MEMBERSHIP,
+  KIND_MEMBERSHIP_HANDLED,
+  KIND_MEMBERSHIP_PENDING,
+  KIND_MEMBERSHIP_REQUEST,
+  KIND_TIER,
+  membershipRequest,
+  openMembershipRequest,
+  tiersOf,
+  type MembershipRequest,
+  type Tier,
+} from './memberships.ts';
