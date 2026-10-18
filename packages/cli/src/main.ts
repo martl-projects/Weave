@@ -20,13 +20,27 @@ usage: weave <command> [options]
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   status                     node status: peers, topics, logs
-  post <text...>             publish a post            [--as <agent>] [--kind <kind>]
-  feed                       show recent posts         [-n <count>] [--kind <kinds>] [--all]
+  post <text...>             publish a post            [--group <g>] [--as <agent>] [--kind <kind>]
+  feed                       show recent posts         [--group <g>] [-n <count>] [--kind <kinds>] [--all]
   watch                      stream new events (needs a running daemon)
   join <topic>               join a topic (a group of peers) on the DHT
   agent add <name>           create a key for an agent [--can <kinds>]  default: weave.post,weave.reply
   agent list                 list your agents
   bootstrap <host:port...>   use these DHT bootstrap nodes (e.g. a local testnet); --clear for defaults
+
+groups (end-to-end encrypted):
+  group create <name>        start a group
+  group list                 groups you belong to
+  group invite <group>       print an invite link       [--hours <n>]  default: 168
+  group join <invite>        join with an invite link
+  group members <group>      members and who invited them
+  group remove <group> <who> remove a member and rotate the key (founder only)
+
+people (<who> is a name you have seen or a did:key):
+  follow <who> / unfollow <who>       public unless --private
+  block <who> / unblock <who>         private unless --public
+  mute <who> / unmute <who>           private unless --public
+  people                     following, followers, friends, blocked, muted
 
 global options:
   --home <dir>   Weave home (default: $WEAVE_HOME or ~/.weave)
@@ -44,6 +58,10 @@ const { values, positionals } = parseArgs({
     n: { type: 'string', short: 'n' },
     clear: { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
+    group: { type: 'string', short: 'g' },
+    hours: { type: 'string' },
+    private: { type: 'boolean' },
+    public: { type: 'boolean' },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -75,7 +93,8 @@ function line(item: FeedItem): string {
   const time = new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const body = typeof item.body === 'string' ? item.body : (item.body as { text?: unknown } | null)?.text ?? JSON.stringify(item.body);
   const kind = item.kind === 'weave.post' ? '' : `[${item.kind}] `;
-  return `${time}  ${who(item).padEnd(20)}  ${kind}${body}`;
+  const where = item.group ? `#${item.group.name} ` : item.private ? '(private) ' : '';
+  return `${time}  ${who(item).padEnd(20)}  ${where}${kind}${body}`;
 }
 
 async function main(): Promise<void> {
@@ -100,7 +119,9 @@ async function main(): Promise<void> {
       console.log(`weave daemon for ${status.name ?? status.did}`);
       console.log(`  home ${home.dir}\n  api  http://127.0.0.1:${daemon.port}\n  topics ${status.topics.join(', ') || '(none)'}`);
       daemon.node.replica.onAppend((event) => {
-        if (event.signer !== daemon.node.identity.did && CONTENT_KINDS.includes(event.kind)) console.log(line(daemon.node.toItem(event)));
+        if (event.signer === daemon.node.identity.did) return;
+        const item = daemon.node.itemFor(event);
+        if (item && CONTENT_KINDS.includes(item.kind)) console.log(line(item));
       });
       const shutdown = async () => {
         await daemon.stop();
@@ -126,12 +147,12 @@ async function main(): Promise<void> {
     case 'post': {
       const text = args.join(' ').trim();
       if (!text) throw new Error('usage: weave post <text>');
-      const item = await (await backend()).publish({ kind: values.kind ?? 'weave.post', body: { text }, as: values.as });
+      const item = await (await backend()).publish({ kind: values.kind ?? 'weave.post', body: { text }, as: values.as, group: values.group });
       return out(item, () => line(item));
     }
 
     case 'feed': {
-      const items = await (await backend()).feed({ limit: values.n ? Number(values.n) : 20, kinds: values.kind?.split(',') ?? (values.all ? undefined : CONTENT_KINDS) });
+      const items = await (await backend()).feed({ limit: values.n ? Number(values.n) : 20, kinds: values.kind?.split(',') ?? (values.all ? undefined : CONTENT_KINDS), group: values.group });
       if (values.json) return items.forEach((item) => console.log(JSON.stringify(item)));
       return console.log(items.map(line).join('\n') || '(nothing yet)');
     }
@@ -162,6 +183,68 @@ async function main(): Promise<void> {
         return out(agents, () => agents.map((a) => `${a.name}  ${a.did}  can: ${a.permissions.join(', ')}`).join('\n') || '(no agents)');
       }
       throw new Error('usage: weave agent add <name> [--can <kinds>] | weave agent list');
+    }
+
+    case 'group': {
+      const [sub, ref, extra] = args;
+      const b = await backend();
+      if (sub === 'create' && ref) {
+        const g = await b.createGroup(args.slice(1).join(' '));
+        return out(g, () => `created group ${g.name}\n  invite people with: weave group invite "${g.name}"`);
+      }
+      if (sub === 'list') {
+        const groups = await b.groups();
+        return out(groups, () => groups.map((g) => `${g.name.padEnd(24)} ${g.members} member${g.members === 1 ? '' : 's'}, founded by ${g.founderName ?? g.founder}`).join('\n') || '(no groups)');
+      }
+      if (sub === 'invite' && ref) {
+        const invite = await b.invite(ref, values.hours ? Number(values.hours) : undefined);
+        return out({ invite }, () => `${invite}\n\nShare this link privately: whoever has it can read the group.\nThey join with: weave group join <link>`);
+      }
+      if (sub === 'join' && ref) {
+        const g = await b.joinGroup(ref);
+        return out(g, () => `joined ${g.name} (founded by ${g.founderName ?? g.founder})`);
+      }
+      if (sub === 'members' && ref) {
+        const members = await b.members(ref);
+        return out(members, () =>
+          members.map((m) => `${(m.name ?? m.did).padEnd(24)} ${m.invitedBy ? `invited by ${m.invitedByName ?? m.invitedBy}` : 'founder'}`).join('\n'),
+        );
+      }
+      if (sub === 'remove' && ref && extra) {
+        await b.removeMember(ref, extra);
+        return out({ removed: extra }, () => `removed ${extra} and rotated the group key`);
+      }
+      throw new Error('usage: weave group create|list|invite|join|members|remove — see "weave --help"');
+    }
+
+    case 'follow':
+    case 'unfollow':
+    case 'block':
+    case 'unblock':
+    case 'mute':
+    case 'unmute': {
+      const target = args.join(' ').trim();
+      if (!target) throw new Error(`usage: weave ${command} <who>`);
+      const on = !command.startsWith('un');
+      const edge = command.replace(/^un/, '') as 'follow' | 'block' | 'mute';
+      const isPrivate = values.private ? true : values.public ? false : undefined;
+      await (await backend()).setEdge({ edge, who: target, on, private: isPrivate });
+      const done = { follow: 'following', block: 'blocked', mute: 'muted' }[edge];
+      return out({ edge, who: target, on }, () => `${on ? '' : 'no longer '}${done} ${target}`);
+    }
+
+    case 'people': {
+      const social = await (await backend()).social();
+      const list = (people: { did: string; name?: string }[]) => people.map((p) => p.name ?? p.did).join(', ') || '-';
+      return out(social, () =>
+        [
+          `friends    ${list(social.friends)}`,
+          `following  ${list(social.following)}`,
+          `followers  ${list(social.followers)}`,
+          `blocked    ${list(social.blocked)}`,
+          `muted      ${list(social.muted)}`,
+        ].join('\n'),
+      );
     }
 
     case 'bootstrap': {
