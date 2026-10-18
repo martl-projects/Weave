@@ -1,6 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
+import type { MembershipRequestInfo } from '@weave/node/client';
 import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
+import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
@@ -143,6 +145,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
             </div>
           )}
         </header>
+        <SupportBox did={p.did} name={name} me={p.me} />
         {p.projects.length > 0 && (
           <section className="space-box">
             <h3>{name}'s projects</h3>
@@ -191,6 +194,23 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           }}
         />
       )}
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------- memberships
+
+export function MembershipsView({ meDid, meName }: { meDid: string; meName?: string }) {
+  return (
+    <Page title={<><Icon name="star" /> Memberships</>}>
+      <p className="small">Patreon-style: creators offer tiers, supporters ask to join. A tier is a group with its own chat, and creators can open projects to it. Memberships give access, never votes.</p>
+      <div className="space">
+        <SupportBox did={meDid} name={meName ?? 'you'} me />
+        <section className="space-box">
+          <h3>Supporting</h3>
+          <MySupport />
+        </section>
+      </div>
     </Page>
   );
 }
@@ -333,9 +353,13 @@ export function PeopleView() {
 }
 
 export function InboxView({ admissions }: { admissions: Admission[] }) {
+  const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   return (
     <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.length === 0 && requests?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {(requests ?? []).map((r) => (
+        <MembershipRequestCard key={r.id} request={r} />
+      ))}
       {admissions.map((a) => (
         <AdmissionCard key={`${a.project.id}-${a.did}-${a.group.id}-${a.change}`} admission={a} />
       ))}

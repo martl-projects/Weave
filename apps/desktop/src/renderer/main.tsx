@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { MembershipRequestInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -11,6 +12,7 @@ import {
   CommunityBanner,
   DelegationBar,
   InboxView,
+  MembershipsView,
   InviteDialog,
   LonePost,
   NewDialog,
@@ -74,7 +76,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   );
 }
 
-function Places({ spaces, chats, route, waiting, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; onNew(): void }) {
+function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useTick(); // unread state lives in localStorage
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
     const list = spaces.filter((s) => s.kind === kind);
@@ -98,8 +100,9 @@ function Places({ spaces, chats, route, waiting, onNew }: { spaces: SpaceInfo[];
       <ul className="tree-view">
         <TreeLink href="#/" icon="home" label="Home" on={route.length === 0} />
         <TreeLink href="#/saved" icon="bookmark" label="Saved" on={route[0] === 'saved'} />
-        <TreeLink href="#/inbox" icon="inbox" label={`Inbox${waiting.length ? ` (${waiting.length})` : ''}`} on={route[0] === 'inbox'} />
+        <TreeLink href="#/inbox" icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} on={route[0] === 'inbox'} />
         <TreeLink href="#/people" icon="users" label="People" on={route[0] === 'people'} />
+        <TreeLink href="#/memberships" icon="star" label="Memberships" on={route[0] === 'memberships'} />
         <li className="tree-head">
           <Icon name="message" /> Chats
         </li>
@@ -334,12 +337,14 @@ function Shell() {
   const { data: status } = useApi(() => api<Status>('status'), []);
   const { data: waiting } = useApi(() => api<Admission[]>('admissions'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
+  const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
+  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
+  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
@@ -353,6 +358,7 @@ function Shell() {
     else if (route[0] === 'space') center = <SpaceView who={route[1]} meDid={me.did} />;
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} />;
+    else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>Saved</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty="Save posts to find them here again. Only you can see what you save." />;
@@ -420,7 +426,7 @@ function Shell() {
       <div className="toolbar">
         <ToolButton icon="home" label="Home" href="#/" on={route.length === 0} />
         <ToolButton icon="bookmark" label="Saved" href="#/saved" on={route[0] === 'saved'} />
-        <ToolButton icon="inbox" label={`Inbox${waiting?.length ? ` (${waiting.length})` : ''}`} href="#/inbox" on={route[0] === 'inbox'} />
+        <ToolButton icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} href="#/inbox" on={route[0] === 'inbox'} />
         <ToolButton icon="users" label="People" href="#/people" on={route[0] === 'people'} />
         <ToolButton icon="user" label="My space" href="#/space" on={route[0] === 'space' && !route[1]} />
         <span className="tool-sep" />
@@ -443,7 +449,7 @@ function Shell() {
         </div>
       </div>
       <div className="panes">
-        <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} onNew={() => setDialog({ kind: 'new' })} />
+        <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} inbox={inbox} onNew={() => setDialog({ kind: 'new' })} />
         {body}
       </div>
       <div className="status-bar">
