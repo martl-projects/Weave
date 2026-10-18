@@ -21,19 +21,17 @@ The app opens and asks what people should call you. That creates your identity a
 
 Already using Weave on another computer? Choose **I already use Weave…** and type your words instead (keep your other computer online while you do).
 
-## 2. Connect with Martin
+## 2. You're connected
 
-1. Martin sends you his contact link (it starts with `weave:contact:`).
-2. In the app: **People → Add by link**, paste it, **Add**. You now follow him.
-3. Send him yours: **People → My contact link → Copy**, then paste it into any chat.
-4. Once he adds you back, you're friends: **Chats** in the left tree shows your direct chat.
-5. He can then invite you into the **Weave** project (an invite link, keep it private) or let you into a group.
+Weave ships with Martin's contact, so a new identity follows him right away and asks to join **Weave friends**, his free tier. As soon as your node reaches his (keep the app open; he needs to be online too), you're in, and through it in the **Weave** project: its Releases, Ideas, Issues and Proposals boards and its chat.
+
+To become friends and chat privately, send Martin your contact link: **People → My contact link → Copy**, then paste it into any chat. Once he adds you back, **Chats** in the left tree shows your direct chat.
 
 Prefer the terminal? Everything the app does, the CLI does too:
 
 ```bash
-npx weave add "weave:contact:…"    # add Martin
-npx weave contact                  # your own link
+npx weave contact                  # your own link, to send to Martin
+npx weave add "weave:contact:…"    # add someone else's
 npx weave dm Martin "Hi!"          # once you're friends
 npx weave --help                   # everything else
 ```

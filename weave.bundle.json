@@ -1,0 +1,12 @@
+{
+  "contacts": [
+    "weave:contact:eyJkaWQiOiJkaWQ6a2V5Ono2TWtzUnV4OGRzckRnUXRwOVNYZ2tMZEVLaHVxUnlEN0R2UFI3ckE0cW0zejJmViIsImVudHJ5Ijp7ImJvb3RzdHJhcCI6W10sInRvcGljcyI6WyJkaWQ6a2V5Ono2TWtzUnV4OGRzckRnUXRwOVNYZ2tMZEVLaHVxUnlEN0R2UFI3ckE0cW0zejJmViJdfSwibmFtZSI6Ik1hcnRpbiIsInYiOjF9"
+  ],
+  "tiers": [
+    {
+      "tier": "lz_m0SX-VStGNQoborn7rA",
+      "creator": "did:key:z6MksRux8dsrDgQtp9SXgkLdEKhuqRyD7DvPR7rA4qm3z2fV",
+      "note": "Joined through the Weave app"
+    }
+  ]
+}
