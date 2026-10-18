@@ -9,7 +9,9 @@ import type { Did } from './keys.ts';
  *
  *   weave.thread        {title, text}                     start a discussion
  *   weave.reply         {target, text}                    reply to a thread, issue or proposal
- *   weave.msg           {text}                            chat message
+ *   weave.msg           {text, channel, replyTo}          chat message in a channel (default "general"), optionally replying to one
+ *   weave.channel       {name, topic}                     create a chat channel
+ *   weave.react         {target, emoji, on}               add or remove an emoji reaction on any event
  *   weave.issue         {title, text, labels}             open an issue
  *   weave.issue.claim   {issue}                           take it on (the signer — person or agent — is the assignee)
  *   weave.issue.status  {issue, status}                   open | in-progress | done | closed
@@ -20,6 +22,9 @@ import type { Did } from './keys.ts';
 export const KIND_THREAD = 'weave.thread';
 export const KIND_REPLY = 'weave.reply';
 export const KIND_MSG = 'weave.msg';
+export const KIND_CHANNEL = 'weave.channel';
+export const KIND_REACT = 'weave.react';
+export const DEFAULT_CHANNEL = 'general';
 export const KIND_ISSUE = 'weave.issue';
 export const KIND_ISSUE_CLAIM = 'weave.issue.claim';
 export const KIND_ISSUE_STATUS = 'weave.issue.status';
@@ -81,12 +86,80 @@ export interface Issue {
   replies: Reply[];
 }
 
+export interface Reaction {
+  emoji: string;
+  /** Who reacted: the signing key (so an agent's reaction is its own) and the person it belongs to. */
+  by: Array<{ author: Did; signer: Did }>;
+}
+
 export interface Message {
   id: string;
   author: Did;
   signer: Did;
   text: string;
   time: string;
+  channel: string;
+  replyTo?: string;
+  reactions: Reaction[];
+}
+
+export interface Channel {
+  name: string;
+  topic: string;
+  /** Time of the latest message, if any. */
+  last?: string;
+}
+
+/** Channel names are short, lowercase words with dashes: "general", "build-log". */
+export function channelName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const name = value.trim().toLowerCase().replace(/^#/, '').replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 32);
+  return name || undefined;
+}
+
+const MAX_EMOJI_LENGTH = 16;
+
+/**
+ * Reactions per target, latest event per (signer, target, emoji) wins. Keyed by
+ * signer, so an agent reacting is told apart from the person it acts for.
+ */
+export function reactionsOf(entries: Entry[]): Map<string, Reaction[]> {
+  const state = new Map<string, Map<string, Map<Did, Did>>>(); // target → emoji → signer → author
+  for (const e of entries.filter((x) => x.kind === KIND_REACT).sort(byTime)) {
+    const target = str(e.body, 'target', 200);
+    const emoji = str(e.body, 'emoji', MAX_EMOJI_LENGTH);
+    if (!target || !emoji) continue;
+    const byEmoji = state.get(target) ?? new Map<string, Map<Did, Did>>();
+    const who = byEmoji.get(emoji) ?? new Map<Did, Did>();
+    if (field(e.body, 'on') === false) who.delete(e.event.signer);
+    else who.set(e.event.signer, e.event.author);
+    byEmoji.set(emoji, who);
+    state.set(target, byEmoji);
+  }
+  const out = new Map<string, Reaction[]>();
+  for (const [target, byEmoji] of state) {
+    const reactions = [...byEmoji]
+      .filter(([, who]) => who.size > 0)
+      .map(([emoji, who]) => ({ emoji, by: [...who].map(([signer, author]) => ({ author, signer })) }));
+    if (reactions.length) out.set(target, reactions);
+  }
+  return out;
+}
+
+/** Channels: "general" first, then the others by name. A channel exists once created or used. */
+export function channelsOf(entries: Entry[]): Channel[] {
+  const channels = new Map<string, Channel>([[DEFAULT_CHANNEL, { name: DEFAULT_CHANNEL, topic: '' }]]);
+  for (const e of entries.filter((x) => x.kind === KIND_CHANNEL).sort(byTime)) {
+    const name = channelName(field(e.body, 'name'));
+    if (name && !channels.has(name)) channels.set(name, { name, topic: str(e.body, 'topic', 200) });
+  }
+  for (const e of entries.filter((x) => x.kind === KIND_MSG)) {
+    const name = channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL;
+    const channel = channels.get(name) ?? { name, topic: '' };
+    if (!channel.last || e.event.time > channel.last) channel.last = e.event.time;
+    channels.set(name, channel);
+  }
+  return [...channels.values()].sort((a, b) => (a.name === DEFAULT_CHANNEL ? -1 : b.name === DEFAULT_CHANNEL ? 1 : a.name.localeCompare(b.name)));
 }
 
 function repliesByTarget(entries: Entry[]): Map<string, Reply[]> {
@@ -124,11 +197,27 @@ export function threadsOf(entries: Entry[]): Thread[] {
 }
 
 /** Chat messages, oldest first. */
-export function messagesOf(entries: Entry[]): Message[] {
+export function messagesOf(entries: Entry[], channel?: string): Message[] {
+  const reactions = reactionsOf(entries);
   return entries
     .filter((e) => e.kind === KIND_MSG && str(e.body, 'text'))
-    .sort(byTime)
-    .map((e) => ({ id: e.id, author: e.event.author, signer: e.event.signer, text: str(e.body, 'text'), time: e.event.time }));
+    .map((e) => {
+      const replyTo = str(e.body, 'replyTo', 200);
+      return {
+        id: e.id,
+        author: e.event.author,
+        signer: e.event.signer,
+        text: str(e.body, 'text'),
+        time: e.event.time,
+        channel: channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL,
+        ...(replyTo ? { replyTo } : {}),
+        reactions: reactions.get(e.id) ?? [],
+        _sort: e,
+      };
+    })
+    .filter((m) => !channel || m.channel === channel)
+    .sort((a, b) => byTime(a._sort, b._sort))
+    .map(({ _sort, ...message }) => message);
 }
 
 /**

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  channelName,
+  channelsOf,
   createIdentity,
   createSubKey,
   delegation,
@@ -41,6 +43,36 @@ describe('threads and chat', () => {
     expect(threads.map((t) => t.id)).toEqual([t1, t2]);
     expect(threads[0].replies.map((r) => r.text)).toEqual(['Yes, smaller attack surface']);
     expect(messagesOf(entries).map((m) => m.text)).toEqual(['hi all']);
+  });
+});
+
+describe('chat channels, replies and reactions', () => {
+  it('sorts messages into channels, keeping replies and reactions', () => {
+    const { entries, post } = setup();
+    const alice = createIdentity();
+    const forge = createSubKey(alice.did);
+    post(alice, 'weave.delegate', delegation(forge.did, 'agent', ['weave.msg', 'weave.react']).body!);
+    const bob = createIdentity();
+    post(alice, 'weave.channel', { name: '#Build Log', topic: 'CI results' });
+    const hello = post(alice, 'weave.msg', { text: 'hello' });
+    post(bob, 'weave.msg', { text: 'green', channel: 'build-log' });
+    post(bob, 'weave.msg', { text: 'hi!', replyTo: hello });
+    post(bob, 'weave.react', { target: hello, emoji: '🎉' });
+    post(forge, 'weave.react', { target: hello, emoji: '🎉' });
+    post(alice, 'weave.react', { target: hello, emoji: '👀' });
+    post(alice, 'weave.react', { target: hello, emoji: '👀', on: false });
+
+    expect(channelsOf(entries).map((c) => [c.name, c.topic])).toEqual([['general', ''], ['build-log', 'CI results']]);
+    const general = messagesOf(entries, 'general');
+    expect(general.map((m) => m.text)).toEqual(['hello', 'hi!']);
+    expect(general[1].replyTo).toBe(hello);
+    expect(general[0].reactions).toEqual([{ emoji: '🎉', by: [{ author: bob.did, signer: bob.did }, { author: alice.did, signer: forge.did }] }]);
+    expect(messagesOf(entries, 'build-log').map((m) => m.text)).toEqual(['green']);
+  });
+
+  it('normalizes channel names', () => {
+    expect(channelName(' #Release Notes ')).toBe('release-notes');
+    expect(channelName('!!!')).toBeUndefined();
   });
 });
 
