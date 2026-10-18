@@ -251,4 +251,6 @@ export interface Backend {
   vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo>;
   /** Let someone's votes in this group count for you when you don't vote; `who` undefined clears it. */
   delegateVote(input: { group: string; who?: string }): Promise<void>;
+  /** Whose votes count for yours in this group, if anyone's. */
+  votingDelegate(group: string): Promise<Actor | null>;
 }

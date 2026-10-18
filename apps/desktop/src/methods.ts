@@ -17,6 +17,20 @@ export const RENDERER_METHODS = [
   'profile',
   'setProfile',
   'directory',
+  'threads',
+  'startThread',
+  'reply',
+  'messages',
+  'say',
+  'issues',
+  'openIssue',
+  'claimIssue',
+  'setIssueStatus',
+  'proposals',
+  'propose',
+  'vote',
+  'delegateVote',
+  'votingDelegate',
 ] as const satisfies ReadonlyArray<keyof Backend>;
 
 export type RendererMethod = (typeof RENDERER_METHODS)[number];

@@ -489,6 +489,16 @@ export class WeaveNode implements Backend {
     await this.publish({ kind: KIND_VOTE_DELEGATE, body: { to }, group: input.group });
   }
 
+  async votingDelegate(groupRef: string): Promise<Actor | null> {
+    let to: unknown = null;
+    for (const entry of this.#entries(this.#group(groupRef))) {
+      if (entry.kind === KIND_VOTE_DELEGATE && entry.event.author === this.identity.author) {
+        to = (entry.body as { to?: unknown } | null)?.to ?? null;
+      }
+    }
+    return isDid(to) ? this.#actor(to, to) : null;
+  }
+
   /** A did:key, or the name of someone whose profile this node has seen. */
   resolve(who: string): Did {
     if (isDid(who)) return who;

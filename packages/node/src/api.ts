@@ -108,6 +108,8 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
       return send(res, 200, await backend.propose(await readBody(req)));
     case 'POST /v1/votes':
       return send(res, 200, await backend.vote(await readBody(req)));
+    case 'GET /v1/votes/delegate':
+      return send(res, 200, await backend.votingDelegate(url.searchParams.get('group') ?? ''));
     case 'POST /v1/votes/delegate':
       await backend.delegateVote(await readBody(req));
       return send(res, 200, { ok: true });

@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http';
 import type { Choice, IssueStatus } from '@weave/core';
 import type {
+  Actor,
   AgentInfo,
   Backend,
   EdgeInput,
@@ -199,6 +200,10 @@ export class ApiClient implements Backend {
 
   async delegateVote(input: { group: string; who?: string }): Promise<void> {
     await this.#request('POST', '/votes/delegate', input);
+  }
+
+  votingDelegate(group: string): Promise<Actor | null> {
+    return this.#request('GET', `/votes/delegate?${new URLSearchParams({ group })}`);
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {

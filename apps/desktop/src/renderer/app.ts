@@ -1,4 +1,4 @@
-import type { FeedItem, GroupInfo, MemberInfo, Profile, Social, Status, Theme } from '@weave/node/client';
+import type { Actor, FeedItem, GroupInfo, IssueInfo, MemberInfo, MessageInfo, Profile, ProposalInfo, Social, Status, Theme, ThreadInfo } from '@weave/node/client';
 import { api, bridge, type AppState } from './bridge.ts';
 
 // ---------------------------------------------------------------- helpers
@@ -80,7 +80,8 @@ async function refreshBasics(): Promise<void> {
   applyAppTheme(me.theme);
 }
 
-const route = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+// Decode first: Electron's loadFile encodes the slashes in a hash.
+const route = () => decodeURIComponent(location.hash).replace(/^#\/?/, '').split('/').filter(Boolean);
 
 // ---------------------------------------------------------------- pieces
 
@@ -143,7 +144,7 @@ const posts = (items: FeedItem[], empty: string, inGroup = false) =>
 // ---------------------------------------------------------------- views
 
 async function viewFeed(): Promise<string> {
-  const items = await api<FeedItem[]>('feed', { kinds: ['weave.post', 'weave.reply'], limit: 100 });
+  const items = await api<FeedItem[]>('feed', { kinds: ['weave.post'], limit: 100 });
   return `
   <header class="page-head"><h1>Feed</h1><p class="muted">Public posts from people you're connected with, and everything in your groups.</p></header>
   ${composer()}
@@ -207,19 +208,41 @@ async function viewGroups(): Promise<string> {
   </section>`;
 }
 
-async function viewGroup(id: string): Promise<string> {
+const GROUP_TABS = [
+  ['posts', 'Posts'],
+  ['discussion', 'Discussion'],
+  ['chat', 'Chat'],
+  ['votes', 'Votes'],
+  ['issues', 'Issues'],
+] as const;
+
+const actorName = (a: Actor) => (a.did === me.did ? 'You' : (a.name ?? shortDid(a.did)));
+const actorChip = (a: Actor) =>
+  `<a class="name" href="#/space/${encodeURIComponent(a.did)}">${esc(actorName(a))}</a>${a.agent ? ` <span class="badge agent">${esc(a.agent)}</span>` : ''}`;
+
+async function viewGroup(id: string, tab = 'posts', item?: string): Promise<string> {
   const group = groups.find((g) => g.id === id);
   if (!group) return `<p class="empty">You're not in this group.</p>`;
-  const [items, members] = await Promise.all([
-    api<FeedItem[]>('feed', { group: id, kinds: ['weave.post', 'weave.reply'], limit: 200 }),
-    api<MemberInfo[]>('members', id),
-  ]);
-  const founder = group.founder === me.did;
+  const members = await api<MemberInfo[]>('members', id);
+  const body =
+    tab === 'discussion' ? (item ? await groupThread(id, item) : await groupDiscussion(id)) :
+    tab === 'chat' ? await groupChat(id) :
+    tab === 'votes' ? await groupVotes(id, members) :
+    tab === 'issues' ? await groupIssues(id) :
+    await groupPosts(id, group, members);
   return `
   <header class="page-head row-head">
     <div><h1><span class="hash">#</span>${esc(group.name)}</h1><p class="muted">${members.length} member${members.length === 1 ? '' : 's'} · end-to-end encrypted · key epoch ${group.epoch}</p></div>
     <button class="btn primary" data-action="invite" data-group="${esc(id)}">Invite someone</button>
   </header>
+  <nav class="tabs">${GROUP_TABS.map(([key, label]) => `<a class="${tab === key ? 'on' : ''}" href="#/group/${esc(id)}/${key}">${label}</a>`).join('')}</nav>
+  ${body}`;
+}
+
+async function groupPosts(id: string, group: GroupInfo, members: MemberInfo[]): Promise<string> {
+  const items = await api<FeedItem[]>('feed', { group: id, kinds: ['weave.post'], limit: 200 });
+  const founder = group.founder === me.did;
+  return `
   <div class="split">
     <div>${composer(id)}<section class="stream">${posts(items, 'No posts yet. Say hello!', true)}</section></div>
     <aside class="card members">
@@ -233,6 +256,136 @@ async function viewGroup(id: string): Promise<string> {
         </div>`).join('')}
     </aside>
   </div>`;
+}
+
+async function groupDiscussion(id: string): Promise<string> {
+  const threads = await api<ThreadInfo[]>('threads', id);
+  return `
+  <form class="card form compact" data-form="thread">
+    <input type="hidden" name="group" value="${esc(id)}">
+    <input name="title" required maxlength="200" placeholder="Start a discussion: what should we decide or figure out?">
+    <textarea name="text" rows="2" placeholder="Details (optional)"></textarea>
+    <div class="row end"><button class="btn primary">Start discussion</button></div>
+  </form>
+  <section class="stream">
+    ${threads.map((t) => `
+      <a class="card thread-card" href="#/group/${esc(id)}/discussion/${esc(t.id)}">
+        <h3>${esc(t.title)}</h3>
+        <p class="muted small">${esc(actorName(t.by))}${t.by.agent ? ` · ${esc(t.by.agent)}` : ''} · ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'} · active ${ago(t.active)}</p>
+      </a>`).join('') || '<p class="empty">No discussions yet.</p>'}
+  </section>`;
+}
+
+async function groupThread(id: string, threadId: string): Promise<string> {
+  const thread = (await api<ThreadInfo[]>('threads', id)).find((t) => t.id === threadId);
+  if (!thread) return `<p class="empty">This discussion isn't here (yet).</p>`;
+  const entry = (by: Actor, text: string, time: string, lead = false) => `
+    <div class="card entry${lead ? ' lead' : ''}">
+      ${avatar(by.did, by.name, 32)}
+      <div class="post-main"><div class="post-meta">${actorChip(by)}<time>${ago(time)}</time></div><p>${esc(text)}</p></div>
+    </div>`;
+  return `
+  <a class="back" href="#/group/${esc(id)}/discussion">← All discussions</a>
+  <h2>${esc(thread.title)}</h2>
+  <section class="stream">
+    ${entry(thread.by, thread.text || '(no details)', thread.time, true)}
+    ${thread.replies.map((r) => entry(r.by, r.text, r.time)).join('')}
+  </section>
+  <form class="card form compact" data-form="reply">
+    <input type="hidden" name="target" value="${esc(thread.id)}">
+    <textarea name="text" rows="2" required placeholder="Reply…"></textarea>
+    <div class="row end"><button class="btn primary">Reply</button></div>
+  </form>`;
+}
+
+async function groupChat(id: string): Promise<string> {
+  const messages = await api<MessageInfo[]>('messages', id, 200);
+  return `
+  <div class="chat card">
+    <div class="chat-log">
+      ${messages.map((m) => `
+        <div class="msg${m.by.did === me.did && !m.by.agent ? ' mine' : ''}">
+          <div class="msg-meta">${esc(actorName(m.by))}${m.by.agent ? ` · ${esc(m.by.agent)}` : ''} · ${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+          <div class="bubble">${esc(m.text)}</div>
+        </div>`).join('') || '<p class="empty">Quiet so far. Say hi!</p>'}
+    </div>
+    <form class="chat-input" data-form="say">
+      <input type="hidden" name="group" value="${esc(id)}">
+      <input name="text" required autocomplete="off" placeholder="Message #${esc(groups.find((g) => g.id === id)?.name ?? '')}">
+      <button class="btn primary">Send</button>
+    </form>
+  </div>`;
+}
+
+async function groupVotes(id: string, members: MemberInfo[]): Promise<string> {
+  const [proposals, delegate] = await Promise.all([api<ProposalInfo[]>('proposals', id), api<Actor | null>('votingDelegate', id)]);
+  const others = members.filter((m) => m.did !== me.did);
+  const card = (p: ProposalInfo) => {
+    const total = Math.max(1, p.yes + p.no + p.abstain);
+    const state = p.closed ? (p.passed ? '<span class="badge friend">Passed</span>' : '<span class="badge warn">Not passed</span>') : `<span class="muted small">open until ${new Date(p.deadline).toLocaleString()}</span>`;
+    const button = (choice: 'yes' | 'no' | 'abstain', label: string) =>
+      `<button class="btn small vote-${choice}${p.myVote?.choice === choice && !p.myVote.via ? ' chosen' : ''}" data-action="vote" data-proposal="${esc(p.id)}" data-choice="${choice}" ${p.closed ? 'disabled' : ''}>${label}</button>`;
+    return `
+    <article class="card proposal">
+      <div class="row"><h3>${esc(p.title)}</h3>${state}</div>
+      ${p.text ? `<p>${esc(p.text)}</p>` : ''}
+      <div class="tally"><span class="yes" style="width:${(p.yes / total) * 100}%"></span><span class="no" style="width:${(p.no / total) * 100}%"></span><span class="abstain" style="width:${(p.abstain / total) * 100}%"></span></div>
+      <p class="muted small">Yes ${p.yes} · No ${p.no} · Abstain ${p.abstain} · ${p.voted} of ${p.eligible} counted · quorum ${p.quorum} ${p.quorumReached ? '✓' : ''} · proposed by ${esc(actorName(p.by))}</p>
+      <div class="row">
+        <span class="muted small">${p.myVote ? `Your vote: <b>${p.myVote.choice}</b>${p.myVote.via ? ` (via ${esc(actorName(p.myVote.via))})` : ''}` : 'You have not voted.'}</span>
+        <span class="vote-buttons">${button('yes', 'Yes')}${button('no', 'No')}${button('abstain', 'Abstain')}</span>
+      </div>
+    </article>`;
+  };
+  return `
+  <div class="split">
+    <div>
+      <form class="card form compact" data-form="propose">
+        <input type="hidden" name="group" value="${esc(id)}">
+        <input name="title" required maxlength="200" placeholder="Propose something to decide together">
+        <textarea name="text" rows="2" placeholder="Why? What changes if it passes?"></textarea>
+        <div class="row"><select name="hours"><option value="24">Vote for 1 day</option><option value="72" selected>Vote for 3 days</option><option value="168">Vote for a week</option></select><button class="btn primary">Put to a vote</button></div>
+      </form>
+      <section class="stream">${proposals.map(card).join('') || '<p class="empty">No proposals yet.</p>'}</section>
+    </div>
+    <aside class="card">
+      <h3>Delegation</h3>
+      <p class="muted small">When you don't vote, your vote can follow someone you trust in this group. Voting yourself always wins.</p>
+      <select data-action="delegate" data-group="${esc(id)}">
+        <option value="">Only I vote for me</option>
+        ${others.map((m) => `<option value="${esc(m.did)}" ${delegate?.did === m.did ? 'selected' : ''}>Follow ${esc(m.name ?? shortDid(m.did))}</option>`).join('')}
+      </select>
+    </aside>
+  </div>`;
+}
+
+async function groupIssues(id: string): Promise<string> {
+  const issues = await api<IssueInfo[]>('issues', id);
+  const column = (title: string, statuses: string[]) => {
+    const list = issues.filter((i) => statuses.includes(i.status));
+    return `
+    <div class="column">
+      <h3>${title} <span class="muted">${list.length}</span></h3>
+      ${list.map((i) => `
+        <article class="card issue">
+          <h4>${esc(i.title)}</h4>
+          ${i.labels.length ? `<div class="badges">${i.labels.map((l) => `<span class="badge">${esc(l)}</span>`).join('')}</div>` : ''}
+          <p class="muted small">${i.assignee ? `→ ${esc(actorName(i.assignee))}${i.assignee.agent ? ` · ${esc(i.assignee.agent)}` : ''}` : 'Nobody on it yet'}</p>
+          <div class="row">
+            ${(i.assignee?.did === me.did && !i.assignee.agent) || i.status === 'done' || i.status === 'closed' ? '' : `<button class="btn small" data-action="claim" data-issue="${esc(i.id)}">Take it</button>`}
+            <select data-action="issue-status" data-issue="${esc(i.id)}">${['open', 'in-progress', 'done', 'closed'].map((st) => `<option ${st === i.status ? 'selected' : ''}>${st}</option>`).join('')}</select>
+          </div>
+        </article>`).join('') || '<p class="empty small">—</p>'}
+    </div>`;
+  };
+  return `
+  <form class="card form compact inline" data-form="issue">
+    <input type="hidden" name="group" value="${esc(id)}">
+    <input name="title" required maxlength="200" placeholder="What needs doing?">
+    <input name="labels" placeholder="labels, comma separated">
+    <button class="btn primary">Open issue</button>
+  </form>
+  <div class="board">${column('Open', ['open'])}${column('In progress', ['in-progress'])}${column('Done', ['done', 'closed'])}</div>`;
 }
 
 async function viewPeople(): Promise<string> {
@@ -308,18 +461,22 @@ async function render(): Promise<void> {
       return;
     }
     await refreshBasics();
-    const [view, arg] = route();
+    const [view, arg, tab, item] = route();
     const content =
       view === 'space' ? await viewSpace(arg) :
       view === 'groups' ? await viewGroups() :
-      view === 'group' && arg ? await viewGroup(arg) :
+      view === 'group' && arg ? await viewGroup(arg, tab, item) :
       view === 'people' ? await viewPeople() :
       await viewFeed();
     const active =
       view === 'space' ? `space:${arg ?? me.did}` : view === 'group' ? `group:${arg}` : view === 'people' ? 'people' : view === 'groups' ? 'groups' : 'feed';
     const scroll = document.querySelector('.content')?.scrollTop ?? 0;
+    const typed = captureInputs();
     root.innerHTML = `<div class="layout">${sidebar(active)}<main class="content">${content}</main></div>`;
     document.querySelector('.content')!.scrollTop = scroll;
+    restoreInputs(typed);
+    const log = document.querySelector('.chat-log');
+    if (log) log.scrollTop = log.scrollHeight;
   } catch (error) {
     toast((error as Error).message, 'error');
   } finally {
@@ -327,6 +484,28 @@ async function render(): Promise<void> {
     if (again) {
       again = false;
       void render();
+    }
+  }
+}
+
+/** Text in form fields, keyed by form and field name, plus which field had focus. */
+function captureInputs() {
+  const values = new Map<string, string>();
+  for (const el of root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('form[data-form] input[name]:not([type=hidden]), form[data-form] textarea[name]')) {
+    if (el.value) values.set(`${el.form?.dataset.form}/${el.name}`, el.value);
+  }
+  const active = document.activeElement as HTMLInputElement | null;
+  const focus = active?.form?.dataset.form && active.name ? { key: `${active.form.dataset.form}/${active.name}`, at: active.selectionStart } : undefined;
+  return { values, focus };
+}
+
+function restoreInputs({ values, focus }: ReturnType<typeof captureInputs>): void {
+  for (const el of root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('form[data-form] input[name]:not([type=hidden]), form[data-form] textarea[name]')) {
+    const value = values.get(`${el.form?.dataset.form}/${el.name}`);
+    if (value !== undefined) el.value = value;
+    if (focus && focus.key === `${el.form?.dataset.form}/${el.name}`) {
+      el.focus();
+      if (focus.at !== null) el.setSelectionRange(focus.at, focus.at);
     }
   }
 }
@@ -371,6 +550,13 @@ document.addEventListener('click', async (e) => {
           <textarea class="invite" readonly rows="5">${esc(link)}</textarea>
           <div class="row end"><button class="btn ghost" data-action="close-modal">Close</button><button class="btn primary" data-action="copy" data-text="${esc(link)}">Copy link</button></div>`);
       }
+      case 'vote':
+        await api('vote', { proposal: el.dataset.proposal, choice: el.dataset.choice });
+        return render();
+      case 'claim':
+        await api('claimIssue', { issue: el.dataset.issue });
+        toast("It's yours");
+        return render();
       case 'remove-member':
         if (!confirm(`Remove ${name} from the group? The group key will be rotated so they can't read anything new.`)) return;
         await api('removeMember', group, who);
@@ -396,6 +582,7 @@ document.addEventListener('submit', async (e) => {
         break;
       case 'post':
         await api('publish', { kind: 'weave.post', body: { text: data.text }, group: data.group || undefined });
+        form.reset();
         break;
       case 'create-group': {
         const g = await api<GroupInfo>('createGroup', data.name);
@@ -409,6 +596,27 @@ document.addEventListener('submit', async (e) => {
         toast(`Joined #${g.name}`);
         break;
       }
+      case 'thread': {
+        const t = await api<ThreadInfo>('startThread', { group: data.group, title: data.title, text: data.text });
+        location.hash = `#/group/${data.group}/discussion/${t.id}`;
+        break;
+      }
+      case 'reply':
+        await api('reply', { target: data.target, text: data.text });
+        form.reset();
+        break;
+      case 'say':
+        await api('say', { group: data.group, text: data.text });
+        form.reset();
+        break;
+      case 'propose':
+        await api('propose', { group: data.group, title: data.title, text: data.text, hours: Number(data.hours) });
+        form.reset();
+        break;
+      case 'issue':
+        await api('openIssue', { group: data.group, title: data.title, labels: data.labels.split(',').map((l) => l.trim()).filter(Boolean) });
+        form.reset();
+        break;
       case 'theme': {
         const { name, ...theme } = data;
         await api('setProfile', { name, theme });
@@ -422,6 +630,22 @@ document.addEventListener('submit', async (e) => {
     toast((error as Error).message, 'error');
   } finally {
     if (button) button.disabled = false;
+  }
+});
+
+document.addEventListener('change', async (e) => {
+  const el = e.target as HTMLSelectElement;
+  try {
+    if (el.dataset.action === 'issue-status') {
+      await api('setIssueStatus', { issue: el.dataset.issue, status: el.value });
+      await render();
+    } else if (el.dataset.action === 'delegate') {
+      await api('delegateVote', { group: el.dataset.group, who: el.value || undefined });
+      toast(el.value ? 'Delegation saved' : 'You vote only for yourself now');
+      await render();
+    }
+  } catch (error) {
+    toast((error as Error).message, 'error');
   }
 });
 
