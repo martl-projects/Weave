@@ -9,7 +9,20 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ]
   },
-  "include": ["packages/*/src", "packages/*/test", "scripts"]
+  "include": [
+    "packages/*/src",
+    "packages/*/test",
+    "scripts",
+    "apps/*/src",
+    "apps/*/*.ts"
+  ]
 }
