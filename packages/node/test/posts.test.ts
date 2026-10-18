@@ -43,6 +43,34 @@ describe('contact links', () => {
   });
 });
 
+describe('the app bundle', () => {
+  it('connects a newcomer to the shipper and, through a free tier, into the project, with no clicks', async () => {
+    const martin = person('Martin');
+    const tier = await martin.createTier({ name: 'Weave friends', price: 0, auto: true, benefits: ['The Weave project'] });
+    await martin.createProject({ name: 'Weave' });
+    await martin.inviteGroup({ project: 'Weave', group: tier.id });
+    await martin.setRule({ project: 'Weave', group: tier.id, auto: true });
+
+    const ada = person('Ada');
+    await ada.applyBundle({ contacts: [await martin.contactLink()], tiers: [{ tier: tier.id, creator: martin.identity.author, note: 'via the app' }] });
+    expect((await ada.profile(martin.identity.author)).following).toBe(true);
+    expect(ada.config.pendingMemberships).toHaveLength(1); // Martin's tier hasn't reached Ada yet
+
+    sync(martin, ada);
+    await ada.reconcile(); // now it has: the request goes out
+    expect(ada.config.pendingMemberships).toEqual([]);
+    sync(ada, martin);
+    await martin.reconcile(); // automatic tier: let in, and on into Weave by the tier's rule
+    expect(await martin.membershipRequests()).toEqual([]);
+    expect((await martin.members('Weave')).map((m) => m.name)).toEqual(['Martin', 'Ada']);
+    sync(martin, ada);
+
+    expect((await ada.spaces('project')).map((s) => s.name)).toEqual(['Weave']);
+    expect((await ada.memberships())[0]).toMatchObject({ name: 'Weave friends', membership: { active: true } });
+    expect((await martin.profile(ada.identity.author)).following).toBe(false); // Martin follows back by hand
+  });
+});
+
 describe('memberships', () => {
   it('lets a supporter ask for a tier, the creator grant it, and the tier key reach the supporter', async () => {
     const martin = person('Martin');

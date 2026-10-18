@@ -8,7 +8,7 @@ import { isDid, type Did, type KeyPair } from './keys.ts';
  * creator founded, so its members get the group's chat and every project the
  * group is invited into. Memberships buy access, never votes.
  *
- *   weave.tier                  {tier, name, price, currency, description, benefits, position, open}
+ *   weave.tier                  {tier, name, price, currency, description, benefits, position, open, auto}
  *                               public, by the creator: the offer, shown on their hub
  *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry}
  *   weave.membership            {member, until}   sealed in the tier group, by its founder:
@@ -38,6 +38,8 @@ export interface Tier {
   position: number;
   /** Accepting new members. */
   open: boolean;
+  /** Requests are granted without asking the creator (for free tiers). */
+  auto: boolean;
   time: string;
 }
 
@@ -63,6 +65,7 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
       benefits: Array.isArray(body.benefits) ? body.benefits.filter((b): b is string => typeof b === 'string').map((b) => b.slice(0, 120)).slice(0, 10) : [],
       position: Number.isFinite(Number(body.position)) ? Number(body.position) : 0,
       open: body.open !== false,
+      auto: body.auto === true,
       hidden: body.hidden === true,
       time: event.time,
     });

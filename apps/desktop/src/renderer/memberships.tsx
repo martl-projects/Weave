@@ -91,7 +91,8 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const [description, setDescription] = useState(tier?.description ?? '');
   const [benefits, setBenefits] = useState(tier?.benefits.join('\n') ?? '');
   const [open, setOpen] = useState(tier?.open ?? true);
-  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open });
+  const [auto, setAuto] = useState(tier?.auto ?? false);
+  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open, auto });
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your hub`);
@@ -128,6 +129,10 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
         <div className="field-row">
           <input id="tier-open" type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />
           <label htmlFor="tier-open">Taking new members</label>
+        </div>
+        <div className="field-row">
+          <input id="tier-auto" type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          <label htmlFor="tier-auto">Let people in automatically (for free tiers)</label>
         </div>
         <p className="small">
           A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.

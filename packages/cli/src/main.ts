@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
@@ -13,6 +15,7 @@ import {
   type Admission,
   type Backend,
   type BoardInfo,
+  type Bundle,
   type CommunityInfo,
   type FeedItem,
   type IssueInfo,
@@ -30,7 +33,8 @@ const HELP = `weave — build things together, peer to peer, with your friends a
 
 usage: weave <command> [options]
 
-  init <name>                create your identity; shows your 24 recovery words once
+  init <name>                create your identity; shows your 24 recovery words once, and applies
+                             weave.bundle.json (contacts and free tiers the app ships with) unless --bare
   restore                    set up this computer as another device of your identity, from your recovery words
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
@@ -95,7 +99,7 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
 
 memberships, Patreon-style (tiers buy access to a tier's chat and the projects it's invited into, never votes):
-  tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"]
+  tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"] [--auto: let people in without asking]
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
@@ -163,6 +167,8 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
+    bare: { type: 'boolean', default: false },
+    auto: { type: 'boolean' },
     encryption: { type: 'boolean', default: false },
     channel: { type: 'string', short: 'c' },
     reply: { type: 'string' },
@@ -243,6 +249,12 @@ const tierLine = (t: TierInfo) => {
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
+/** The contacts and free tiers this copy of Weave ships with, from weave.bundle.json at the repository root. */
+function readBundle(): Bundle | undefined {
+  const file = join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json');
+  return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
+}
+
 /** The recovery words, numbered in four columns, for writing down. */
 const numbered = (words: string) => {
   const list = words.split(' ');
@@ -320,6 +332,8 @@ async function main(): Promise<void> {
       const name = args.join(' ').trim();
       if (!name) throw new Error('usage: weave init <name>');
       const { node, words } = WeaveNode.create(name, home.dir);
+      const bundle = values.bare ? undefined : readBundle();
+      if (bundle) await node.applyBundle(bundle);
       await node.close();
       return out({ did: node.identity.author, name, home: home.dir, words }, () =>
         [
@@ -751,7 +765,7 @@ async function main(): Promise<void> {
       const [sub, ref] = args;
       const b = await backend();
       if (sub === 'create' && ref) {
-        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit) });
+        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto });
         return out(t, () => `offered ${t.name}\n${tierLine(t)}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
       }
       if (sub === 'list') {
@@ -759,7 +773,7 @@ async function main(): Promise<void> {
         return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(no tiers)');
       }
       if (sub === 'set' && ref) {
-        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit) });
+        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto });
         return out(t, () => tierLine(t));
       }
       if ((sub === 'open' || sub === 'close' || sub === 'hide') && ref) {

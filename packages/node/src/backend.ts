@@ -228,6 +228,8 @@ export interface TierInfo {
   position: number;
   /** Accepting new members. */
   open: boolean;
+  /** Requests are granted automatically, without asking the creator (for free tiers). */
+  auto: boolean;
   /** You offer this tier. */
   mine: boolean;
   /** For the creator: how many active members it has. */
@@ -531,9 +533,9 @@ export interface Backend {
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
-  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo>;
+  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
-  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): Promise<TierInfo>;
+  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): Promise<TierInfo>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */

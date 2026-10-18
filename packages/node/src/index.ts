@@ -49,5 +49,5 @@ export { startDaemon, type Daemon } from './daemon.ts';
 export { FileStore } from './filestore.ts';
 export { loadSpaces, type StoredSpace } from './spacestore.ts';
 export { resolveHome, type Home } from './home.ts';
-export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT, WeaveNode } from './node.ts';
+export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT, WeaveNode, type Bundle } from './node.ts';
 export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';

@@ -787,7 +787,7 @@ export class WeaveNode implements Backend {
    * were admitted or removed.
    */
   async reconcile(): Promise<number> {
-    let changed = await this.#expireMemberships();
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#sendQueuedRequests());
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -1071,14 +1071,14 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- memberships
 
-  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo> {
+  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean }): Promise<TierInfo> {
     const group = await this.#createSpace('group', input.name, { tier: true });
     const position = this.#tierOffers(this.identity.author).length;
-    this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, time: '' }, input);
+    this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, auto: false, time: '' }, input);
     return this.#tierInfo(this.#tierOffer(group.id));
   }
 
-  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): Promise<TierInfo> {
+  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): Promise<TierInfo> {
     const before = this.#tierOffer(input.tier);
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
@@ -1114,7 +1114,7 @@ export class WeaveNode implements Backend {
 
   async grantMembership(input: { tier: string; who: string; months: number }): Promise<TierInfo> {
     const months = Math.round(Number(input.months));
-    if (!(months >= 1 && months <= 36)) throw new Error('grant 1 to 36 months');
+    if (!(months >= 1 && (months <= 36 || months === FREE_TIER_MONTHS))) throw new Error('grant 1 to 36 months');
     const group = this.#tierGroup(input.tier);
     const member = this.resolve(input.who);
     if (member === this.identity.author) throw new Error("you're in your own tier already");
@@ -1141,9 +1141,63 @@ export class WeaveNode implements Backend {
     for (const space of this.#spaces.values()) {
       if (space.kind !== 'group' || space.founder === this.identity.author || !this.#state(space).tier) continue;
       const offer = this.#tierOffers(space.founder).find((t) => t.id === space.id);
-      out.push(this.#tierInfo(offer ?? { id: space.id, creator: space.founder, name: space.name, price: 0, currency: 'EUR', description: '', benefits: [], position: 0, open: false, time: '' }));
+      out.push(this.#tierInfo(offer ?? { id: space.id, creator: space.founder, name: space.name, price: 0, currency: 'EUR', description: '', benefits: [], position: 0, open: false, auto: false, time: '' }));
     }
     return out;
+  }
+
+  /**
+   * Ask to join a tier as soon as its creator's node has been reached: their
+   * tier offer and encryption key must arrive first. Used for the app's bundle,
+   * which names a free tier of the person who ships it.
+   */
+  queueMembershipRequest(input: { tier: string; creator: Did; note?: string }): void {
+    if (this.config.pendingMemberships.some((p) => p.tier === input.tier)) return;
+    this.config = { ...this.config, pendingMemberships: [...this.config.pendingMemberships, input] };
+    saveConfig(this.home, this.config);
+  }
+
+  /**
+   * What an app ships with for newcomers: contacts to add (and follow) and free
+   * tiers to ask to join, typically those of the person who ships the app.
+   * Nothing in it is secret.
+   */
+  async applyBundle(bundle: Bundle): Promise<void> {
+    for (const link of bundle.contacts ?? []) await this.addContact(link);
+    for (const tier of bundle.tiers ?? []) this.queueMembershipRequest(tier);
+    await this.#sendQueuedRequests();
+  }
+
+  async #sendQueuedRequests(): Promise<number> {
+    let sent = 0;
+    for (const pending of this.config.pendingMemberships) {
+      const creator = pending.creator as Did;
+      const offered = this.#tierOffers(creator).some((t) => t.id === pending.tier);
+      const keysKnown = !!this.replica.authority.keys(creator).next || this.#eventsOf(creator).length > 0;
+      if (!offered || !keysKnown) continue;
+      try {
+        if (!(await this.tiers(creator)).find((t) => t.id === pending.tier)?.requested) await this.requestMembership({ tier: pending.tier, note: pending.note });
+        sent++;
+      } catch {
+        // closed tier or similar: drop it, the creator decides by hand
+      }
+      this.config = { ...this.config, pendingMemberships: this.config.pendingMemberships.filter((p) => p.tier !== pending.tier) };
+      saveConfig(this.home, this.config);
+    }
+    return sent;
+  }
+
+  /** Let in everyone asking to join our tiers that admit automatically. */
+  async #grantAutomatic(): Promise<number> {
+    const auto = new Set(this.#tierOffers(this.identity.author).filter((t) => t.auto && t.open).map((t) => t.id));
+    if (!auto.size) return 0;
+    let granted = 0;
+    for (const request of await this.membershipRequests()) {
+      if (!auto.has(request.tier.id)) continue;
+      await this.grantMembership({ tier: request.tier.id, who: request.did, months: FREE_TIER_MONTHS });
+      granted++;
+    }
+    return granted;
   }
 
   /** Remove members whose grants ran out from the tiers we offer, with one key rotation per tier. */
@@ -1167,7 +1221,7 @@ export class WeaveNode implements Backend {
     return removed;
   }
 
-  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): void {
+  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): void {
     const price = patch.price ?? before.price;
     if (!Number.isInteger(price) || price < 0) throw new Error('the price is a whole number of cents, 0 for free');
     const currency = (patch.currency ?? before.currency).toUpperCase();
@@ -1183,6 +1237,7 @@ export class WeaveNode implements Backend {
       benefits: (patch.benefits ?? before.benefits).map((b) => b.trim()).filter(Boolean).slice(0, 10),
       position: patch.position ?? before.position,
       open: patch.open ?? before.open,
+      auto: patch.auto ?? before.auto,
     };
     if (patch.hidden) body.hidden = true;
     this.replica.append(this.identity, { kind: KIND_TIER, body });
@@ -1230,6 +1285,7 @@ export class WeaveNode implements Backend {
       benefits: tier.benefits,
       position: tier.position,
       open: tier.open,
+      auto: tier.auto,
       mine,
       ...(mine && state ? { members: [...state.members.values()].filter((m) => m.did !== tier.creator && (!m.until || m.until > now)).length } : {}),
       ...(!mine && me?.until ? { membership: { until: me.until, active: me.until > now } } : {}),
@@ -2028,3 +2084,12 @@ const agentInfo = (agent: AgentKey): AgentInfo => ({ name: agent.name, did: agen
 
 /** This computer's name, for naming its device key. */
 const deviceName = (): string => hostname().slice(0, 40) || 'device';
+
+/** Automatic grants (free tiers) don't run out in practice. */
+const FREE_TIER_MONTHS = 1200;
+
+/** Contacts and free tiers an app ships with for newcomers (see weave.bundle.json). */
+export interface Bundle {
+  contacts?: string[];
+  tiers?: Array<{ tier: string; creator: Did; note?: string }>;
+}
