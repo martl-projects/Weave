@@ -1,0 +1,57 @@
+// Serves the desktop UI to a normal browser for development: the same
+// renderer, with /rpc and /events forwarded to the daemon of a Weave home.
+// Binds to 127.0.0.1 only.
+//
+//   npm run dev:web -- --home .dev/alice --port 8770
+
+import { createReadStream, existsSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { extname, join, normalize, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { connectDaemon, resolveHome } from '@weave/node/client';
+import { RENDERER_METHODS, type RendererMethod } from './src/methods.ts';
+
+const { values } = parseArgs({ options: { home: { type: 'string' }, port: { type: 'string', default: '8770' } } });
+const home = resolveHome(values.home && resolve(process.env.INIT_CWD ?? process.cwd(), values.home));
+const port = Number(values.port);
+const STATIC = join(import.meta.dirname, 'dist', 'renderer');
+const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+
+const json = (res: import('node:http').ServerResponse, status: number, body: unknown) => {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+};
+
+createServer(async (req, res) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  try {
+    if (url.pathname === '/state') {
+      const client = await connectDaemon(home);
+      return json(res, 200, { home: home.dir, hasIdentity: existsSync(home.identity), connected: !!client });
+    }
+    if (url.pathname === '/rpc' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { method, args } = JSON.parse(body) as { method: RendererMethod; args: unknown[] };
+      if (!RENDERER_METHODS.includes(method)) return json(res, 403, { error: `not allowed: ${method}` });
+      const client = await connectDaemon(home);
+      if (!client) return json(res, 503, { error: 'no daemon running for this home' });
+      const fn = client[method] as (...a: unknown[]) => Promise<unknown>;
+      return json(res, 200, (await fn.apply(client, args)) ?? null);
+    }
+    if (url.pathname === '/events') {
+      const client = await connectDaemon(home);
+      if (!client) return json(res, 503, { error: 'no daemon running for this home' });
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      const controller = new AbortController();
+      req.on('close', () => controller.abort());
+      return client.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal);
+    }
+    const file = normalize(join(STATIC, url.pathname === '/' ? 'index.html' : url.pathname));
+    if (!file.startsWith(STATIC) || !existsSync(file)) return json(res, 404, { error: 'not found' });
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
+    createReadStream(file).pipe(res);
+  } catch (error) {
+    json(res, 500, { error: (error as Error).message });
+  }
+}).listen(port, '127.0.0.1', () => console.log(`weave web preview for ${home.dir} on http://127.0.0.1:${port}`));
