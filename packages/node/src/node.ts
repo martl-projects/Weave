@@ -1,6 +1,7 @@
 import {
   b64u,
   canManage,
+  canonicalKind,
   channelName,
   channelsOf,
   CHOICES,
@@ -174,10 +175,11 @@ export class WeaveNode implements Backend {
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
-    for (const event of this.replica.events((e) => e.kind === KIND_REKEY || e.kind === KIND_GIFT)) this.#takeKeys(event);
+    const isKeys = (e: WeaveEvent) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
+    for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.onAppend((event) => {
       this.#decoded = undefined;
-      if (event.kind === KIND_REKEY || event.kind === KIND_GIFT) this.#takeKeys(event);
+      if (isKeys(event)) this.#takeKeys(event);
     });
   }
 
@@ -864,7 +866,7 @@ export class WeaveNode implements Backend {
 
   /** New epoch keys from a rekey, or a whole space gifted to us when a project admitted us. */
   #takeKeys(event: WeaveEvent): void {
-    if (event.kind === KIND_REKEY) {
+    if (canonicalKind(event.kind) === KIND_REKEY) {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
       if (!space || !canManage(this.#state(space), event.author)) return;
       const opened = openRekey(event, this.identity);
@@ -929,7 +931,7 @@ export class WeaveNode implements Backend {
   }
 
   #decode(event: WeaveEvent): Decoded | undefined {
-    if (event.kind === KIND_REKEY || event.kind === KIND_GIFT) return undefined; // key plumbing, not content
+    if (canonicalKind(event.kind) === KIND_REKEY || event.kind === KIND_GIFT) return undefined; // key plumbing, not content
     if (event.kind !== KIND_SEALED) return { event, inner: { kind: event.kind, body: event.body } };
 
     let decoded: Decoded | undefined;

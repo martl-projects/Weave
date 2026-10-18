@@ -18,6 +18,7 @@ export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {
   canManage,
+  canonicalKind,
   currentEpoch,
   decodeInvite,
   encodeInvite,

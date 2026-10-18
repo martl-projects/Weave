@@ -17,8 +17,8 @@ export function loadSpaces(home: Home): StoredSpace[] {
   }
   return files.map((file) => {
     const space = readJson<StoredSpace>(join(home.groups, file))!;
-    // Spaces from before groups and projects were told apart were what projects are now.
-    return { ...space, kind: space.kind ?? 'project' };
+    // Spaces from before groups and projects were told apart were encrypted as groups; read them as such.
+    return { ...space, kind: space.kind ?? 'group' };
   });
 }
 

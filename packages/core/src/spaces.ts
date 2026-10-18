@@ -44,6 +44,17 @@ export const KIND_DECLINE = 'weave.project.decline';
 
 export type SpaceKind = 'group' | 'project';
 
+/** Names used before groups and projects were told apart; still read so older spaces keep working. */
+const LEGACY_KINDS: Record<string, string> = {
+  'weave.group.create': KIND_SPACE_CREATE,
+  'weave.group.join': KIND_JOIN,
+  'weave.group.remove': KIND_REMOVE,
+  'weave.group.rekey': KIND_REKEY,
+};
+
+/** An event kind under its current name. */
+export const canonicalKind = (kind: string): string => LEGACY_KINDS[kind] ?? kind;
+
 /** Everything a member holds about a space. Secret: whoever has it can read the space. */
 export interface SpaceKeys {
   kind: SpaceKind;
@@ -121,10 +132,10 @@ export function rekey(space: SpaceKeys, members: Did[]): { fields: EventFields; 
 export function openRekey(event: WeaveEvent, me: SigningIdentity): { epoch: number; key: string } | undefined {
   const body = event.body as { epoch?: unknown; boxes?: Record<string, Box> } | null;
   const box = body?.boxes?.[me.did];
-  if (event.kind !== KIND_REKEY || !box) return undefined;
+  if (canonicalKind(event.kind) !== KIND_REKEY || !box) return undefined;
   try {
-    const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: string; epoch?: number; key?: string };
-    if (opened.space !== parseScope(event.scope)?.id || opened.epoch !== body!.epoch || typeof opened.key !== 'string') return undefined;
+    const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as { space?: string; group?: string; epoch?: number; key?: string };
+    if ((opened.space ?? opened.group) !== parseScope(event.scope)?.id || opened.epoch !== body!.epoch || typeof opened.key !== 'string') return undefined;
     return { epoch: opened.epoch as number, key: opened.key };
   } catch {
     return undefined;
@@ -247,7 +258,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
   for (const { event, inner } of [...opened].sort(byTime)) {
     const author = event.author;
     const body = (inner.body ?? {}) as Record<string, unknown>;
-    switch (inner.kind) {
+    switch (canonicalKind(inner.kind)) {
       case KIND_SPACE_CREATE:
         if (author === founder && state.members.size === 0) {
           admit(founder, event.time);
@@ -309,7 +320,8 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
 
 /** Should an event by this author be shown? Members yes; removed members only for what they wrote before removal. */
 export function visibleIn(state: SpaceState, event: WeaveEvent, inner: Inner): boolean {
-  if (inner.kind === KIND_JOIN || inner.kind === KIND_SPACE_CREATE) return true;
+  const kind = canonicalKind(inner.kind);
+  if (kind === KIND_JOIN || kind === KIND_SPACE_CREATE) return true;
   if (state.members.has(event.author)) return true;
   const removedAt = state.removed.get(event.author);
   return removedAt !== undefined && event.time < removedAt;

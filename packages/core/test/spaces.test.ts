@@ -186,6 +186,18 @@ describe('spaces', () => {
     expect(openGift(event, eve)).toBeUndefined();
   });
 
+  it('still reads groups made before groups and projects were told apart', () => {
+    const { founder, space, post, opened, expires } = setup('group');
+    const bob = createIdentity();
+    post(founder, { kind: 'weave.invite', body: { invite: 'old', expires } });
+    post(bob, { kind: 'weave.group.join', body: { invite: 'old' } }); // the old name
+    const legacy = spaceState('group', founder.did, [
+      { event: opened()[0].event, inner: { kind: 'weave.group.create', body: { name: space.name } } },
+      ...opened().slice(1),
+    ]);
+    expect([...legacy.members.keys()]).toEqual([founder.did, bob.did]);
+  });
+
   it('drops sealed events whose inner kind a delegated agent may not sign', () => {
     const { founder, space, replica } = setup('project');
     const forge = createSubKey(founder.did);
