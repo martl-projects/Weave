@@ -11,9 +11,18 @@
     "web": "node build.ts && node dev-web.ts"
   },
   "dependencies": {
-    "@weave/node": "*"
+    "@emoji-mart/data": "^1.2.1",
+    "@tanstack/react-virtual": "^3.14.21",
+    "@weave/node": "*",
+    "dompurify": "^3.4.17",
+    "emoji-mart": "^5.6.0",
+    "marked": "^18.1.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "electron": "^44.9.0",
     "esbuild": "^0.28.2"
   }

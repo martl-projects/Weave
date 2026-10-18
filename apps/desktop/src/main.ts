@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
 import { createIdentity, ensureDaemon, hasIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -60,8 +60,18 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
     },
   });
-  // Links open in the system browser, never inside the app.
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Links in messages open in the system browser, never inside the app.
+  const external = (url: string) => /^https?:\/\//.test(url) && void shell.openExternal(url);
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    external(url);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file:')) {
+      event.preventDefault();
+      external(url);
+    }
+  });
   await window.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: ((values.route as string | undefined) ?? '').replace(/^#/, '') });
 
   if (values.screenshot) {

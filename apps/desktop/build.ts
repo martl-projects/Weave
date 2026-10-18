@@ -26,12 +26,16 @@ await Promise.all([
     external: ['electron'],
   }),
   build({
-    entryPoints: ['src/renderer/app.ts'],
+    entryPoints: ['src/renderer/main.tsx'],
     outfile: 'dist/renderer/app.js',
     bundle: true,
     platform: 'browser',
     format: 'esm',
     target: 'chrome130',
+    jsx: 'automatic',
+    minify: true,
+    sourcemap: true,
+    define: { 'process.env.NODE_ENV': '"production"' },
   }),
 ]);
 
