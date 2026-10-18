@@ -5,7 +5,6 @@
 :root {
   --face: #c0c0c0;
   --navy: #000080;
-  --title-2: #1084d0;
   --link: #0000ee;
   --teal: #008080;
   --up: #ff4500;
@@ -89,7 +88,7 @@ button .icon { vertical-align: -3px; }
 /* blue title strips over each pane, like "Home - Best" */
 .pane-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none; min-height: 24px; padding: 2px 3px 2px 6px;
-  background: linear-gradient(90deg, var(--navy), var(--title-2)); color: #fff;
+  background: var(--navy); color: #fff;
 }
 .pane-head b { display: flex; align-items: center; gap: 4px; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .pane-tools { display: flex; align-items: center; gap: 4px; flex: none; color: #fff; }
@@ -163,9 +162,9 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 /* ---------- banners (project and community heads) */
 .banner {
   display: flex; gap: 14px; align-items: flex-start; flex: none; padding: 12px 14px; margin: 2px;
-  background: linear-gradient(180deg, #14205a, #2f4d96 70%, #5574b8); color: #fff; font-family: var(--content-font); font-size: 12px;
+  background: #1f3a7a; color: #fff; font-family: var(--content-font); font-size: 12px;
 }
-.banner.community { background: linear-gradient(180deg, #00585a, #0b8a7d 75%, #2aa595); }
+.banner.community { background: #007070; }
 .banner-art { border: 2px solid #fff; box-shadow: 2px 2px 0 #0006; }
 .banner-text { flex: 1; min-width: 0; }
 .banner-text h1 { font-size: 24px; text-shadow: 2px 2px 0 #0008; }
@@ -333,3 +332,7 @@ menu[role='tablist'] { margin-bottom: 0; }
 .search-row { margin-bottom: 10px; flex-wrap: nowrap; }
 .search-row input { flex: 1; height: 24px; }
 .icon.bitmap { image-rendering: pixelated; vertical-align: -3px; }
+
+/* Windows 95 title bars were solid, not 98's gradient. */
+.title-bar { background: var(--navy); }
+.title-bar.inactive { background: #808080; }
