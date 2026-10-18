@@ -4,9 +4,12 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "bin": { "weave": "./src/main.ts" },
+  "bin": {
+    "weave": "./src/main.ts"
+  },
   "dependencies": {
     "@weave/core": "*",
-    "@weave/node": "*"
+    "@weave/node": "*",
+    "@weave/mcp": "*"
   }
 }

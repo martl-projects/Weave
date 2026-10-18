@@ -26,7 +26,8 @@ usage: weave <command> [options]
   status                     node status: peers, topics, logs
   post <text...>             publish a post            [--group <g>] [--as <agent>] [--kind <kind>]
   feed                       show recent posts         [--group <g>] [-n <count>] [--kind <kinds>] [--all]
-  watch                      stream new events (needs a running daemon)
+  watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
+  mcp                        serve this node to an agent harness over MCP (stdio)  [--as <agent>]
   join <topic>               join a topic (a group of peers) on the DHT
   agent add <name>           create a key for an agent [--can <kinds>]  default: weave.post,weave.reply
   agent list                 list your agents
@@ -79,6 +80,7 @@ const { values, positionals } = parseArgs({
     n: { type: 'string', short: 'n' },
     clear: { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
+    mentions: { type: 'boolean', default: false },
     group: { type: 'string', short: 'g' },
     hours: { type: 'string' },
     text: { type: 'string' },
@@ -201,7 +203,21 @@ async function main(): Promise<void> {
       const client = await backend({ needsDaemon: true });
       const controller = new AbortController();
       process.on('SIGINT', () => controller.abort());
-      return client.watch((item) => console.log(values.json ? JSON.stringify(item) : line(item)), controller.signal);
+      // --mentions: only items that address the agent (or you) as @name.
+      const name = values.as ?? (await client.whoami()).name;
+      const mention = name && new RegExp(`@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      return client.watch((item) => {
+        if (values.mentions && !(mention && mention.test(JSON.stringify(item.body)))) return;
+        console.log(values.json ? JSON.stringify(item) : line(item));
+      }, controller.signal);
+    }
+
+    case 'mcp': {
+      // stdout belongs to the MCP protocol from here on; messages for people go to stderr.
+      const b = await backend();
+      if (b instanceof WeaveNode) console.error('weave mcp: no daemon running, working offline. Start "weave daemon" to reach peers.');
+      const { serveStdio } = await import('@weave/mcp');
+      return serveStdio(b, { as: values.as });
     }
 
     case 'join': {
