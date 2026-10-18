@@ -47,8 +47,35 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
     case 'GET /v1/feed': {
       const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
       const kinds = url.searchParams.get('kinds')?.split(',').filter(Boolean);
-      return send(res, 200, await backend.feed({ limit, kinds }));
+      const group = url.searchParams.get('group') ?? undefined;
+      return send(res, 200, await backend.feed({ limit, kinds, group }));
     }
+    case 'GET /v1/groups':
+      return send(res, 200, await backend.groups());
+    case 'POST /v1/groups': {
+      const { name } = await readBody(req);
+      return send(res, 200, await backend.createGroup(name));
+    }
+    case 'POST /v1/groups/invite': {
+      const { group, hours } = await readBody(req);
+      return send(res, 200, { invite: await backend.invite(group, hours) });
+    }
+    case 'POST /v1/groups/join': {
+      const { invite } = await readBody(req);
+      return send(res, 200, await backend.joinGroup(invite));
+    }
+    case 'GET /v1/groups/members':
+      return send(res, 200, await backend.members(url.searchParams.get('group') ?? ''));
+    case 'POST /v1/groups/remove': {
+      const { group, who } = await readBody(req);
+      await backend.removeMember(group, who);
+      return send(res, 200, { ok: true });
+    }
+    case 'POST /v1/edges':
+      await backend.setEdge(await readBody(req));
+      return send(res, 200, { ok: true });
+    case 'GET /v1/social':
+      return send(res, 200, await backend.social());
     case 'POST /v1/publish':
       return send(res, 200, await backend.publish(await readBody(req)));
     case 'POST /v1/agents': {

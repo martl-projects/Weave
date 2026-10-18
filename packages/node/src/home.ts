@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
  *
  *   identity.json   root key (plaintext for now — to be encrypted)
  *   agents/*.json   delegated agent keys
+ *   groups/*.json   keys of groups you belong to (secret)
  *   config.json     topics to join, bootstrap nodes
  *   logs/*.jsonl    one append-only file per signing key
  *   daemon.json     port and token of the running daemon
@@ -16,6 +17,7 @@ export interface Home {
   dir: string;
   identity: string;
   agents: string;
+  groups: string;
   config: string;
   logs: string;
   daemon: string;
@@ -27,6 +29,7 @@ export function resolveHome(dir?: string): Home {
     dir: root,
     identity: join(root, 'identity.json'),
     agents: join(root, 'agents'),
+    groups: join(root, 'groups'),
     config: join(root, 'config.json'),
     logs: join(root, 'logs'),
     daemon: join(root, 'daemon.json'),

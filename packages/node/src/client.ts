@@ -1,5 +1,5 @@
 import { request as httpRequest } from 'node:http';
-import type { AgentInfo, Backend, FeedItem, FeedQuery, PublishInput, Status, Whoami } from './backend.ts';
+import type { AgentInfo, Backend, EdgeInput, FeedItem, FeedQuery, GroupInfo, MemberInfo, PublishInput, Social, Status, Whoami } from './backend.ts';
 import { readJson, type Home } from './home.ts';
 
 export interface DaemonInfo {
@@ -64,6 +64,7 @@ export class ApiClient implements Backend {
     const params = new URLSearchParams();
     if (query.limit !== undefined) params.set('limit', String(query.limit));
     if (query.kinds?.length) params.set('kinds', query.kinds.join(','));
+    if (query.group) params.set('group', query.group);
     return this.#request('GET', `/feed?${params}`);
   }
 
@@ -77,6 +78,38 @@ export class ApiClient implements Backend {
 
   async join(topic: string): Promise<void> {
     await this.#request('POST', '/join', { topic });
+  }
+
+  createGroup(name: string): Promise<GroupInfo> {
+    return this.#request('POST', '/groups', { name });
+  }
+
+  groups(): Promise<GroupInfo[]> {
+    return this.#request('GET', '/groups');
+  }
+
+  async invite(group: string, hours?: number): Promise<string> {
+    return (await this.#request<{ invite: string }>('POST', '/groups/invite', { group, hours })).invite;
+  }
+
+  joinGroup(invite: string): Promise<GroupInfo> {
+    return this.#request('POST', '/groups/join', { invite });
+  }
+
+  members(group: string): Promise<MemberInfo[]> {
+    return this.#request('GET', `/groups/members?${new URLSearchParams({ group })}`);
+  }
+
+  async removeMember(group: string, who: string): Promise<void> {
+    await this.#request('POST', '/groups/remove', { group, who });
+  }
+
+  async setEdge(input: EdgeInput): Promise<void> {
+    await this.#request('POST', '/edges', input);
+  }
+
+  social(): Promise<Social> {
+    return this.#request('GET', '/social');
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
