@@ -1,0 +1,12 @@
+{
+  "name": "@weave/node",
+  "version": "0.0.1",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@weave/core": "*",
+    "@weave/net": "*"
+  }
+}
