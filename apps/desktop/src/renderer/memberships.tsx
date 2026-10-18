@@ -5,7 +5,7 @@ import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
 
 /*
- * Memberships, Patreon-style: creators offer tiers on their space, supporters
+ * Memberships, Patreon-style: creators offer tiers on their hub, supporters
  * ask to join (saying how they paid), creators grant months from their Inbox.
  * A tier is a group, so members get its chat and the projects it's invited into.
  */
@@ -94,7 +94,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open });
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your space`);
+    const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your hub`);
     if (done) {
       bump();
       onClose();
@@ -136,7 +136,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           {tier && (
             <AsyncButton
               onClick={async () => {
-                if (!confirm(`Take ${tier.name} off your space? Members keep it until their grants run out.`)) return;
+                if (!confirm(`Take ${tier.name} off your hub? Members keep it until their grants run out.`)) return;
                 if (await attempt(() => api('setTier', { tier: tier.id, hidden: true }).then(bump), 'Tier removed')) onClose();
               }}
             >
@@ -154,7 +154,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   );
 }
 
-/** "Support X" on someone's space; on your own, your tiers to manage. */
+/** "Support X" on someone's hub; on your own, your tiers to manage. */
 export function SupportBox({ did, name, me }: { did: string; name: string; me: boolean }) {
   const { data: tiers } = useApi(() => api<TierInfo[]>('tiers', did), [did]);
   const [joining, setJoining] = useState<TierInfo>();
@@ -209,7 +209,7 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
 /** Tiers you support, for the Memberships page. */
 export function MySupport() {
   const { data } = useApi(() => api<TierInfo[]>('memberships'), []);
-  if (!data?.length) return <p className="small">You don't support anyone yet. Creators offer tiers on their space.</p>;
+  if (!data?.length) return <p className="small">You don't support anyone yet. Creators offer tiers on their hub.</p>;
   return (
     <>
       {data.map((t) => (

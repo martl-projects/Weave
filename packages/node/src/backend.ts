@@ -135,7 +135,7 @@ export interface ProjectInfo extends SpaceInfo {
   post?: PostInfo;
 }
 
-/** A project shown publicly in someone's space. */
+/** A project shown publicly on someone's hub. */
 export interface PublicProject {
   id: string;
   name: string;
@@ -288,7 +288,7 @@ export interface Person {
   name?: string;
 }
 
-/** Someone's space as this node sees it. */
+/** Someone's hub (their profile page) as this node sees it. */
 export interface Profile {
   did: Did;
   name?: string;
@@ -505,7 +505,7 @@ export interface Backend {
   // people
   setEdge(input: EdgeInput): Promise<void>;
   social(): Promise<Social>;
-  /** A person's space; defaults to your own. */
+  /** A person's hub; defaults to your own. */
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
@@ -532,7 +532,7 @@ export interface Backend {
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
   createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo>;
-  /** Change a tier, close it to new members (open: false) or take it off your space (hidden: true). */
+  /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
   setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; hidden?: boolean }): Promise<TierInfo>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;

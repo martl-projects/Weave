@@ -37,7 +37,7 @@ function useForm<T extends Record<string, string>>(initial: T) {
   return { values, field, reset: () => setValues(initial) };
 }
 
-// ---------------------------------------------------------------- your space (MySpace-style, in the person's theme)
+// ---------------------------------------------------------------- your hub (MySpace-style, in the person's theme)
 
 function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
   const [theme, setTheme] = useState<Theme>(me.theme);
@@ -48,8 +48,8 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
     </label>
   );
   return (
-    <Modal title="Customize your space" onClose={onClose}>
-      <p className="small">Your theme is public: friends see your space the way you style it.</p>
+    <Modal title="Customize your hub" onClose={onClose}>
+      <p className="small">Your theme is public: friends see your hub the way you style it.</p>
       <div className="field-row-stacked">
         <label htmlFor="me-name">Name</label>
         <input id="me-name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
@@ -79,7 +79,7 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
       </div>
       <div className="space-preview" style={themeVars(theme) as React.CSSProperties} data-pattern={theme.pattern}>
         <div className="space-box">
-          <b style={{ color: 'var(--accent)' }}>{name || 'You'}</b>'s space
+          <b style={{ color: 'var(--accent)' }}>{name || 'You'}</b>'s hub
         </div>
       </div>
       <div className="buttons">
@@ -87,7 +87,7 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
         <AsyncButton
           className="default"
           onClick={async () => {
-            const saved = await attempt(() => api<Profile>('setProfile', { name, theme }), 'Your space is updated');
+            const saved = await attempt(() => api<Profile>('setProfile', { name, theme }), 'Your hub is updated');
             if (saved) {
               bump();
               onClose();
@@ -107,13 +107,13 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
   const posts = useApi(() => (p ? api<FeedItem[]>('feed', { author: p.did, publicOnly: true, kinds: ['weave.post'], limit: 100 }) : Promise.resolve([])), [p?.did]);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
-  if (!p) return <Page title="Space">{null}</Page>;
+  if (!p) return <Page title="Hub">{null}</Page>;
   const name = p.name ?? shortDid(p.did);
   const edge = (kind: 'follow' | 'mute' | 'block', on: boolean, label: string) => (
     <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: kind, who: p.did, on }).then(bump))}>{label}</AsyncButton>
   );
   return (
-    <Page title={<>{p.me ? 'My space' : `${name}'s space`}</>} actions={p.me && <button onClick={() => setEditing(true)}>Customize…</button>}>
+    <Page title={<>{p.me ? 'My hub' : `${name}'s hub`}</>} actions={p.me && <button onClick={() => setEditing(true)}>Customize…</button>}>
       <div className="space" style={themeVars(p.theme) as React.CSSProperties} data-pattern={p.theme.pattern}>
         <header className="space-box space-head">
           <Avatar did={p.did} size={96} />
@@ -591,7 +591,7 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
                 ))}
               </select>
               <input id="public" type="checkbox" checked={info.page.public} onChange={(e) => save({ public: e.target.checked })} />
-              <label htmlFor="public">Show the page publicly in my space</label>
+              <label htmlFor="public">Show the page publicly on my hub</label>
               <span className="grow" />
               <button className="default" disabled={description === undefined || description === info.page.description} onClick={() => save({ description }).then(() => setDescription(undefined))}>
                 Save

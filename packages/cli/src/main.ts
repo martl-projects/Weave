@@ -98,7 +98,7 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"]
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
-  tier open|close|hide <tier>   take new members, stop taking them, or take it off your space
+  tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
   support <tier>             ask to join a tier               [--text "how I paid"] (only the creator reads it)
   requests                   people asking to join your tiers
   grant <tier> <who>         let them in, or renew            [--months 1]
@@ -764,7 +764,7 @@ async function main(): Promise<void> {
       }
       if ((sub === 'open' || sub === 'close' || sub === 'hide') && ref) {
         const t = await b.setTier({ tier: ref, open: sub === 'open', hidden: sub === 'hide' || undefined });
-        return out(t, () => (sub === 'hide' ? `${t.name} is off your space; members keep it until their grants run out` : tierLine(t)));
+        return out(t, () => (sub === 'hide' ? `${t.name} is off your hub; members keep it until their grants run out` : tierLine(t)));
       }
       throw new Error('usage: weave tier create|list|set|open|close|hide — see "weave --help"');
     }
@@ -945,7 +945,7 @@ async function main(): Promise<void> {
       const text = args.join(' ').trim();
       if (!text) throw new Error('usage: weave add <contact link>');
       const p = await (await backend()).addContact(text);
-      return out(p, () => `added ${p.name ?? p.did} and followed them; their space syncs once your nodes connect (needs a running daemon)`);
+      return out(p, () => `added ${p.name ?? p.did} and followed them; their hub syncs once your nodes connect (needs a running daemon)`);
     }
 
     case 'people': {

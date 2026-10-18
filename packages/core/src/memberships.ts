@@ -9,7 +9,7 @@ import { isDid, type Did, type KeyPair } from './keys.ts';
  * group is invited into. Memberships buy access, never votes.
  *
  *   weave.tier                  {tier, name, price, currency, description, benefits, position, open}
- *                               public, by the creator: the offer, shown on their space
+ *                               public, by the creator: the offer, shown on their hub
  *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry}
  *   weave.membership            {member, until}   sealed in the tier group, by its founder:
  *                               admits (or renews) a member until a date

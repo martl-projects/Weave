@@ -294,7 +294,7 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
           </b>
           <span className="pane-tools">
             <button onClick={() => navigate(`#/space/${encodeURIComponent(chat.peer.did)}`)}>
-              <Icon name="user" /> Space
+              <Icon name="user" /> Hub
             </button>
           </span>
         </header>
@@ -344,7 +344,7 @@ function Shell() {
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', keys: 'Keys & devices', space: route[1] ? 'Space' : 'My space', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
+  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', keys: 'Keys & devices', space: route[1] ? 'Hub' : 'My hub', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
@@ -410,7 +410,7 @@ function Shell() {
             { label: 'Saved', onClick: () => navigate('#/saved') },
             { label: 'Inbox', onClick: () => navigate('#/inbox') },
             { label: 'People', onClick: () => navigate('#/people') },
-            { label: 'My space', onClick: () => navigate('#/space') },
+            { label: 'My hub', onClick: () => navigate('#/space') },
             { label: 'Keys & devices', onClick: () => navigate('#/keys') },
             'sep',
             { label: 'Refresh', onClick: bump },
@@ -430,7 +430,7 @@ function Shell() {
         <ToolButton icon="bookmark" label="Saved" href="#/saved" on={route[0] === 'saved'} />
         <ToolButton icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} href="#/inbox" on={route[0] === 'inbox'} />
         <ToolButton icon="users" label="People" href="#/people" on={route[0] === 'people'} />
-        <ToolButton icon="user" label="My space" href="#/space" on={route[0] === 'space' && !route[1]} />
+        <ToolButton icon="user" label="My hub" href="#/space" on={route[0] === 'space' && !route[1]} />
         <span className="tool-sep" />
         <ToolButton icon="pencil" label="Submit" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label="New" onClick={() => setDialog({ kind: 'new' })} />

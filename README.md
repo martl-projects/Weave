@@ -13,7 +13,7 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 - **Maintainers decide who takes part.** When someone joins a group that a project invited, the project's maintainers are asked: "Allow Noah from group Friends to join XY?" Ticking "allow automatically" turns that into a standing rule, and any participant's node then lets newcomers in.
 - **Everything is end-to-end encrypted.** Events in projects, groups and communities travel as sealed envelopes that peers relay without being able to read. An invite link carries the key and where to find the inviter, so a friend can join with nothing but the link.
 - **Votes count once per participant;** if you don't vote, your vote can follow someone you trust.
-- **Memberships, Patreon-style.** Creators offer tiers on their space. A tier is a group: members get its chat and every project the creator opens to it. Supporters ask to join with a note only the creator can read, and the creator grants months; when a grant runs out, the tier's key rotates without them. Memberships buy access, never votes. Weave doesn't handle money yet: Gumroad and Patreon bridges are next.
+- **Memberships, Patreon-style.** Creators offer tiers on their hub. A tier is a group: members get its chat and every project the creator opens to it. Supporters ask to join with a note only the creator can read, and the creator grants months; when a grant runs out, the tier's key rotates without them. Memberships buy access, never votes. Weave doesn't handle money yet: Gumroad and Patreon bridges are next.
 - **Friends can chat privately.** Two friends (people who follow each other) each derive the same key from their two identities, so a direct chat needs no invite and no setup, and nobody else can read it or even tell which two people it belongs to.
 - **The social graph is signed too.** Follows are public by default, blocks and mutes are sealed so only your own nodes can read them; a friend is a mutual follow.
 - **Peers sync directly.** Nodes find each other through the [Hyperswarm](https://github.com/holepunchto/hyperswarm) DHT, connect through home routers via hole punching, and exchange the events the other side is missing. Every node verifies everything it receives.
@@ -80,7 +80,7 @@ npx weave --home .dev/alice project add-group Synths Friends   # everyone in Fri
 npx weave --home .dev/alice admissions                # newcomers to Friends, waiting for a yes
 npx weave --home .dev/alice admit Synths Noah Friends --always # let Noah in, and future newcomers too
 npx weave --home .dev/alice project members Synths    # who let whom in, through which group
-npx weave --home .dev/alice project page Synths --public       # show the project page in your space
+npx weave --home .dev/alice project page Synths --public       # show the project page on your hub
 npx weave --home .dev/alice contact                   # your contact link: send it via WhatsApp, email, anything
 npx weave --home .dev/bob add "weave:contact:…"      # connect, follow, keep in the address book
 npx weave --home .dev/bob find ali                   # search people you know of
@@ -161,7 +161,7 @@ npm run desktop -- --home .dev/martin
 
 Without `--home` the app opens `~/.weave` and greets you with a welcome screen if you have no identity yet. `npm run dev:web -- --home .dev/martin` serves the same UI to a browser on http://127.0.0.1:8770 for development.
 
-It looks like Windows 95 (thanks to [98.css](https://github.com/jdan/98.css), icons from [SerenityOS](https://github.com/SerenityOS/serenity) under BSD-2-Clause, see `apps/desktop/src/renderer/serenity/LICENSE`, and a few from [pixelarticons](https://github.com/halfmage/pixelarticons)): a toolbar, and an Explorer-style tree of your communities, projects (with their boards and channels) and groups. Home, communities and boards list posts like Reddit, with upvotes, pixel thumbnails, sticky posts and hot/new/top sorting. Opening a post shows it with its own chat below, Discord-style: reactions, replies, @mentions and formatting. Projects have a front page with their banner, boards and general chat; issues and proposals keep their status, assignee and voting controls; maintainers get admission requests in their Inbox. Your space is styled with your theme (colors, font, wallpaper), and when you visit someone's space you see it the way they styled it.
+It looks like Windows 95 (thanks to [98.css](https://github.com/jdan/98.css), icons from [SerenityOS](https://github.com/SerenityOS/serenity) under BSD-2-Clause, see `apps/desktop/src/renderer/serenity/LICENSE`, and a few from [pixelarticons](https://github.com/halfmage/pixelarticons)): a toolbar, and an Explorer-style tree of your communities, projects (with their boards and channels) and groups. Home, communities and boards list posts like Reddit, with upvotes, pixel thumbnails, sticky posts and hot/new/top sorting. Opening a post shows it with its own chat below, Discord-style: reactions, replies, @mentions and formatting. Projects have a front page with their banner, boards and general chat; issues and proposals keep their status, assignee and voting controls; maintainers get admission requests in their Inbox. Your hub is styled with your theme (colors, font, wallpaper), and when you visit someone's hub you see it the way they styled it.
 
 ## Roadmap
 

@@ -1,5 +1,5 @@
 /* Weave in a Windows 95 window: 98.css for the chrome, Reddit-style post lists
-   and a Discord-style chat inside. People's own themes color their spaces. */
+   and a Discord-style chat inside. People's own themes color their hubs. */
 @import '98.css/dist/98.css';
 
 :root {
@@ -11,7 +11,7 @@
   --down: #3a5dff;
   --agent: #007a68;
   --content-font: Tahoma, Verdana, 'Segoe UI', Arial, sans-serif;
-  /* defaults for theme variables, overridden per person on their space */
+  /* defaults for theme variables, overridden per person on their hub */
   --accent: #000080;
   --bg: #008080;
   --surface: #ffffff;
@@ -304,7 +304,7 @@ menu[role='tablist'] { margin-bottom: 0; }
 .boards-table td { padding: 2px 6px 2px 0; }
 .small-btn { min-width: 0; padding: 0 6px; }
 
-/* ---------- someone's space, in their own theme (MySpace-style boxes) */
+/* ---------- someone's hub, in their own theme (MySpace-style boxes) */
 .space { min-height: 100%; margin: -10px -12px; padding: 12px; background: var(--bg); color: var(--text); font-family: var(--font); }
 .space[data-pattern='weave'] {
   background-image:

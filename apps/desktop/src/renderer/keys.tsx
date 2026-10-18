@@ -109,7 +109,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        <p>Your space, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
+        <p>Your hub, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
       </div>
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">What should people call you?</label>
@@ -120,7 +120,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           I already use Weave…
         </button>
         <button className="default" disabled={busy}>
-          Create my space
+          Create my hub
         </button>
       </div>
     </form>,
