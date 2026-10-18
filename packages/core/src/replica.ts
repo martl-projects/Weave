@@ -21,6 +21,8 @@ export class Replica {
   readonly store: LogStore;
   readonly authority = new Authority();
   #pending = new Map<string, WeaveEvent>();
+  /** Keys seen signing two different events with the same seq: a sign the key is used where it shouldn't be. */
+  readonly forks = new Set<Did>();
   #listeners = new Set<(event: WeaveEvent) => void>();
 
   /** A store that already holds events (e.g. loaded from disk) is trusted as-is; delegations in it are re-applied. */
@@ -87,7 +89,9 @@ export class Replica {
     if (event.seq < expected) {
       const stored = this.store.get(event.signer, event.seq)!;
       // Two different events with the same seq from one key is equivocation.
-      return eventId(stored) === eventId(event) ? { status: 'duplicate' } : { status: 'rejected', reason: 'conflicting event (fork)' };
+      if (eventId(stored) === eventId(event)) return { status: 'duplicate' };
+      this.forks.add(event.signer);
+      return { status: 'rejected', reason: 'conflicting event (fork)' };
     }
     if (event.seq > expected) return this.#park(event, 'gap in log');
     if (event.prev !== (head ? eventId(head) : null)) return { status: 'rejected', reason: 'broken hash chain' };

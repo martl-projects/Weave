@@ -10,6 +10,8 @@ export type {
   TierInfo,
   CommunityInfo,
   Edge,
+  IdentityInfo,
+  KeyInfo,
   EdgeInput,
   FeedItem,
   FeedQuery,

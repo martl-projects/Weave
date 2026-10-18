@@ -149,8 +149,8 @@ describe('projects, groups and the social graph between daemons', () => {
     daemons.push(alice, bob, mallory);
 
     await mallory.node.publish({ kind: 'weave.post', body: { text: 'spam' } });
-    await until(() => alice.node.nameOf(bob.node.identity.did) === 'Bob' && alice.node.nameOf(mallory.node.identity.did) === 'Mallory');
-    await until(() => bob.node.nameOf(alice.node.identity.did) === 'Alice');
+    await until(() => alice.node.nameOf(bob.node.identity.author) === 'Bob' && alice.node.nameOf(mallory.node.identity.author) === 'Mallory');
+    await until(() => bob.node.nameOf(alice.node.identity.author) === 'Alice');
 
     await alice.node.setEdge({ edge: 'follow', who: 'Bob', on: true });
     await bob.node.setEdge({ edge: 'follow', who: 'Alice', on: true });

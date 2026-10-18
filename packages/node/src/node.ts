@@ -1,5 +1,6 @@
 import {
   b64u,
+  createSubKey,
   boardName,
   boardsOf,
   canManage,
@@ -19,6 +20,7 @@ import {
   encodeContact,
   encodeInvite,
   eventId,
+  findRecoveryIndex,
   followersOf,
   friendsOf,
   gift,
@@ -26,6 +28,7 @@ import {
   isDid,
   ISSUE_STATUSES,
   issuesOf,
+  inception,
   KIND_ADMIT,
   KIND_BOARD,
   KIND_CURATE,
@@ -65,7 +68,9 @@ import {
   KIND_VOTE_DELEGATE,
   membershipRequest,
   messagesOf,
+  newRecoveryWords,
   newSpace,
+  normalizeWords,
   open,
   openGift,
   openIn,
@@ -77,8 +82,13 @@ import {
   postsOf,
   proposalsOf,
   randomBytes,
+  recoveryEncryptionKey,
+  recoveryIdentity,
+  recoveryRoot,
   rank,
   rekey,
+  revocation,
+  rotation,
   Replica,
   SAVE_MODES,
   savesOf,
@@ -102,6 +112,7 @@ import {
   type Entry,
   type EventFields,
   type Inner,
+  type Recipient,
   type Invite,
   type Issue,
   type IssueStatus,
@@ -136,6 +147,8 @@ import {
   type CommunityInfo,
   type EdgeInput,
   type FeedItem,
+  type IdentityInfo,
+  type KeyInfo,
   type FeedQuery,
   type InProject,
   type InSpace,
@@ -166,7 +179,8 @@ import {
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { resolveHome, type Home } from './home.ts';
-import { createAndSaveAgent, createAndSaveIdentity, loadAgents, loadIdentity, type AgentKey } from './keystore.ts';
+import { hostname } from 'node:os';
+import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
@@ -197,7 +211,9 @@ const DEFAULT_PAGE: ProjectPage = { description: '', status: 'active', public: f
  */
 export class WeaveNode implements Backend {
   readonly home: Home;
-  readonly identity: SigningIdentity;
+  #identity: SigningIdentity;
+  /** This person's encryption keys on this device, oldest first. */
+  #encryption: EncryptionKey[];
   readonly replica: Replica;
   config: Config;
   #agents: AgentKey[];
@@ -213,7 +229,10 @@ export class WeaveNode implements Backend {
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
-    this.identity = identity;
+    this.#identity = identity;
+    // Homes from before separate encryption keys use the root key for encryption.
+    const stored = loadEncryptionKeys(home);
+    this.#encryption = stored.length ? stored : [{ did: identity.did, keys: identity.keys }];
     this.#releaseLock = acquireLock(home);
     this.replica = new Replica(new FileStore(home.logs));
     this.config = loadConfig(home);
@@ -236,12 +255,74 @@ export class WeaveNode implements Backend {
     return new WeaveNode(home, identity);
   }
 
-  /** Create a new identity in an empty home and publish a profile with the given name. */
+  /** The key this node signs with: this device's (for old homes, the root key). */
+  get identity(): SigningIdentity {
+    return this.#identity;
+  }
+
+  /** Create a new identity in an empty home and publish a profile with the given name. The recovery words are dropped: for tests and demos. */
   static init(name: string, dir?: string): WeaveNode {
+    return WeaveNode.create(name, dir).node;
+  }
+
+  /**
+   * Create a new identity in an empty home. Returns the 24 recovery words: they
+   * are shown once and never stored, and every root and encryption key is
+   * derived from them. The root signs the identity record (committing to the
+   * next root) and this device's key; after that, only the device key is on disk.
+   */
+  static create(name: string, dir?: string): { node: WeaveNode; words: string } {
     const home = resolveHome(dir);
-    createAndSaveIdentity(home);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const words = newRecoveryWords();
+    const root = recoveryRoot(words, 0);
+    const person: SigningIdentity = { author: root.did, did: root.did, keys: root };
+    const device = createSubKey(root.did);
+    const enc = recoveryEncryptionKey(words, 0);
+    saveEncryptionKeys(home, [{ did: enc.did, keys: enc }]);
+    saveDevice(home, device);
     const node = WeaveNode.open(home.dir);
+    node.replica.append(person, inception(recoveryRoot(words, 1).did, enc.did));
+    node.replica.append(person, delegation(device.did, 'device', ['*'], deviceName()));
     node.replica.append(node.identity, { kind: KIND_PROFILE, body: { name } });
+    return { node, words };
+  }
+
+  /**
+   * Set up this computer as a new device of an existing identity, from its
+   * recovery words. The identity's events must reach this node first (from
+   * `events`, or from peers while it waits online), so it knows which root and
+   * encryption key are current.
+   */
+  static async restore(words: string, dir?: string, options: { events?: WeaveEvent[]; online?: boolean; timeoutMs?: number } = {}): Promise<WeaveNode> {
+    const clean = normalizeWords(words);
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const author = recoveryIdentity(clean);
+    const device = createSubKey(author);
+    const firstEnc = recoveryEncryptionKey(clean, 0);
+    saveEncryptionKeys(home, [{ did: firstEnc.did, keys: firstEnc }]);
+    saveDevice(home, device);
+    const node = WeaveNode.open(home.dir);
+    for (const event of options.events ?? []) node.replica.ingest(event);
+    const known = () => !!node.replica.authority.keys(author).next;
+    if (!known() && options.online) {
+      await node.goOnline();
+      await node.join(author);
+      const until = Date.now() + (options.timeoutMs ?? 30_000);
+      while (!known() && Date.now() < until) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!known()) {
+      await node.close();
+      throw new Error("couldn't find your identity on the network yet: keep another of your devices (or a friend who follows you) online and try again");
+    }
+    const state = node.replica.authority.keys(author);
+    const rootIndex = findRecoveryIndex(clean, state.root, 'root');
+    const encIndex = findRecoveryIndex(clean, state.enc, 'enc');
+    if (rootIndex === undefined || encIndex === undefined) throw new Error("these words don't match this identity's current keys");
+    node.#saveEncryption(Array.from({ length: encIndex + 1 }, (_, i) => recoveryEncryptionKey(clean, i)).map((k) => ({ did: k.did, keys: k })));
+    const root = recoveryRoot(clean, rootIndex);
+    node.replica.append({ author, did: root.did, keys: root }, delegation(device.did, 'device', ['*'], deviceName()));
     return node;
   }
 
@@ -279,7 +360,7 @@ export class WeaveNode implements Backend {
   }
 
   async whoami(): Promise<Whoami> {
-    return { did: this.identity.did, name: this.nameOf(this.identity.did), agents: this.#agents.map(agentInfo) };
+    return { did: this.identity.author, name: this.nameOf(this.identity.author), agents: this.#agents.map(agentInfo), signer: this.identity.did };
   }
 
   async publish(input: PublishInput): Promise<FeedItem> {
@@ -336,8 +417,8 @@ export class WeaveNode implements Backend {
     const heads = this.replica.heads();
     const spaces = [...this.#spaces.values()];
     return {
-      did: this.identity.did,
-      name: this.nameOf(this.identity.did),
+      did: this.identity.author,
+      name: this.nameOf(this.identity.author),
       online: this.online,
       topics: this.config.topics,
       groups: spaces.filter((s) => s.kind === 'group').length,
@@ -407,7 +488,7 @@ export class WeaveNode implements Backend {
     for (const entry of this.#entries(space)) {
       const { author, signer, time } = entry.event;
       if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
-      const agent = signer !== author ? this.replica.authority.grant(signer)?.name : undefined;
+      const agent = this.#agentName(signer, author);
       if (agent) agents.set(author, (agents.get(author) ?? new Set()).add(agent));
     }
     return [...state.members.values()].map((m) => ({
@@ -433,7 +514,7 @@ export class WeaveNode implements Backend {
     if (member === space.founder) throw new Error(`the founder can't be removed from ${space.name}`);
     this.replica.append(this.identity, sealFor(space, { kind: KIND_REMOVE, body: { member } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
-    const { fields, epoch, key } = rekey(space, remaining);
+    const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
     this.replica.append(this.identity, fields);
@@ -814,14 +895,14 @@ export class WeaveNode implements Backend {
   /** A space's theme: the latest theme event its author published. */
   themeOf(author: Did): Theme {
     let theme: unknown;
-    for (const event of this.replica.store.range(author, 1)) if (event.kind === KIND_THEME) theme = event.body;
+    for (const event of this.#eventsOf(author)) if (event.kind === KIND_THEME) theme = event.body;
     return sanitizeTheme(theme);
   }
 
   /** Projects someone shows publicly: their latest public page per project, unless withdrawn. */
   publicProjectsOf(author: Did): PublicProject[] {
     const latest = new Map<string, { body: Record<string, unknown>; time: string }>();
-    for (const event of this.replica.store.range(author, 1)) {
+    for (const event of this.#eventsOf(author)) {
       const body = event.body as Record<string, unknown> | null;
       if (event.kind === KIND_PUBLIC_PROJECT && typeof body?.project === 'string') latest.set(body.project, { body, time: event.time });
     }
@@ -834,6 +915,158 @@ export class WeaveNode implements Backend {
         status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
         time,
       }));
+  }
+
+  // ---------------------------------------------------------------- identity and keys
+
+  async identityInfo(): Promise<IdentityInfo> {
+    const me = this.identity.author;
+    const state = this.replica.authority.keys(me);
+    const mine = (key: Did) => this.replica.authority.personOf(key) === me;
+    return {
+      did: me,
+      recoverable: !!state.next,
+      rotations: state.retired.size,
+      encryptionKey: state.enc,
+      device: this.identity.did,
+      forks: [...this.replica.forks].filter(mine),
+    };
+  }
+
+  async keys(): Promise<KeyInfo[]> {
+    const me = this.identity.author;
+    const out: KeyInfo[] = [];
+    for (const grant of this.replica.authority.grantsOf(me)) {
+      const signer = grant.subject;
+      const head = this.replica.store.head(signer);
+      out.push({
+        did: signer,
+        role: grant.role,
+        ...(grant.name ? { name: grant.name } : {}),
+        current: signer === this.identity.did,
+        ...(grant.revokedAfter !== undefined ? { revokedAfter: grant.revokedAfter } : {}),
+        events: head?.seq ?? 0,
+        ...(head ? { lastTime: head.time } : {}),
+        forked: this.replica.forks.has(signer),
+      });
+    }
+    return out.sort((a, b) => Number(b.current) - Number(a.current) || a.role.localeCompare(b.role) || (a.name ?? '').localeCompare(b.name ?? ''));
+  }
+
+  async revokeKey(input: { key: string; since?: string; words?: string }): Promise<KeyInfo[]> {
+    const me = this.identity.author;
+    const all = await this.keys();
+    const key = all.find((k) => k.did === input.key) ?? all.find((k) => k.name?.toLowerCase() === input.key.toLowerCase());
+    if (!key) throw new Error(`you have no device or agent "${input.key}"`);
+    // Everything it signed after `since` becomes void; claimed times can be forged, so we cut at the last event before it.
+    let afterSeq = this.replica.store.head(key.did)?.seq ?? 0;
+    if (input.since) {
+      const since = Date.parse(input.since);
+      if (Number.isNaN(since)) throw new Error('since is a date and time, e.g. 2026-10-17T18:00');
+      afterSeq = 0;
+      for (const event of this.replica.store.range(key.did, 1)) if (Date.parse(event.time) < since) afterSeq = event.seq;
+    }
+    const ownDevice = key.did === this.identity.did;
+    if (key.role === 'agent' && !input.words) {
+      if (ownDevice) throw new Error('that is this device');
+      this.replica.append(this.identity, revocation(key.did, afterSeq));
+    } else {
+      if (!input.words) throw new Error('revoking a device needs your recovery words');
+      const root = this.#currentRoot(input.words);
+      this.replica.append(root, revocation(key.did, afterSeq));
+      if (ownDevice) {
+        // This computer keeps working with a fresh device key.
+        const fresh = createSubKey(me);
+        this.replica.append(root, delegation(fresh.did, 'device', ['*'], deviceName()));
+        saveDevice(this.home, fresh);
+        this.#identity = fresh;
+        this.#decoded = undefined;
+      }
+    }
+    return this.keys();
+  }
+
+  async rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo> {
+    const words = normalizeWords(input.words);
+    const me = this.identity.author;
+    const state = this.replica.authority.keys(me);
+    if (!state.next) throw new Error('this identity was made before recovery kits existed and cannot rotate; create a new identity');
+    const index = findRecoveryIndex(words, state.root, 'root');
+    if (index === undefined || recoveryIdentity(words) !== me) throw new Error("these words don't belong to this identity");
+    const next = recoveryRoot(words, index + 1);
+    const retire = this.replica.store.head(state.root)?.seq ?? 0;
+    let enc: EncryptionKey | undefined;
+    if (input.encryption) {
+      const encIndex = findRecoveryIndex(words, state.enc, 'enc') ?? this.#encryption.length - 1;
+      const key = recoveryEncryptionKey(words, encIndex + 1);
+      enc = { did: key.did, keys: key };
+      this.#saveEncryption([...this.#encryption, enc]);
+    }
+    this.replica.append({ author: me, did: next.did, keys: next }, rotation(recoveryRoot(words, index + 2).did, retire, enc?.did));
+    this.#decoded = undefined;
+    return this.identityInfo();
+  }
+
+  /** The current root key, from the recovery words. */
+  #currentRoot(words: string): SigningIdentity {
+    const clean = normalizeWords(words);
+    const me = this.identity.author;
+    if (recoveryIdentity(clean) !== me) throw new Error("these words don't belong to this identity");
+    const index = findRecoveryIndex(clean, this.replica.authority.keys(me).root, 'root');
+    if (index === undefined) throw new Error("these words don't match this identity's current root key");
+    const root = recoveryRoot(clean, index);
+    return { author: me, did: root.did, keys: root };
+  }
+
+  #saveEncryption(keys: EncryptionKey[]): void {
+    saveEncryptionKeys(this.home, keys);
+    this.#encryption = keys;
+    this.#decoded = undefined;
+  }
+
+  /** Where to encrypt to when writing to someone: their published encryption key. */
+  #encryptionKeyOf = (person: Did): Did => this.replica.authority.encryptionKey(person);
+
+  /** Me, as someone opening what was encrypted to me, with my current encryption key. */
+  #recipient(): Recipient {
+    const published = this.replica.authority.encryptionKey(this.identity.author);
+    const key = this.#encryption.find((k) => k.did === published) ?? this.#encryption.at(-1)!;
+    return { author: this.identity.author, keys: key.keys };
+  }
+
+  /** Try opening something with each of my encryption keys, newest first. */
+  #tryOpen<T>(open: (me: Recipient) => T | undefined): T | undefined {
+    for (const key of [...this.#encryption].reverse()) {
+      const opened = open({ author: this.identity.author, keys: key.keys });
+      if (opened !== undefined) return opened;
+    }
+    return undefined;
+  }
+
+  /** The secret behind my private (self-sealed) data: my first encryption key, so it survives rotations. */
+  #selfSecret(): Uint8Array {
+    return this.#encryption[0].keys.secretKey;
+  }
+
+  /**
+   * A person's own events, from every key that signs for them (root keys and
+   * devices; agents too), valid ones only, oldest first.
+   */
+  #eventsOf(person: Did): WeaveEvent[] {
+    const authority = this.replica.authority;
+    const events: WeaveEvent[] = [];
+    for (const signer of this.replica.store.signers()) {
+      if (authority.personOf(signer) !== person) continue;
+      for (const event of this.replica.store.range(signer, 1)) if (event.author === person && authority.check(event).ok) events.push(event);
+    }
+    return events.sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
+  }
+
+  /** An agent's name, if this signer is one of the author's agents (devices sign as the person). */
+  #agentName(signer: Did, author: Did): string | undefined {
+    if (signer === author) return undefined;
+    const grant = this.replica.authority.grant(signer);
+    return grant?.role === 'agent' ? grant.name : undefined;
   }
 
   // ---------------------------------------------------------------- memberships
@@ -861,7 +1094,7 @@ export class WeaveNode implements Backend {
     if (tier.creator === this.identity.author) throw new Error("that's your own tier");
     if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
     await this.join(tier.creator); // the creator's node listens on their identity topic
-    this.replica.append(this.identity, membershipRequest(tier.creator, { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint() }));
+    this.replica.append(this.identity, membershipRequest(this.#encryptionKeyOf(tier.creator), { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint() }));
     this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_PENDING, body: { creator: tier.creator, tier: tier.id } }));
   }
 
@@ -871,7 +1104,7 @@ export class WeaveNode implements Backend {
     const out: MembershipRequestInfo[] = [];
     for (const event of this.replica.events((e) => e.kind === KIND_MEMBERSHIP_REQUEST && e.author !== this.identity.author)) {
       const id = eventId(event);
-      const request = handled.has(id) ? undefined : openMembershipRequest(event, this.identity);
+      const request = handled.has(id) ? undefined : this.#tryOpen((me) => openMembershipRequest(event, me));
       const tier = request && mine.get(request.tier);
       if (!tier) continue;
       out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time });
@@ -892,7 +1125,7 @@ export class WeaveNode implements Backend {
     // New (or returning) members get the tier's keys, posted where their node will look for them.
     if (!current) {
       const { entry: _entry, ...keys } = group;
-      this.replica.append(this.identity, gift({ ...keys }, [member], 'gift', this.#entryPoint()));
+      this.replica.append(this.identity, gift({ ...keys }, [member], 'gift', this.#entryPoint(), this.#encryptionKeyOf));
     }
     await this.#answerRequests(group.id, member);
     return this.#tierInfo(this.#tierOffer(group.id));
@@ -925,7 +1158,7 @@ export class WeaveNode implements Backend {
       if (!expired.length) continue;
       for (const member of expired) this.replica.append(this.identity, sealFor(space, { kind: KIND_REMOVE, body: { member } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
-      const { fields, epoch, key } = rekey(space, remaining);
+      const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
       this.#saveSpace(space);
       this.replica.append(this.identity, fields);
@@ -957,7 +1190,7 @@ export class WeaveNode implements Backend {
 
   /** The tiers a creator offers, from their public events. */
   #tierOffers(creator: Did): Tier[] {
-    return tiersOf([...this.replica.store.range(creator, 1)]);
+    return tiersOf(this.#eventsOf(creator));
   }
 
   /** A tier anyone offers, by id or name (yours first). */
@@ -1202,7 +1435,7 @@ export class WeaveNode implements Backend {
   /** Display name for an author: the name in their latest profile, else the one their contact link gave. */
   nameOf(author: Did): string | undefined {
     let name: string | undefined;
-    for (const event of this.replica.store.range(author, 1)) {
+    for (const event of this.#eventsOf(author)) {
       const body = event.body as { name?: unknown } | null;
       if (event.kind === KIND_PROFILE && typeof body?.name === 'string') name = body.name;
     }
@@ -1333,7 +1566,7 @@ export class WeaveNode implements Backend {
     if (!dids.length) return;
     for (const member of dids) this.replica.append(this.identity, sealFor(project, { kind: KIND_ADMIT, body: { member, via: group.id } }));
     const { entry: _entry, ...keys } = project;
-    this.replica.append(this.identity, gift({ ...keys }, dids, spaceScope(group), this.#entryPoint()));
+    this.replica.append(this.identity, gift({ ...keys }, dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
 
   /** Joins to and departures from a project's invited groups that this node can see (it must be in the group). */
@@ -1362,14 +1595,14 @@ export class WeaveNode implements Backend {
     if (canonicalKind(event.kind) === KIND_REKEY) {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
       if (!space || !canManage(this.#state(space), event.author)) return;
-      const opened = openRekey(event, this.identity);
+      const opened = this.#tryOpen((me) => openRekey(event, me));
       if (opened && !space.keys[String(opened.epoch)]) {
         space.keys[String(opened.epoch)] = opened.key;
         this.#saveSpace(space);
       }
       return;
     }
-    const opened = openGift(event, this.identity);
+    const opened = this.#tryOpen((me) => openGift(event, me));
     if (!opened) return;
     // Only accept gifts posted in a group we're in, by someone in that group,
     // or a tier's keys from the creator we asked to join it.
@@ -1439,7 +1672,7 @@ export class WeaveNode implements Backend {
   #direct(peer: Did): StoredSpace {
     let space = this.#directByPeer.get(peer);
     if (!space) {
-      space = { ...directSpace(this.identity, peer), entry: { topics: [peer], bootstrap: [] } };
+      space = { ...directSpace(this.#recipient(), peer, this.#encryptionKeyOf(peer)), entry: { topics: [peer], bootstrap: [] } };
       this.#directByPeer.set(peer, space);
       this.#directs.set(space.id, { space, peer });
     }
@@ -1448,8 +1681,9 @@ export class WeaveNode implements Backend {
 
   /** Derive the direct chats with everyone whose log we hold (people, not their agents' keys). */
   #ensureDirects(): void {
-    for (const author of Object.keys(this.replica.heads()) as Did[]) {
-      if (author !== this.identity.author && !this.#directByPeer.has(author) && !this.replica.authority.grant(author)) this.#direct(author);
+    for (const signer of Object.keys(this.replica.heads()) as Did[]) {
+      const person = this.replica.authority.personOf(signer);
+      if (person !== this.identity.author && !this.#directByPeer.has(person) && !this.replica.authority.grant(person)) this.#direct(person);
     }
   }
 
@@ -1607,7 +1841,7 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- internals: reading
 
   #sealForSelf(inner: Inner): EventFields {
-    const key = selfKey(this.identity.keys.secretKey);
+    const key = selfKey(this.#selfSecret());
     return { kind: KIND_SEALED, scope: SELF_SCOPE, body: seal(key, inner as unknown as Json, `weave/self/v1:${this.identity.author}`) };
   }
 
@@ -1619,7 +1853,7 @@ export class WeaveNode implements Backend {
     if (event.scope === SELF_SCOPE) {
       if (event.author !== this.identity.author) return undefined;
       try {
-        const key = selfKey(this.identity.keys.secretKey);
+        const key = selfKey(this.#selfSecret());
         const inner = open(key, event.body as Sealed, `weave/self/v1:${event.author}`) as unknown as Inner;
         decoded = { event, inner, private: true };
       } catch {
@@ -1629,7 +1863,7 @@ export class WeaveNode implements Backend {
       const scope = parseScope(event.scope);
       let space = this.#spaces.get(scope?.id ?? '') ?? this.#directs.get(scope?.id ?? '')?.space;
       // A direct message from someone new: their chat with us is the one derived from their key.
-      if (!space && scope?.kind === 'direct' && event.author !== this.identity.author && !this.replica.authority.grant(event.author)) {
+      if (!space && scope?.kind === 'direct' && event.author !== this.identity.author) {
         const candidate = this.#direct(event.author);
         if (candidate.id === scope.id) space = candidate;
       }
@@ -1702,10 +1936,8 @@ export class WeaveNode implements Backend {
     const actor: Actor = { did: author };
     const name = this.nameOf(author);
     if (name) actor.name = name;
-    if (signer !== author) {
-      const agent = this.replica.authority.grant(signer)?.name;
-      if (agent) actor.agent = agent;
-    }
+    const agent = this.#agentName(signer, author);
+    if (agent) actor.agent = agent;
     return actor;
   }
 
@@ -1784,10 +2016,8 @@ export class WeaveNode implements Backend {
     };
     const authorName = this.nameOf(event.author);
     if (authorName) item.authorName = authorName;
-    if (event.signer !== event.author) {
-      const signerName = this.replica.authority.grant(event.signer)?.name;
-      if (signerName) item.signerName = signerName;
-    }
+    const signerName = this.#agentName(event.signer, event.author);
+    if (signerName) item.signerName = signerName;
     if (space) item.space = { id: space.id, kind: space.kind, name: this.#spaceName(space) };
     if (isPrivate) item.private = true;
     return item;
@@ -1795,3 +2025,6 @@ export class WeaveNode implements Backend {
 }
 
 const agentInfo = (agent: AgentKey): AgentInfo => ({ name: agent.name, did: agent.did, permissions: agent.permissions });
+
+/** This computer's name, for naming its device key. */
+const deviceName = (): string => hostname().slice(0, 40) || 'device';

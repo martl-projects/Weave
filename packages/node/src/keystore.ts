@@ -36,6 +36,26 @@ export function loadIdentity(home: Home): SigningIdentity | undefined {
   return stored && fromStored(stored);
 }
 
+/** Save this device's key (it acts for `identity.author`). Replaces the previous one. */
+export function saveDevice(home: Home, identity: SigningIdentity): void {
+  writeJson(home.identity, toStored(identity));
+}
+
+export interface EncryptionKey {
+  did: Did;
+  keys: SigningIdentity['keys'];
+}
+
+/** The person's encryption keys held on this device, oldest first; empty for homes from before they existed. */
+export function loadEncryptionKeys(home: Home): EncryptionKey[] {
+  const stored = readJson<Array<{ did: Did; publicKey: string; secretKey: string }>>(home.encryption) ?? [];
+  return stored.map((s) => ({ did: s.did, keys: { publicKey: b64u.decode(s.publicKey), secretKey: b64u.decode(s.secretKey) } }));
+}
+
+export function saveEncryptionKeys(home: Home, keys: EncryptionKey[]): void {
+  writeJson(home.encryption, keys.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })));
+}
+
 export function createAndSaveIdentity(home: Home): SigningIdentity {
   if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
   const identity = createIdentity();

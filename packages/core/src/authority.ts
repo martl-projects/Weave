@@ -106,6 +106,11 @@ export class Authority {
     return this.#grants.get(subject);
   }
 
+  /** All device and agent keys delegated by a person, revoked ones included. */
+  grantsOf(author: Did): Grant[] {
+    return [...this.#grants.values()].filter((g) => g.author === author);
+  }
+
   /** A person's key state; people who never published identity events have their identifier as root and encryption key. */
   keys(person: Did): KeyState {
     return this.#people.get(person) ?? { root: person, retired: new Map(), enc: person };

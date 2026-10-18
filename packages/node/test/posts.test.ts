@@ -22,10 +22,10 @@ describe('contact links', () => {
     const ada = person('Ada');
     const link = await ada.contactLink();
     expect(link).toMatch(/^weave:contact:/);
-    expect(link).not.toContain(ada.identity.did.slice(8)); // encoded, holds no keys either
+    expect(link).not.toContain(ada.identity.author.slice(8)); // encoded, holds no keys either
     const added = await martin.addContact(`Add me on Weave: ${link} see you!`);
-    expect(added).toMatchObject({ did: ada.identity.did, name: 'Ada', contact: true, following: true });
-    expect(martin.config.topics).toContain(ada.identity.did);
+    expect(added).toMatchObject({ did: ada.identity.author, name: 'Ada', contact: true, following: true });
+    expect(martin.config.topics).toContain(ada.identity.author);
     expect((await martin.directory('ad')).map((p) => p.name)).toEqual(['Ada']);
     expect(await martin.directory('zz')).toEqual([]);
     await expect(ada.addContact(link)).rejects.toThrow(/your own/);
@@ -39,7 +39,7 @@ describe('contact links', () => {
     expect(martin.config.bootstrap).toEqual([]);
     await tester.createGroup('Testers');
     await expect(martin.joinSpace(await tester.invite('Testers'))).rejects.toThrow(/weave bootstrap 127.0.0.1:49737/);
-    expect(martin.replica.events().filter((e) => e.author === martin.identity.did && e.scope === 'self').length).toBe(1);
+    expect(martin.replica.events().filter((e) => e.author === martin.identity.author && e.scope === 'self').length).toBe(1);
   });
 });
 
@@ -109,9 +109,9 @@ describe('direct chats', () => {
     const martin = person('Martin');
     const ada = person('Ada');
     const eve = person('Eve');
-    await expect(martin.openChat(ada.identity.did)).rejects.toThrow(/friends/);
-    await martin.setEdge({ edge: 'follow', who: ada.identity.did, on: true });
-    await ada.setEdge({ edge: 'follow', who: martin.identity.did, on: true });
+    await expect(martin.openChat(ada.identity.author)).rejects.toThrow(/friends/);
+    await martin.setEdge({ edge: 'follow', who: ada.identity.author, on: true });
+    await ada.setEdge({ edge: 'follow', who: martin.identity.author, on: true });
     sync(martin, ada);
     sync(ada, martin);
 
@@ -132,7 +132,7 @@ describe('direct chats', () => {
     expect((await eve.feed({ limit: 100 })).some((i) => i.kind === 'weave.msg')).toBe(false);
     expect((await martin.spaces()).some((s) => s.kind === 'direct')).toBe(false); // chats aren't listed as spaces
 
-    await ada.setEdge({ edge: 'follow', who: martin.identity.did, on: false });
+    await ada.setEdge({ edge: 'follow', who: martin.identity.author, on: false });
     sync(ada, martin);
     expect((await martin.chats())[0].friend).toBe(false);
     await expect(martin.say({ space: chat.id, text: 'hello?' })).rejects.toThrow(/read-only/);

@@ -33,9 +33,42 @@ export interface AgentInfo {
 }
 
 export interface Whoami {
+  /** The person: your identifier, which stays the same when keys change. */
   did: Did;
   name?: string;
   agents: AgentInfo[];
+  /** The key this node signs with: this device's key (for old identities, the identifier itself). */
+  signer: Did;
+}
+
+/** Your identity's keys as the network sees them. */
+export interface IdentityInfo {
+  did: Did;
+  /** Protected by a recovery kit, with a pre-committed next root key. False for identities made before that existed. */
+  recoverable: boolean;
+  /** How many times the root key was rotated. */
+  rotations: number;
+  /** The key people encrypt to when writing to you. */
+  encryptionKey: Did;
+  /** This device's key. */
+  device: Did;
+  /** Your keys that were seen signing in two places at once: possibly stolen. */
+  forks: Did[];
+}
+
+/** One of your device or agent keys. */
+export interface KeyInfo {
+  did: Did;
+  role: 'device' | 'agent';
+  name?: string;
+  /** The key this node signs with. */
+  current: boolean;
+  /** Revoked: events after this seq are void. */
+  revokedAfter?: number;
+  /** Events it signed, and when the latest says it was signed. */
+  events: number;
+  lastTime?: string;
+  forked: boolean;
 }
 
 export interface Status {
@@ -483,6 +516,19 @@ export interface Backend {
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
   addContact(link: string): Promise<Profile>;
 
+  // identity and keys
+  identityInfo(): Promise<IdentityInfo>;
+  /** Your devices and agents. */
+  keys(): Promise<KeyInfo[]>;
+  /**
+   * Revoke a device or agent (did or name): its events after `since` (a time; default now) are void.
+   * Devices need your recovery words; agents can be revoked from this device. Revoking this device's
+   * own key gives this computer a fresh one.
+   */
+  revokeKey(input: { key: string; since?: string; words?: string }): Promise<KeyInfo[]>;
+  /** Rotate to the next root key from your recovery words; with `encryption`, also to a new encryption key. */
+  rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo>;
+
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
   createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[] }): Promise<TierInfo>;
@@ -543,6 +589,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

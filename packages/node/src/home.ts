@@ -6,7 +6,8 @@ import { dirname, join, resolve } from 'node:path';
  * A Weave home directory holds one person's node: identity, agent keys,
  * config and logs. Several homes on one machine are several simulated people.
  *
- *   identity.json   root key (plaintext for now — to be encrypted)
+ *   identity.json   this device's key, acting for the person (old homes: the root key itself)
+ *   encryption.json the person's encryption keys, newest last (old homes: none, the root key is used)
  *   agents/*.json   delegated agent keys
  *   groups/*.json   keys of the groups and projects you belong to (secret)
  *   config.json     topics to join, bootstrap nodes
@@ -17,6 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 export interface Home {
   dir: string;
   identity: string;
+  encryption: string;
   agents: string;
   groups: string;
   config: string;
@@ -30,6 +32,7 @@ export function resolveHome(dir?: string): Home {
   return {
     dir: root,
     identity: join(root, 'identity.json'),
+    encryption: join(root, 'encryption.json'),
     agents: join(root, 'agents'),
     groups: join(root, 'groups'),
     config: join(root, 'config.json'),

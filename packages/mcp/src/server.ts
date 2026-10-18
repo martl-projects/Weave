@@ -69,7 +69,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   let mySigner: string | undefined;
 
   void backend.whoami().then((me) => {
-    mySigner = as ? me.agents.find((a) => a.name === as)?.did : me.did;
+    mySigner = as ? me.agents.find((a) => a.name === as)?.did : me.signer;
   });
 
   const mentionPattern = as ? new RegExp(`@${as.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i') : undefined;

@@ -152,3 +152,12 @@ export {
   type MembershipRequest,
   type Tier,
 } from './memberships.ts';
+export {
+  findIndex as findRecoveryIndex,
+  newRecoveryWords,
+  normalizeWords,
+  recoveryEncryptionKey,
+  recoveryIdentity,
+  recoveryRoot,
+  type RecoveryWords,
+} from './recovery.ts';
