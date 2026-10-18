@@ -34,6 +34,8 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 
 ## Getting started
 
+Invited to try it? [JOINING.md](JOINING.md) gets you from zero to chatting. The rest of this section is for developing Weave.
+
 Requires Node.js 24 or newer (TypeScript runs natively, no build step).
 
 ```bash
