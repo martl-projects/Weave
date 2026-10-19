@@ -590,6 +590,12 @@ export interface Backend {
   /** Maintainers: limit who reads and writes a board, by name or did:key, and groups as "group:<name>"; null opens it to everyone. */
   setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]>;
   members(space: string): Promise<MemberInfo[]>;
+  /** A pairing code (for a QR code) that lets a phone use this node; valid for ten minutes, once. Needs the node online. */
+  pairPhone(): Promise<{ link: string; expires: string }>;
+  /** Phones paired with this node, and whether each is connected right now. */
+  phones(): Promise<Array<{ key: string; name: string; paired: string; lastSeen?: string }>>;
+  /** Unpair a phone: it's disconnected at once and refused from then on. */
+  unpairPhone(key: string): Promise<void>;
   /** Show a community or project on your Home, or not. Private: sealed to you, it follows you to your other devices. */
   setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo>;
   /** Leave a group, project or community: you stop receiving it, and its key rotates. The owner hands it over first. */
@@ -757,7 +763,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

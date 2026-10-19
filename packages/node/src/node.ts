@@ -245,6 +245,7 @@ import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveD
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
+import { RemoteAccess } from './remote.ts';
 import { checkGumroadLicense, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
@@ -312,6 +313,15 @@ export class WeaveNode implements Backend {
   #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
   /** The time, in milliseconds (tests move it forward to reach renewals). */
   clock: () => number = Date.now;
+  /** Paired phones using this node remotely (see remote.ts). */
+  #remote = new RemoteAccess({
+    home: () => this.home,
+    dht: () => this.#swarm?.swarm.dht,
+    bootstrap: () => this.config.bootstrap,
+    name: () => this.nameOf(this.identity.author),
+    call: (method, args) => (this[method] as (...a: unknown[]) => Promise<unknown>).apply(this, args),
+    watch: (onItem, signal) => this.watch(onItem, signal),
+  });
   /** Apps this node started for the person, by project id. */
   #apps = new AppProcesses(() => this.#emitLive());
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -445,10 +455,12 @@ export class WeaveNode implements Backend {
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
+    await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
   }
 
   async goOffline(): Promise<void> {
     this.#apps.stopAll();
+    await this.#remote.close();
     await this.#live.close();
     await this.#swarm?.destroy();
     this.#swarm = undefined;
@@ -2638,6 +2650,20 @@ export class WeaveNode implements Backend {
       }
     }
     return posts.filter((p) => !hidden.has(p.by.did));
+  }
+
+  // ---------------------------------------------------------------- phones
+
+  async pairPhone(): Promise<{ link: string; expires: string }> {
+    return this.#remote.pair();
+  }
+
+  async phones(): Promise<Array<{ key: string; name: string; paired: string; lastSeen?: string }>> {
+    return this.#remote.phones();
+  }
+
+  async unpairPhone(key: string): Promise<void> {
+    this.#remote.unpair(key);
   }
 
   async setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo> {
