@@ -3,6 +3,7 @@ import type { IdentityInfo, KeyInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
+import { PhonesBox } from './phones.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -237,6 +238,7 @@ export function KeysView() {
         </table>
         <p className="small">Each computer signs with its own key. To use Weave on another computer, choose “I already use Weave” there and type your words; don't copy your Weave folder.</p>
       </fieldset>
+      <PhonesBox />
       {dialog?.kind === 'revoke' && (
         <WordsDialog
           title={dialog.key.current ? 'Replace this device key' : 'Revoke device'}

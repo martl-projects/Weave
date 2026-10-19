@@ -474,3 +474,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .app-log { max-height: 180px; overflow: auto; margin: 4px 0 0; padding: 4px 6px; background: #000; color: #c0c0c0; font: 11px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; }
 .approve-launch { display: flex; gap: 10px; align-items: flex-start; }
 .launch-command { margin: 4px 0; padding: 4px 6px; background: #fff; border: 1px solid #808080; font: 12px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+
+/* ---------- pairing a phone */
+.pair-phone { display: flex; gap: 12px; align-items: flex-start; }
+.pair-phone .qr { flex: none; width: 200px; height: 200px; background: #fff; border: 1px solid #808080; }
+.pair-phone .qr svg { display: block; width: 100%; height: 100%; }
