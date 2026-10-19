@@ -131,8 +131,10 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"] [--auto: let people in without asking]
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
+                             sell it through Gumroad: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
+                             (license keys on; your node lets buyers in and renews monthly); --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
-  support <tier>             ask to join a tier               [--text "how I paid"] (only the creator reads it)
+  support <tier>             ask to join a tier               [--text "how I paid"] [--license <key from your Gumroad receipt>]
   requests                   people asking to join your tiers
   grant <tier> <who>         let them in, or renew            [--months 1]
   decline <tier> <who>       turn a request down
@@ -243,6 +245,10 @@ const { values, positionals } = parseArgs({
     price: { type: 'string' },
     currency: { type: 'string' },
     benefit: { type: 'string' },
+    gumroad: { type: 'string' },
+    'gumroad-product': { type: 'string' },
+    'gumroad-variant': { type: 'string' },
+    license: { type: 'string' },
     months: { type: 'string' },
     name: { type: 'string' },
     status: { type: 'string' },
@@ -295,8 +301,17 @@ function needSpace(): string {
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const tierLine = (t: TierInfo) => {
   const state = t.mine ? `${t.members ?? 0} member${t.members === 1 ? '' : 's'}${t.open ? '' : ', closed'}` : t.membership ? (t.membership.active ? `member until ${new Date(t.membership.until).toLocaleDateString()}` : 'membership ended') : t.requested ? 'asked to join' : t.open ? 'open' : 'closed';
-  return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}`;
+  const gumroad = t.gumroad ? `\n  sold on Gumroad: ${t.gumroad.url}${t.gumroad.variant ? ` (${t.gumroad.variant})` : ''}${t.mine ? '' : ` — then: weave support ${t.id} --license <key>`}` : '';
+  return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}${gumroad}`;
 };
+
+/** --gumroad options as a tier's Gumroad link: undefined leaves it, null removes it. */
+function gumroadLink(): TierInfo['gumroad'] | null {
+  if (values.gumroad === undefined) return undefined;
+  if (values.gumroad === 'off') return null;
+  if (!values['gumroad-product']) throw new Error('add the product id: --gumroad-product <id> (from the product in Gumroad)');
+  return { url: values.gumroad, product: values['gumroad-product'], ...(values['gumroad-variant'] ? { variant: values['gumroad-variant'] } : {}) };
+}
 /** "5" or "5.50" (in the currency's main unit) → cents. */
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
@@ -949,7 +964,7 @@ ${postLine(p)}`);
       const [sub, ref] = args;
       const b = await backend();
       if (sub === 'create' && ref) {
-        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto });
+        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined });
         return out(t, () => `offered ${t.name}\n${tierLine(t)}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
       }
       if (sub === 'list') {
@@ -957,7 +972,7 @@ ${postLine(p)}`);
         return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(no tiers)');
       }
       if (sub === 'set' && ref) {
-        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto });
+        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() });
         return out(t, () => tierLine(t));
       }
       if ((sub === 'open' || sub === 'close' || sub === 'hide') && ref) {
@@ -970,13 +985,15 @@ ${postLine(p)}`);
     case 'support': {
       const tier = args.join(' ').trim();
       if (!tier) throw new Error('usage: weave support <tier id> [--text "how I paid"]');
-      await (await backend()).requestMembership({ tier, note: values.text });
-      return out({ requested: tier }, () => 'asked to join; the creator decides');
+      await (await backend()).requestMembership({ tier, note: values.text, license: values.license });
+      return out({ requested: tier }, () => (values.license ? "sent your license key: you're in once the creator's node has checked it with Gumroad" : 'asked to join; the creator decides'));
     }
 
     case 'requests': {
       const list = await (await backend()).membershipRequests();
-      return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
+      const license = (r: (typeof list)[number]) =>
+        r.license ? `\n  Gumroad license ${r.license.key.slice(0, 8)}…: ${r.license.ok === undefined ? 'checking' : r.license.ok ? 'valid' : `not let in: ${r.license.reason}`}${r.license.email ? ` (${r.license.email})` : ''}` : '';
+      return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}${license(r)}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
     }
 
     case 'grant':

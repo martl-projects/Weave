@@ -85,6 +85,9 @@ import {
   KIND_MEMBERSHIP,
   KIND_MEMBERSHIP_HANDLED,
   KIND_MEMBERSHIP_PENDING,
+  KIND_MEMBERSHIP_LICENSE,
+  parseGumroadLink,
+  type GumroadLink,
   KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
   KIND_MUTE,
@@ -242,6 +245,7 @@ import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveD
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
+import { checkGumroadLicense, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
@@ -302,6 +306,12 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<() => void>();
+  /** How license keys are checked with Gumroad (tests put a fake here). */
+  checkLicense: LicenseChecker = checkGumroadLicense;
+  /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
+  #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
+  /** The time, in milliseconds (tests move it forward to reach renewals). */
+  clock: () => number = Date.now;
   /** Apps this node started for the person, by project id. */
   #apps = new AppProcesses(() => this.#emitLive());
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -1163,7 +1173,7 @@ export class WeaveNode implements Backend {
    */
   async reconcile(): Promise<number> {
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#sendQueuedRequests());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
@@ -1676,14 +1686,14 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- memberships
 
-  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean }): Promise<TierInfo> {
+  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo> {
     const group = await this.#createSpace('group', input.name, { tier: true });
     const position = this.#tierOffers(this.identity.author).length;
     this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, auto: false, time: '' }, input);
     return this.#tierInfo(this.#tierOffer(group.id));
   }
 
-  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): Promise<TierInfo> {
+  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo> {
     const before = this.#tierOffer(input.tier);
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
@@ -1694,12 +1704,18 @@ export class WeaveNode implements Backend {
     return this.#tierOffers(who ? this.resolve(who) : this.identity.author).map((t) => this.#tierInfo(t));
   }
 
-  async requestMembership(input: { tier: string; note?: string }): Promise<void> {
+  async requestMembership(input: { tier: string; note?: string; license?: string }): Promise<void> {
     const tier = this.#tierOffer(input.tier);
     if (tier.creator === this.identity.author) throw new Error("that's your own tier");
     if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
+    const license = input.license?.trim();
+    if (license && !tier.gumroad) throw new Error(`${tier.name} isn't sold through Gumroad`);
+    if (license && !/^[A-Za-z0-9-]{8,100}$/.test(license)) throw new Error('a Gumroad license key looks like XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX');
     await this.join(tier.creator); // the creator's node listens on their identity topic
-    this.replica.append(this.identity, membershipRequest(this.#encryptionKeyOf(tier.creator), { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint() }));
+    this.replica.append(
+      this.identity,
+      membershipRequest(this.#encryptionKeyOf(tier.creator), { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint(), ...(license ? { license } : {}) }),
+    );
     this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_PENDING, body: { creator: tier.creator, tier: tier.id } }));
   }
 
@@ -1712,7 +1728,10 @@ export class WeaveNode implements Backend {
       const request = handled.has(id) ? undefined : this.#tryOpen((me) => openMembershipRequest(event, me));
       const tier = request && mine.get(request.tier);
       if (!tier) continue;
-      out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time });
+      const check = this.#licenseChecks.get(id);
+      const answer = check && check !== 'checking' ? { ok: check.ok, ...(check.reason ? { reason: check.reason } : {}), ...(check.email ? { email: check.email } : {}) } : {};
+      const license = request.license ? { license: { key: request.license, ...answer } } : {};
+      out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time, ...license });
     }
     return out.sort((a, b) => a.time.localeCompare(b.time));
   }
@@ -1804,6 +1823,88 @@ export class WeaveNode implements Backend {
     return granted;
   }
 
+  /**
+   * Let in supporters who bought a tier on Gumroad: their license key is
+   * checked once with Gumroad; a paid-up purchase gets a month, and the key is
+   * kept (sealed to us) for renewing. A key already used by someone else, or
+   * one Gumroad doesn't accept, waits in the Inbox with the reason.
+   */
+  async #grantPaid(): Promise<number> {
+    const sold = new Map(this.#tierOffers(this.identity.author).filter((t) => t.gumroad && t.open).map((t) => [t.id, t]));
+    if (!sold.size) return 0;
+    let granted = 0;
+    for (const request of await this.membershipRequests()) {
+      const tier = sold.get(request.tier.id);
+      const key = request.license?.key;
+      if (!tier?.gumroad || !key || this.#licenseChecks.has(request.id)) continue;
+      const holder = this.#licenses().find((l) => l.tier === tier.id && l.license === key && l.member !== request.did);
+      if (holder) {
+        this.#licenseChecks.set(request.id, { ok: false, reason: `that license key already let ${this.nameOf(holder.member) ?? 'someone else'} in` });
+        continue;
+      }
+      this.#licenseChecks.set(request.id, 'checking');
+      let check: LicenseCheck;
+      try {
+        check = await this.checkLicense(tier.gumroad, key);
+      } catch (error) {
+        this.#licenseChecks.delete(request.id); // offline or Gumroad down: try again later
+        continue;
+      }
+      this.#licenseChecks.set(request.id, check);
+      if (!check.ok) continue;
+      this.#recordLicense(tier.id, request.did, key, check);
+      await this.grantMembership({ tier: tier.id, who: request.did, months: 1 });
+      granted++;
+    }
+    return granted;
+  }
+
+  /**
+   * Renew paid memberships: in the last days of a month, check the key with
+   * Gumroad again (each key at most every few hours); still paid up, another
+   * month. Otherwise the grant simply runs out and the tier key rotates.
+   */
+  async #renewPaid(): Promise<number> {
+    const sold = new Map(this.#tierOffers(this.identity.author).filter((t) => t.gumroad).map((t) => [t.id, t]));
+    if (!sold.size) return 0;
+    const now = this.clock();
+    const soon = new Date(now + 4 * 86400_000).toISOString();
+    let renewed = 0;
+    for (const record of this.#licenses()) {
+      const tier = sold.get(record.tier);
+      const group = this.#spaces.get(record.tier);
+      if (!tier?.gumroad || !group || now - Date.parse(record.checked) < 6 * 3600_000) continue;
+      const until = this.#state(group).members.get(record.member)?.until;
+      if (!until || until > soon || until <= new Date(now).toISOString()) continue;
+      let check: LicenseCheck;
+      try {
+        check = await this.checkLicense(tier.gumroad, record.license);
+      } catch {
+        continue; // offline or Gumroad down: the next round tries again
+      }
+      this.#recordLicense(record.tier, record.member, record.license, check);
+      if (!check.ok) continue;
+      this.replica.append(this.identity, sealFor(group, { kind: KIND_MEMBERSHIP, body: { member: record.member, until: grantUntil(new Date(now), 1, until) } }));
+      renewed++;
+    }
+    return renewed;
+  }
+
+  #recordLicense(tier: string, member: Did, license: string, check: LicenseCheck): void {
+    const body = { tier, member, license, ok: check.ok, ...(check.reason ? { reason: check.reason } : {}), checked: new Date(this.clock()).toISOString() };
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_LICENSE, body }));
+  }
+
+  /** The license keys behind our paid memberships, the latest record per tier and member. */
+  #licenses(): Array<{ tier: string; member: Did; license: string; ok: boolean; checked: string }> {
+    const latest = new Map<string, { tier: string; member: Did; license: string; ok: boolean; checked: string }>();
+    for (const b of this.#selfBodies(KIND_MEMBERSHIP_LICENSE)) {
+      if (typeof b.tier !== 'string' || !isDid(b.member) || typeof b.license !== 'string') continue;
+      latest.set(`${b.tier} ${b.member}`, { tier: b.tier, member: b.member, license: b.license, ok: b.ok === true, checked: typeof b.checked === 'string' ? b.checked : '' });
+    }
+    return [...latest.values()];
+  }
+
   /** Remove members whose grants ran out from the tiers we offer, with one key rotation per tier. */
   async #expireMemberships(): Promise<number> {
     let removed = 0;
@@ -1825,7 +1926,7 @@ export class WeaveNode implements Backend {
     return removed;
   }
 
-  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): void {
+  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): void {
     const price = patch.price ?? before.price;
     if (!Number.isInteger(price) || price < 0) throw new Error('the price is a whole number of cents, 0 for free');
     const currency = (patch.currency ?? before.currency).toUpperCase();
@@ -1844,6 +1945,12 @@ export class WeaveNode implements Backend {
       auto: patch.auto ?? before.auto,
     };
     if (patch.hidden) body.hidden = true;
+    // Gumroad: a new link, null to remove it, or keep the one before.
+    if (patch.gumroad) {
+      const link = parseGumroadLink(patch.gumroad);
+      if (!link) throw new Error('the Gumroad link needs the product id and its page, https://…gumroad.com/l/…');
+      body.gumroad = link as unknown as Json;
+    } else if (patch.gumroad === undefined && before.gumroad) body.gumroad = before.gumroad as unknown as Json;
     this.replica.append(this.identity, { kind: KIND_TIER, body });
   }
 
@@ -1890,6 +1997,7 @@ export class WeaveNode implements Backend {
       position: tier.position,
       open: tier.open,
       auto: tier.auto,
+      ...(tier.gumroad ? { gumroad: tier.gumroad } : {}),
       mine,
       ...(mine && state ? { members: [...state.members.values()].filter((m) => m.did !== tier.creator && (!m.until || m.until > now)).length } : {}),
       ...(!mine && me?.until ? { membership: { until: me.until, active: me.until > now } } : {}),

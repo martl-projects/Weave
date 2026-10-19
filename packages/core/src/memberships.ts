@@ -8,9 +8,13 @@ import { isDid, type Did, type KeyPair } from './keys.ts';
  * creator founded, so its members get the group's chat and every project the
  * group is invited into. Memberships buy access, never votes.
  *
- *   weave.tier                  {tier, name, price, currency, description, benefits, position, open, auto}
- *                               public, by the creator: the offer, shown on their hub
- *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry}
+ *   weave.tier                  {tier, name, price, currency, description, benefits, position, open, auto, gumroad}
+ *                               public, by the creator: the offer, shown on their hub; gumroad: the Gumroad
+ *                               product that sells it ({product, url, variant}), see node/gumroad.ts
+ *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry, license}
+ *                               license: the supporter's Gumroad license key, for tiers sold there
+ *   weave.membership.license    {tier, member, license, ok, reason, checked}   sealed to the creator: the
+ *                               license key behind a membership and its last check, for renewing it
  *   weave.membership            {member, until}   sealed in the tier group, by its founder:
  *                               admits (or renews) a member until a date
  *   weave.membership.handled    {request}   sealed to the creator: a request answered (granted or declined)
@@ -24,6 +28,38 @@ export const KIND_MEMBERSHIP = 'weave.membership';
 export const KIND_MEMBERSHIP_REQUEST = 'weave.membership.request';
 export const KIND_MEMBERSHIP_HANDLED = 'weave.membership.handled';
 export const KIND_MEMBERSHIP_PENDING = 'weave.membership.pending';
+export const KIND_MEMBERSHIP_LICENSE = 'weave.membership.license';
+
+/** A tier sold through Gumroad: its membership product, and the tier of it (variant) that gives this one. */
+export interface GumroadLink {
+  /** The product id from Gumroad. */
+  product: string;
+  /** The product page where supporters buy it. */
+  url: string;
+  /** For products with several tiers: the one that gives this Weave tier. */
+  variant?: string;
+}
+
+const GUMROAD_PRODUCT = /^[A-Za-z0-9_=-]{4,64}$/;
+
+/** A Gumroad link from untrusted input (only https pages on gumroad.com), or undefined. */
+export function parseGumroadLink(value: unknown): GumroadLink | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  const product = typeof v.product === 'string' ? v.product.trim() : '';
+  const url = typeof v.url === 'string' ? v.url.trim() : '';
+  if (!GUMROAD_PRODUCT.test(product)) return undefined;
+  let host = '';
+  try {
+    const parsed = new URL(url);
+    host = parsed.protocol === 'https:' ? parsed.hostname : '';
+  } catch {
+    return undefined;
+  }
+  if (host !== 'gumroad.com' && !host.endsWith('.gumroad.com')) return undefined;
+  const variant = typeof v.variant === 'string' ? v.variant.trim().slice(0, 60) : '';
+  return { product, url, ...(variant ? { variant } : {}) };
+}
 
 export interface Tier {
   /** The tier's group id. */
@@ -40,6 +76,8 @@ export interface Tier {
   open: boolean;
   /** Requests are granted without asking the creator (for free tiers). */
   auto: boolean;
+  /** Sold through Gumroad: supporters buy there and send their license key. */
+  gumroad?: GumroadLink;
   time: string;
 }
 
@@ -55,6 +93,7 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
     const name = str(body.name, 40);
     if (!id || !name) continue;
     const price = Number(body.price);
+    const gumroad = parseGumroadLink(body.gumroad);
     latest.set(id, {
       id,
       creator: event.author,
@@ -66,6 +105,7 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
       position: Number.isFinite(Number(body.position)) ? Number(body.position) : 0,
       open: body.open !== false,
       auto: body.auto === true,
+      ...(gumroad ? { gumroad } : {}),
       hidden: body.hidden === true,
       time: event.time,
     });
@@ -79,6 +119,8 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
 export interface MembershipRequest {
   tier: string;
   note: string;
+  /** A Gumroad license key, for tiers sold there. */
+  license?: string;
   /** Where the supporter's node can be reached. */
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
 }
@@ -94,7 +136,9 @@ export function openMembershipRequest(event: WeaveEvent, me: { keys: KeyPair }):
   if (event.kind !== KIND_MEMBERSHIP_REQUEST || !box) return undefined;
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as unknown as MembershipRequest;
-    return typeof opened?.tier === 'string' ? { tier: opened.tier, note: str(opened.note, 500), entry: opened.entry ?? { topics: [], bootstrap: [] } } : undefined;
+    if (typeof opened?.tier !== 'string') return undefined;
+    const license = str(opened.license, 100).trim();
+    return { tier: opened.tier, note: str(opened.note, 500), entry: opened.entry ?? { topics: [], bootstrap: [] }, ...(license ? { license } : {}) };
   } catch {
     return undefined;
   }

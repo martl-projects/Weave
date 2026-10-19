@@ -7,6 +7,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
  * ask to join (saying how they paid), creators grant months from their Inbox.
+ * Tiers sold through Gumroad let supporters in by their license key instead.
  * A tier is a group, so members get its chat and the projects it's invited into.
  */
 
@@ -36,6 +37,7 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
       <Sprite seed={tier.id} size={40} />
       <div className="grow">
         <b>{tier.name}</b> <span className="price">{money(tier.price, tier.currency)}</span>
+        {tier.gumroad && <span className="tag">via Gumroad</span>}
         {tier.description && <p className="small">{tier.description}</p>}
         {tier.benefits.length > 0 && (
           <ul className="benefits">
@@ -50,9 +52,57 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
   );
 }
 
+/** Joining a tier sold through Gumroad: buy there, then paste the license key from the receipt. */
+function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
+  const [license, setLicense] = useState('');
+  const [note, setNote] = useState('');
+  return (
+    <form
+      className="form"
+      onSubmit={async (e: FormEvent) => {
+        e.preventDefault();
+        const sent = await attempt(() => api('requestMembership', { tier: tier.id, note, license }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has checked your key with Gumroad`);
+        if (sent !== undefined) onClose();
+      }}
+    >
+      <ol className="steps">
+        <li>
+          Buy <b>{tier.name}</b> ({money(tier.price, tier.currency)}) on Gumroad:{' '}
+          <a href={tier.gumroad!.url} target="_blank" rel="noopener noreferrer">
+            open {tier.gumroad!.variant ? `“${tier.gumroad!.variant}” ` : ''}on Gumroad
+          </a>
+          . Gumroad handles the payment; Weave never sees it.
+        </li>
+        <li>
+          <label htmlFor="join-license">Paste the license key from your Gumroad receipt:</label>
+          <input id="join-license" className="wide" required autoFocus spellCheck={false} placeholder="XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX" value={license} onChange={(e) => setLicense(e.target.value.trim())} />
+        </li>
+      </ol>
+      <input className="wide" placeholder="A note for them (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+      <p className="small">
+        Only {creator} can read the key and your note. Their Weave checks the key with Gumroad and lets you in, and renews each month while you pay. It works for one person only.
+      </p>
+      <div className="buttons">
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="default" disabled={!license}>
+          Send key
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
   const [note, setNote] = useState('');
   const creator = tier.creator.name ?? shortDid(tier.creator.did);
+  if (tier.gumroad)
+    return (
+      <Modal title={`Join ${tier.name}`} onClose={onClose}>
+        <GumroadJoin tier={tier} creator={creator} onClose={onClose} />
+      </Modal>
+    );
   return (
     <Modal title={`Join ${tier.name}`} onClose={onClose}>
       <form
@@ -92,7 +142,13 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const [benefits, setBenefits] = useState(tier?.benefits.join('\n') ?? '');
   const [open, setOpen] = useState(tier?.open ?? true);
   const [auto, setAuto] = useState(tier?.auto ?? false);
-  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open, auto });
+  const [onGumroad, setOnGumroad] = useState(!!tier?.gumroad);
+  const [product, setProduct] = useState(tier?.gumroad?.product ?? '');
+  const [url, setUrl] = useState(tier?.gumroad?.url ?? '');
+  const [variant, setVariant] = useState(tier?.gumroad?.variant ?? '');
+  // A new Gumroad link, null to stop selling there, or nothing to leave it as it is.
+  const gumroad = onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
+  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open, auto: onGumroad ? false : auto, gumroad });
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your hub`);
@@ -131,9 +187,35 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <label htmlFor="tier-open">Taking new members</label>
         </div>
         <div className="field-row">
-          <input id="tier-auto" type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          <input id="tier-auto" type="checkbox" checked={auto && !onGumroad} disabled={onGumroad} onChange={(e) => setAuto(e.target.checked)} />
           <label htmlFor="tier-auto">Let people in automatically (for free tiers)</label>
         </div>
+        <fieldset>
+          <legend>
+            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad">Sell it through Gumroad</label>
+          </legend>
+          {onGumroad ? (
+            <>
+              <div className="field-row-stacked">
+                <label htmlFor="gumroad-url">Product page</label>
+                <input id="gumroad-url" required type="url" placeholder="https://you.gumroad.com/l/supporters" value={url} onChange={(e) => setUrl(e.target.value)} />
+              </div>
+              <div className="field-row-stacked">
+                <label htmlFor="gumroad-product">Product ID (Gumroad: the product's settings, or its page's “License key” section)</label>
+                <input id="gumroad-product" required spellCheck={false} placeholder="sDonL7aMmKz8…" value={product} onChange={(e) => setProduct(e.target.value.trim())} />
+              </div>
+              <div className="field-row-stacked">
+                <label htmlFor="gumroad-variant">Gumroad tier that gives this one (if the membership has several)</label>
+                <input id="gumroad-variant" placeholder="e.g. Editors" value={variant} onChange={(e) => setVariant(e.target.value)} />
+              </div>
+              <p className="small">
+                In Gumroad, make it a membership and turn on <b>Generate a unique license key per sale</b>. Supporters buy there and send you the key from their receipt; your Weave checks it with Gumroad, lets them in and renews each month while they pay. Keep Weave running so it can.
+              </p>
+            </>
+          ) : (
+            <p className="small">Supporters pay you through Gumroad, and Weave lets them in automatically. Gumroad is the seller: it handles payments, taxes and refunds.</p>
+          )}
+        </fieldset>
         <p className="small">
           A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.
         </p>
@@ -196,6 +278,13 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
         <div className="grow">
           <b>{name}</b> wants to join <b>{request.tier.name}</b> <span className="small muted">· {ago(request.time)}</span>
           {request.note && <div className="note">“{request.note}”</div>}
+          {request.license && (
+            <div className="small">
+              Gumroad license <code>{request.license.key.slice(0, 8)}…</code>:{' '}
+              {request.license.ok === undefined ? 'checking with Gumroad…' : request.license.ok ? 'valid' : `not let in automatically: ${request.license.reason}`}
+              {request.license.email && ` (bought as ${request.license.email})`}
+            </div>
+          )}
         </div>
         <AsyncButton onClick={() => attempt(() => api('declineMembership', { tier: request.tier.id, who: request.did }).then(bump))}>Decline</AsyncButton>
         <select aria-label="How long" value={months} onChange={(e) => setMonths(e.target.value)}>

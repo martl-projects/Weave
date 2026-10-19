@@ -1,3 +1,4 @@
+import type { GumroadLink } from '@weave/core';
 import type { AppManifest, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -294,6 +295,8 @@ export interface TierInfo {
   open: boolean;
   /** Requests are granted automatically, without asking the creator (for free tiers). */
   auto: boolean;
+  /** Sold through Gumroad: buy there, then send the license key from the receipt. */
+  gumroad?: GumroadLink;
   /** You offer this tier. */
   mine: boolean;
   /** For the creator: how many active members it has. */
@@ -312,6 +315,11 @@ export interface MembershipRequestInfo {
   name?: string;
   note: string;
   time: string;
+  /**
+   * For tiers sold through Gumroad: the license key they sent and what Gumroad
+   * said (`ok` is missing until it was checked). Valid keys are let in automatically.
+   */
+  license?: { key: string; ok?: boolean; reason?: string; email?: string };
 }
 
 /** A live room in a project: a host shares the project's app, players use it through a tunnel. */
@@ -695,13 +703,14 @@ export interface Backend {
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
-  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean }): Promise<TierInfo>;
+  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
-  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean }): Promise<TierInfo>;
+  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
-  requestMembership(input: { tier: string; note?: string }): Promise<void>;
+  /** Ask to join a tier; for tiers sold through Gumroad, send the license key from your receipt and you're in as soon as the creator's node checked it. */
+  requestMembership(input: { tier: string; note?: string; license?: string }): Promise<void>;
   /** Requests waiting for you, as a creator. */
   membershipRequests(): Promise<MembershipRequestInfo[]>;
   /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
