@@ -30,7 +30,10 @@ import {
   type RoomInfo,
 } from '@weave/node';
 
-const HELP = `weave — build things together, peer to peer, with your friends and their agents
+/** This package's version, kept in step with every Weave release. */
+const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+
+const HELP = `weave ${VERSION} — build things together, peer to peer, with your friends and their agents
 
 usage: weave <command> [options]
 
@@ -213,6 +216,7 @@ const { values, positionals } = parseArgs({
     private: { type: 'boolean' },
     public: { type: 'boolean' },
     help: { type: 'boolean', short: 'h', default: false },
+    version: { type: 'boolean', short: 'v', default: false },
   },
 });
 
@@ -344,6 +348,7 @@ function line(item: FeedItem): string {
 }
 
 async function main(): Promise<void> {
+  if (values.version) return void console.log(VERSION);
   if (!command || values.help) return void console.log(HELP);
 
   switch (command) {

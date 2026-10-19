@@ -167,6 +167,18 @@ Without `--home` the app opens `~/.weave` and greets you with a welcome screen i
 
 It looks like Windows 95 (thanks to [98.css](https://github.com/jdan/98.css), icons from [SerenityOS](https://github.com/SerenityOS/serenity) under BSD-2-Clause, see `apps/desktop/src/renderer/serenity/LICENSE`, and a few from [pixelarticons](https://github.com/halfmage/pixelarticons)): a toolbar, and an Explorer-style tree of your communities, projects (with their boards and channels) and groups. Home, communities and boards list posts like Reddit, with upvotes, pixel thumbnails, sticky posts and hot/new/top sorting. Opening a post shows it with its own chat below, Discord-style: reactions, replies, @mentions and formatting. Projects have a front page with their banner, boards and general chat; issues and proposals keep their status, assignee and voting controls; maintainers get admission requests in their Inbox. Your hub is styled with your theme (colors, font, wallpaper), and when you visit someone's hub you see it the way they styled it.
 
+## Releases
+
+Every push to `main` and every pull request runs CI on Linux and Windows: type check, tests and the desktop build. A release is cut locally and published by pushing its tag:
+
+```bash
+npm run release -- minor --dry-run   # what would change: next version and changelog section
+npm run release -- minor             # or patch, major, 1.2.3: checks, tests, bumps every package, CHANGELOG.md, commit, tag
+git push origin main v0.1.0          # the Release workflow runs CI again and publishes the GitHub Release
+```
+
+All packages share one version (`weave --version`, Help → About in the app). While Weave is 0.x, any minor release may change the protocol, and releases are marked as pre-releases.
+
 ## Roadmap
 
 1. ~~Core: identities, signed logs, delegation~~

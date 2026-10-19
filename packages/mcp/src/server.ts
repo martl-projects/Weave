@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { Backend, FeedItem } from '@weave/node';
 
@@ -26,6 +27,9 @@ export interface InboxItem {
 }
 
 const MAX_INBOX = 500;
+
+/** This package's version, kept in step with every Weave release. */
+const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const textOf = (body: unknown): string => {
   if (typeof body === 'string') return body;
@@ -60,7 +64,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) {
   const as = options.as;
-  const server = new McpServer({ name: 'weave', version: '0.0.1' });
+  const server = new McpServer({ name: 'weave', version: VERSION });
 
   // ---------------------------------------------------------------- inbox
   const inbox: InboxItem[] = [];

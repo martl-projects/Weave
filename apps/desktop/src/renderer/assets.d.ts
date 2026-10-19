@@ -9,3 +9,6 @@ declare module '*.png' {
   const url: string;
   export default url;
 }
+
+/** The release version, set by the build (esbuild define). */
+declare const WEAVE_VERSION: string;

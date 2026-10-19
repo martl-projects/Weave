@@ -1,5 +1,6 @@
 {
   "name": "weave",
+  "version": "0.0.1",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -15,7 +16,8 @@
     "weave": "node packages/cli/src/main.ts",
     "desktop": "npm run start -w @weave/desktop --",
     "dev:web": "npm run web -w @weave/desktop --",
-    "dev:seed": "node scripts/dev-seed.ts"
+    "dev:seed": "node scripts/dev-seed.ts",
+    "release": "node scripts/release.ts"
   },
   "engines": {
     "node": ">=24"

@@ -428,7 +428,7 @@ function Shell() {
             { label: 'Invite someone here…', disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
           ]}
         />
-        <Menu label="Help" items={[{ label: 'About Weave', onClick: () => alert('Weave v0.0.1\nBuild things together, peer to peer.\nMIT licensed.') }]} />
+        <Menu label="Help" items={[{ label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) }]} />
       </nav>
       <div className="toolbar">
         <ToolButton icon="home" label="Home" href="#/" on={route.length === 0} />

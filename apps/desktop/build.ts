@@ -1,10 +1,13 @@
 // Bundles the desktop app: main and preload for Electron (CommonJS), the
 // renderer for the browser, plus its static files.
 
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 
 mkdirSync('dist/renderer', { recursive: true });
+
+/** The version of this release, shown in the app's About box. */
+const version = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version;
 
 await Promise.all([
   build({
@@ -35,7 +38,7 @@ await Promise.all([
     jsx: 'automatic',
     minify: true,
     sourcemap: true,
-    define: { 'process.env.NODE_ENV': '"production"' },
+    define: { 'process.env.NODE_ENV': '"production"', WEAVE_VERSION: JSON.stringify(version) },
     loader: { '.svg': 'text', '.png': 'dataurl' },
   }),
   // Styles, with 98.css and its pixel font inlined.
