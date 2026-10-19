@@ -21,7 +21,9 @@ import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
  *
  * Membership events, sealed inside the space:
  *   weave.space.create      {name, tier}       the founder, first event; tier: a membership tier (see memberships.ts)
- *   weave.invite            {invite, expires}  group, community: any member · project: maintainers
+ *   weave.invite            {invite, expires, access?, accept?}  group, community: any member · project: maintainers;
+ *                                              access: board rights it gives (access.ts); accept: the link
+ *                                              carries no keys, the inviter lets each person in
  *   weave.space.join        {invite}           the newcomer, citing an invite link
  *   weave.space.remove      {member}           group: founder · project, community: maintainers (moderators)
  *   weave.project.maintainer {member, on}      projects and communities: maintainers (moderators) appoint or drop others
@@ -29,6 +31,8 @@ import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
  *   weave.project.group      {group, name, on} maintainers invite (or uninvite) a whole group
  *   weave.project.rule       {group, auto}     maintainers: admit that group's newcomers without asking
  *   weave.project.admit      {member, via}     maintainers, or anyone in the project when a rule allows
+ * any kind:
+ *   weave.project.admit      {member, invite}  the inviter lets in someone who knocked with their link
  *   weave.project.decline    {member, via}     maintainers turn a group newcomer away
  * in the clear, because the people concerned can't (yet, or any more) read the space:
  *   weave.space.rekey       {epoch, boxes}     new key for those who stay
@@ -211,6 +215,8 @@ export interface Invite {
   inviter: Did;
   expires: string;
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  /** Keys of read-limited boards the link gives access to: board → epoch → key. */
+  boards?: Record<string, Record<string, string>>;
 }
 
 const INVITE_PREFIX = 'weave:invite:';
@@ -244,6 +250,8 @@ export interface Member {
   via?: string;
   /** For members of a tier: when their membership runs out. */
   until?: string;
+  /** The invite link they came in with (it may carry board rights). */
+  invite?: string;
   since: string;
 }
 
@@ -282,10 +290,10 @@ const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.t
  */
 export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: WeaveEvent; inner: Inner }>): SpaceState {
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map() };
-  const invites = new Map<string, { by: Did; expires: string }>();
+  const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
   const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === founder : state.members.has(author));
-  const admit = (did: Did, time: string, invitedBy?: Did, via?: string) => {
-    state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}) });
+  const admit = (did: Did, time: string, invitedBy?: Did, via?: string, invite?: string) => {
+    state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}), ...(invite ? { invite } : {}) });
     state.removed.delete(did);
     state.declined.delete(did);
   };
@@ -302,12 +310,12 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         }
         break;
       case KIND_INVITE:
-        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires });
+        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true });
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
         const live = invite && invite.expires >= event.time && state.members.has(invite.by);
-        if (live && !state.members.has(author) && !state.removed.has(author)) admit(author, event.time, invite.by);
+        if (live && !invite.accept && !state.members.has(author) && !state.removed.has(author)) admit(author, event.time, invite.by, undefined, body.invite as string);
         break;
       }
       case KIND_REMOVE: {
@@ -337,6 +345,13 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         break;
       }
       case KIND_ADMIT: {
+        // Someone who knocked with an invite link, let in by whoever made the link (while it is live).
+        if (typeof body.invite === 'string') {
+          const invite = invites.get(body.invite);
+          const live = invite && invite.by === author && invite.expires >= event.time && state.members.has(author);
+          if (live && isDid(body.member) && !state.members.has(body.member)) admit(body.member, event.time, author, undefined, body.invite);
+          break;
+        }
         const via = typeof body.via === 'string' ? body.via : undefined;
         const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.has(author);
         if (kind === 'project' && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {

@@ -5,10 +5,24 @@ import type { Did, Replica, WeaveEvent } from '@weave/core';
  * Wire messages, one JSON object per line:
  * - `heads`: the latest seq this side holds per signing key
  * - `events`: events the other side is missing, in log order
+ * - `want`: blobs (by hash) this side is looking for
+ * - `blob`: one blob, base64url, sent to a peer that wants it
+ * Older peers ignore messages they don't know.
  */
 export type Message =
   | { t: 'heads'; heads: Record<string, number> }
-  | { t: 'events'; events: unknown[] };
+  | { t: 'events'; events: unknown[] }
+  | { t: 'want'; hashes: string[] }
+  | { t: 'blob'; hash: string; data: string };
+
+/** Where a session finds blobs to send and puts blobs it receives (see @weave/core blobs). */
+export interface BlobSource {
+  get(hash: string): Uint8Array | undefined;
+  /** A blob arrived; the source checks the hash and keeps it only if it wanted it. */
+  receive(hash: string, data: Uint8Array): void;
+  /** Hashes this node is looking for right now. */
+  wanted(): string[];
+}
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const BATCH = 256;
@@ -30,14 +44,24 @@ export class PeerSession {
   #unsubscribe: () => void;
   #closed = false;
 
-  constructor(replica: Replica, stream: Duplex) {
+  readonly blobs?: BlobSource;
+
+  constructor(replica: Replica, stream: Duplex, blobs?: BlobSource) {
     this.replica = replica;
     this.stream = stream;
+    this.blobs = blobs;
     this.#unsubscribe = replica.onAppend((event) => this.#offer(event));
     stream.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());
     this.#send({ t: 'heads', heads: replica.heads() });
+    const wanted = blobs?.wanted() ?? [];
+    if (wanted.length) this.want(wanted);
+  }
+
+  /** Ask the peer for blobs; it sends those it has. */
+  want(hashes: string[]): void {
+    if (hashes.length) this.#send({ t: 'want', hashes: hashes.slice(0, 256) });
   }
 
   close(): void {
@@ -81,6 +105,13 @@ export class PeerSession {
         if (typeof e.signer === 'string' && Number.isSafeInteger(e.seq)) this.#notePeerHas(e.signer, e.seq!);
         this.replica.ingest(event);
       }
+    } else if (message.t === 'want' && Array.isArray(message.hashes) && this.blobs) {
+      for (const hash of message.hashes.slice(0, 256)) {
+        const data = typeof hash === 'string' ? this.blobs.get(hash) : undefined;
+        if (data) this.#send({ t: 'blob', hash, data: Buffer.from(data).toString('base64url') });
+      }
+    } else if (message.t === 'blob' && typeof message.hash === 'string' && typeof message.data === 'string' && this.blobs) {
+      this.blobs.receive(message.hash, new Uint8Array(Buffer.from(message.data, 'base64url')));
     }
   }
 

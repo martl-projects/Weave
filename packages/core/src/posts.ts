@@ -26,6 +26,8 @@ export const KIND_UPVOTE = 'weave.upvote';
 export const KIND_BOARD = 'weave.board';
 export const KIND_CURATE = 'weave.curate';
 export const KIND_SAVE = 'weave.save';
+/** An event of a read-limited board, sealed with the board's key (see access.ts). */
+export const KIND_BOARD_SEALED = 'weave.board.sealed';
 
 export const BOARD_TYPES = ['posts', 'issues', 'proposals'] as const;
 export type BoardType = (typeof BOARD_TYPES)[number];

@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import Hyperswarm, { type Discovery, type HyperswarmOptions } from 'hyperswarm';
 import { utf8, type Replica } from '@weave/core';
-import { PeerSession } from './session.ts';
+import { PeerSession, type BlobSource } from './session.ts';
 
 /** 32-byte DHT topic for a name. Hashed, so the DHT never sees the name itself. */
 export function topicFor(name: string): Buffer {
@@ -20,11 +20,11 @@ export class SwarmNode {
   #discoveries = new Set<Discovery>();
   #timers: Array<ReturnType<typeof setTimeout>> = [];
 
-  constructor(replica: Replica, options: HyperswarmOptions = {}) {
+  constructor(replica: Replica, options: HyperswarmOptions = {}, blobs?: BlobSource) {
     this.replica = replica;
     this.swarm = new Hyperswarm(options);
     this.swarm.on('connection', (socket) => {
-      const session = new PeerSession(replica, socket);
+      const session = new PeerSession(replica, socket, blobs);
       this.sessions.add(session);
       socket.on('close', () => this.sessions.delete(session));
     });
@@ -46,6 +46,11 @@ export class SwarmNode {
     // Two nodes joining at the same moment each look before the other has announced;
     // a second look a moment later finds them.
     this.#timers.push(setTimeout(() => discovery.refresh({ client: true, server: true }).catch(() => {}), 1500).unref());
+  }
+
+  /** Ask every connected peer for these blobs (new peers are asked when they connect). */
+  want(hashes: string[]): void {
+    for (const session of this.sessions) session.want(hashes);
   }
 
   async destroy(): Promise<void> {

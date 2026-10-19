@@ -341,7 +341,8 @@ export function tally(proposal: Entry, entries: Entry[], members: Set<Did>, now 
   return { ...t, quorumReached, closed, passed: closed && quorumReached && t.yes > t.no, votes };
 }
 
-export function proposalsOf(entries: Entry[], members: Set<Did>, now?: string): Proposal[] {
+/** `members`: who may vote, for all proposals or per proposal (e.g. the writers of its board). */
+export function proposalsOf(entries: Entry[], members: Set<Did> | ((proposal: Entry) => Set<Did>), now?: string): Proposal[] {
   const replies = repliesByTarget(entries);
   return entries
     .filter((e) => e.kind === KIND_PROPOSAL && str(e.body, 'title'))
@@ -353,7 +354,7 @@ export function proposalsOf(entries: Entry[], members: Set<Did>, now?: string): 
       text: str(e.body, 'text'),
       deadline: str(e.body, 'deadline', 40),
       time: e.event.time,
-      tally: tally(e, entries, members, now),
+      tally: tally(e, entries, typeof members === 'function' ? members(e) : members, now),
       replies: replies.get(e.id) ?? [],
     }))
     .sort((a, b) => b.time.localeCompare(a.time));

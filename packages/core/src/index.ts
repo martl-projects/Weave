@@ -121,6 +121,7 @@ export {
   KIND_CURATE,
   KIND_POST,
   KIND_SAVE,
+  KIND_BOARD_SEALED,
   KIND_UPVOTE,
   POST_SORTS,
   postsOf,
@@ -162,3 +163,29 @@ export {
   type RecoveryWords,
 } from './recovery.ts';
 export { KIND_APP, KIND_ROOM, parseManifest, roomsOf, type AppManifest, type AppService, type Room } from './rooms.ts';
+export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
+export {
+  accessOf,
+  boardKeyFor,
+  boardOfEvents,
+  boardOfInner,
+  isReadLimited,
+  keyHolders,
+  KIND_BOARD_ACCESS,
+  KIND_BOARD_KEY,
+  KIND_ROSTER,
+  mayUse,
+  newBoardKey,
+  openBoard,
+  openBoardKey,
+  parseGrantees,
+  parseRights,
+  readersOf,
+  inviteRightsOf,
+  sealForBoard,
+  type Access,
+  type BoardRight,
+  type BoardRules,
+  type Grantee,
+} from './access.ts';
+export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
