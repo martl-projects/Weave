@@ -16,6 +16,7 @@
     "weave": "node packages/cli/src/main.ts",
     "desktop": "npm run start -w @weave/desktop --",
     "dev:web": "npm run web -w @weave/desktop --",
+    "package": "npm run package -w @weave/desktop --",
     "dev:seed": "node scripts/dev-seed.ts",
     "release": "node scripts/release.ts"
   },

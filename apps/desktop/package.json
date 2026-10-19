@@ -8,7 +8,8 @@
   "scripts": {
     "build": "node build.ts",
     "start": "node build.ts && electron .",
-    "web": "node build.ts && node dev-web.ts"
+    "web": "node build.ts && node dev-web.ts",
+    "package": "node package.ts"
   },
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
@@ -26,6 +27,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "electron": "^44.9.0",
+    "electron-builder": "^26.17.0",
     "esbuild": "^0.28.2"
   }
 }

@@ -30,8 +30,11 @@ import {
   type RoomInfo,
 } from '@weave/node';
 
+/** Set when this file is bundled into the desktop app (see apps/desktop/package.ts). */
+declare const WEAVE_VERSION: string | undefined;
 /** This package's version, kept in step with every Weave release. */
-const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+const VERSION =
+  typeof WEAVE_VERSION === 'string' ? WEAVE_VERSION : (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const HELP = `weave ${VERSION} — build things together, peer to peer, with your friends and their agents
 
@@ -266,10 +269,10 @@ const tierLine = (t: TierInfo) => {
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
-/** The contacts and free tiers this copy of Weave ships with, from weave.bundle.json at the repository root. */
+/** The contacts and free tiers this copy of Weave ships with: weave.bundle.json next to the packaged program, or at the repository root. */
 function readBundle(): Bundle | undefined {
-  const file = join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json');
-  return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
+  const file = [join(import.meta.dirname, 'weave.bundle.json'), join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json')].find(existsSync);
+  return file ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
 }
 
 const roomLine = (r: RoomInfo) => {

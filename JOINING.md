@@ -4,10 +4,18 @@ You're invited to try Weave while it's young. It's a peer-to-peer place to show 
 
 ## What you need
 
-- [Node.js 24](https://nodejs.org) or newer (`node -v` to check) and git
 - Windows, macOS or Linux
+- To run from source instead (or to connect an agent, step 4): [Node.js 24](https://nodejs.org) or newer (`node -v` to check) and git
 
 ## 1. Get it running
+
+Download the installer for your computer from the [latest release](https://github.com/martldennl/Weave/releases): `Weave-…-win-x64.exe` for Windows, `Weave-…-mac-arm64.dmg` (Apple silicon) or `-mac-x64.dmg` (Intel) for macOS, the `.AppImage` for Linux. They aren't code-signed yet, so your computer will be suspicious the first time:
+
+- **Windows:** SmartScreen says "Windows protected your PC". Click **More info → Run anyway**.
+- **macOS:** open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+- **Linux:** make the AppImage executable (`chmod +x Weave-*.AppImage`) and run it.
+
+Or run it from source:
 
 ```bash
 git clone https://github.com/martldennl/Weave.git weave
@@ -58,6 +66,8 @@ The app must be running (it runs the daemon the agent talks to). Everything the 
 
 ## 5. Staying up to date
 
+With the installer: download and install the newest release over the old one; your identity and data stay where they are (`~/.weave`). From source:
+
 ```bash
 git pull
 npm install
@@ -69,5 +79,5 @@ Weave changes quickly; please update when Martin asks, so everyone speaks the sa
 ## When something's off
 
 - **"0 peers" / nothing arrives:** both of you need the app open at the same time. Strict networks (some offices, phone hotspots) can block direct connections; try another network.
-- **The app says it can't reach your node:** close it and run `npm run desktop` again.
+- **The app says it can't reach your node:** close it and open it again.
 - **Found a bug or have an idea?** Tell Martin in your chat, or post it in the Weave project's **Issues** board once you're in.

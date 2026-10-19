@@ -28,8 +28,11 @@ export interface InboxItem {
 
 const MAX_INBOX = 500;
 
+/** Set when this file is bundled into the desktop app (see apps/desktop/package.ts). */
+declare const WEAVE_VERSION: string | undefined;
 /** This package's version, kept in step with every Weave release. */
-const VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+const VERSION =
+  typeof WEAVE_VERSION === 'string' ? WEAVE_VERSION : (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 const textOf = (body: unknown): string => {
   if (typeof body === 'string') return body;

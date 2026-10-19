@@ -177,6 +177,15 @@ npm run release -- minor             # or patch, major, 1.2.3: checks, tests, bu
 git push origin main v0.1.0          # the Release workflow runs CI again and publishes the GitHub Release
 ```
 
+The Release workflow also builds the desktop installers on Windows (NSIS `.exe`), macOS (`.dmg` for Apple silicon and Intel) and Linux (AppImage) and attaches them to the release. They aren't code-signed yet (macOS builds are ad-hoc signed). To build one for your own platform, or to try a build in CI without releasing, run the Installers workflow from the Actions tab:
+
+```bash
+npm run package                      # installers in apps/desktop/release/
+npm run package -- --dir             # just the unpacked app
+```
+
+The installer carries the CLI bundled into one file (`resources/daemon/weave.mjs`) with its two native modules, and the app runs it with Electron's own Node, so nobody needs Node.js installed.
+
 All packages share one version (`weave --version`, Help → About in the app). While Weave is 0.x, any minor release may change the protocol, and releases are marked as pre-releases.
 
 ## Roadmap
