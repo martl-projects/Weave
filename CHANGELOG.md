@@ -1,0 +1,74 @@
+# Changelog
+
+Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
+
+## v0.1.0 · 2026-10-19
+
+- Add CI and versioned releases
+- Show all your projects on your own hub, with their permissions
+- Document live rooms
+- Host and join rooms from the app and the CLI
+- Add rooms: share a project's app with participants through a tunnel
+- Create one invite link per dialog instead of one per live update
+- Ship Martin's contact and the free Weave friends tier with the app
+- Ship contacts and free tiers with the app, applied on first start
+- Call a person's page their hub instead of their space
+- Point JOINING.md at the GitHub repository
+- Lock @scure/bip39 for the recovery words
+- Document recovery words, device keys and key rotation
+- Show recovery words at onboarding; restore, revoke and rotate in the app
+- Add init with recovery words, restore, keys, revoke and rotate to the CLI
+- Create identities from a recovery kit; rotate, restore and revoke keys
+- Add pre-rotation identities, device-managed agents and encryption keys
+- Stop contact and invite links from moving nodes onto other networks
+- Add a guide for friends joining Weave
+- Show tiers on spaces, membership requests in the Inbox, and a Memberships page
+- Add tiers, support requests and grants to the CLI and MCP
+- Add membership tiers, Patreon-style
+- Reconnect the desktop app when its daemon restarts
+- Add direct chats between friends
+- Make title bars, pane heads and banners solid, Windows 95 style
+- Use SerenityOS icons in the desktop app
+- Share contact and invite links by copying only
+- Find people by name and add them with a contact link
+- Document communities, posts, boards and the retro app
+- Return a project's own post with its page
+- Redesign the desktop app as a Win95 window with Reddit-style posts
+- Add communities, posts and boards to the CLI and MCP server
+- Add communities, posts, boards, upvotes and saves
+- Keep reading groups made before groups and projects were told apart
+- Document groups and projects
+- Separate groups and projects
+- Seed a second channel, reactions and a reply; document the new chat
+- Rebuild the desktop app in React with a Discord-style chat
+- Add channels, replies and reactions to the node, API, CLI and MCP
+- Add chat channels, message replies and emoji reactions to core
+- Document connecting agent harnesses over MCP
+- Require a running daemon for weave mcp
+- Let only one process write to a home; serve the API before going online
+- Look for peers again shortly after joining and while alone
+- Add MCP server so agent harnesses can take part
+- Let a permission family cover its root kind
+- Seed demo groups with discussion, chat, votes and issues; document them
+- Add discussion, chat, votes and issues to the desktop app
+- Always show your own group events to you
+- Add thread, reply, chat, issue, propose, vote and delegate commands
+- Add threads, chat, issues and votes to the node and its API
+- Add threads, chat, issues and votes to core
+- Typecheck the desktop app
+- Add demo seed script and document the desktop app
+- Add Electron desktop app
+- Count only public posts in profiles
+- Add themes, profiles and a people directory to the node
+- Document groups, people commands and known limitations
+- Add group, follow, block, mute and people commands to the CLI
+- Add groups, invites and social edges to the node and its API
+- Add group encryption, invites, membership and social edges to core
+- Add weave CLI and local testnet script
+- Add node package: on-disk logs and keys, daemon and local API
+- Restore delegations when a replica opens an existing store
+- License under MIT
+- Add Hyperswarm transport, dev mesh simulation and README
+- Add log replication protocol between peers
+- Add core: key identities, signed event logs and delegation
+- Scaffold npm workspace with core and net packages
