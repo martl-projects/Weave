@@ -4,6 +4,7 @@ import type { KnockInfo, MembershipRequestInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
+import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
@@ -386,21 +387,7 @@ function Shell() {
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>Saved</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty="Save posts to find them here again. Only you can see what you save." />;
-    else
-      center = (
-        <PostList
-          title={<>Home</>}
-          query={{}}
-          spaces={spaces}
-          meDid={me.did}
-          toolbar={
-            <button onClick={() => setDialog({ kind: 'submit' })}>
-              <Icon name="pencil" /> Submit
-            </button>
-          }
-          empty={<>Nothing here yet. Start a project or community with “New…”, or join one with an invite link.</>}
-        />
-      );
+    else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
     body = <div className="center">{center}</div>;
   }
 

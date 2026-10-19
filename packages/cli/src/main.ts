@@ -21,6 +21,7 @@ import {
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
+  type PostsQuery,
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
@@ -107,6 +108,8 @@ communities — boards of posts that people join, each post with its own chat:
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
+                             on your home: [--from all|communities|projects|mine|friends|following]
+  home hide <space> / home show <space>   leave a community or project off your home (only you know)
   read <id>                  a post and its chat
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>]
                              (in a project's issues or proposals board this opens an issue or a proposal)
@@ -223,6 +226,7 @@ const { values, positionals } = parseArgs({
     link: { type: 'string' },
     to: { type: 'string' },
     title: { type: 'string' },
+    from: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
     'write-board': { type: 'string' },
@@ -753,9 +757,17 @@ async function main(): Promise<void> {
         board: values.board,
         sort: values.sort as BoardInfo['sort'] | undefined,
         saved: values.saved,
+        from: values.from as PostsQuery['from'],
         limit: values.n ? Number(values.n) : 25,
       });
       return out(posts, () => posts.map(postLine).join('\n') || '(no posts yet)');
+    }
+
+    case 'home': {
+      const [sub, ref] = args;
+      if (!['hide', 'show'].includes(sub) || !ref) throw new Error('usage: weave home hide|show <community|project>');
+      const s = await (await backend()).setHomeVisibility({ space: ref, visible: sub === 'show' });
+      return out(s, () => (s.hiddenFromHome ? `${s.name} is off your home (still in your sidebar)` : `${s.name} shows on your home`));
     }
 
     case 'read': {

@@ -181,6 +181,7 @@ import {
 } from '@weave/core';
 import { roomKeyPair, SwarmNode } from '@weave/net';
 import {
+  HOME_SOURCES,
   PROJECT_STATUSES,
   type Actor,
   type Admission,
@@ -197,6 +198,7 @@ import {
   type IdentityInfo,
   type KeyInfo,
   type FeedQuery,
+  type HomeSource,
   type GranteeInfo,
   type InviteOptions,
   type KnockInfo,
@@ -248,6 +250,8 @@ export const KIND_PROFILE = 'weave.profile';
 export const KIND_PAGE = 'weave.project.page';
 /** A public copy of a project's page, published by a maintainer when the project is public. */
 export const KIND_PUBLIC_PROJECT = 'weave.project.public';
+/** A space you don't want on Home, sealed to yourself; the latest per space counts. */
+export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 const SELF_SCOPE = 'self';
 
 /** An event as this node can read it, before names are resolved. */
@@ -806,7 +810,9 @@ export class WeaveNode implements Backend {
     } else if (query.saved) {
       posts = this.#allPosts().filter((p) => p.saved);
     } else {
-      posts = this.#homePosts();
+      const from = query.from ?? 'all';
+      if (!HOME_SOURCES.includes(from)) throw new Error(`show posts from ${HOME_SOURCES.join(', ')}`);
+      posts = this.#homePosts(from);
       pinned = posts.filter((p) => p.saved === 'pinned').map((p) => p.id);
     }
     if (query.saved) posts = posts.filter((p) => p.saved);
@@ -2318,6 +2324,7 @@ export class WeaveNode implements Backend {
       members: state.members.size,
       epoch: currentEpoch(space),
       ...(state.closed ? { closed: true as const } : {}),
+      ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
   }
 
@@ -2478,18 +2485,60 @@ export class WeaveNode implements Backend {
       .map((p) => this.#postInfo(p, undefined, ctx));
   }
 
-  /** Home: your communities' posts, your projects, and public posts from people you follow. */
-  #homePosts(): PostInfo[] {
+  /**
+   * Home: your communities' posts, your projects, and public posts from people
+   * you follow, from all of them or one kind of source. Spaces you hid from
+   * Home stay out (pass `from` undefined to get everything, e.g. to look a post up).
+   */
+  #homePosts(from?: HomeSource): PostInfo[] {
+    const me = this.identity.author;
     const hidden = this.#hiddenAuthors();
+    const hiddenSpaces = from ? this.#homeHidden() : new Set<string>();
+    const friends = from === 'friends' ? new Set(friendsOf(this.#graph(), me)) : new Set<Did>();
+    const wants = (kind: 'community' | 'project' | 'public') =>
+      !from || from === 'all' || (kind === 'community' ? from === 'communities' : kind === 'project' ? ['projects', 'mine', 'friends'].includes(from) : ['following', 'friends', 'mine'].includes(from));
     const posts: PostInfo[] = [];
     for (const space of this.#spaces.values()) {
-      if (space.kind === 'community') posts.push(...this.#spacePosts(space).posts);
-      if (space.kind === 'project') {
+      if (hiddenSpaces.has(space.id)) continue;
+      if (space.kind === 'community' && wants('community')) posts.push(...this.#spacePosts(space).posts);
+      if (space.kind === 'project' && wants('project')) {
+        const state = this.#state(space);
+        if (from === 'mine' && state.founder !== me && !state.maintainers.has(me)) continue;
+        if (from === 'friends' && !friends.has(state.founder)) continue;
         const post = this.#projectPost(space);
         if (post) posts.push(post);
       }
     }
-    return [...posts.filter((p) => !hidden.has(p.by.did)), ...this.#publicPosts()];
+    if (wants('public')) {
+      for (const p of this.#publicPosts()) {
+        // Shared projects: yours under "mine", your friends' under "friends"; "following" takes every public post.
+        if (from === 'mine' && !(p.project && p.by.did === me)) continue;
+        if (from === 'friends' && !(p.project && friends.has(p.by.did))) continue;
+        // On Home, a share of a project you're in is already there as the project itself.
+        if (from && p.project && posts.some((q) => q.type === 'project' && q.space?.id === p.project!.id)) continue;
+        posts.push(p);
+      }
+    }
+    return posts.filter((p) => !hidden.has(p.by.did));
+  }
+
+  async setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    if (space.kind !== 'community' && space.kind !== 'project') throw new Error('only communities and projects are on Home');
+    if (this.#homeHidden().has(space.id) === !input.visible) return this.#spaceInfo(space);
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_HOME_HIDDEN, body: { space: space.id, hidden: !input.visible } }));
+    return this.#spaceInfo(space);
+  }
+
+  /** Spaces you hid from Home. */
+  #homeHidden(): Set<string> {
+    const hidden = new Set<string>();
+    for (const b of this.#selfBodies(KIND_HOME_HIDDEN)) {
+      if (typeof b.space !== 'string') continue;
+      if (b.hidden === false) hidden.delete(b.space);
+      else hidden.add(b.space);
+    }
+    return hidden;
   }
 
   /** Everything that can be shown as a post, including every board of every project. */

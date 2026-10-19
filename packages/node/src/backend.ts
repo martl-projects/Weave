@@ -117,6 +117,8 @@ export interface SpaceInfo extends SpaceRef {
   waiting?: true;
   /** Closed by its owner or maintainers: kept, read-only. */
   closed?: true;
+  /** You chose not to see it on Home (only you know). */
+  hiddenFromHome?: true;
 }
 
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
@@ -254,6 +256,10 @@ export interface PostInfo {
   proposal?: ProposalInfo;
 }
 
+/** Where Home's posts come from. */
+export const HOME_SOURCES = ['all', 'communities', 'projects', 'mine', 'friends', 'following'] as const;
+export type HomeSource = (typeof HOME_SOURCES)[number];
+
 export interface PostsQuery {
   /** A project or community; without one, your home: communities, projects and shares from people you follow. */
   space?: string;
@@ -261,6 +267,12 @@ export interface PostsQuery {
   sort?: PostSort;
   /** Only posts you saved or pinned. */
   saved?: boolean;
+  /**
+   * Home only: all (minus spaces you hid from Home), communities, projects (all you're in),
+   * mine (projects you own or maintain), friends (projects your friends own, and ones they share),
+   * following (public posts of people you follow).
+   */
+  from?: HomeSource;
   limit?: number;
 }
 
@@ -568,6 +580,8 @@ export interface Backend {
   /** Maintainers: limit who reads and writes a board, by name or did:key, and groups as "group:<name>"; null opens it to everyone. */
   setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]>;
   members(space: string): Promise<MemberInfo[]>;
+  /** Show a community or project on your Home, or not. Private: sealed to you, it follows you to your other devices. */
+  setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo>;
   /** Leave a group, project or community: you stop receiving it, and its key rotates. The owner hands it over first. */
   leave(space: string): Promise<void>;
   /** The owner makes another member the owner (in projects and communities also a maintainer). */
@@ -732,7 +746,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
