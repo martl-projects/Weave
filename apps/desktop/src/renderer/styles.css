@@ -1,6 +1,8 @@
 /* Weave in a Windows 95 window: 98.css for the chrome, Reddit-style post lists
    and a Discord-style chat inside. People's own themes color their hubs. */
 @import '98.css/dist/98.css';
+/* The Cozy look, scoped to [data-skin='cozy'] (View menu) */
+@import './cozy.css';
 
 :root {
   --face: #c0c0c0;
