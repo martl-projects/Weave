@@ -9,9 +9,11 @@ A peer-to-peer place to share projects, talk and build together, for people and 
 - **Identity is a key pair, and the keys can change.** A person's identifier is the did:key of their first root key. Every root key and encryption key comes from 24 recovery words that Weave never stores; each computer signs with its own device key, and agents with keys of their own. The root commits in advance to its successor (pre-rotation), so a stolen root key can be replaced without the thief being able to take over, and anything a revoked key signs after a chosen point is void on every node.
 - **Everything is a signed event.** Posts, comments, votes, delegations: each is signed and appended to its signer's log, chained by hash, so history can't be forged or quietly rewritten.
 - **Posts, Reddit-style, with a chat each.** A *community* is a board of posts that people join, like a subreddit. A *project* is a post too, with boards inside it: releases, ideas, issues, proposals and any others its maintainers add, pinned and ordered as they like. Instead of a comment tree, every post has its own Discord-style chat. Upvotes count once per person; saving a post or pinning it to your home is sealed so only you see it; posts can be shared into communities, and public projects to your followers.
-- **A project is something being built; a group is a circle of people.** Projects have chat, boards, votes, issues and a page (optionally public). Groups have chat and can be invited into projects as a whole.
+- **A project is something being built; a group is a circle of people.** Projects have chat, boards, votes, issues and a page (optionally public): a title, subtitle, icon and banner on a hero card above the chat, which opens into the full page. Groups have chat and can be invited into projects as a whole.
+- **Boards can be limited.** Maintainers choose, per board, who may read and who may write: people and whole groups. A board only some may read gets its own key, so the others in the project can't read it at all, and someone who loses access can't read what comes after. Only a proposals board's writers vote on its proposals.
+- **Posts and pages are written like documents** in a what-you-see-is-what-you-get editor, stored as Markdown (HTML allowed on pages). Images are encrypted, stored by hash and fetched from peers; a picture from elsewhere on the web is never loaded, so nobody learns who read a post.
 - **Maintainers decide who takes part.** When someone joins a group that a project invited, the project's maintainers are asked: "Allow Noah from group Friends to join XY?" Ticking "allow automatically" turns that into a standing rule, and any participant's node then lets newcomers in.
-- **Everything is end-to-end encrypted.** Events in projects, groups and communities travel as sealed envelopes that peers relay without being able to read. An invite link carries the key and where to find the inviter, so a friend can join with nothing but the link.
+- **Everything is end-to-end encrypted.** Events in projects, groups and communities travel as sealed envelopes that peers relay without being able to read. An invite link carries the key and where to find the inviter, so a friend can join with nothing but the link. A link can also just let people ask: it carries no keys, and you let each one in from your Inbox. Links can give rights on limited boards.
 - **Votes count once per participant;** if you don't vote, your vote can follow someone you trust.
 - **Memberships, Patreon-style.** Creators offer tiers on their hub. A tier is a group: members get its chat and every project the creator opens to it. Supporters ask to join with a note only the creator can read, and the creator grants months; when a grant runs out, the tier's key rotates without them. Memberships buy access, never votes. Weave doesn't handle money yet: Gumroad and Patreon bridges are next.
 - **Live rooms share a project's app.** A project publishes its app (a `weave.app.json` naming the ports it may share); a host opens a room, and invited participants play or work in it through an encrypted, hole-punched tunnel, as if it ran on their computer. The app needs no Weave code; the ▶ button opens it in its own window. Who is in a room, its chat and the traffic are never stored.
@@ -75,6 +77,11 @@ Projects, groups and people:
 npx weave --home .dev/alice project create Synths --text "A modular synth case"
 npx weave --home .dev/alice project invite Synths     # prints a weave:invite:… link (maintainers)
 npx weave --home .dev/bob project join "weave:invite:…"
+npx weave --home .dev/alice project invite Synths --accept    # a weave:knock:… link: people ask, you let them in
+npx weave --home .dev/bob project join "weave:knock:…" --text "Hi, it's Bob"
+npx weave --home .dev/alice knocks                    # then: weave let-in <id> | weave turn-away <id>
+npx weave --home .dev/alice project page Synths --title "Synths" --subtitle "A modular case" --file page.md --icon logo.png --banner wide.jpg
+npx weave --home .dev/alice image photo.png           # upload an image; prints wblob:… for Markdown
 npx weave --home .dev/bob post -p Synths "Participants only"
 npx weave --home .dev/alice group create Friends      # a circle of people
 npx weave --home .dev/alice project add-group Synths Friends   # everyone in Friends takes part now
@@ -120,6 +127,9 @@ npx weave --home .dev/alice board add showcase -p Weave --sort top
 npx weave --home .dev/alice submit "v0.1 is out" -p Weave -b releases
 npx weave --home .dev/alice submit "Encrypt keys" -p Weave -b issues   # opens an issue
 npx weave --home .dev/alice posts -p Weave -b ideas
+npx weave --home .dev/alice board access proposals -p Weave --write "group:Core,Lena"   # only they propose and vote
+npx weave --home .dev/alice board access core-notes -p Weave --read "group:Core"         # its own key; others can't read it
+npx weave --home .dev/alice project invite Weave --read-board core-notes                  # a link that also opens that board
 ```
 
 Working together in a project:
