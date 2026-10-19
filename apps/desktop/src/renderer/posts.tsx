@@ -3,8 +3,8 @@ import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, 
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bump, navigate, plain, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast } from './ui.tsx';
-import { RichEditor } from './editor.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast } from './ui.tsx';
+import { ImagePicker, RichEditor } from './editor.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -193,8 +193,8 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
   return (
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`}>
       <VoteBox post={post} />
-      <a className="thumb" href={href}>
-        <Sprite seed={post.project?.id ?? post.id} size={64} />
+      <a className={`thumb${post.image ? ' has-image' : ''}`} href={href}>
+        {post.image ? <BlobImage src={post.image} alt="" /> : <Sprite seed={post.project?.id ?? post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -410,6 +410,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
               <Icon name="externalLink" /> {post.link}
             </a>
           )}
+          {post.image && <BlobImage className="post-image" src={post.image} alt={post.title} />}
           {post.text && <Markdown text={post.text} />}
           {post.project && post.type !== 'project' && <ProjectCard post={post} />}
           {post.share?.space && post.share.member && post.type !== 'project' && !post.project && (
@@ -462,11 +463,12 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
+  const [image, setImage] = useState('');
   const writable = boards?.filter((b) => b.canWrite !== false);
   const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined }), 'Posted');
+    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined }), 'Posted');
     if (post) {
       onClose();
       bump();
@@ -510,6 +512,12 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
             <label htmlFor="submit-link">Link (optional)</label>
             <input id="submit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
           </div>
+          {!chosenBoard || chosenBoard.type === 'posts' ? (
+            <div className="field-row-stacked">
+              <label>Image (optional)</label>
+              <ImagePicker value={image} onChange={setImage} label="Image" wide />
+            </div>
+          ) : null}
           <div className="field-row-stacked">
             <label>Text (optional)</label>
             <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
@@ -531,12 +539,14 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
   const [title, setTitle] = useState(post.title);
   const [text, setText] = useState(post.text);
   const [link, setLink] = useState(post.link ?? '');
+  const [image, setImage] = useState(post.image ?? '');
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const changes: Record<string, string> = {};
     if (title.trim() !== post.title) changes.title = title;
     if (text !== post.text) changes.text = text;
     if (link.trim() !== (post.link ?? '')) changes.link = link.trim();
+    if (image !== (post.image ?? '')) changes.image = image;
     if (!Object.keys(changes).length) return onClose();
     const saved = await attempt(() => api<PostInfo>('editPost', { post: post.id, ...changes }), 'Saved');
     if (saved) {
@@ -554,6 +564,10 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
         <div className="field-row-stacked">
           <label htmlFor="edit-link">Link (optional)</label>
           <input id="edit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
+        </div>
+        <div className="field-row-stacked">
+          <label>Image (optional)</label>
+          <ImagePicker value={image} onChange={setImage} label="Image" wide />
         </div>
         <div className="field-row-stacked">
           <label>Text (optional)</label>

@@ -1,3 +1,4 @@
+import { parseBlobRef } from './blobs.ts';
 import type { Json } from './bytes.ts';
 import { KIND_ISSUE, KIND_PROPOSAL, KIND_THREAD, type Entry } from './collab.ts';
 import type { Did } from './keys.ts';
@@ -9,8 +10,10 @@ import type { SpaceKind } from './spaces.ts';
  * one board of posts. Every post has a chat (weave.msg with `post`) instead of
  * a comment tree.
  *
- *   weave.post     {title, text, link, board, share}   a post in a community or in a project's board
- *   weave.post.edit   {target, title, text, link}      the post's author changes it; the latest edit counts
+ *   weave.post     {title, text, link, image, board, share}
+ *                                                      a post in a community or in a project's board; image: a wblob: reference
+ *   weave.post.edit   {target, title, text, link, image}
+ *                                                      the post's author changes it; the latest edit counts
  *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
  *                                                      take it down; it stays in the logs, out of sight
  *   weave.upvote   {target, value}                     1, 0 or -1; the latest per person counts
@@ -163,6 +166,8 @@ export interface Post {
   title: string;
   text: string;
   link?: string;
+  /** An attached image (wblob: reference): the post's thumbnail. */
+  image?: string;
   share?: Share;
   time: string;
   /** When its author last edited it. */
@@ -211,7 +216,8 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const share = shareOf(e.body);
       const board = kind === 'project' ? (boardName(field(e.body, 'board')) ?? 'releases') : COMMUNITY_BOARD;
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
-      posts.push({ ...base, type: 'post', board, title, text, ...(/^https?:\/\//.test(link) ? { link } : {}), ...(share ? { share } : {}) });
+      const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
+      posts.push({ ...base, type: 'post', board, title, text, ...(/^https?:\/\//.test(link) ? { link } : {}), ...(image ? { image } : {}), ...(share ? { share } : {}) });
     } else if (kind === 'project' && e.kind === KIND_THREAD && str(e.body, 'title')) {
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     } else if (kind === 'project' && (e.kind === KIND_ISSUE || e.kind === KIND_PROPOSAL) && str(e.body, 'title')) {
@@ -242,6 +248,9 @@ function reviseAll(posts: Post[], entries: Entry[], maintainers: Set<Did>): Post
     const link = field(e.body, 'link');
     if (link === '') delete post.link;
     else if (typeof link === 'string' && /^https?:\/\//.test(link)) post.link = link.slice(0, 500);
+    const image = field(e.body, 'image');
+    if (image === '') delete post.image;
+    else if (parseBlobRef(image)) post.image = (image as string).trim();
     post.edited = e.event.time;
   }
   return posts.filter((p) => !deleted.has(p.id));

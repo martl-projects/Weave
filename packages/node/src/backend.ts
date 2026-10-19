@@ -234,6 +234,8 @@ export interface PostInfo {
   title: string;
   text: string;
   link?: string;
+  /** An attached image (wblob: reference), shown as the post's thumbnail. */
+  image?: string;
   time: string;
   /** When its author last edited it. */
   edited?: string;
@@ -603,9 +605,9 @@ export interface Backend {
   /** One post by id (full or short), including projects. */
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; as?: string }): Promise<PostInfo>;
-  /** Your own post: change its title, text or link (an empty link removes it). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; as?: string }): Promise<PostInfo>;
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo>;
+  /** Your own post: change its title, text, link or image (empty removes a link or image). Leave out what stays. */
+  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */

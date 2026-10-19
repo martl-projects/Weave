@@ -827,16 +827,19 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > 200) throw new Error('titles are at most 200 characters');
     const link = input.link?.trim();
     if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
+    const image = input.image?.trim();
+    if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
     const space = this.#space(input.space);
     if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
+    if (image) body.image = image;
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
       if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
@@ -847,7 +850,7 @@ export class WeaveNode implements Backend {
     return this.post(id);
   }
 
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; as?: string }): Promise<PostInfo> {
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo> {
     const post = await this.#ownPost(input.post, 'edit');
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
@@ -862,7 +865,12 @@ export class WeaveNode implements Backend {
       if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
       body.link = link;
     }
-    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text or link');
+    if (input.image !== undefined) {
+      const image = input.image.trim();
+      if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
+      body.image = image;
+    }
+    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link or image');
     await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
     return this.post(post.id);
   }
@@ -912,6 +920,7 @@ export class WeaveNode implements Backend {
     const share: Record<string, Json> = { post: post.id, ...(post.space ? { space: { ...post.space } } : {}), ...(project ? { project } : {}) };
     const body: Record<string, Json> = { title: post.title, text, share };
     if (post.link) body.link = post.link;
+    if (post.image) body.image = post.image;
     const { id } = await this.publish({ kind: KIND_POST, body, space: target.id });
     return this.post(id);
   }
@@ -2453,6 +2462,7 @@ export class WeaveNode implements Backend {
       title: p.title,
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
+      ...(p.image ? { image: p.image } : {}),
       time: p.time,
       ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,

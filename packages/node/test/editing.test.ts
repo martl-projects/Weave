@@ -77,6 +77,18 @@ describe('editing and deleting posts', () => {
     expect((await kofi.feed({ space: 'Weave', limit: 500 })).some((i) => JSON.stringify(i.body).includes('Secret numbers'))).toBe(false);
   });
 
+  it('attaches an image to a post, and changes or removes it by editing', async () => {
+    const martin = person('Martin');
+    await martin.createCommunity({ name: 'Synths' });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64').toString('base64');
+    const [first, second] = [await martin.putBlob({ data: png, type: 'image/png' }), await martin.putBlob({ data: png, type: 'image/png' })];
+    const post = await martin.submit({ space: 'Synths', title: 'My case', image: first });
+    expect(post.image).toBe(first);
+    await expect(martin.submit({ space: 'Synths', title: 'Bad', image: 'https://example.com/x.png' })).rejects.toThrow(/uploaded image/);
+    expect((await martin.editPost({ post: post.id, image: second })).image).toBe(second);
+    expect(await martin.editPost({ post: post.id, image: '' })).not.toHaveProperty('image');
+  });
+
   it('edits only posts, not issues or proposals', async () => {
     const martin = person('Martin');
     await martin.createProject({ name: 'Weave' });

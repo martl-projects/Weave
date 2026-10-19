@@ -241,6 +241,7 @@
 :root[data-skin='cozy'] .post-row.is-pinned { background: #eef8ea; }
 :root[data-skin='cozy'] .thumb { padding: 0; border: 2px solid var(--cz-line); border-radius: 8px; overflow: hidden; box-shadow: var(--cz-lift); background: #fff; }
 :root[data-skin='cozy'] .thumb .sprite { margin: 0; width: 100% !important; height: 100% !important; }
+:root[data-skin='cozy'] .post-image { border: 2px solid var(--cz-line); border-radius: 10px; box-shadow: var(--cz-lift); }
 :root[data-skin='cozy'] .post-title { color: var(--cz-line); font-weight: 800; }
 :root[data-skin='cozy'] a.post-title:visited { color: #5a4a9c; }
 :root[data-skin='cozy'] .post-meta, :root[data-skin='cozy'] .post-meta a { color: var(--cz-muted); }

@@ -111,9 +111,9 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
                              on your home: [--from all|communities|projects|mine|friends|following]
   home hide <space> / home show <space>   leave a community or project off your home (only you know)
   read <id>                  a post and its chat
-  submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>]
+  submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>] [--image <file>]
                              (in a project's issues or proposals board this opens an issue or a proposal)
-  edit <id>                  change your post           [--title <t>] [--text <t>] [--link <url>] (--link "" removes it)
+  edit <id>                  change your post           [--title <t>] [--text <t>] [--link <url>] [--image <file>] ("" removes a link or image)
   delete <id>                take a post down: yours, or any where you moderate (it stays in the logs)
   up <id> / down <id> / unvote <id>   upvote, downvote, or take your vote back
   save <id> / unsave <id>    keep a post for later; --pin puts it at the top of your home (only you see this)
@@ -234,6 +234,7 @@ const { values, positionals } = parseArgs({
     write: { type: 'string' },
     subtitle: { type: 'string' },
     icon: { type: 'string' },
+    image: { type: 'string' },
     banner: { type: 'string' },
     type: { type: 'string' },
     position: { type: 'string' },
@@ -794,13 +795,17 @@ async function main(): Promise<void> {
       if (!title) throw new Error('usage: weave submit <title...> -r <community> | -p <project> [-b <board>]');
       const space = values.community ?? values.project;
       if (!space) throw new Error('where? add -r <community> or -p <project> (with -b <board>)');
-      const p = await (await backend()).submit({ space, board: values.board, title, text: values.text, link: values.link, as: values.as });
+      const b = await backend();
+      const image = values.image ? await uploadImage(b, values.image) : undefined;
+      const p = await b.submit({ space, board: values.board, title, text: values.text, link: values.link, image, as: values.as });
       return out(p, () => postLine(p));
     }
 
     case 'edit': {
       if (!args[0]) throw new Error('usage: weave edit <id> [--title <t>] [--text <t>] [--link <url>]');
-      const p = await (await backend()).editPost({ post: args[0], title: values.title, text: values.text, link: values.link, as: values.as });
+      const b = await backend();
+      const image = values.image === undefined ? undefined : values.image === '' ? '' : await uploadImage(b, values.image);
+      const p = await b.editPost({ post: args[0], title: values.title, text: values.text, link: values.link, image, as: values.as });
       return out(p, () => `edited
 ${postLine(p)}`);
     }
