@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { MembershipRequestInfo } from '@weave/node/client';
+import type { KnockInfo, MembershipRequestInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
@@ -343,7 +343,8 @@ function Shell() {
   const { data: waiting } = useApi(() => api<Admission[]>('admissions'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
-  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0);
+  const { data: knocks } = useApi(() => api<KnockInfo[]>('knocks'), []);
+  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   if (!me || !spaces) return <div className="desktop" />;
 
@@ -362,7 +363,7 @@ function Shell() {
     else if (['p', 'g', 'r'].includes(route[0])) center = <Page title="Not here">You're not in this {({ p: 'project', g: 'group', r: 'community' } as Record<string, string>)[route[0]]}.</Page>;
     else if (route[0] === 'space') center = <SpaceView who={route[1]} meDid={me.did} />;
     else if (route[0] === 'people') center = <PeopleView />;
-    else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} />;
+    else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} knocks={knocks ?? []} />;
     else if (route[0] === 'keys') center = <KeysView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;

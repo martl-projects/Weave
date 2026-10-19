@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Theme } from '@weave/node/client';
-import { bridge } from './bridge.ts';
+import { api, bridge } from './bridge.ts';
 
 export { api, bridge, type AppState } from './bridge.ts';
 
@@ -164,15 +164,30 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');
   }
+  // Only images from Weave itself (encrypted blobs from peers): a remote image would tell its server who read the post.
+  if (node.tagName === 'IMG') {
+    const src = node.getAttribute('src') ?? '';
+    if (!src.startsWith('wblob:')) return void node.remove();
+    node.setAttribute('data-wblob', src);
+    node.removeAttribute('src');
+    node.setAttribute('loading', 'lazy');
+  }
 });
 
+/** DOMPurify's default allowed URLs, plus wblob: references. */
+const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
+
 /**
- * Markdown (bold, italics, code, links, lists) rendered safely: messages come
- * from other people, so the HTML is sanitized, and @mentions become chips.
+ * Markdown (bold, italics, code, links, lists, images) rendered safely: messages
+ * come from other people, so the HTML is sanitized, and @mentions become chips.
+ * `rich` (project pages) also keeps inline styles; the page container keeps
+ * them from reaching outside it.
  */
-export function renderMarkdown(text: string): string {
-  const html = DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true, gfm: true }) as string, {
-    FORBID_TAGS: ['img', 'style', 'iframe', 'form', 'input'],
+export function renderMarkdown(text: string, rich = false): string {
+  const html = DOMPurify.sanitize(marked.parse(text, { async: false, breaks: !rich, gfm: true }) as string, {
+    FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'video', 'audio', 'object', 'embed'],
+    ...(rich ? {} : { FORBID_ATTR: ['style'] }),
+    ALLOWED_URI_REGEXP: ALLOWED_URI,
   });
   const template = document.createElement('template');
   template.innerHTML = html;
@@ -197,6 +212,68 @@ export function renderMarkdown(text: string): string {
     node.replaceWith(fragment);
   }
   return template.innerHTML;
+}
+
+// ---------------------------------------------------------------- images
+
+const blobUrls = new Map<string, Promise<string>>();
+
+/** A local object URL for a wblob: image, fetched once (from disk or peers) and cached. */
+export function blobUrl(ref: string): Promise<string> {
+  let url = blobUrls.get(ref);
+  if (!url) {
+    url = api<{ data: string; type: string }>('blob', ref).then(({ data, type }) => URL.createObjectURL(new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], { type })));
+    url.catch(() => blobUrls.delete(ref));
+    blobUrls.set(ref, url);
+  }
+  return url;
+}
+
+export function useBlobUrl(ref?: string): string | undefined {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    setUrl(undefined);
+    if (!ref) return;
+    let alive = true;
+    blobUrl(ref).then((u) => alive && setUrl(u), () => {});
+    return () => {
+      alive = false;
+    };
+  }, [ref]);
+  return url;
+}
+
+/** Fill in the images renderMarkdown left as data-wblob placeholders. */
+export function loadBlobImages(root: HTMLElement): void {
+  for (const img of root.querySelectorAll<HTMLImageElement>('img[data-wblob]:not([src])')) {
+    blobUrl(img.dataset.wblob!).then(
+      (url) => (img.src = url),
+      () => img.classList.add('blob-missing'),
+    );
+  }
+}
+
+/**
+ * Upload an image: shrunk to at most `maxSide` pixels and re-encoded (which also
+ * drops metadata such as GPS positions), then stored encrypted. Returns its wblob: reference.
+ */
+export async function uploadImage(file: Blob, maxSide = 1600): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('that is not an image');
+  let blob: Blob = file;
+  if (file.type !== 'image/gif') {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("couldn't read that image"))), 'image/webp', 0.86));
+  }
+  if (blob.size > 2 * 1024 * 1024) throw new Error('images are at most 2 MB');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return api<string>('putBlob', { data: btoa(binary), type: blob.type });
 }
 
 // ---------------------------------------------------------------- themes

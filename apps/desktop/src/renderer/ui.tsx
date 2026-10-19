@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { hue, renderMarkdown } from './lib.ts';
+import { hue, loadBlobImages, renderMarkdown, useBlobUrl } from './lib.ts';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -68,10 +68,20 @@ export function WeaveMark({ size = 26 }: { size?: number }) {
   );
 }
 
-/** Markdown from other people, sanitized. */
-export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
-  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+/** Markdown from other people, sanitized, with its images loaded from peers. `rich`: a project page, which may use inline styles. */
+export function Markdown({ text, rich }: { text: string; rich?: boolean }) {
+  const html = useMemo(() => renderMarkdown(text, rich), [text, rich]);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) loadBlobImages(ref.current);
+  }, [html]);
+  return <div ref={ref} className={rich ? 'md md-rich' : 'md'} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/** An uploaded (wblob:) image, loaded from disk or peers. */
+export function BlobImage({ src, alt = '', className }: { src: string; alt?: string; className?: string }) {
+  const url = useBlobUrl(src);
+  return url ? <img src={url} alt={alt} className={className} /> : <span className={`${className ?? ''} blob-loading`} aria-label={alt} />;
 }
 
 // ---------------------------------------------------------------- windows

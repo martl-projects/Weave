@@ -4,6 +4,7 @@ import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bump, navigate, plain, shortDid, useApi } from './lib.ts';
 import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast } from './ui.tsx';
+import { RichEditor } from './editor.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -425,7 +426,8 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
-  const chosenBoard = boards?.find((b) => b.name === (boardName || 'ideas')) ?? boards?.[0];
+  const writable = boards?.filter((b) => b.canWrite !== false);
+  const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined }), 'Posted');
@@ -436,7 +438,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
     }
   };
   return (
-    <Modal title="Submit a post" onClose={onClose}>
+    <Modal title="Submit a post" onClose={onClose} wide>
       {targets.length === 0 ? (
         <p>Create or join a community or project first.</p>
       ) : (
@@ -452,11 +454,13 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
             </select>
             {target?.kind === 'project' && boards && (
               <select aria-label="Board" value={chosenBoard?.name} onChange={(e) => setBoardName(e.target.value)}>
-                {boards.map((b) => (
-                  <option key={b.name} value={b.name}>
-                    {b.title}
-                  </option>
-                ))}
+                {boards
+                  .filter((b) => b.canWrite !== false)
+                  .map((b) => (
+                    <option key={b.name} value={b.name}>
+                      {b.title}
+                    </option>
+                  ))}
               </select>
             )}
           </div>
@@ -471,8 +475,8 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
             <input id="submit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
           </div>
           <div className="field-row-stacked">
-            <label htmlFor="submit-text">Text (optional, Markdown)</label>
-            <textarea id="submit-text" rows={6} value={text} onChange={(e) => setText(e.target.value)} />
+            <label>Text (optional)</label>
+            <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
           </div>
           <div className="buttons">
             <button type="button" onClick={onClose}>

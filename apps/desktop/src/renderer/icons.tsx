@@ -4,6 +4,16 @@
 // fills in, as SVG tinted with currentColor.
 import arrowDown from 'pixelarticons/svg/arrow-big-down.svg';
 import arrowUp from 'pixelarticons/svg/arrow-big-up.svg';
+import bulletList from 'pixelarticons/svg/bulletlist.svg';
+import code from 'pixelarticons/svg/code.svg';
+import eye from 'pixelarticons/svg/eye.svg';
+import heading2 from 'pixelarticons/svg/heading-2.svg';
+import heading3 from 'pixelarticons/svg/heading-3.svg';
+import image from 'pixelarticons/svg/image.svg';
+import link from 'pixelarticons/svg/link.svg';
+import quote from 'pixelarticons/svg/quote-text-inline.svg';
+import redo from 'pixelarticons/svg/redo.svg';
+import undo from 'pixelarticons/svg/undo.svg';
 import clock from 'pixelarticons/svg/clock.svg';
 import fire from 'pixelarticons/svg/fire.svg';
 import hash from 'pixelarticons/svg/hash.svg';
@@ -76,7 +86,7 @@ const BITMAPS = {
 } satisfies Record<string, [string, string?]>;
 
 /** Tintable SVGs, for what SerenityOS doesn't cover. */
-const VECTORS = { arrowDown, arrowUp, clock, fire, hash, lock, message, trophy };
+const VECTORS = { arrowDown, arrowUp, bulletList, clock, code, eye, fire, hash, heading2, heading3, image, link, lock, message, quote, redo, trophy, undo };
 
 export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 
