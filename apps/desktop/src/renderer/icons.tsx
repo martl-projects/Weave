@@ -19,6 +19,7 @@ import fire from 'pixelarticons/svg/fire.svg';
 import hash from 'pixelarticons/svg/hash.svg';
 import lock from 'pixelarticons/svg/lock.svg';
 import message from 'pixelarticons/svg/message.svg';
+import trash from 'pixelarticons/svg/trash.svg';
 import trophy from 'pixelarticons/svg/trophy.svg';
 import mail16 from './serenity/16x16/app-mail.png';
 import projects16 from './serenity/16x16/app-hack-studio.png';
@@ -86,7 +87,7 @@ const BITMAPS = {
 } satisfies Record<string, [string, string?]>;
 
 /** Tintable SVGs, for what SerenityOS doesn't cover. */
-const VECTORS = { arrowDown, arrowUp, bulletList, clock, code, eye, fire, hash, heading2, heading3, image, link, lock, message, quote, redo, trophy, undo };
+const VECTORS = { arrowDown, arrowUp, bulletList, clock, code, eye, fire, hash, heading2, heading3, image, link, lock, message, quote, redo, trash, trophy, undo };
 
 export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 

@@ -31,6 +31,23 @@ describe('posts and boards', () => {
     expect(posts[1].title).toBe('First build runs!');
   });
 
+  it('applies the author’s latest edit and drops deleted posts', () => {
+    const { entries, post } = setup();
+    const [alice, bob, mod] = [createIdentity(), createIdentity(), createIdentity()];
+    const first = post(alice, 'weave.post', { title: 'Draft', text: 'old', link: 'https://a.example' });
+    const second = post(bob, 'weave.post', { title: 'Bob’s' });
+    const third = post(bob, 'weave.post', { title: 'Spam' });
+    post(alice, 'weave.post.edit', { target: first, title: 'Better', text: 'new' });
+    post(alice, 'weave.post.edit', { target: first, link: '' });
+    post(bob, 'weave.post.edit', { target: first, title: 'Not yours' });
+    post(alice, 'weave.post.delete', { target: second }); // not hers, not a moderator
+    post(mod, 'weave.post.delete', { target: third });
+    const posts = postsOf('community', entries, new Set<Did>([mod.did]));
+    expect(posts.map((p) => p.id)).toEqual([first, second]);
+    expect(posts[0]).toMatchObject({ title: 'Better', text: 'new', edited: '2026-10-18T10:04:00.000Z' });
+    expect(posts[0]).not.toHaveProperty('link');
+  });
+
   it('lets maintainers add, reorder, pin and drop boards, ignoring everyone else', () => {
     const { entries, post } = setup();
     const [alice, mallory] = [createIdentity(), createIdentity()];

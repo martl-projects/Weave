@@ -110,6 +110,8 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   read <id>                  a post and its chat
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>]
                              (in a project's issues or proposals board this opens an issue or a proposal)
+  edit <id>                  change your post           [--title <t>] [--text <t>] [--link <url>] (--link "" removes it)
+  delete <id>                take a post down: yours, or any where you moderate (it stays in the logs)
   up <id> / down <id> / unvote <id>   upvote, downvote, or take your vote back
   save <id> / unsave <id>    keep a post for later; --pin puts it at the top of your home (only you see this)
   share <id> --to <community|followers>   share a post into a community; public projects also to your followers  [--text <t>]
@@ -782,6 +784,19 @@ async function main(): Promise<void> {
       if (!space) throw new Error('where? add -r <community> or -p <project> (with -b <board>)');
       const p = await (await backend()).submit({ space, board: values.board, title, text: values.text, link: values.link, as: values.as });
       return out(p, () => postLine(p));
+    }
+
+    case 'edit': {
+      if (!args[0]) throw new Error('usage: weave edit <id> [--title <t>] [--text <t>] [--link <url>]');
+      const p = await (await backend()).editPost({ post: args[0], title: values.title, text: values.text, link: values.link, as: values.as });
+      return out(p, () => `edited
+${postLine(p)}`);
+    }
+
+    case 'delete': {
+      if (!args[0]) throw new Error('usage: weave delete <id>');
+      await (await backend()).deletePost({ post: args[0], as: values.as });
+      return out({ deleted: args[0] }, () => 'deleted: out of sight for everyone; it stays in the logs');
     }
 
     case 'up':

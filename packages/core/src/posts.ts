@@ -10,6 +10,9 @@ import type { SpaceKind } from './spaces.ts';
  * a comment tree.
  *
  *   weave.post     {title, text, link, board, share}   a post in a community or in a project's board
+ *   weave.post.edit   {target, title, text, link}      the post's author changes it; the latest edit counts
+ *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
+ *                                                      take it down; it stays in the logs, out of sight
  *   weave.upvote   {target, value}                     1, 0 or -1; the latest per person counts
  *   weave.board    {name, title, type, sort, position, on}
  *                                                      project maintainers add, change or drop a board
@@ -22,6 +25,8 @@ import type { SpaceKind } from './spaces.ts';
  * releases.
  */
 export const KIND_POST = 'weave.post';
+export const KIND_POST_EDIT = 'weave.post.edit';
+export const KIND_POST_DELETE = 'weave.post.delete';
 export const KIND_UPVOTE = 'weave.upvote';
 export const KIND_BOARD = 'weave.board';
 export const KIND_CURATE = 'weave.curate';
@@ -160,6 +165,8 @@ export interface Post {
   link?: string;
   share?: Share;
   time: string;
+  /** When its author last edited it. */
+  edited?: string;
 }
 
 function shareOf(body: Json): Share | undefined {
@@ -190,8 +197,10 @@ const titleOf = (body: Json): string =>
 /**
  * Posts of a space, by board: posts, issues and proposals alike. `kind`
  * decides where posts without a board land. Public posts use kind undefined.
+ * Posts show their author's latest edit; deleted ones are left out.
+ * `maintainers` (or moderators) may delete others' posts in their space.
  */
-export function postsOf(kind: SpaceKind | undefined, entries: Entry[]): Post[] {
+export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintainers: Set<Did> = new Set()): Post[] {
   const posts: Post[] = [];
   for (const e of entries) {
     const base = { id: e.id, author: e.event.author, signer: e.event.signer, time: e.event.time };
@@ -210,7 +219,32 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[]): Post[] {
       posts.push({ ...base, type: issue ? 'issue' : 'proposal', board: issue ? 'issues' : 'proposals', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     }
   }
-  return posts;
+  return reviseAll(posts, entries, maintainers);
+}
+
+/** Apply edits and deletes to weave.post posts (not threads, issues or proposals). */
+function reviseAll(posts: Post[], entries: Entry[], maintainers: Set<Did>): Post[] {
+  const editable = new Set(entries.filter((e) => e.kind === KIND_POST).map((e) => e.id));
+  const byId = new Map(posts.filter((p) => editable.has(p.id)).map((p) => [p.id, p]));
+  const deleted = new Set<string>();
+  for (const e of entries.filter((x) => x.kind === KIND_POST_EDIT || x.kind === KIND_POST_DELETE).sort(byTime)) {
+    const post = byId.get(str(e.body, 'target', 200));
+    if (!post || deleted.has(post.id)) continue;
+    const own = e.event.author === post.author;
+    if (e.kind === KIND_POST_DELETE) {
+      if (own || maintainers.has(e.event.author)) deleted.add(post.id);
+      continue;
+    }
+    if (!own) continue;
+    const title = str(e.body, 'title', 200).trim();
+    if (title) post.title = title;
+    if (typeof field(e.body, 'text') === 'string') post.text = str(e.body, 'text');
+    const link = field(e.body, 'link');
+    if (link === '') delete post.link;
+    else if (typeof link === 'string' && /^https?:\/\//.test(link)) post.link = link.slice(0, 500);
+    post.edited = e.event.time;
+  }
+  return posts.filter((p) => !deleted.has(p.id));
 }
 
 /**

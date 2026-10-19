@@ -233,6 +233,8 @@ export interface PostInfo {
   text: string;
   link?: string;
   time: string;
+  /** When its author last edited it. */
+  edited?: string;
   /** Latest activity: the post or its chat. */
   active: string;
   score: number;
@@ -588,6 +590,10 @@ export interface Backend {
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   submit(input: { space: string; board?: string; title: string; text?: string; link?: string; as?: string }): Promise<PostInfo>;
+  /** Your own post: change its title, text or link (an empty link removes it). Leave out what stays. */
+  editPost(input: { post: string; title?: string; text?: string; link?: string; as?: string }): Promise<PostInfo>;
+  /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
+  deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */
   upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo>;
   /** Save a post for later, pin it to the top of your home, or (null) forget it. Only you can see this. */
@@ -728,7 +734,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
+  'posts', 'post', 'submit', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot',

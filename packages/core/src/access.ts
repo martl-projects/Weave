@@ -125,6 +125,8 @@ const TARGET_FIELDS: Record<string, string> = {
   'weave.reply': 'target',
   'weave.msg': 'post',
   'weave.upvote': 'target',
+  'weave.post.edit': 'target',
+  'weave.post.delete': 'target',
   'weave.react': 'target',
 };
 

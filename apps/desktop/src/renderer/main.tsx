@@ -234,7 +234,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
       </section>
     );
   } else if (space.kind === 'community') {
-    if (view === 'post' && arg) body = <PostView id={arg} space={space} {...common} back={{ href: spaceHref(space), label: `r/${space.name}` }} />;
+    if (view === 'post' && arg) body = <PostView id={arg} space={space} {...common} moderator={!!info?.maintainer} back={{ href: spaceHref(space), label: `r/${space.name}` }} />;
     else if (view === 'about') body = <CommunityAbout community={space} members={list} meDid={me.did} />;
     else
       body = (
@@ -251,7 +251,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
       );
   } else if (view === 'b' && arg) {
     const board = boards?.find((b) => b.name === arg);
-    if (postId) body = <PostView id={postId} space={space} {...common} back={{ href: `${spaceHref(space)}/b/${arg}`, label: board?.title ?? arg }} />;
+    if (postId) body = <PostView id={postId} space={space} {...common} moderator={!!info?.maintainer} back={{ href: `${spaceHref(space)}/b/${arg}`, label: board?.title ?? arg }} />;
     else
       body = (
         <PostList

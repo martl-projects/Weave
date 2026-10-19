@@ -3,7 +3,7 @@ import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, 
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bump, navigate, plain, shortDid, useApi } from './lib.ts';
-import { attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Markdown, Modal, Sprite, toast } from './ui.tsx';
 import { RichEditor } from './editor.tsx';
 
 // ---------------------------------------------------------------- names and links
@@ -78,8 +78,31 @@ export function VoteBox({ post, vertical = true }: { post: PostInfo; vertical?: 
   );
 }
 
-function PostActions({ post, spaces, curate }: { post: PostInfo; spaces: SpaceInfo[]; curate?: Curate }) {
+/** What you may change about a post: edit your own, delete your own or (moderating) anyone's. */
+export interface Editing {
+  meDid: string;
+  /** You maintain or moderate the post's space. */
+  moderator?: boolean;
+  /** Where to go once the post is deleted. */
+  onDeleted?(): void;
+}
+
+function PostActions({ post, spaces, curate, editing }: { post: PostInfo; spaces: SpaceInfo[]; curate?: Curate; editing?: Editing }) {
   const [sharing, setSharing] = useState(false);
+  const [changing, setChanging] = useState(false);
+  const own = post.type === 'post' && !!editing && post.by.did === editing.meDid;
+  const mayDelete = post.type === 'post' && (own || !!editing?.moderator);
+  const remove = async () => {
+    const question = own
+      ? `Delete “${post.title}” and hide its chat? People who already have it keep a copy in their logs.`
+      : `Delete “${post.title}” by ${post.by.name ?? 'someone'} for everyone here? It stays in the logs, out of sight.`;
+    if (!(await ask(question, 'Delete'))) return;
+    const done = await attempt(() => api('deletePost', { post: post.id }).then(() => true), 'Deleted');
+    if (done) {
+      editing?.onDeleted?.();
+      bump();
+    }
+  };
   const save = (mode: 'saved' | 'pinned' | null, done: string) => attempt(() => api('save', { target: post.id, mode }).then(bump), done);
   return (
     <div className="post-actions">
@@ -112,7 +135,18 @@ function PostActions({ post, spaces, curate }: { post: PostInfo; spaces: SpaceIn
           )}
         </>
       )}
+      {own && (
+        <button className="link" onClick={() => setChanging(true)}>
+          <Icon name="pencil" /> edit
+        </button>
+      )}
+      {mayDelete && (
+        <button className="link" onClick={remove}>
+          <Icon name="trash" /> delete
+        </button>
+      )}
       {sharing && <ShareDialog post={post} spaces={spaces} onClose={() => setSharing(false)} />}
+      {changing && <EditPostDialog post={post} onClose={() => setChanging(false)} />}
     </div>
   );
 }
@@ -154,7 +188,7 @@ function Badges({ post }: { post: PostInfo }) {
   );
 }
 
-export function PostRow({ post, meDid, spaces, showWhere = true, curate }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate }) {
+export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate; moderator?: boolean }) {
   const href = postHref(post);
   return (
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`}>
@@ -186,10 +220,11 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate }: { pos
           {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
           {' · '}
           {ago(post.time)}
+          {post.edited && <span title={`edited ${new Date(post.edited).toLocaleString()}`}> · edited</span>}
           {post.active !== post.time && <> · active {ago(post.active)}</>}
         </div>
         {post.text && <p className="excerpt">{plain(post.text).slice(0, 220)}</p>}
-        <PostActions post={post} spaces={spaces} curate={curate} />
+        <PostActions post={post} spaces={spaces} curate={curate} editing={{ meDid, moderator }} />
       </div>
     </article>
   );
@@ -238,7 +273,7 @@ export function PostList({
       <div className="pane-scroll sunken">
         {above}
         {(posts ?? []).map((p) => (
-          <PostRow key={p.id} post={p} meDid={meDid} spaces={spaces} showWhere={!query.space} curate={curate} />
+          <PostRow key={p.id} post={p} meDid={meDid} spaces={spaces} showWhere={!query.space} curate={curate} moderator={canCurate && !!query.space} />
         ))}
         {posts?.length === 0 && <div className="empty">{empty}</div>}
       </div>
@@ -343,7 +378,7 @@ function ProjectCard({ post }: { post: PostInfo }) {
   );
 }
 
-export function PostHeader({ post, meDid, spaces, back }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; back?: { href: string; label: string } }) {
+export function PostHeader({ post, meDid, spaces, back, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; back?: { href: string; label: string }; moderator?: boolean }) {
   return (
     <article className="post-full">
       {back && (
@@ -368,6 +403,7 @@ export function PostHeader({ post, meDid, spaces, back }: { post: PostInfo; meDi
             )}
             <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
             {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>} · {ago(post.time)}
+            {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
           </div>
           {post.link && (
             <a className="post-link big" href={post.link}>
@@ -383,7 +419,7 @@ export function PostHeader({ post, meDid, spaces, back }: { post: PostInfo; meDi
           )}
           {post.issue && <IssueControls post={post} meDid={meDid} />}
           {post.proposal && <ProposalControls post={post} />}
-          <PostActions post={post} spaces={spaces} />
+          <PostActions post={post} spaces={spaces} editing={{ meDid, moderator, onDeleted: () => navigate(back?.href ?? '#/') }} />
         </div>
       </div>
     </article>
@@ -391,7 +427,7 @@ export function PostHeader({ post, meDid, spaces, back }: { post: PostInfo; meDi
 }
 
 /** A post with its chat below, like a Discord channel about one thing. */
-export function PostView({ id, space, members, meDid, meName, spaces, back }: { id: string; space?: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; back?: { href: string; label: string } }) {
+export function PostView({ id, space, members, meDid, meName, spaces, back, moderator }: { id: string; space?: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; back?: { href: string; label: string }; moderator?: boolean }) {
   const { data: post, error } = useApi(() => api<PostInfo>('post', id), [id]);
   if (error) return <div className="empty">{error}</div>;
   if (!post) return <div className="pane-main" />;
@@ -404,7 +440,7 @@ export function PostView({ id, space, members, meDid, meName, spaces, back }: { 
         <span className="pane-tools small">{post.chat} in chat</span>
       </header>
       <div className="post-split">
-        <PostHeader post={post} meDid={meDid} spaces={spaces} back={back} />
+        <PostHeader post={post} meDid={meDid} spaces={spaces} back={back} moderator={moderator} />
         {space ? (
           <ChatView space={space} post={post.id} meDid={meDid} meName={meName} members={members} />
         ) : (
@@ -486,6 +522,51 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
           </div>
         </form>
       )}
+    </Modal>
+  );
+}
+
+/** Change your own post: title, link and text. */
+function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) {
+  const [title, setTitle] = useState(post.title);
+  const [text, setText] = useState(post.text);
+  const [link, setLink] = useState(post.link ?? '');
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const changes: Record<string, string> = {};
+    if (title.trim() !== post.title) changes.title = title;
+    if (text !== post.text) changes.text = text;
+    if (link.trim() !== (post.link ?? '')) changes.link = link.trim();
+    if (!Object.keys(changes).length) return onClose();
+    const saved = await attempt(() => api<PostInfo>('editPost', { post: post.id, ...changes }), 'Saved');
+    if (saved) {
+      bump();
+      onClose();
+    }
+  };
+  return (
+    <Modal title="Edit post" onClose={onClose} wide>
+      <form className="form" onSubmit={save}>
+        <div className="field-row-stacked">
+          <label htmlFor="edit-title">Title</label>
+          <input id="edit-title" required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="edit-link">Link (optional)</label>
+          <input id="edit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
+        </div>
+        <div className="field-row-stacked">
+          <label>Text (optional)</label>
+          <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
+        </div>
+        <p className="small">Everyone sees the new version, marked as edited. Earlier versions stay in the logs.</p>
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default">Save</button>
+        </div>
+      </form>
     </Modal>
   );
 }

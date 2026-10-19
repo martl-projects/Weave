@@ -260,6 +260,27 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   );
 
   server.registerTool(
+    'weave_edit_post',
+    {
+      title: 'Edit a post',
+      description: 'Change the title, text or link of your own post (an empty link removes it). Leave out what stays the same. Everyone sees it marked as edited.',
+      inputSchema: { post: z.string().min(6), title: z.string().min(1).max(200).optional(), text: z.string().optional(), link: z.union([z.string().url(), z.literal('')]).optional() },
+    },
+    run(async ({ post, title, text, link }: { post: string; title?: string; text?: string; link?: string }) => backend.editPost({ post, title, text, link, as })),
+  );
+
+  server.registerTool(
+    'weave_delete_post',
+    {
+      title: 'Delete a post',
+      description: 'Take down your own post, or one in a space you maintain or moderate. It disappears for everyone but stays in the logs.',
+      inputSchema: { post: z.string().min(6) },
+      annotations: { destructiveHint: true },
+    },
+    run(async ({ post }: { post: string }) => backend.deletePost({ post, as })),
+  );
+
+  server.registerTool(
     'weave_upvote',
     { title: 'Upvote', description: 'Upvote (1), downvote (-1) or take back your vote (0) on a post. One vote per person.', inputSchema: { post: z.string().min(6), value: z.union([z.literal(1), z.literal(0), z.literal(-1)]) } },
     run(async ({ post, value }: { post: string; value: number }) => backend.upvote({ target: post, value, as })),

@@ -89,6 +89,8 @@ import {
   KIND_MSG,
   KIND_MUTE,
   KIND_POST,
+  KIND_POST_DELETE,
+  KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
   KIND_REACT,
@@ -837,6 +839,43 @@ export class WeaveNode implements Backend {
     }
     const { id } = await this.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
     return this.post(id);
+  }
+
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; as?: string }): Promise<PostInfo> {
+    const post = await this.#ownPost(input.post, 'edit');
+    const body: Record<string, Json> = { target: post.id };
+    if (input.title !== undefined) {
+      const title = input.title.trim();
+      if (!title) throw new Error('a post needs a title');
+      if (title.length > 200) throw new Error('titles are at most 200 characters');
+      body.title = title;
+    }
+    if (input.text !== undefined) body.text = input.text;
+    if (input.link !== undefined) {
+      const link = input.link.trim();
+      if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
+      body.link = link;
+    }
+    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text or link');
+    await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
+    return this.post(post.id);
+  }
+
+  async deletePost(input: { post: string; as?: string }): Promise<void> {
+    const post = await this.#ownPost(input.post, 'delete');
+    await this.publish({ kind: KIND_POST_DELETE, body: { target: post.id }, space: post.space?.id, as: input.as });
+  }
+
+  /** A post you may edit (yours) or delete (yours, or any in a space you maintain or moderate). */
+  async #ownPost(ref: string, action: 'edit' | 'delete'): Promise<PostInfo> {
+    const post = await this.post(ref);
+    if (post.type !== 'post') throw new Error(`only posts can be changed this way; this is a ${post.type}`);
+    // Old ideas threads show up as posts too, but are weave.thread events.
+    if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && eventId(d.event) === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
+    if (post.by.did === this.identity.author) return post;
+    const space = post.space && this.#spaces.get(post.space.id);
+    if (action === 'delete' && space && this.#state(space).maintainers.has(this.identity.author)) return post;
+    throw new Error(action === 'edit' ? 'only its author can edit a post' : `only its author${space ? ` or the ${space.kind === 'community' ? 'moderators' : 'maintainers'}` : ''} can delete a post`);
   }
 
   async upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo> {
@@ -2350,7 +2389,7 @@ export class WeaveNode implements Backend {
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves() };
-    const posts = postsOf(space.kind, entries)
+    const posts = postsOf(space.kind, entries, state.maintainers)
       .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
       .map((p) => {
         const info = this.#postInfo(p, space, ctx);
@@ -2408,6 +2447,7 @@ export class WeaveNode implements Backend {
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
       time: p.time,
+      ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,
       score: score?.score ?? 0,
       myVote: score?.votes.get(this.identity.author) ?? 0,

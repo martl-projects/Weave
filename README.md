@@ -114,6 +114,8 @@ npx weave --home .dev/alice posts                     # home: communities, proje
 npx weave --home .dev/alice up <id>                   # or down, unvote
 npx weave --home .dev/alice say --post <id> "Nice wood!"   # every post has its own chat
 npx weave --home .dev/bob read <id>                   # the post and its chat
+npx weave --home .dev/bob edit <id> --title "My first modular case"   # your own posts; shown as edited
+npx weave --home .dev/alice delete <id>               # your own, or any where you moderate; it stays in the logs
 npx weave --home .dev/alice save <id> --pin           # pinned to the top of your home, only you see it
 npx weave --home .dev/alice pin <id> -r Synths        # moderators: sticky at the top of the community
 npx weave --home .dev/alice share <project-id> --to Synths   # show your project to a community
@@ -175,7 +177,7 @@ npm run desktop -- --home .dev/martin
 
 Without `--home` the app opens `~/.weave` and greets you with a welcome screen if you have no identity yet. `npm run dev:web -- --home .dev/martin` serves the same UI to a browser on http://127.0.0.1:8770 for development.
 
-It looks like Windows 95 (thanks to [98.css](https://github.com/jdan/98.css), icons from [SerenityOS](https://github.com/SerenityOS/serenity) under BSD-2-Clause, see `apps/desktop/src/renderer/serenity/LICENSE`, and a few from [pixelarticons](https://github.com/halfmage/pixelarticons)): a toolbar, and an Explorer-style tree of your communities, projects (with their boards and channels) and groups. Home, communities and boards list posts like Reddit, with upvotes, pixel thumbnails, sticky posts and hot/new/top sorting. Opening a post shows it with its own chat below, Discord-style: reactions, replies, @mentions and formatting. Projects have a front page with their banner, boards and general chat; issues and proposals keep their status, assignee and voting controls; maintainers get admission requests in their Inbox. Your hub is styled with your theme (colors, font, wallpaper), and when you visit someone's hub you see it the way they styled it.
+It looks like Windows 95 (thanks to [98.css](https://github.com/jdan/98.css), icons from [SerenityOS](https://github.com/SerenityOS/serenity) under BSD-2-Clause, see `apps/desktop/src/renderer/serenity/LICENSE`, and a few from [pixelarticons](https://github.com/halfmage/pixelarticons)): a toolbar, and an Explorer-style tree of your communities, projects (with their boards and channels) and groups. Home, communities and boards list posts like Reddit, with upvotes, pixel thumbnails, sticky posts and hot/new/top sorting; you edit and delete your own posts, and moderators and maintainers can take any down. Opening a post shows it with its own chat below, Discord-style: reactions, replies, @mentions and formatting. Projects have a front page with their banner, boards and general chat; issues and proposals keep their status, assignee and voting controls; maintainers get admission requests in their Inbox. Your hub is styled with your theme (colors, font, wallpaper), and when you visit someone's hub you see it the way they styled it.
 
 ## Releases
 
