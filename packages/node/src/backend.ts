@@ -308,7 +308,8 @@ export interface AppLaunchInfo {
   approved: boolean;
   running: boolean;
   started?: string;
-  exit?: { code: number | null; time: string };
+  /** `stopped`: on request, not by itself. */
+  exit?: { code: number | null; time: string; stopped?: true };
   /** The app's last lines of output. */
   log: string[];
 }

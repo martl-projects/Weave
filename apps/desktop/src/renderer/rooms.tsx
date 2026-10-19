@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
-import { attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -99,7 +99,7 @@ function RoomCard({ room }: { room: RoomInfo }) {
           {main}
           <span className="grow" />
           {room.mine ? (
-            <AsyncButton onClick={async () => confirm(`End "${room.name}"? Everyone in it is disconnected.`) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
           )}
@@ -166,7 +166,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
           <div className="field-row">
             <span className={`status-dot ${launch.running ? 'on' : ''}`} />
             <span className="grow">
-              {launch.running ? `Running since ${clock(launch.started!)}` : launch.exit ? `Stopped${launch.exit.code ? ` (exit code ${launch.exit.code})` : ''}` : 'Not running'}
+              {launch.running ? `Running since ${clock(launch.started!)}` : launch.exit ? (launch.exit.stopped ? 'Stopped' : `Exited by itself${launch.exit.code ? ` (code ${launch.exit.code})` : ''}`) : 'Not running'}
             </span>
             {launch.running ? (
               <AsyncButton onClick={() => attempt(() => api('stopApp', project.id).then(bump), 'Stopped')}>Stop app</AsyncButton>

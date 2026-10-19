@@ -8,7 +8,7 @@ import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx'
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
-import { attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -733,7 +733,7 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
                 <button className="small-btn" disabled={i === boards.length - 1} onClick={() => move(i, 1)} title="Move down">
                   ▼
                 </button>
-                <button className="small-btn" title="Remove board (its posts stay in the logs)" onClick={() => confirm(`Remove the board “${b.title}”?`) && set(b.name, { on: false })}>
+                <button className="small-btn" title="Remove board (its posts stay in the logs)" onClick={async () => (await ask(`Remove the board “${b.title}”? Its posts stay in the logs.`, 'Remove')) && set(b.name, { on: false })}>
                   ✕
                 </button>
               </td>

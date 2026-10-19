@@ -181,16 +181,63 @@ export function Toasts() {
     () => toasts,
   );
   return (
-    <div className="toasts">
-      {list.map((t) => (
-        <div key={t.id} className={`window toast ${t.kind}`}>
-          <div className="window-body">
-            {t.kind === 'error' ? '⚠ ' : 'ℹ '}
-            {t.text}
+    <>
+      <div className="toasts">
+        {list.map((t) => (
+          <div key={t.id} className={`window toast ${t.kind}`}>
+            <div className="window-body">
+              {t.kind === 'error' ? '⚠ ' : 'ℹ '}
+              {t.text}
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      <Questions />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- questions
+
+interface Question {
+  text: string;
+  yes: string;
+  answer(yes: boolean): void;
+}
+let showQuestion: ((q: Question) => void) | undefined;
+
+/**
+ * Ask the person to confirm, in a Win95 message box. Used instead of the
+ * browser's confirm(), which some windows (like a preview pane) never show.
+ */
+export function ask(text: string, yes = 'OK'): Promise<boolean> {
+  return new Promise((answer) => (showQuestion ? showQuestion({ text, yes, answer }) : answer(window.confirm(text))));
+}
+
+/** Where ask() shows its box; mounted once, with the toasts. */
+function Questions() {
+  const [question, setQuestion] = useState<Question>();
+  useEffect(() => {
+    showQuestion = setQuestion;
+    return () => {
+      showQuestion = undefined;
+    };
+  }, []);
+  if (!question) return null;
+  const done = (yes: boolean) => {
+    question.answer(yes);
+    setQuestion(undefined);
+  };
+  return (
+    <Modal title="Weave" onClose={() => done(false)}>
+      <p>{question.text}</p>
+      <div className="buttons">
+        <button onClick={() => done(false)}>Cancel</button>
+        <button className="default" autoFocus onClick={() => done(true)}>
+          {question.yes}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

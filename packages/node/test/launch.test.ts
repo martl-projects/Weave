@@ -42,7 +42,7 @@ describe('starting a project app', () => {
     await expect(node.launchApp({ project: 'Gameshow' })).rejects.toThrow(/running already/);
 
     const stopped = await until(() => node.stopApp('Gameshow'), (i) => !i.running);
-    expect(stopped.exit).toBeDefined();
+    expect(stopped.exit).toMatchObject({ stopped: true });
     // Approved once: starts again without asking.
     await node.launchApp({ project: 'Gameshow' });
     await node.stopApp('Gameshow');

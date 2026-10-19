@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { MembershipRequestInfo, TierInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
@@ -141,7 +141,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           {tier && (
             <AsyncButton
               onClick={async () => {
-                if (!confirm(`Take ${tier.name} off your hub? Members keep it until their grants run out.`)) return;
+                if (!(await ask(`Take ${tier.name} off your hub? Members keep it until their grants run out.`, 'Take it off'))) return;
                 if (await attempt(() => api('setTier', { tier: tier.id, hidden: true }).then(bump), 'Tier removed')) onClose();
               }}
             >

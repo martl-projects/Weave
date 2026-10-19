@@ -295,7 +295,7 @@ const launchText = (l: AppLaunchInfo) =>
   [
     l.command ? `start command: ${l.command.join(' ')}${l.approved ? ' (approved)' : ''}` : `no start command${l.hint ? `; start it yourself: ${l.hint}` : ''}`,
     `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
-    l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? `stopped (exit code ${l.exit.code ?? '-'})` : 'not running',
+    l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? (l.exit.stopped ? 'stopped' : `exited by itself (code ${l.exit.code ?? '-'})`) : 'not running',
   ].join('\n');
 
 /** One line from the terminal, for questions only a person should answer. */

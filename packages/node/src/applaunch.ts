@@ -10,8 +10,8 @@ import { createHash } from 'node:crypto';
 
 export interface AppRun {
   started: string;
-  /** Set once the app has exited. */
-  exit?: { code: number | null; time: string };
+  /** Set once the app has exited; `stopped` when it was stopped on request (its exit code means nothing then). */
+  exit?: { code: number | null; time: string; stopped?: true };
   /** The app's last lines of output. */
   log: string[];
 }
@@ -25,7 +25,7 @@ export const launchFingerprint = (command: string[], folder: string): string => 
 const cmdQuote = (arg: string) => `"${arg.replace(/"/g, '""')}"`;
 
 export class AppProcesses {
-  #runs = new Map<string, AppRun & { child?: ChildProcess }>();
+  #runs = new Map<string, AppRun & { child?: ChildProcess; stopping?: true }>();
   readonly #changed: () => void;
 
   constructor(changed: () => void = () => {}) {
@@ -52,7 +52,7 @@ export class AppProcesses {
     const child = batch
       ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${[program, ...args].map(cmdQuote).join(' ')}"`], { cwd: folder, env, windowsHide: true, windowsVerbatimArguments: true })
       : spawn(program, args, { cwd: folder, env, windowsHide: true, detached: process.platform !== 'win32' });
-    const run: AppRun & { child?: ChildProcess } = { started: new Date().toISOString(), log: [], child };
+    const run: AppRun & { child?: ChildProcess; stopping?: true } = { started: new Date().toISOString(), log: [], child };
     this.#runs.set(key, run);
     const add = (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split(/\r?\n/)) if (line.trim()) run.log.push(line.slice(0, 500));
@@ -62,7 +62,7 @@ export class AppProcesses {
     child.stderr?.on('data', add);
     const finish = (code: number | null) => {
       if (run.exit) return;
-      run.exit = { code, time: new Date().toISOString() };
+      run.exit = { code, time: new Date().toISOString(), ...(run.stopping ? { stopped: true as const } : {}) };
       run.child = undefined;
       this.#changed();
     };
@@ -76,8 +76,10 @@ export class AppProcesses {
 
   /** Stop the app and everything it started. */
   stop(key: string): void {
-    const child = this.#runs.get(key)?.child;
-    if (!child?.pid) return;
+    const run = this.#runs.get(key);
+    const child = run?.child;
+    if (!run || !child?.pid) return;
+    run.stopping = true;
     if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
     else {
       try {

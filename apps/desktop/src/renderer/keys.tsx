@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { IdentityInfo, KeyInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
-import { attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
+import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -224,7 +224,7 @@ export function KeysView() {
                 <td>
                   {k.revokedAfter === undefined &&
                     (k.role === 'agent' ? (
-                      <AsyncButton onClick={async () => confirm(`Revoke the agent ${k.name}? It can't sign anything from now on.`) && attempt(() => api('revokeKey', { key: k.did }).then(bump), `${k.name} is revoked`)}>
+                      <AsyncButton onClick={async () => (await ask(`Revoke the agent ${k.name}? It can't sign anything from now on.`, 'Revoke')) && attempt(() => api('revokeKey', { key: k.did }).then(bump), `${k.name} is revoked`)}>
                         Revoke
                       </AsyncButton>
                     ) : (

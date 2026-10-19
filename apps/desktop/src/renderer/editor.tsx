@@ -6,7 +6,7 @@ import { Placeholder } from '@tiptap/extensions';
 import { Markdown } from '@tiptap/markdown';
 import { Icon, type IconName } from './icons.tsx';
 import { uploadImage } from './lib.ts';
-import { attempt, BlobImage } from './ui.tsx';
+import { ask, attempt, BlobImage } from './ui.tsx';
 
 /*
  * The editor for posts and project pages: what you see is what you get, with
@@ -149,14 +149,14 @@ export function RichEditor({
   }, [value, editor, source]);
 
   if (!editor) return null;
-  const toggleSource = () => {
-    if (source && hasHtml(value) && !confirm('This text contains HTML. The visual editor keeps only what it knows (text, headings, lists, links, images) and drops the rest. Switch anyway?')) return;
+  const toggleSource = async () => {
+    if (source && hasHtml(value) && !(await ask('This text contains HTML. The visual editor keeps only what it knows (text, headings, lists, links, images) and drops the rest. Switch anyway?', 'Switch'))) return;
     if (source) editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
     setSource(!source);
   };
   return (
     <div className="rich-editor sunken">
-      <Toolbar editor={editor} source={source} onSource={toggleSource} onImage={() => fileInput.current?.click()} />
+      <Toolbar editor={editor} source={source} onSource={() => void toggleSource()} onImage={() => fileInput.current?.click()} />
       {source ? (
         <textarea className="editor-source" style={{ minHeight }} value={value} spellCheck={false} onChange={(e) => onChange(e.target.value)} aria-label="Markdown source" />
       ) : (
