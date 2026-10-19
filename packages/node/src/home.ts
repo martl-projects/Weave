@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
  *   groups/*.json   keys of the groups and projects you belong to (secret)
  *   config.json     topics to join, bootstrap nodes
  *   logs/*.jsonl    one append-only file per signing key
+ *   blobs/<hash>    encrypted files (images), see @weave/core blobs
  *   daemon.json     port and token of the running daemon
  *   node.lock       pid of the one process writing to this home
  */
@@ -23,6 +24,7 @@ export interface Home {
   groups: string;
   config: string;
   logs: string;
+  blobs: string;
   daemon: string;
   lock: string;
 }
@@ -37,6 +39,7 @@ export function resolveHome(dir?: string): Home {
     groups: join(root, 'groups'),
     config: join(root, 'config.json'),
     logs: join(root, 'logs'),
+    blobs: join(root, 'blobs'),
     daemon: join(root, 'daemon.json'),
     lock: join(root, 'node.lock'),
   };

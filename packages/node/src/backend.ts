@@ -113,12 +113,25 @@ export interface SpaceInfo extends SpaceRef {
   founderName?: string;
   members: number;
   epoch: number;
+  /** Joined with a link that needs the inviter's OK: asked, not let in yet. */
+  waiting?: true;
 }
 
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 export interface ProjectPage {
+  /** Shown as the page's heading; the project's name when empty. */
+  title: string;
+  /** One or two lines under the title, on the hero card. */
+  subtitle: string;
+  /** The page itself: Markdown, which may contain HTML (sanitized when shown) and images (wblob: references). */
+  body: string;
+  /** Square image (wblob: reference) for the hero card and lists. */
+  icon?: string;
+  /** Wide image (wblob: reference) behind the hero card. */
+  banner?: string;
+  /** Short text for shares and older clients: the subtitle, or the start of the body. */
   description: string;
   status: ProjectStatus;
   /** Shown to everyone: in the maintainers' spaces and on the public website. */
@@ -168,6 +181,37 @@ export interface BoardInfo {
   count: number;
   /** Time of the latest post or chat message in the board. */
   active?: string;
+  /** Who may read and write, when the maintainers limited it (otherwise everyone in the project). */
+  access: { read?: GranteeInfo[]; write?: GranteeInfo[] };
+  /** You may post, vote and chat here. */
+  canWrite: boolean;
+}
+
+/** A person or group a board is open to. */
+export interface GranteeInfo {
+  person?: Did;
+  group?: string;
+  name?: string;
+}
+
+/** Someone who asked to join with a link that needs your OK. */
+export interface KnockInfo {
+  id: string;
+  space: SpaceRef;
+  did: Did;
+  name?: string;
+  note: string;
+  time: string;
+  /** Board rights the link gives. */
+  access: Array<{ board: string; read?: boolean; write?: boolean }>;
+}
+
+/** Options for an invite link. */
+export interface InviteOptions {
+  /** The link only lets people ask; you let each one in (they get no keys until then). */
+  accept?: boolean;
+  /** Board rights the link gives, by board name or title (projects). */
+  access?: Array<{ board: string; read?: boolean; write?: boolean }>;
 }
 
 /**
@@ -493,8 +537,15 @@ export interface Backend {
   createGroup(name: string): Promise<SpaceInfo>;
   createProject(input: { name: string; description?: string }): Promise<ProjectInfo>;
   /** An invite link for a group (any member) or a project (maintainers), valid for `hours`. */
-  invite(space: string, hours?: number): Promise<string>;
-  joinSpace(invite: string): Promise<SpaceInfo>;
+  invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
+  /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
+  joinSpace(invite: string, note?: string): Promise<SpaceInfo>;
+  /** People asking to join with your links that need your OK. */
+  knocks(): Promise<KnockInfo[]>;
+  /** Let someone in (or turn them away) who asked with your link. */
+  answerKnock(input: { knock: string; accept: boolean }): Promise<void>;
+  /** Maintainers: limit who reads and writes a board, by name or did:key, and groups as "group:<name>"; null opens it to everyone. */
+  setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]>;
   members(space: string): Promise<MemberInfo[]>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
@@ -527,6 +578,10 @@ export interface Backend {
   // projects
   project(ref: string): Promise<ProjectInfo>;
   setProjectPage(input: { project: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
+  /** Store an image (base64) encrypted; returns its wblob: reference to put in a post or page. */
+  putBlob(input: { data: string; type: string }): Promise<string>;
+  /** An image by its wblob: reference, from disk or fetched from peers; base64. */
+  blob(ref: string): Promise<{ data: string; type: string }>;
   setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void>;
   /** Invite a whole group into a project; its current members take part right away. */
   inviteGroup(input: { project: string; group: string }): Promise<void>;
@@ -621,11 +676,11 @@ export interface Backend {
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same project. */
   reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
   issues(project: string): Promise<IssueInfo[]>;
-  openIssue(input: InProject & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo>;
+  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo>;
   claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
   setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
   proposals(project: string): Promise<ProposalInfo[]>;
-  propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo>;
+  propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number; board?: string }): Promise<ProposalInfo>;
   vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo>;
   /** Let someone's votes in this project count for you when you don't vote; `who` undefined clears it. */
   delegateVote(input: { project: string; who?: string }): Promise<void>;
@@ -638,10 +693,10 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
-  'project', 'setProjectPage', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
+  'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot',
   'projectApp', 'publishApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',

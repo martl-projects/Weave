@@ -9,7 +9,8 @@ export interface ApiServer {
   close(): Promise<void>;
 }
 
-const MAX_BODY = 1024 * 1024;
+/** Room for one image (2 MB) as base64 in an RPC call. */
+const MAX_BODY = 4 * 1024 * 1024;
 
 /**
  * The daemon's local HTTP API, used by the CLI, the desktop app and the MCP

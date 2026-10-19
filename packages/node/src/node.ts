@@ -1,6 +1,40 @@
 import {
+  accessOf,
   b64u,
+  BLOB_TYPES,
+  boardKeyFor,
+  boardOfEvents,
+  boardOfInner,
+  decodeKnock,
+  encodeKnock,
+  inviteRightsOf,
+  isKnockLink,
+  isReadLimited,
+  keyHolders,
+  KIND_BOARD_ACCESS,
+  KIND_BOARD_KEY,
+  KIND_BOARD_SEALED,
+  KIND_KNOCK,
+  KIND_KNOCK_HANDLED,
+  KIND_KNOCK_PENDING,
+  KIND_ROSTER,
+  knockFor,
+  mayUse,
+  newBoardKey,
+  openBoard,
+  openBoardKey,
+  openKnock,
+  readersOf,
+  sealForBoard,
+  type Access,
+  type BoardRight,
+  type Grantee,
+  blobRefsIn,
   createSubKey,
+  decryptBlob,
+  encryptBlob,
+  parseBlobRef,
+  type BlobType,
   boardName,
   boardsOf,
   canManage,
@@ -133,6 +167,7 @@ import {
   type Score,
   type Sealed,
   type SigningIdentity,
+  type SpaceKeys,
   type SpaceKind,
   type SpaceState,
   type Tier,
@@ -156,6 +191,9 @@ import {
   type IdentityInfo,
   type KeyInfo,
   type FeedQuery,
+  type GranteeInfo,
+  type InviteOptions,
+  type KnockInfo,
   type InProject,
   type InSpace,
   type IssueInfo,
@@ -192,6 +230,7 @@ import { hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
+import { BlobStore } from './blobstore.ts';
 import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
@@ -207,11 +246,13 @@ interface Decoded {
   event: WeaveEvent;
   inner: Inner;
   space?: StoredSpace;
+  /** For events of a read-limited board: which board (they were sealed with its key). */
+  board?: string;
   private?: true;
 }
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
-const DEFAULT_PAGE: ProjectPage = { description: '', status: 'active', public: false };
+const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
 
 /**
  * One person's node: their keys, their replica of the logs they know, the
@@ -229,6 +270,9 @@ export class WeaveNode implements Backend {
   #agents: AgentKey[];
   #spaces = new Map<string, StoredSpace>();
   #swarm?: SwarmNode;
+  readonly blobs: BlobStore;
+  /** Blob hashes already asked for ahead of time, so each is requested once per run. */
+  #prefetched = new Set<string>();
   #releaseLock: () => void;
   #live = new LiveRooms({
     dht: () => this.#swarm?.swarm.dht,
@@ -251,6 +295,8 @@ export class WeaveNode implements Backend {
   #directs = new Map<string, { space: StoredSpace; peer: Did }>();
   #directByPeer = new Map<Did, StoredSpace>();
   #contactCache?: { from: Decoded[]; map: Map<Did, string | undefined> };
+  /** Board-key events already looked at, so each box is tried once. */
+  #boardKeysSeen = new Set<string>();
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
@@ -260,6 +306,7 @@ export class WeaveNode implements Backend {
     this.#encryption = stored.length ? stored : [{ did: identity.did, keys: identity.keys }];
     this.#releaseLock = acquireLock(home);
     this.replica = new Replica(new FileStore(home.logs));
+    this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
@@ -369,7 +416,7 @@ export class WeaveNode implements Backend {
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
-    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {});
+    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs);
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
@@ -397,8 +444,10 @@ export class WeaveNode implements Backend {
     if (input.as && !permits((signer as AgentKey).permissions, input.kind)) {
       throw new Error(`agent "${input.as}" may not sign ${input.kind}`);
     }
-    const inner: Inner = { kind: input.kind, body: input.body ?? null };
-    const fields: EventFields = input.space ? sealFor(this.#space(input.space), inner) : inner;
+    let inner: Inner = { kind: input.kind, body: input.body ?? null };
+    const space = input.space ? this.#space(input.space) : undefined;
+    if (space?.kind === 'project') inner = this.#forBoard(space, inner);
+    const fields: EventFields = space ? sealFor(space, inner) : inner;
     const event = this.replica.append(signer, fields);
     return this.itemFor(event)!;
   }
@@ -485,32 +534,120 @@ export class WeaveNode implements Backend {
 
   async createProject(input: { name: string; description?: string }): Promise<ProjectInfo> {
     const project = await this.#createSpace('project', input.name);
-    if (input.description) this.replica.append(this.identity, sealFor(project, { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, description: input.description } }));
+    if (input.description) this.replica.append(this.identity, sealFor(project, { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
     return this.project(project.id);
   }
 
-  async invite(ref: string, hours = 24 * 7): Promise<string> {
+  async invite(ref: string, hours = 24 * 7, options: InviteOptions = {}): Promise<string> {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new Error('a direct chat is between two people; start a group to talk with more');
     if (state.tier && space.founder !== this.identity.author) throw new Error(`only ${this.nameOf(space.founder) ?? 'its creator'} lets people into ${space.name}`);
     const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
     if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
+    if (options.access?.length && space.kind !== 'project') throw new Error('board rights are for projects');
+    const boards = space.kind === 'project' ? this.#spacePosts(space).boards : [];
+    const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
     const invite = b64u.encode(randomBytes(12));
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
-    this.replica.append(this.identity, sealFor(space, { kind: KIND_INVITE, body: { invite, expires } }));
-    const { entry: _entry, ...keys } = space;
-    return encodeInvite({ v: 2, space: keys, invite, inviter: this.identity.author, expires, entry: this.#entryPoint() });
+    const body: Record<string, Json> = { invite, expires };
+    if (access.length) body.access = access as unknown as Json;
+    if (options.accept) body.accept = true;
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_INVITE, body }));
+    if (options.accept) {
+      return encodeKnock({
+        v: 1,
+        space: { kind: space.kind, id: space.id, name: space.name, founder: space.founder },
+        invite,
+        inviter: this.identity.author,
+        enc: this.#encryptionKeyOf(this.identity.author),
+        expires,
+        entry: this.#entryPoint(),
+      });
+    }
+    const boardKeys = this.#boardKeysFor(space, access);
+    return encodeInvite({ v: 2, space: this.#keysOnly(space), invite, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
   }
 
-  async joinSpace(text: string): Promise<SpaceInfo> {
+  async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
+    if (isKnockLink(text)) return this.#knock(text, note ?? '');
     const invite = decodeInvite(text);
     if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
     this.#adoptBootstrap(invite.entry);
-    const space: StoredSpace = { ...invite.space, entry: invite.entry };
+    const space: StoredSpace = { ...invite.space, entry: invite.entry, ...(invite.boards ? { boards: invite.boards } : {}) };
     await this.#addSpace(space);
     this.replica.append(this.identity, sealFor(space, { kind: KIND_JOIN, body: { invite: invite.invite } }));
     return this.#spaceInfo(space);
+  }
+
+  /** Ask to be let in with a link that needs the inviter's OK. */
+  async #knock(text: string, note: string): Promise<SpaceInfo> {
+    const link = decodeKnock(text);
+    if (this.#spaces.has(link.space.id)) throw new Error(`you are already in ${link.space.name}`);
+    if (link.inviter === this.identity.author) throw new Error("that's your own link");
+    this.#adoptBootstrap(link.entry);
+    for (const topic of new Set([link.inviter, ...link.entry.topics])) await this.join(topic);
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter } }));
+    this.replica.append(this.identity, knockFor(link, note.trim(), this.#entryPoint()));
+    return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, waiting: true };
+  }
+
+  async knocks(): Promise<KnockInfo[]> {
+    return this.#openKnocks().map(({ id, event, space, note, rights }) => ({
+      id,
+      space: { id: space.id, kind: space.kind, name: space.name },
+      did: event.author,
+      name: this.nameOf(event.author),
+      note,
+      time: event.time,
+      access: rights,
+    }));
+  }
+
+  async answerKnock(input: { knock: string; accept: boolean }): Promise<void> {
+    const matches = this.#openKnocks().filter((k) => k.id.startsWith(input.knock));
+    if (matches.length !== 1) throw new Error(matches.length ? 'that id is ambiguous — use more characters' : 'no such request (maybe already answered)');
+    const { id, event, space, invite, rights } = matches[0];
+    if (input.accept) {
+      const member = event.author;
+      this.replica.append(this.identity, sealFor(space, { kind: KIND_ADMIT, body: { member, invite } }));
+      const boardKeys = this.#boardKeysFor(space, rights);
+      this.replica.append(this.identity, gift({ ...this.#keysOnly(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], 'gift', this.#entryPoint(), this.#encryptionKeyOf));
+    }
+    this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_HANDLED, body: { knock: id } }));
+  }
+
+  /** Knocks with my live links that I haven't answered and whose senders aren't in yet. */
+  #openKnocks(): Array<{ id: string; event: WeaveEvent; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> {
+    const handled = new Set(this.#selfBodies(KIND_KNOCK_HANDLED).map((b) => b.knock));
+    const out: Array<{ id: string; event: WeaveEvent; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> = [];
+    for (const event of this.replica.events((e) => e.kind === KIND_KNOCK && e.author !== this.identity.author)) {
+      const id = eventId(event);
+      if (handled.has(id)) continue;
+      const opened = this.#tryOpen((me) => openKnock(event, me));
+      const space = opened && this.#spaces.get(opened.space);
+      if (!opened || !space) continue;
+      const state = this.#state(space);
+      if (state.members.has(event.author)) continue;
+      const entries = this.#entries(space);
+      const live = entries.some((e) => e.kind === KIND_INVITE && e.event.author === this.identity.author && (e.body as { invite?: unknown; expires?: unknown; accept?: unknown })?.invite === opened.invite && (e.body as { accept?: unknown }).accept === true && String((e.body as { expires?: unknown }).expires) >= new Date().toISOString());
+      if (!live) continue;
+      out.push({ id, event, space, invite: opened.invite, note: opened.note, rights: inviteRightsOf(entries, state).get(opened.invite) ?? [] });
+    }
+    return out.sort((x, y) => x.event.time.localeCompare(y.event.time));
+  }
+
+  /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
+  #keysOnly(space: StoredSpace): SpaceKeys {
+    const { entry: _entry, boards: _boards, ...keys } = space;
+    return keys;
+  }
+
+  /** Keys of the read-limited boards that these rights open, to hand over with an invite. */
+  #boardKeysFor(space: StoredSpace, rights: BoardRight[]): Record<string, Record<string, string>> | undefined {
+    const out: Record<string, Record<string, string>> = {};
+    for (const r of rights) if ((r.read || r.write) && space.boards?.[r.board]) out[r.board] = { ...space.boards[r.board] };
+    return Object.keys(out).length ? out : undefined;
   }
 
   async members(ref: string): Promise<MemberInfo[]> {
@@ -629,8 +766,8 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
-      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as })).id);
-      if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as })).id);
+      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
+      if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
       body.board = board.name;
     }
     const { id } = await this.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
@@ -672,11 +809,51 @@ export class WeaveNode implements Backend {
   async boards(ref: string): Promise<BoardInfo[]> {
     const space = this.#space(ref);
     const { posts, boards } = this.#spacePosts(space);
-    return boards.map((b) => {
-      const inBoard = posts.filter((p) => p.board === b.name);
-      const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
-      return { ...b, count: inBoard.length, ...(active ? { active } : {}) };
-    });
+    const state = this.#state(space);
+    const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
+    const me = this.identity.author;
+    return boards
+      .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
+      .map((b) => {
+        const inBoard = posts.filter((p) => p.board === b.name);
+        const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
+        const rules = access?.rules.get(b.name);
+        const info = (list?: Grantee[]) => list?.map((g) => this.#granteeInfo(g, state));
+        return {
+          ...b,
+          count: inBoard.length,
+          ...(active ? { active } : {}),
+          access: { ...(rules?.read ? { read: info(rules.read) } : {}), ...(rules?.write ? { write: info(rules.write) } : {}) },
+          canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
+        };
+      });
+  }
+
+  async setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const board = this.#board(project, this.#spacePosts(project).boards, input.board);
+    const before = this.#access(project, state, this.#entries(project)).rules.get(board.name) ?? {};
+    const grantees = (list: string[] | null | undefined, keep?: Grantee[]): Grantee[] | null => {
+      if (list === null) return null;
+      if (list === undefined) return keep ?? null;
+      return list.map((ref) => {
+        if (ref.startsWith('group:')) return { group: this.#knownGroup(project, ref.slice(6)).id };
+        const did = this.resolve(ref);
+        if (!state.members.has(did)) throw new Error(`${ref} isn't in ${project.name}`);
+        return { person: did };
+      });
+    };
+    const read = grantees(input.read, before.read);
+    const write = grantees(input.write, before.write);
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_BOARD_ACCESS, body: { board: board.name, read: read as unknown as Json, write: write as unknown as Json } }));
+    await this.#reconcileBoards(project);
+    return this.boards(project.id);
+  }
+
+  #granteeInfo(g: Grantee, state: SpaceState): GranteeInfo {
+    if ('person' in g) return { person: g.person, ...(this.nameOf(g.person) ? { name: this.nameOf(g.person) } : {}) };
+    return { group: g.group, name: this.#spaces.get(g.group)?.name ?? state.groups.get(g.group)?.name ?? 'group' };
   }
 
   async setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]> {
@@ -732,9 +909,21 @@ export class WeaveNode implements Backend {
     const project = this.#project(input.project);
     const state = this.#maintainerState(project);
     if (input.status !== undefined && !PROJECT_STATUSES.includes(input.status)) throw new Error(`status is one of ${PROJECT_STATUSES.join(', ')}`);
+    for (const image of [input.icon, input.banner]) if (image && !parseBlobRef(image)) throw new Error('icons and banners are uploaded images (wblob: references)');
     const before = this.#page(project, state);
+    // Older callers set only the description: that is the body.
+    const pageBody = input.body ?? (input.description !== undefined && input.subtitle === undefined ? input.description : before.body);
+    const subtitle = (input.subtitle ?? before.subtitle).trim().slice(0, 300);
+    // An empty string removes an image; undefined keeps it.
+    const icon = input.icon === undefined ? before.icon : input.icon || undefined;
+    const banner = input.banner === undefined ? before.banner : input.banner || undefined;
     const page: ProjectPage = {
-      description: input.description ?? before.description,
+      title: (input.title ?? before.title).trim().slice(0, 100),
+      subtitle,
+      body: pageBody.slice(0, 100_000),
+      ...(icon ? { icon } : {}),
+      ...(banner ? { banner } : {}),
+      description: subtitle || summary(pageBody),
       status: input.status ?? before.status,
       public: input.public ?? before.public,
     };
@@ -742,11 +931,45 @@ export class WeaveNode implements Backend {
     // Public projects keep a public copy of their page; making it private publishes a withdrawal.
     if (page.public || before.public) {
       const body: Record<string, Json> = page.public
-        ? { project: project.id, name: project.name, description: page.description, status: page.status, public: true }
+        ? { project: project.id, name: project.name, title: page.title, subtitle: page.subtitle, ...(page.icon ? { icon: page.icon } : {}), description: page.description, status: page.status, public: true }
         : { project: project.id, public: false };
       this.replica.append(this.identity, { kind: KIND_PUBLIC_PROJECT, body });
     }
     return this.project(project.id);
+  }
+
+  // ---------------------------------------------------------------- images
+
+  async putBlob(input: { data: string; type: string }): Promise<string> {
+    if (!BLOB_TYPES.includes(input.type as BlobType)) throw new Error(`images are ${BLOB_TYPES.map((t) => t.slice(6).toUpperCase()).join(', ')}`);
+    const { data, ref } = encryptBlob(new Uint8Array(Buffer.from(input.data, 'base64')), input.type as BlobType);
+    this.blobs.put(data);
+    return `wblob:${ref.hash}.${ref.key}`;
+  }
+
+  async blob(text: string): Promise<{ data: string; type: string }> {
+    const ref = parseBlobRef(text);
+    if (!ref) throw new Error('not an image reference');
+    const stored = await this.blobs.fetch(ref.hash, (hashes) => this.#swarm?.want(hashes));
+    const { bytes, type } = decryptBlob(stored, ref.key);
+    return { data: Buffer.from(bytes).toString('base64'), type };
+  }
+
+  /** Ask peers ahead of time for images in what we can read, so they show at once and we can pass them on. */
+  #prefetchBlobs(): void {
+    if (!this.#swarm) return;
+    const missing: string[] = [];
+    for (const d of this.#decodeAll()) {
+      if (!d.space) continue;
+      for (const ref of blobRefsIn(JSON.stringify(d.inner.body ?? ''))) {
+        if (this.#prefetched.has(ref.hash) || this.blobs.has(ref.hash)) continue;
+        this.#prefetched.add(ref.hash);
+        missing.push(ref.hash);
+      }
+    }
+    for (const hash of missing.slice(0, 64)) {
+      this.blobs.fetch(hash, (hashes) => this.#swarm?.want(hashes), 120_000).catch(() => this.#prefetched.delete(hash));
+    }
   }
 
   async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
@@ -820,10 +1043,12 @@ export class WeaveNode implements Backend {
    * were admitted or removed.
    */
   async reconcile(): Promise<number> {
+    this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#sendQueuedRequests());
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
+      changed += await this.#reconcileBoards(project);
       const joins = new Map<string, Did[]>();
       for (const change of this.#changes(project, state)) {
         if (!state.groups.get(change.group.id)?.auto) continue;
@@ -1309,8 +1534,7 @@ export class WeaveNode implements Backend {
     this.replica.append(this.identity, sealFor(group, { kind: KIND_MEMBERSHIP, body: { member, until } }));
     // New (or returning) members get the tier's keys, posted where their node will look for them.
     if (!current) {
-      const { entry: _entry, ...keys } = group;
-      this.replica.append(this.identity, gift({ ...keys }, [member], 'gift', this.#entryPoint(), this.#encryptionKeyOf));
+      this.replica.append(this.identity, gift(this.#keysOnly(group), [member], 'gift', this.#entryPoint(), this.#encryptionKeyOf));
     }
     await this.#answerRequests(group.id, member);
     return this.#tierInfo(this.#tierOffer(group.id));
@@ -1600,10 +1824,11 @@ export class WeaveNode implements Backend {
     return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
   }
 
-  async openIssue(input: InProject & { title: string; text?: string; labels?: string[] }): Promise<IssueInfo> {
+  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo> {
     if (!input.title?.trim()) throw new Error('an issue needs a title');
     const project = this.#project(input.project);
-    const body = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
+    const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
+    if (input.board) body.board = input.board;
     const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
     return (await this.issues(project.id)).find((i) => i.id === id)!;
   }
@@ -1623,16 +1848,16 @@ export class WeaveNode implements Backend {
 
   async proposals(ref: string): Promise<ProposalInfo[]> {
     const project = this.#project(ref);
-    const participants = new Set(this.#state(project).members.keys());
-    return proposalsOf(this.#entries(project), participants).map((p) => this.#proposalInfo(p));
+    return proposalsOf(this.#entries(project), this.#voters(project)).map((p) => this.#proposalInfo(p));
   }
 
-  async propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number }): Promise<ProposalInfo> {
+  async propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number; board?: string }): Promise<ProposalInfo> {
     if (!input.title?.trim()) throw new Error('a proposal needs a title');
     const project = this.#project(input.project);
     const deadline = new Date(Date.now() + (input.hours ?? 72) * 3600_000).toISOString();
     const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', deadline };
     if (input.quorum) body.quorum = input.quorum;
+    if (input.board) body.board = input.board;
     const { id } = await this.publish({ kind: KIND_PROPOSAL, body, space: project.id, as: input.as });
     return (await this.proposals(project.id)).find((p) => p.id === id)!;
   }
@@ -1806,8 +2031,7 @@ export class WeaveNode implements Backend {
   #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
     if (!dids.length) return;
     for (const member of dids) this.replica.append(this.identity, sealFor(project, { kind: KIND_ADMIT, body: { member, via: group.id } }));
-    const { entry: _entry, ...keys } = project;
-    this.replica.append(this.identity, gift({ ...keys }, dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
+    this.replica.append(this.identity, gift(this.#keysOnly(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
 
   /** Joins to and departures from a project's invited groups that this node can see (it must be in the group). */
@@ -1850,11 +2074,16 @@ export class WeaveNode implements Backend {
     const via = this.#spaces.get(parseScope(event.scope)?.id ?? '');
     const viaGroup = !!via && via.kind === 'group' && this.#state(via).members.has(event.author);
     const asked = opened.space.kind === 'group' && opened.space.founder === event.author && this.#selfBodies(KIND_MEMBERSHIP_PENDING).some((b) => b.tier === opened.space.id && b.creator === event.author);
-    if (!viaGroup && !asked) return;
+    // Or the keys of a space we knocked on, from the person whose link we used.
+    const knocked = this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === opened.space.id && b.inviter === event.author);
+    if (!viaGroup && !asked && !knocked) return;
     const known = this.#spaces.get(opened.space.id);
     if (known) {
       let added = false;
       for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch]) (known.keys[epoch] = key), (added = true);
+      for (const [board, epochs] of Object.entries((opened.space as StoredSpace).boards ?? {})) {
+        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch]) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
+      }
       if (added) this.#saveSpace(known);
       return;
     }
@@ -1876,11 +2105,23 @@ export class WeaveNode implements Backend {
     let page = DEFAULT_PAGE;
     for (const d of this.#decodeAll()) {
       if (d.space?.id !== project.id || d.inner.kind !== KIND_PAGE || !state.maintainers.has(d.event.author)) continue;
-      const body = d.inner.body as Partial<ProjectPage> | null;
+      const body = (d.inner.body ?? {}) as Record<string, unknown>;
+      const text = (key: string, max: number) => (typeof body[key] === 'string' ? (body[key] as string).slice(0, max) : undefined);
+      // Pages from before titles and bodies had only a description: it becomes the body.
+      const legacy = body.body === undefined && body.subtitle === undefined;
+      const subtitle = text('subtitle', 300) ?? '';
+      const pageBody = text('body', 100_000) ?? (legacy ? (text('description', 5000) ?? '') : '');
+      const icon = parseBlobRef(body.icon) ? (body.icon as string) : undefined;
+      const banner = parseBlobRef(body.banner) ? (body.banner as string) : undefined;
       page = {
-        description: typeof body?.description === 'string' ? body.description.slice(0, 5000) : page.description,
-        status: PROJECT_STATUSES.includes(body?.status as ProjectStatus) ? (body!.status as ProjectStatus) : page.status,
-        public: body?.public === true,
+        title: text('title', 100) ?? '',
+        subtitle,
+        body: pageBody,
+        ...(icon ? { icon } : {}),
+        ...(banner ? { banner } : {}),
+        description: subtitle || summary(pageBody),
+        status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : page.status,
+        public: body.public === true,
       };
     }
     return page;
@@ -1957,11 +2198,14 @@ export class WeaveNode implements Backend {
   #spacePosts(space: StoredSpace): { posts: PostInfo[]; boards: Board[] } {
     const entries = this.#entries(space);
     const state = this.#state(space);
-    const boards = boardsOf(space.kind, entries, state.maintainers);
+    const access = space.kind === 'project' ? this.#access(space, state, entries) : undefined;
+    const me = this.identity.author;
+    // Boards we may not read stay out of sight altogether.
+    const boards = boardsOf(space.kind, entries, state.maintainers).filter((b) => !access?.rules.get(b.name)?.read || !state.members.has(me) || mayUse('read', b.name, me, state, access));
     const known = new Set(boards.map((b) => b.name));
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
-    const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, new Set(state.members.keys())).map((p) => [p.id, p]) : []);
+    const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves() };
     const posts = postsOf(space.kind, entries)
       .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
@@ -2111,6 +2355,12 @@ export class WeaveNode implements Backend {
       const inner = space && openIn(space, event);
       if (!inner) return undefined;
       decoded = { event, inner, space };
+      // An event of a read-limited board: readable only with that board's key.
+      if (inner.kind === KIND_BOARD_SEALED) {
+        const opened = space?.kind === 'project' ? openBoard(space, inner, space.boards) : undefined;
+        if (!opened) return undefined;
+        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board };
+      }
     }
     // A delegated key may carry sealed events, but only of kinds it was granted.
     if (event.signer !== event.author) {
@@ -2121,12 +2371,35 @@ export class WeaveNode implements Backend {
   }
 
   #decodeAll(): Decoded[] {
-    if (!this.#decoded) this.#ensureDirects();
-    this.#decoded ??= this.replica.events().flatMap((event) => {
-      const decoded = this.#decode(event);
-      return decoded ? [decoded] : [];
-    });
-    return this.#decoded;
+    // Board keys arrive inside the project: taking one makes more events readable, so decode again.
+    for (let round = 0; round < 4; round++) {
+      if (!this.#decoded) this.#ensureDirects();
+      this.#decoded ??= this.replica.events().flatMap((event) => {
+        const decoded = this.#decode(event);
+        return decoded ? [decoded] : [];
+      });
+      if (!this.#takeBoardKeys(this.#decoded)) break;
+    }
+    return this.#decoded!;
+  }
+
+  /** Keep board keys boxed to us; true if any was new (then everything is decoded again). */
+  #takeBoardKeys(decoded: Decoded[]): boolean {
+    const changed = new Set<StoredSpace>();
+    for (const d of decoded) {
+      if (d.inner.kind !== KIND_BOARD_KEY || d.space?.kind !== 'project') continue;
+      const id = eventId(d.event);
+      if (this.#boardKeysSeen.has(id)) continue;
+      this.#boardKeysSeen.add(id);
+      const opened = this.#tryOpen((me) => openBoardKey(d.space!, d.inner, me));
+      if (!opened) continue;
+      const epochs = ((d.space.boards ??= {})[opened.board] ??= {});
+      if (epochs[String(opened.epoch)]) continue;
+      epochs[String(opened.epoch)] = opened.key;
+      changed.add(d.space);
+    }
+    for (const space of changed) this.#saveSpace(space);
+    return changed.size > 0;
   }
 
   #graph() {
@@ -2151,9 +2424,129 @@ export class WeaveNode implements Backend {
   /** A space's readable events from members, as entries for the collaboration functions. */
   #entries(space: StoredSpace): Entry[] {
     const state = this.#state(space);
-    return this.#decodeAll()
+    const entries = this.#decodeAll()
       .filter((d) => d.space?.id === space.id && (this.#mine(d.event) || visibleIn(state, d.event, d.inner)))
       .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    return space.kind === 'project' ? this.#writable(space, state, entries) : entries;
+  }
+
+  // ---------------------------------------------------------------- internals: board access
+
+  #access(space: StoredSpace, state: SpaceState, entries: Entry[]): Access {
+    return accessOf(entries, state, inviteRightsOf(entries, state));
+  }
+
+  /** Where issues and proposals that don't name a board live: the first board of their type. */
+  #boardDefaults(state: SpaceState, entries: Entry[]): { issues?: string; proposals?: string } {
+    const boards = boardsOf('project', entries, state.maintainers);
+    return { issues: boards.find((b) => b.type === 'issues')?.name, proposals: boards.find((b) => b.type === 'proposals')?.name };
+  }
+
+  /** Leave out what people wrote in boards they may not write in (everyone's node does the same). */
+  #writable(space: StoredSpace, state: SpaceState, entries: Entry[]): Entry[] {
+    const access = this.#access(space, state, entries);
+    if (![...access.rules.values()].some((r) => r.write)) return entries;
+    const boards = boardOfEvents(entries, this.#boardDefaults(state, entries));
+    return entries.filter((e) => {
+      const board = boards.get(e.id);
+      return !board || !access.rules.get(board)?.write || mayUse('write', board, e.event.author, state, access);
+    });
+  }
+
+  /** Who may vote on each proposal: the people who may write in its board. */
+  #voters(project: StoredSpace): (proposal: Entry) => Set<Did> {
+    const state = this.#state(project);
+    const entries = this.#entries(project);
+    const access = this.#access(project, state, entries);
+    const boards = boardOfEvents(entries, this.#boardDefaults(state, entries));
+    const everyone = new Set(state.members.keys());
+    return (proposal) => {
+      const board = boards.get(proposal.id);
+      return board && access.rules.get(board)?.write ? new Set([...everyone].filter((did) => mayUse('write', board, did, state, access))) : everyone;
+    };
+  }
+
+  /** Check a new event against its board's rules, and seal it with the board's key if the board is read-limited. */
+  #forBoard(space: StoredSpace, inner: Inner): Inner {
+    const state = this.#state(space);
+    const entries = this.#entries(space);
+    const access = this.#access(space, state, entries);
+    if (!access.rules.size) return inner;
+    const defaults = this.#boardDefaults(state, entries);
+    const board = boardOfInner(inner, boardOfEvents(entries, defaults), defaults);
+    const rules = board ? access.rules.get(board) : undefined;
+    if (!board || !rules) return inner;
+    const me = this.identity.author;
+    if (rules.write && state.members.has(me) && !mayUse('write', board, me, state, access)) throw new Error(`only some people may write in ${board} of ${space.name}, and you're not one of them`);
+    if (!rules.read) return inner;
+    const epochs = space.boards?.[board] ?? {};
+    const epoch = Math.max(-1, ...Object.keys(epochs).map(Number));
+    if (epoch < 0) throw new Error(`you don't have the key for ${board} yet: someone who can read it needs to be online once`);
+    return sealForBoard(space, board, epoch, epochs[String(epoch)], inner);
+  }
+
+  /**
+   * Keep read-limited boards readable by exactly their readers: maintainers
+   * publish who of an invited group takes part (others can't see the group),
+   * anyone holding a board's key passes it to readers who lack it, and
+   * maintainers start a new key when someone may no longer read.
+   */
+  async #reconcileBoards(project: StoredSpace): Promise<number> {
+    const me = this.identity.author;
+    let state = this.#state(project);
+    if (!state.members.has(me)) return 0;
+    let entries = this.#entries(project);
+    let access = this.#access(project, state, entries);
+    if (!access.rules.size) return 0;
+    let changed = 0;
+    if (state.maintainers.has(me)) {
+      const groups = new Set([...access.rules.values()].flatMap((r) => [...(r.read ?? []), ...(r.write ?? [])]).flatMap((g) => ('group' in g ? [g.group] : [])));
+      for (const id of groups) {
+        const group = this.#spaces.get(id);
+        if (!group) continue;
+        const roster = [...this.#state(group).members.keys()].filter((did) => state.members.has(did)).sort();
+        const known = [...(access.rosters.get(id) ?? [])].sort();
+        if (roster.join() === known.join()) continue;
+        this.replica.append(this.identity, sealFor(project, { kind: KIND_ROSTER, body: { group: id, members: roster } }));
+        changed++;
+      }
+      if (changed) {
+        state = this.#state(project);
+        entries = this.#entries(project);
+        access = this.#access(project, state, entries);
+      }
+    }
+    const holders = keyHolders(entries);
+    for (const [board, rules] of access.rules) {
+      if (!rules.read) continue;
+      const readers = readersOf(board, state, access);
+      const epochs = holders.get(board);
+      const mine = project.boards?.[board] ?? {};
+      const newKey = (epoch: number) => {
+        const key = newBoardKey();
+        ((project.boards ??= {})[board] ??= {})[String(epoch)] = key;
+        this.#saveSpace(project);
+        this.replica.append(this.identity, sealFor(project, boardKeyFor(project, board, epoch, key, readers, this.#encryptionKeyOf)));
+        changed++;
+      };
+      if (!epochs?.size) {
+        if (state.maintainers.has(me) && !Object.keys(mine).length) newKey(0);
+        continue;
+      }
+      const latest = Math.max(...epochs.keys());
+      if (!mine[String(latest)]) continue; // the newest key hasn't reached us yet
+      // Someone who may no longer read holds the current key: maintainers start a new one.
+      if (state.maintainers.has(me) && [...epochs.get(latest)!].some((did) => !readers.includes(did))) newKey(latest + 1);
+      // Readers get every key we hold that they lack, older ones too, so they can read the board's history.
+      for (const [epoch, holding] of epochs) {
+        const key = mine[String(epoch)];
+        const missing = key ? readers.filter((did) => !holding.has(did)) : [];
+        if (!missing.length) continue;
+        this.replica.append(this.identity, sealFor(project, boardKeyFor(project, board, epoch, key, missing, this.#encryptionKeyOf)));
+        changed++;
+      }
+    }
+    return changed;
   }
 
   /** An event by full id or a unique prefix (at least 6 characters), limited to some kinds. */
@@ -2277,4 +2670,16 @@ const FREE_TIER_MONTHS = 1200;
 export interface Bundle {
   contacts?: string[];
   tiers?: Array<{ tier: string; creator: Did; note?: string }>;
+}
+
+/** The start of a Markdown text as one plain line, for shares and older clients. */
+function summary(markdown: string, max = 300): string {
+  const plain = markdown
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#*_>`~|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain;
 }

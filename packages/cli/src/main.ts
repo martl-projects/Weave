@@ -24,6 +24,7 @@ import {
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
+  type KnockInfo,
   type SpaceInfo,
   type ThreadInfo,
   type TierInfo,
@@ -59,6 +60,7 @@ groups — collections of people, with their own chat:
   group create <name>        start a group
   group list                 groups you're in
   group invite <group>       print an invite link (any member)   [--hours <n>]  default: 168
+                             [--accept: the link only lets people ask; you let each one in]
   group join <link>          join with an invite link
   group members <group>      members and who invited them
   group remove <group> <who> remove someone and rotate the key (founder only)
@@ -67,9 +69,13 @@ projects — something being built; participants chat, discuss, vote and work on
   project create <name>                  start a project            [--text <description>]
   project list                           projects you take part in
   project show <project>                 page, maintainers, invited groups and rules
-  project page <project>                 change the page   [--text <description>] [--status idea|active|paused|shipped|archived] [--public | --private]
-  project invite <project>               print an invite link (maintainers)
-  project join <link>                    join with an invite link
+  project page <project>                 change the page   [--title <t>] [--subtitle <t>] [--text <markdown> | --file <page.md>]
+                                                           [--icon <image>] [--banner <image>] ("" removes one)
+                                                           [--status idea|active|paused|shipped|archived] [--public | --private]
+  image <file>                           upload an image; prints its wblob: reference for Markdown: ![alt](wblob:…)
+  project invite <project>               print an invite link (maintainers)  [--hours <n>] [--accept]
+                                         [--read-board <b,…>] [--write-board <b,…>]: board rights the link gives
+  project join <link>                    join with an invite link (or ask to, with an --accept link)  [--text <note>]
   project members <project>              participants: who let them in, through which group
   project remove <project> <who>         remove someone and rotate the key (maintainers)
   project maintainer <project> <who>     make someone a maintainer; --off to undo
@@ -77,6 +83,8 @@ projects — something being built; participants chat, discuss, vote and work on
   project drop-group <project> <group>   stop inviting the group's newcomers
   project rule <project> <group>         admit the group's newcomers without asking; --off to ask again
   admissions [project]                   people the maintainers are asked about
+  knocks                                 people asking to join with your --accept links
+  let-in <id> / turn-away <id>           answer someone who asked
   admit <project> <who> <group>          let a group newcomer in   [--always: also its future newcomers, in all your projects with that group]
   decline <project> <who> <group>        turn a group newcomer away
 
@@ -103,6 +111,9 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board add <name>           add a board (maintainers)  [--title <t>] [--type posts|issues|proposals] [--sort hot|new|top] [--position <n>]
   board set <name>           change title, sort or position (maintainers)
   board drop <name>          remove a board; its posts stay in the logs
+  board access <name>        who may read and write (maintainers)  [--read <who,…>] [--write <who,…>]
+                             people by name or did:key, groups as group:<name>; "everyone" opens it again,
+                             "" leaves only the maintainers
   pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
 
 memberships, Patreon-style (tiers buy access to a tier's chat and the projects it's invited into, never votes):
@@ -204,6 +215,14 @@ const { values, positionals } = parseArgs({
     link: { type: 'string' },
     to: { type: 'string' },
     title: { type: 'string' },
+    accept: { type: 'boolean', default: false },
+    'read-board': { type: 'string' },
+    'write-board': { type: 'string' },
+    read: { type: 'string' },
+    write: { type: 'string' },
+    subtitle: { type: 'string' },
+    icon: { type: 'string' },
+    banner: { type: 'string' },
     type: { type: 'string' },
     position: { type: 'string' },
     hours: { type: 'string' },
@@ -269,6 +288,15 @@ const tierLine = (t: TierInfo) => {
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
+const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+
+/** Upload an image file; returns its wblob: reference. */
+async function uploadImage(b: Backend, path: string): Promise<string> {
+  const type = IMAGE_TYPES[path.split('.').pop()?.toLowerCase() ?? ''];
+  if (!type) throw new Error(`images are ${Object.keys(IMAGE_TYPES).join(', ')} files`);
+  return b.putBlob({ data: readFileSync(path).toString('base64'), type });
+}
+
 /** The contacts and free tiers this copy of Weave ships with: weave.bundle.json next to the packaged program, or at the repository root. */
 function readBundle(): Bundle | undefined {
   const file = [join(import.meta.dirname, 'weave.bundle.json'), join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json')].find(existsSync);
@@ -310,7 +338,30 @@ const postLine = (p: PostInfo) => {
   return `${p.short}  ${vote}${String(p.score).padStart(3)}  ${p.title}${marks ? `  ${marks}` : ''}
                  ${where(p)} · ${actor(p.by)} · ${p.chat} in chat${p.link ? ` · ${p.link}` : ''}`;
 };
-const boardLine = (b: BoardInfo) => `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}`;
+const grantees = (list: BoardInfo['access']['read']) => (list?.length ? list.map((g) => (g.group ? `group:${g.name ?? g.group}` : (g.name ?? g.person))).join(', ') : 'maintainers only');
+const boardLine = (b: BoardInfo) =>
+  `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}` +
+  (b.access.read ? `\n${''.padEnd(17)}read: ${grantees(b.access.read)}` : '') +
+  (b.access.write ? `\n${''.padEnd(17)}write: ${grantees(b.access.write)}${b.canWrite ? '' : ' (not you)'}` : '');
+const knockLine = (k: KnockInfo) =>
+  `${k.id.slice(0, 8)}  ${k.name ?? k.did} asks to join ${k.space.kind} ${k.space.name}${k.note ? `: "${k.note}"` : ''}${k.access.length ? `  (link gives ${k.access.map((r) => `${r.write ? 'write' : 'read'} ${r.board}`).join(', ')})` : ''}\n          weave let-in ${k.id.slice(0, 8)}  ·  weave turn-away ${k.id.slice(0, 8)}`;
+
+/** Board rights from --read-board and --write-board (writing includes reading). */
+function boardRights(): Array<{ board: string; read?: boolean; write?: boolean }> {
+  const split = (v?: string) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const write = split(values['write-board']);
+  return [...split(values['read-board']).filter((b) => !write.includes(b)).map((board) => ({ board, read: true })), ...write.map((board) => ({ board, read: true, write: true }))];
+}
+
+const inviteLink = (b: Backend, ref: string) => b.invite(ref, values.hours ? Number(values.hours) : undefined, { accept: values.accept, access: boardRights() });
+
+const inviteText = (link: string, kind: string) =>
+  link.startsWith('weave:knock:')
+    ? `${link}\n\nWhoever has this link can ask to join the ${kind}; you let each one in (weave knocks).\nThey ask with: weave ${kind} join <link> [--text "a note"]`
+    : `${link}\n\nShare this link privately: whoever has it can join the ${kind}.\nThey join with: weave ${kind} join <link>`;
+
+const joinedText = (s: SpaceInfo) =>
+  s.waiting ? `asked to join ${s.kind} ${s.name}: you're in once the person who sent the link lets you in` : `joined ${s.kind} ${s.name} (founded by ${s.founderName ?? s.founder})`;
 const communityText = (c: CommunityInfo) =>
   [`r/${c.name}`, c.description ? `  ${c.description}` : '', `  moderators: ${c.moderators.map(actor).join(', ')}`, `  ${c.members} member${c.members === 1 ? '' : 's'}`].filter(Boolean).join('\n');
 
@@ -333,8 +384,10 @@ const admissionLine = (a: Admission) =>
     : `${a.project.name}: ${a.name ?? a.did} left ${a.group.name} — weave project remove "${a.project.name}" ${a.did}`;
 const projectText = (p: ProjectInfo) =>
   [
-    `${p.name}  [${p.page.status}]${p.page.public ? '  public' : ''}`,
-    p.page.description ? `  ${p.page.description}` : '',
+    `${p.page.title || p.name}  [${p.page.status}]${p.page.public ? '  public' : ''}${p.page.title && p.page.title !== p.name ? `  (p/${p.name})` : ''}`,
+    p.page.subtitle ? `  ${p.page.subtitle}` : '',
+    p.page.body ? `\n${p.page.body.split('\n').map((l) => `  ${l}`).join('\n')}\n` : '',
+    p.page.icon || p.page.banner ? `  images: ${[p.page.icon && 'icon', p.page.banner && 'banner'].filter(Boolean).join(', ')}` : '',
     `  maintainers: ${p.maintainers.map(actor).join(', ')}`,
     `  groups: ${p.groups.map((g) => `${g.name}${g.auto ? ' (admitted automatically)' : ''}`).join(', ') || '-'}`,
     `  ${p.members} participant${p.members === 1 ? '' : 's'}`,
@@ -526,12 +579,12 @@ async function main(): Promise<void> {
         return out(groups, () => groups.map(spaceLine).join('\n') || '(no groups)');
       }
       if (sub === 'invite' && ref) {
-        const invite = await b.invite(ref, values.hours ? Number(values.hours) : undefined);
-        return out({ invite }, () => `${invite}\n\nShare this link privately: whoever has it can join the group.\nThey join with: weave group join <link>`);
+        const invite = await inviteLink(b, ref);
+        return out({ invite }, () => inviteText(invite, 'group'));
       }
       if (sub === 'join' && ref) {
-        const g = await b.joinSpace(ref);
-        return out(g, () => `joined ${g.kind} ${g.name} (founded by ${g.founderName ?? g.founder})`);
+        const g = await b.joinSpace(ref, values.text);
+        return out(g, () => joinedText(g));
       }
       if (sub === 'members' && ref) {
         const members = await b.members(ref);
@@ -565,18 +618,29 @@ async function main(): Promise<void> {
         case 'page': {
           if (!ref) break;
           const isPublic = values.public ? true : values.private ? false : undefined;
-          const p = await b.setProjectPage({ project: ref, description: values.text, status: values.status as ProjectStatus | undefined, public: isPublic });
+          const body = values.file !== undefined ? readFileSync(values.file, 'utf8') : values.text;
+          const image = async (path?: string) => (path === undefined ? undefined : path === '' ? '' : uploadImage(b, path));
+          const p = await b.setProjectPage({
+            project: ref,
+            title: values.title,
+            subtitle: values.subtitle,
+            body,
+            icon: await image(values.icon),
+            banner: await image(values.banner),
+            status: values.status as ProjectStatus | undefined,
+            public: isPublic,
+          });
           return out(p, () => projectText(p));
         }
         case 'invite': {
           if (!ref) break;
-          const invite = await b.invite(ref, values.hours ? Number(values.hours) : undefined);
-          return out({ invite }, () => `${invite}\n\nShare this link privately: whoever has it can join the project.\nThey join with: weave project join <link>`);
+          const invite = await inviteLink(b, ref);
+          return out({ invite }, () => inviteText(invite, 'project'));
         }
         case 'join': {
           if (!ref) break;
-          const p = await b.joinSpace(ref);
-          return out(p, () => `joined ${p.kind} ${p.name} (founded by ${p.founderName ?? p.founder})`);
+          const p = await b.joinSpace(ref, values.text);
+          return out(p, () => joinedText(p));
         }
         case 'members': {
           if (!ref) break;
@@ -632,13 +696,13 @@ async function main(): Promise<void> {
         }
         case 'invite': {
           if (!ref) break;
-          const invite = await b.invite(ref, values.hours ? Number(values.hours) : undefined);
-          return out({ invite }, () => `${invite}\n\nShare this link privately: whoever has it can join the community.\nThey join with: weave community join <link>`);
+          const invite = await inviteLink(b, ref);
+          return out({ invite }, () => inviteText(invite, 'community'));
         }
         case 'join': {
           if (!ref) break;
-          const c = await b.joinSpace(ref);
-          return out(c, () => `joined ${c.kind} ${c.name} (founded by ${c.founderName ?? c.founder})`);
+          const c = await b.joinSpace(ref, values.text);
+          return out(c, () => joinedText(c));
         }
         case 'members': {
           if (!ref) break;
@@ -725,7 +789,12 @@ async function main(): Promise<void> {
 
     case 'board': {
       const [sub, name] = args;
-      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop <name> -p <project>');
+      if (sub === 'access' && name) {
+        const list = (value?: string) => (value === undefined ? undefined : value.trim() === 'everyone' ? null : value.split(',').map((w) => w.trim()).filter(Boolean));
+        const boards = await (await backend()).setBoardAccess({ project: needProject(), board: name, read: list(values.read), write: list(values.write) });
+        return out(boards, () => boards.map(boardLine).join('\n'));
+      }
+      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access <name> -p <project>');
       const boards = await (await backend()).setBoard({
         project: needProject(),
         name,
@@ -742,6 +811,18 @@ async function main(): Promise<void> {
       if (!args.length && !values.clear) throw new Error('usage: weave pin <id...> -r <community> | -p <project> -b <board>  (--clear unpins all)');
       const boards = await (await backend()).curate({ space: values.community ?? needProject(), board: values.board, pinned: values.clear ? [] : args });
       return out(boards, () => boards.map(boardLine).join('\n'));
+    }
+
+    case 'knocks': {
+      const knocks = await (await backend()).knocks();
+      return out(knocks, () => knocks.map(knockLine).join('\n') || '(nobody asking)');
+    }
+
+    case 'let-in':
+    case 'turn-away': {
+      if (!args[0]) throw new Error(`usage: weave ${command} <id>`);
+      await (await backend()).answerKnock({ knock: args[0], accept: command === 'let-in' });
+      return out({ [command]: args[0] }, () => (command === 'let-in' ? 'let them in: their node gets the keys when it next meets yours' : 'turned them away'));
     }
 
     case 'admissions': {
@@ -1053,6 +1134,12 @@ async function main(): Promise<void> {
           `muted      ${list(social.muted)}`,
         ].join('\n'),
       );
+    }
+
+    case 'image': {
+      if (!args[0]) throw new Error('usage: weave image <file>');
+      const ref = await uploadImage(await backend(), args[0]);
+      return out({ ref }, () => `${ref}\n\nUse it in a post or page: ![description](${ref})`);
     }
 
     case 'bootstrap': {

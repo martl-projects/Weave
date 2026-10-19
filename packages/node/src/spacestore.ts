@@ -6,6 +6,8 @@ import { readJson, writeJson, type Home } from './home.ts';
 /** A group's or project's keys plus where we first found its members. */
 export interface StoredSpace extends SpaceKeys {
   entry: Invite['entry'];
+  /** Keys of the read-limited boards we may read: board → epoch → key. */
+  boards?: Record<string, Record<string, string>>;
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {
