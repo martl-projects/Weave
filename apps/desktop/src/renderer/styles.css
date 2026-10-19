@@ -457,3 +457,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .boards-table { width: 100%; table-layout: auto; }
 .boards-table input { width: 100%; min-width: 70px; }
 .boards-table .access-btn { max-width: 140px; }
+/* The generated icon has a fixed size; in the hero it fills whatever frame the layout gives it. */
+.hero-art .sprite { display: block; width: 100% !important; height: 100% !important; }
+.hero-art .sprite svg { display: block; width: 100%; height: 100%; }
