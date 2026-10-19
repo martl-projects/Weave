@@ -479,3 +479,35 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .pair-phone { display: flex; gap: 12px; align-items: flex-start; }
 .pair-phone .qr { flex: none; width: 200px; height: 200px; background: #fff; border: 1px solid #808080; }
 .pair-phone .qr svg { display: block; width: 100%; height: 100%; }
+
+/* ---------- phones: one pane at a time, the toolbar as a tab bar at the bottom */
+.mobile-only { display: none !important; }
+@media (max-width: 700px) {
+  .mobile-only { display: flex !important; }
+  .not-mobile, .menubar, .brand, .toolbar .tool-sep, .members, .status-bar, .app-window > .title-bar .title-bar-controls { display: none !important; }
+  .app-window > .title-bar { padding-top: calc(3px + env(safe-area-inset-top)); }
+  .app-window > .toolbar {
+    order: 10; justify-content: space-around; gap: 0; padding: 2px 0 calc(2px + env(safe-area-inset-bottom));
+    border-top: 1px solid #fff; border-bottom: none; box-shadow: 0 -1px #808080;
+  }
+  .tool { flex: 1; min-width: 0; min-height: 50px; padding: 2px; font-size: 11px; }
+  .tool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .panes { padding: 2px 0; gap: 0; }
+  .places { display: none; }
+  .places-open .places { display: flex; width: 100%; }
+  .places-open .panes > :not(.places) { display: none; }
+  /* Fingers, not mouse pointers. */
+  .tree-link { min-height: 36px; padding: 4px 6px; font-size: 14px; }
+  .tree-head { font-size: 13px; padding: 6px; }
+  button { min-height: 32px; }
+  .pane-head { min-height: 32px; flex-wrap: wrap; padding: 3px 4px; }
+  .pane-head b { flex: 1 1 100%; }
+  .pane-tools { flex-wrap: wrap; flex: 1 1 100%; justify-content: flex-start; }
+  .pane-head b { font-size: 13px; }
+  .pane-tools button { min-height: 28px; }
+  .pane-tools select { height: 28px; }
+  /* 16px text in fields keeps iOS from zooming in on every tap. */
+  input, textarea, select { font-size: 16px !important; }
+  .page { font-size: 14px; }
+  .window.modal, .window.modal.wide { width: calc(100vw - 12px) !important; max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; }
+}

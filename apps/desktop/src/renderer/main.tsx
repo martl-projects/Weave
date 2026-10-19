@@ -334,7 +334,7 @@ function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: Space
 
 // ---------------------------------------------------------------- window
 
-function ToolButton({ icon, label, onClick, href, on }: { icon: IconName; label: string; onClick?(): void; href?: string; on?: boolean }) {
+function ToolButton({ icon, label, onClick, href, on, className = '' }: { icon: IconName; label: string; onClick?(): void; href?: string; on?: boolean; className?: string }) {
   const inner = (
     <>
       <Icon name={icon} size={24} />
@@ -342,11 +342,11 @@ function ToolButton({ icon, label, onClick, href, on }: { icon: IconName; label:
     </>
   );
   return href ? (
-    <a className={`tool${on ? ' on' : ''}`} href={href} aria-label={label}>
+    <a className={`tool${on ? ' on' : ''} ${className}`} href={href} aria-label={label}>
       {inner}
     </a>
   ) : (
-    <button className="tool" onClick={onClick} aria-label={label}>
+    <button className={`tool${on ? ' on' : ''} ${className}`} onClick={onClick} aria-label={label}>
       {inner}
     </button>
   );
@@ -364,6 +364,10 @@ function Shell() {
   const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
+  // On a phone the places tree is a screen of its own; picking something closes it.
+  const [placesOpen, setPlacesOpen] = useState(false);
+  const routeKey = route.join('/');
+  useEffect(() => setPlacesOpen(false), [routeKey]);
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
@@ -392,7 +396,7 @@ function Shell() {
   }
 
   return (
-    <div className="window app-window">
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}`}>
       <div className="title-bar">
         <div className="title-bar-text">
           <WeaveMark size={14} /> Weave - [{where}]
@@ -444,15 +448,17 @@ function Shell() {
         <Menu label="Help" items={[{ label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) }]} />
       </nav>
       <div className="toolbar">
-        <ToolButton icon="home" label="Home" href="#/" on={route.length === 0} />
-        <ToolButton icon="bookmark" label="Saved" href="#/saved" on={route[0] === 'saved'} />
-        <ToolButton icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} href="#/inbox" on={route[0] === 'inbox'} />
-        <ToolButton icon="users" label="People" href="#/people" on={route[0] === 'people'} />
-        <ToolButton icon="user" label="My hub" href="#/space" on={route[0] === 'space' && !route[1]} />
+        {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
+        <ToolButton icon="notes" label="Places" className="mobile-only" on={placesOpen} onClick={() => setPlacesOpen((open) => !open)} />
+        <ToolButton icon="home" label="Home" href="#/" on={route.length === 0 && !placesOpen} />
+        <ToolButton icon="bookmark" label="Saved" href="#/saved" on={route[0] === 'saved'} className="not-mobile" />
+        <ToolButton icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
+        <ToolButton icon="users" label="People" href="#/people" on={route[0] === 'people' && !placesOpen} />
+        <ToolButton icon="user" label="My hub" href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
         <span className="tool-sep" />
         <ToolButton icon="pencil" label="Submit" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
-        <ToolButton icon="plus" label="New" onClick={() => setDialog({ kind: 'new' })} />
-        {space && <ToolButton icon="userPlus" label="Invite" onClick={() => setDialog({ kind: 'invite', space })} />}
+        <ToolButton icon="plus" label="New" onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
+        {space && <ToolButton icon="userPlus" label="Invite" onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
         <div className="brand">
           <WeaveMark size={40} />
           <div>
