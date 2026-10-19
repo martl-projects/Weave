@@ -301,7 +301,7 @@
 :root[data-skin='cozy'] .banner-side .votes { padding: 4px 6px; border: 2px solid var(--cz-line); border-radius: 10px; background: var(--cz-paper); }
 :root[data-skin='cozy'] .board-strip { padding: 8px; gap: 6px; border-bottom: 2px dashed var(--cz-soft); }
 :root[data-skin='cozy'] .project-page { margin: 0; background: var(--cz-paper); }
-:root[data-skin='cozy'] .md img { border: 2px solid var(--cz-soft); border-radius: 8px; }
+:root[data-skin='cozy'] :is(.md, .msg-text) img { border: 2px solid var(--cz-soft); border-radius: 8px; }
 
 /* ---------- editor */
 :root[data-skin='cozy'] .rich-editor { border: 2px solid var(--cz-soft); border-radius: 10px; overflow: hidden; }

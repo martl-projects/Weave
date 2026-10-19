@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
-import { api, clock, dayLabel, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
+import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { attempt, Avatar } from './ui.tsx';
 
@@ -63,6 +63,10 @@ function Message({
   const { m, compact } = row;
   const [picking, setPicking] = useState(false);
   const html = useMemo(() => renderMarkdown(m.text), [m.text]);
+  const textRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (textRef.current) loadBlobImages(textRef.current);
+  }, [html]);
   const mentionsMe = mentionNames.some((name) => new RegExp(`@${name}\\b`, 'i').test(m.text));
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));
   const author = (
@@ -95,7 +99,7 @@ function Message({
               <time>{`${dayLabel(m.time)} at ${clock(m.time)}`}</time>
             </div>
           )}
-          <div className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />
+          <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />
           {m.reactions.length > 0 && (
             <div className="reactions">
               {m.reactions.map((r) => (

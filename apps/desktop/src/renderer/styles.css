@@ -295,6 +295,7 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .author.is-agent a { color: var(--agent); }
 .msg-text { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .msg-text p, .md p { margin: 0 0 4px; }
+.msg-text img { display: block; max-width: min(100%, 480px); height: auto; margin: 6px 0; border: 1px solid #808080; }
 .md p:last-child, .msg-text p:last-child { margin-bottom: 0; }
 .md pre, .msg-text pre { padding: 6px 8px; background: #f4f4f4; border: 1px solid #c0c0c0; overflow-x: auto; }
 .md code, .msg-text code { font-family: 'Lucida Console', Consolas, monospace; font-size: 12px; background: #f4f4f4; }
