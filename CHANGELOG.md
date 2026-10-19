@@ -2,6 +2,28 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.2.0 · 2026-10-19
+
+- Give the app a phone layout
+- Pair phones from Keys & devices
+- Let paired phones use a node remotely
+- Ship martl as everyone's first contact
+- Sell membership tiers through Gumroad
+- Let posts carry an attached image
+- Filter Home by source and let people hide spaces from it
+- Let people edit and delete posts
+- Load images in chat messages
+- Let people leave spaces, hand them over and close them
+- Add a Cozy look for the app
+- Ask in an in-app dialog instead of confirm(), so End room works everywhere
+- Let the host start a project's app from its manifest
+- Fit the generated project icon into the hero card's frame
+- Document project pages, images, board access and ask-first invites
+- Add a project hero card, a WYSIWYG editor and board access to the app
+- Let nodes share images, richer project pages, board access and ask-first invites
+- Add encrypted blobs, board access and knock links to the protocol
+- Build unsigned desktop installers for Windows, macOS and Linux
+
 ## v0.1.0 · 2026-10-19
 
 - Add CI and versioned releases
