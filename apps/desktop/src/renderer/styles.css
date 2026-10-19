@@ -460,3 +460,10 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 /* The generated icon has a fixed size; in the hero it fills whatever frame the layout gives it. */
 .hero-art .sprite { display: block; width: 100% !important; height: 100% !important; }
 .hero-art .sprite svg { display: block; width: 100%; height: 100%; }
+
+/* ---------- starting a project's app */
+.app-panel .status-dot { width: 10px; height: 10px; border: 1px solid #404040; background: #808080; flex: none; }
+.app-panel .status-dot.on { background: #00c000; }
+.app-log { max-height: 180px; overflow: auto; margin: 4px 0 0; padding: 4px 6px; background: #000; color: #c0c0c0; font: 11px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; }
+.approve-launch { display: flex; gap: 10px; align-items: flex-start; }
+.launch-command { margin: 4px 0; padding: 4px 6px; background: #fff; border: 1px solid #808080; font: 12px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; word-break: break-all; }

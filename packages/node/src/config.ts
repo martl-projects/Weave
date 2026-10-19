@@ -7,11 +7,21 @@ export interface Config {
   bootstrap: Array<{ host: string; port: number }>;
   /** Tiers to ask to join once the creator's node has been reached (e.g. from the app's bundle). */
   pendingMemberships: Array<{ tier: string; creator: string; note?: string }>;
+  /** Project id → this computer's copy of the project's app (never published). */
+  appFolders: Record<string, string>;
+  /** Project id → the start command and folder the person approved (a fingerprint, see applaunch.ts). */
+  approvedLaunches: Record<string, string>;
 }
 
 export function loadConfig(home: Home): Config {
   const stored = readJson<Partial<Config>>(home.config) ?? {};
-  return { topics: stored.topics ?? [], bootstrap: stored.bootstrap ?? [], pendingMemberships: stored.pendingMemberships ?? [] };
+  return {
+    topics: stored.topics ?? [],
+    bootstrap: stored.bootstrap ?? [],
+    pendingMemberships: stored.pendingMemberships ?? [],
+    appFolders: stored.appFolders ?? {},
+    approvedLaunches: stored.approvedLaunches ?? {},
+  };
 }
 
 export function saveConfig(home: Home, config: Config): void {

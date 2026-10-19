@@ -301,6 +301,29 @@ export function applyAppTheme(theme?: Theme): void {
   root.dataset.pattern = theme.pattern;
 }
 
+/*
+ * The app's own skin (its window chrome) is a local preference, unlike a
+ * person's public hub theme: it changes how Weave looks to you, not to others.
+ */
+export const SKINS = { win95: 'Windows 95', cozy: 'Cozy' } as const;
+export type Skin = keyof typeof SKINS;
+const SKIN_KEY = 'weave.skin';
+
+export function loadSkin(): Skin {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(SKIN_KEY);
+  } catch {}
+  return saved && saved in SKINS ? (saved as Skin) : 'win95';
+}
+
+export function applySkin(skin: Skin): void {
+  document.documentElement.dataset.skin = skin;
+  try {
+    localStorage.setItem(SKIN_KEY, skin);
+  } catch {}
+}
+
 /** Remembers whether the user is scrolled to the bottom of an element, to keep chat pinned there. */
 export function useStickToBottom(element: HTMLElement | null): React.MutableRefObject<boolean> {
   const stuck = useRef(true);

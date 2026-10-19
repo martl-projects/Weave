@@ -68,6 +68,13 @@ ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknow
   }
 });
 
+/** A folder on this computer, picked by the person (for a project app's local copy). */
+ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
+  const options = { title: String(title ?? 'Choose a folder').slice(0, 80), properties: ['openDirectory' as const] };
+  const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? undefined : result.filePaths[0];
+});
+
 /** Only the apps rooms share: the host's own port, or a room tunnel on this computer. */
 const APP_ADDRESS = /^http:\/\/(localhost|[a-z0-9-]+\.weave\.localhost):\d+\//;
 

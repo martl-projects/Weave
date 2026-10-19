@@ -6,7 +6,7 @@ import { ChatView } from './chat.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, bridge, bump, isActive, isUnread, navigate, shortDid, useApi, useRoute, useTick, type AppState } from './lib.ts';
+import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
 import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, Sprite, Toasts, WeaveMark } from './ui.tsx';
 import {
@@ -346,6 +346,7 @@ function Shell() {
   const { data: knocks } = useApi(() => api<KnockInfo[]>('knocks'), []);
   const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
+  const [skin, setSkin] = useState<Skin>(loadSkin);
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
@@ -420,6 +421,14 @@ function Shell() {
             { label: 'Keys & devices', onClick: () => navigate('#/keys') },
             'sep',
             { label: 'Refresh', onClick: bump },
+            'sep',
+            ...(Object.keys(SKINS) as Skin[]).map((s) => ({
+              label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
+              onClick: () => {
+                applySkin(s);
+                setSkin(s);
+              },
+            })),
           ]}
         />
         <Menu
@@ -494,4 +503,5 @@ function App() {
   );
 }
 
+applySkin(loadSkin());
 createRoot(document.getElementById('root')!).render(<App />);

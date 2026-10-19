@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
@@ -24,6 +24,7 @@ import {
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
+  type AppLaunchInfo,
   type KnockInfo,
   type SpaceInfo,
   type ThreadInfo,
@@ -72,6 +73,8 @@ projects — something being built; participants chat, discuss, vote and work on
   project page <project>                 change the page   [--title <t>] [--subtitle <t>] [--text <markdown> | --file <page.md>]
                                                            [--icon <image>] [--banner <image>] ("" removes one)
                                                            [--status idea|active|paused|shipped|archived] [--public | --private]
+  app folder [path] -p <project>         where this computer's copy of the app is (default: here)
+  app start|stop|status -p <project>     run the manifest's start command (asks you once), stop it, see its output
   image <file>                           upload an image; prints its wblob: reference for Markdown: ![alt](wblob:…)
   project invite <project>               print an invite link (maintainers)  [--hours <n>] [--accept]
                                          [--read-board <b,…>] [--write-board <b,…>]: board rights the link gives
@@ -287,6 +290,24 @@ const tierLine = (t: TierInfo) => {
 /** "5" or "5.50" (in the currency's main unit) → cents. */
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
+
+const launchText = (l: AppLaunchInfo) =>
+  [
+    l.command ? `start command: ${l.command.join(' ')}${l.approved ? ' (approved)' : ''}` : `no start command${l.hint ? `; start it yourself: ${l.hint}` : ''}`,
+    `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
+    l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? `stopped (exit code ${l.exit.code ?? '-'})` : 'not running',
+  ].join('\n');
+
+/** One line from the terminal, for questions only a person should answer. */
+async function askLine(question: string): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error('run this in a terminal: it asks you to approve the command');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
 
 const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
 
@@ -927,14 +948,32 @@ async function main(): Promise<void> {
       if (sub === 'publish') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
-        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')), folder: dirname(file) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
         return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start ? `\n  start: ${app.start.hint}` : ''}` : '(no app published)'));
       }
-      throw new Error('usage: weave app publish|show -p <project>');
+      if (sub === 'folder') {
+        const info = await b.setAppFolder({ project: needProject(), folder: args[1] === undefined ? (process.env.INIT_CWD ?? process.cwd()) : args[1] && resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1]) });
+        return out(info, () => launchText(info));
+      }
+      if (sub === 'start') {
+        const project = needProject();
+        let info = await b.appLaunch(project);
+        if (info.command && info.folder && !info.approved) {
+          const answer = await askLine(`Weave will run this on your computer:\n  ${info.command.join(' ')}\n  in ${info.folder}\nRun it? [y/N] `);
+          if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not started');
+        }
+        info = await b.launchApp({ project, approve: true });
+        return out(info, () => launchText(info));
+      }
+      if (sub === 'stop' || sub === 'status') {
+        const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
+        return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
+      }
+      throw new Error('usage: weave app publish|show|folder|start|stop|status -p <project>');
     }
 
     case 'rooms': {

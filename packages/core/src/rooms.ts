@@ -8,6 +8,8 @@ import { isDid } from './keys.ts';
  * through an encrypted tunnel, as if it ran on theirs.
  *
  *   weave.app    {app, name, version, services, start}   a maintainer publishes the project's app manifest;
+ *                                                       start: {hint, command}: how the host starts the app; Weave
+ *                                                       runs the command only on the host's say-so (see node)
  *                                                       sealed in the project, the latest by a maintainer counts
  *   weave.room   {room, name, service, key, invite, open}
  *                                                       the host announces a room (open) or ends it (open: false);
@@ -33,8 +35,12 @@ export interface AppManifest {
   version: number;
   /** The only ports a room may ever forward. */
   services: AppService[];
-  /** Shown to the host; never run by Weave. */
-  start?: { hint: string };
+  /**
+   * How to start the app on the host's computer. `hint` is shown to people;
+   * `command` (program and arguments, no shell) can be run by Weave in the
+   * host's own copy of the app, after the host has seen and approved it.
+   */
+  start?: { hint?: string; command?: string[] };
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -64,8 +70,18 @@ export function parseManifest(input: unknown): AppManifest {
     const joiner = side(open.joiner, 'Play');
     return { id, port, protocol, ...(host || joiner ? { open: { ...(host ? { host } : {}), ...(joiner ? { joiner } : {}) } } : {}) };
   });
-  const start = m.start && typeof m.start === 'object' ? text((m.start as Record<string, unknown>).hint, 200) : '';
-  return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start: { hint: start } } : {}) };
+  const rawStart = (m.start && typeof m.start === 'object' ? m.start : {}) as Record<string, unknown>;
+  const hint = text(rawStart.hint, 200);
+  let command: string[] | undefined;
+  if (rawStart.command !== undefined) {
+    const parts = rawStart.command;
+    if (!Array.isArray(parts) || parts.length === 0 || parts.length > 32 || !parts.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.includes('\0'))) {
+      throw new Error('"start.command" is the program and its arguments, e.g. ["node", "server.js"]');
+    }
+    command = parts as string[];
+  }
+  const start = hint || command ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}) } : undefined;
+  return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}) };
 }
 
 export interface Room {

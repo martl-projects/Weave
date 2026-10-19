@@ -14,6 +14,8 @@ interface Bridge {
   restore(words: string): Promise<void>;
   /** Open a room's shared app in its own window. */
   openApp(url: string, title: string): Promise<void>;
+  /** Let the person pick a folder on this computer; undefined if they cancel. */
+  pickFolder(title: string): Promise<string | undefined>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
 }
@@ -34,6 +36,8 @@ const webBridge: Bridge = {
   openApp: async (url) => {
     window.open(url, '_blank', 'noopener');
   },
+  // A browser can't hand out folder paths: type it.
+  pickFolder: async (title) => prompt(`${title}\n\nThe full path of the folder:`)?.trim() || undefined,
   restore: async () => {
     throw new Error('restore with "weave restore" when using the web preview');
   },

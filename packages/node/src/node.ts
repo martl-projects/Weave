@@ -180,6 +180,7 @@ import {
   type Actor,
   type Admission,
   type AgentInfo,
+  type AppLaunchInfo,
   type Backend,
   type BoardInfo,
   type ChatInfo,
@@ -226,11 +227,14 @@ import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { resolveHome, type Home } from './home.ts';
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
+import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
@@ -289,6 +293,8 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<() => void>();
+  /** Apps this node started for the person, by project id. */
+  #apps = new AppProcesses(() => this.#emitLive());
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
@@ -423,6 +429,7 @@ export class WeaveNode implements Backend {
   }
 
   async goOffline(): Promise<void> {
+    this.#apps.stopAll();
     await this.#live.close();
     await this.#swarm?.destroy();
     this.#swarm = undefined;
@@ -1181,13 +1188,88 @@ export class WeaveNode implements Backend {
     return this.#app(this.#project(ref)) ?? null;
   }
 
-  async publishApp(input: { project: string; manifest: unknown }): Promise<AppManifest> {
+  async publishApp(input: { project: string; manifest: unknown; folder?: string }): Promise<AppManifest> {
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const manifest = parseManifest(input.manifest);
     this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
+    if (input.folder) this.#rememberAppFolder(project.id, input.folder);
     return manifest;
   }
+
+  async appLaunch(ref: string): Promise<AppLaunchInfo> {
+    const project = this.#project(ref);
+    const start = this.#app(project)?.start;
+    const folder = this.config.appFolders[project.id];
+    const run = this.#apps.status(project.id);
+    return {
+      ...(start?.command ? { command: start.command } : {}),
+      ...(start?.hint ? { hint: start.hint } : {}),
+      ...(folder ? { folder } : {}),
+      approved: !!start?.command && !!folder && this.config.approvedLaunches[project.id] === launchFingerprint(start.command, folder),
+      running: this.#apps.running(project.id),
+      ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
+      log: run?.log ?? [],
+    };
+  }
+
+  async setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo> {
+    const project = this.#project(input.project);
+    if (input.folder.trim()) this.#rememberAppFolder(project.id, input.folder.trim());
+    else {
+      const { [project.id]: _gone, ...rest } = this.config.appFolders;
+      this.config = { ...this.config, appFolders: rest };
+      saveConfig(this.home, this.config);
+    }
+    return this.appLaunch(project.id);
+  }
+
+  async launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
+    const project = this.#project(input.project);
+    const app = this.#app(project);
+    const command = app?.start?.command;
+    if (!app || !command) throw new Error(`${project.name}'s app has no start command; start it yourself${app?.start?.hint ? `: ${app.start.hint}` : ''}`);
+    const folder = this.config.appFolders[project.id];
+    if (!folder) throw new Error(`choose where ${app.name} is on this computer first (the folder with its weave.app.json)`);
+    this.#checkAppFolder(project.id, folder);
+    const fingerprint = launchFingerprint(command, folder);
+    if (this.config.approvedLaunches[project.id] !== fingerprint) {
+      if (!input.approve) throw new Error(`approve the command first: Weave would run "${command.join(' ')}" in ${folder}`);
+      this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: fingerprint } };
+      saveConfig(this.home, this.config);
+    }
+    this.#apps.start(project.id, command, folder);
+    return this.appLaunch(project.id);
+  }
+
+  async stopApp(ref: string): Promise<AppLaunchInfo> {
+    const project = this.#project(ref);
+    this.#apps.stop(project.id);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return this.appLaunch(project.id);
+  }
+
+  #rememberAppFolder(projectId: string, folder: string): void {
+    const full = resolvePath(folder);
+    this.#checkAppFolder(projectId, full);
+    this.config = { ...this.config, appFolders: { ...this.config.appFolders, [projectId]: full } };
+    saveConfig(this.home, this.config);
+  }
+
+  /** The folder must hold this project's app: its weave.app.json with the same app id. */
+  #checkAppFolder(projectId: string, folder: string): void {
+    const file = joinPath(folder, 'weave.app.json');
+    if (!existsSync(file)) throw new Error(`there's no weave.app.json in ${folder}`);
+    let local: { app?: unknown };
+    try {
+      local = JSON.parse(readFileSync(file, 'utf8')) as { app?: unknown };
+    } catch {
+      throw new Error(`${file} isn't valid JSON`);
+    }
+    const published = this.#app(this.#project(projectId));
+    if (published && local.app !== published.app) throw new Error(`${folder} holds the app "${String(local.app)}", but this project's app is "${published.app}"`);
+  }
+
 
   async rooms(ref?: string): Promise<RoomInfo[]> {
     const only = ref ? this.#project(ref).id : undefined;
@@ -1316,7 +1398,7 @@ export class WeaveNode implements Backend {
       joined,
       connected,
       peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      ...(app ? { app: { app: app.app, name: app.name, ...(app.start ? { startHint: app.start.hint } : {}) } } : {}),
+      ...(app ? { app: { app: app.app, name: app.name, ...(app.start?.hint ? { startHint: app.start.hint } : {}), ...(app.start?.command ? { canLaunch: true } : {}) } } : {}),
       ...(service ? { service: { id: service.id, label: side?.label ?? (mine ? 'Open' : 'Play'), ready } } : {}),
       ...(url ? { url } : {}),
       time: room.time,

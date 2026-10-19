@@ -297,6 +297,22 @@ export interface MembershipRequestInfo {
 }
 
 /** A live room in a project: a host shares the project's app, players use it through a tunnel. */
+/** Starting the project's app on this computer (see the manifest's start.command). */
+export interface AppLaunchInfo {
+  /** The command from the manifest, if it has one. */
+  command?: string[];
+  hint?: string;
+  /** This computer's copy of the app, if chosen. */
+  folder?: string;
+  /** You approved this command for this folder. */
+  approved: boolean;
+  running: boolean;
+  started?: string;
+  exit?: { code: number | null; time: string };
+  /** The app's last lines of output. */
+  log: string[];
+}
+
 export interface RoomInfo {
   id: string;
   project: SpaceRef;
@@ -313,7 +329,7 @@ export interface RoomInfo {
   connected: boolean;
   /** Who is in it right now, as far as you can see (only once you're in). */
   peers: Person[];
-  app?: { app: string; name: string; startHint?: string };
+  app?: { app: string; name: string; startHint?: string; canLaunch?: boolean };
   /** The shared service, the label of your ▶ button, and (host) whether the app answers on its port. */
   service?: { id: string; label: string; ready: boolean };
   /** What ▶ opens, once there is something to open. */
@@ -626,7 +642,15 @@ export interface Backend {
   /** The app a project shares in its rooms, if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
   /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
-  publishApp(input: { project: string; manifest: unknown }): Promise<AppManifest>;
+  /** Maintainers: publish the app manifest; `folder` (from the CLI) is remembered as this computer's copy of the app. */
+  publishApp(input: { project: string; manifest: unknown; folder?: string }): Promise<AppManifest>;
+  /** Starting the app here: its command, your folder, whether you approved it, and whether it runs. */
+  appLaunch(project: string): Promise<AppLaunchInfo>;
+  /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
+  setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
+  /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
+  launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
+  stopApp(project: string): Promise<AppLaunchInfo>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
@@ -699,7 +723,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot',
-  'projectApp', 'publishApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
+import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
@@ -54,8 +54,8 @@ function RoomCard({ room }: { room: RoomInfo }) {
       </button>
     ) : (
       <span className="waiting">
-        <button disabled>Start the app first</button>
-        {room.app?.startHint && <span className="small"> {room.app.startHint}</span>}{' '}
+        <button disabled>{room.app?.canLaunch ? 'Start the app above first' : 'Start the app first'}</button>
+        {!room.app?.canLaunch && room.app?.startHint && <span className="small"> {room.app.startHint}</span>}{' '}
         <button onClick={bump}>Check again</button>
       </span>
     );
@@ -108,6 +108,102 @@ function RoomCard({ room }: { room: RoomInfo }) {
         {room.joined && <RoomChat room={room} />}
       </div>
     </article>
+  );
+}
+
+/** Asking before Weave runs a program: the exact command and where. */
+function ApproveLaunch({ app, launch, onApprove, onClose }: { app: AppManifest; launch: AppLaunchInfo; onApprove(): void; onClose(): void }) {
+  return (
+    <Modal title={`Start ${app.name}?`} onClose={onClose}>
+      <div className="approve-launch">
+        <Icon name="warning" size={32} />
+        <div>
+          <p>Weave will run this program on your computer, as you:</p>
+          <pre className="launch-command">{launch.command!.join(' ')}</pre>
+          <p className="small">
+            in <code>{launch.folder}</code>
+          </p>
+          <p className="small">It comes from the project's app manifest. Only run it if you trust the people who maintain {app.name}. Weave asks again whenever the command or the folder changes.</p>
+        </div>
+      </div>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <button className="default" onClick={onApprove}>
+          Run it
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** The app on this computer: where it is, start and stop, and what it printed. */
+function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
+  const { data: launch } = useApi(() => api<AppLaunchInfo>('appLaunch', project.id), [project.id]);
+  const [asking, setAsking] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  if (!launch) return null;
+  const pick = async () => {
+    const folder = await bridge.pickFolder(`Where is ${app.name} on this computer? (the folder with its weave.app.json)`);
+    if (folder) await attempt(() => api('setAppFolder', { project: project.id, folder }).then(bump), 'Folder saved');
+  };
+  const start = (approve = false) => attempt(() => api('launchApp', { project: project.id, approve }).then(bump), `${app.name} is starting`);
+  if (!launch.command)
+    return launch.hint ? (
+      <p className="small">
+        To host, start {app.name} yourself: {launch.hint}
+      </p>
+    ) : null;
+  return (
+    <fieldset className="app-panel">
+      <legend>{app.name} on this computer</legend>
+      {!launch.folder ? (
+        <div className="field-row">
+          <span className="grow small">To host a room, Weave can start {app.name} for you. Where is it on this computer?</span>
+          <button onClick={pick}>Choose folder…</button>
+        </div>
+      ) : (
+        <>
+          <div className="field-row">
+            <span className={`status-dot ${launch.running ? 'on' : ''}`} />
+            <span className="grow">
+              {launch.running ? `Running since ${clock(launch.started!)}` : launch.exit ? `Stopped${launch.exit.code ? ` (exit code ${launch.exit.code})` : ''}` : 'Not running'}
+            </span>
+            {launch.running ? (
+              <AsyncButton onClick={() => attempt(() => api('stopApp', project.id).then(bump), 'Stopped')}>Stop app</AsyncButton>
+            ) : (
+              <button className="default" onClick={() => (launch.approved ? void start() : setAsking(true))}>
+                ▶ Start {app.name}
+              </button>
+            )}
+            {launch.log.length > 0 && <button onClick={() => setShowLog(!showLog)}>{showLog ? 'Hide output' : 'Output'}</button>}
+          </div>
+          <div className="small muted">
+            {launch.command.join(' ')} · in {launch.folder}{' '}
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                void pick();
+              }}
+            >
+              change
+            </a>
+          </div>
+          {showLog && <pre className="app-log sunken">{launch.log.slice(-60).join('\n')}</pre>}
+        </>
+      )}
+      {asking && (
+        <ApproveLaunch
+          app={app}
+          launch={launch}
+          onClose={() => setAsking(false)}
+          onApprove={() => {
+            setAsking(false);
+            void start(true);
+          }}
+        />
+      )}
+    </fieldset>
   );
 }
 
@@ -222,6 +318,7 @@ export function RoomsView({ project, members, meDid }: { project: SpaceInfo; mem
           <b>{app.name}</b> runs on the host's computer; players use it through an encrypted tunnel. Who's in a room and what's said there is never stored.
         </p>
       )}
+      {app && <AppPanel project={project} app={app} />}
       {(rooms ?? []).map((room) => (
         <RoomCard key={room.id} room={room} />
       ))}
