@@ -847,6 +847,89 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
           </div>
         ))}
       </fieldset>
+      <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------- leaving, handing over, closing
+
+const KIND_WORD = { group: 'group', project: 'project', community: 'community', direct: 'chat' } as const;
+
+/** Leave a space, hand it over (owner), or close and reopen it (owner, maintainers). */
+export function SpaceOwnership({ space, members, meDid, canClose }: { space: SpaceInfo; members: MemberInfo[]; meDid: string; canClose: boolean }) {
+  const [to, setTo] = useState('');
+  const owner = space.founder === meDid;
+  const others = members.filter((m) => m.did !== meDid);
+  const word = KIND_WORD[space.kind];
+  const leave = async () => {
+    if (!(await ask(`Leave ${space.name}? You stop receiving it, and its key rotates without you. You can come back with a new invite.`, 'Leave'))) return;
+    if (await attempt(() => api('leave', space.id), `You left ${space.name}`)) {
+      bump();
+      navigate('#/');
+    }
+  };
+  const handOver = async () => {
+    const person = others.find((m) => m.did === to);
+    if (!person) return;
+    const name = person.name ?? shortDid(person.did);
+    if (await ask(`Make ${name} the owner of ${space.name}? You stay in it${space.kind === 'group' ? '' : ` as a ${space.kind === 'community' ? 'moderator' : 'maintainer'}`}; only ${name} can hand it on again.`, 'Hand over')) {
+      await attempt(() => api('handOver', { space: space.id, to: person.did }).then(bump), `${name} owns ${space.name} now`);
+      setTo('');
+    }
+  };
+  const close = async (closed: boolean) => {
+    if (closed && !(await ask(`Close ${space.name}? Everything in it is kept and stays readable, but nobody can write or invite until it's opened again.`, 'Close'))) return;
+    await attempt(() => api('closeSpace', { space: space.id, closed }).then(bump), closed ? `${space.name} is closed` : `${space.name} is open again`);
+  };
+  return (
+    <fieldset>
+      <legend>Leave, hand over or close</legend>
+      {space.closed && (
+        <p className="notice">
+          <Icon name="lock" /> This {word} is closed: kept as it is, read-only.
+        </p>
+      )}
+      <p className="small">
+        Owner: <b>{owner ? 'you' : (members.find((m) => m.did === space.founder)?.name ?? shortDid(space.founder))}</b>
+      </p>
+      {owner ? (
+        <>
+          <div className="field-row">
+            <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="New owner" disabled={!others.length}>
+              <option value="">{others.length ? 'Hand over to…' : `Nobody else is in this ${word}`}</option>
+              {others.map((m) => (
+                <option key={m.did} value={m.did}>
+                  {m.name ?? shortDid(m.did)}
+                </option>
+              ))}
+            </select>
+            <button onClick={() => void handOver()} disabled={!to}>
+              Hand over
+            </button>
+          </div>
+          <p className="small">To leave, hand it over first{others.length ? '' : ', or close it'}.</p>
+        </>
+      ) : (
+        <div className="field-row">
+          <AsyncButton onClick={leave}>Leave {space.name}…</AsyncButton>
+        </div>
+      )}
+      {canClose && (
+        <div className="field-row">
+          {space.closed ? <AsyncButton onClick={() => close(false)}>Open it again</AsyncButton> : <AsyncButton onClick={() => close(true)}>Close {space.name}…</AsyncButton>}
+          <span className="small">Closing keeps everything; nothing new can be written.</span>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+/** A group's settings: for now, who owns it, leaving and closing. */
+export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  return (
+    <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
+      <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
   );
 }
@@ -919,6 +1002,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
           );
         })}
       </fieldset>
+      <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
   );
 }

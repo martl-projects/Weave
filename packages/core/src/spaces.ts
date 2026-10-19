@@ -34,6 +34,10 @@ import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
  * any kind:
  *   weave.project.admit      {member, invite}  the inviter lets in someone who knocked with their link
  *   weave.project.decline    {member, via}     maintainers turn a group newcomer away
+ * any kind (but direct chats):
+ *   weave.space.leave       {}                 a member leaves (not the owner: they hand over first)
+ *   weave.space.handover    {to}               the owner makes another member the owner (not for tiers)
+ *   weave.space.close       {closed}           owner (groups) or maintainers: closed spaces are kept, read-only
  * in the clear, because the people concerned can't (yet, or any more) read the space:
  *   weave.space.rekey       {epoch, boxes}     new key for those who stay
  *   weave.space.gift        {boxes}            a space's keys boxed to newly admitted people
@@ -49,6 +53,9 @@ export const KIND_PROJECT_GROUP = 'weave.project.group';
 export const KIND_RULE = 'weave.project.rule';
 export const KIND_ADMIT = 'weave.project.admit';
 export const KIND_DECLINE = 'weave.project.decline';
+export const KIND_LEAVE = 'weave.space.leave';
+export const KIND_HANDOVER = 'weave.space.handover';
+export const KIND_CLOSE = 'weave.space.close';
 
 export const SPACE_KINDS = ['group', 'project', 'community', 'direct'] as const;
 export type SpaceKind = (typeof SPACE_KINDS)[number];
@@ -264,6 +271,7 @@ export interface InvitedGroup {
 
 export interface SpaceState {
   kind: SpaceKind;
+  /** The owner: whoever created the space, or the last person it was handed over to. */
   founder: Did;
   name?: string;
   members: Map<Did, Member>;
@@ -277,6 +285,10 @@ export interface SpaceState {
   declined: Map<Did, string>;
   /** Groups that are a creator's membership tier: only the founder lets people in. */
   tier?: true;
+  /** People who left on their own (they may come back with a new invite). */
+  left: Set<Did>;
+  /** Closed by its owner or maintainers: kept, but read-only. */
+  closed?: { by: Did; time: string };
 }
 
 const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -289,13 +301,14 @@ const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.t
  * newcomers in automatically.
  */
 export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: WeaveEvent; inner: Inner }>): SpaceState {
-  const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map() };
+  const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map(), left: new Set() };
   const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
-  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === founder : state.members.has(author));
+  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === state.founder : state.members.has(author));
   const admit = (did: Did, time: string, invitedBy?: Did, via?: string, invite?: string) => {
     state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}), ...(invite ? { invite } : {}) });
     state.removed.delete(did);
     state.declined.delete(did);
+    state.left.delete(did);
   };
 
   for (const { event, inner } of [...opened].sort(byTime)) {
@@ -315,12 +328,12 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
         const live = invite && invite.expires >= event.time && state.members.has(invite.by);
-        if (live && !invite.accept && !state.members.has(author) && !state.removed.has(author)) admit(author, event.time, invite.by, undefined, body.invite as string);
+        if (live && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, event.time, invite.by, undefined, body.invite as string);
         break;
       }
       case KIND_REMOVE: {
-        const allowed = kind === 'group' ? author === founder : state.maintainers.has(author);
-        if (allowed && isDid(body.member) && body.member !== founder && state.members.has(body.member)) {
+        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author);
+        if (allowed && isDid(body.member) && body.member !== state.founder && state.members.has(body.member)) {
           state.members.delete(body.member);
           state.maintainers.delete(body.member);
           state.removed.set(body.member, event.time);
@@ -328,7 +341,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         break;
       }
       case KIND_MAINTAINER:
-        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== founder) {
+        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== state.founder) {
           if (body.on === false) state.maintainers.delete(body.member);
           else if (state.members.has(body.member)) state.maintainers.add(body.member);
         }
@@ -361,10 +374,27 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
       }
       case KIND_MEMBERSHIP:
         // A tier's founder admits or renews a member until a date (see memberships.ts).
-        if (kind === 'group' && author === founder && isMembershipBody(body)) {
+        if (kind === 'group' && author === state.founder && isMembershipBody(body)) {
           if (!state.members.has(body.member)) admit(body.member, event.time, founder);
           state.members.get(body.member)!.until = body.until;
         }
+        break;
+      case KIND_LEAVE:
+        if (state.members.has(author) && author !== state.founder) {
+          state.members.delete(author);
+          state.maintainers.delete(author);
+          state.removed.set(author, event.time);
+          state.left.add(author);
+        }
+        break;
+      case KIND_HANDOVER:
+        if (author === state.founder && !state.tier && isDid(body.to) && body.to !== author && state.members.has(body.to)) {
+          state.founder = body.to;
+          state.maintainers.add(body.to);
+        }
+        break;
+      case KIND_CLOSE:
+        if (canManage(state, author)) state.closed = body.closed === false ? undefined : { by: author, time: event.time };
         break;
       case KIND_DECLINE:
         if (kind === 'project' && state.maintainers.has(author) && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {

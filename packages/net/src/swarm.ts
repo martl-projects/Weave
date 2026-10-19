@@ -48,6 +48,11 @@ export class SwarmNode {
     this.#timers.push(setTimeout(() => discovery.refresh({ client: true, server: true }).catch(() => {}), 1500).unref());
   }
 
+  /** Stop announcing on and looking up a topic. */
+  async leave(name: string): Promise<void> {
+    await this.swarm.leave(topicFor(name));
+  }
+
   /** Ask every connected peer for these blobs (new peers are asked when they connect). */
   want(hashes: string[]): void {
     for (const session of this.sessions) session.want(hashes);

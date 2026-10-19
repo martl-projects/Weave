@@ -17,6 +17,9 @@ import {
   KIND_KNOCK,
   KIND_KNOCK_HANDLED,
   KIND_KNOCK_PENDING,
+  KIND_CLOSE,
+  KIND_HANDOVER,
+  KIND_LEAVE,
   KIND_ROSTER,
   knockFor,
   mayUse,
@@ -235,7 +238,7 @@ import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveD
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
-import { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
+import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
 export const KIND_PROFILE = 'weave.profile';
@@ -453,6 +456,7 @@ export class WeaveNode implements Backend {
     }
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
+    if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
     const fields: EventFields = space ? sealFor(space, inner) : inner;
     const event = this.replica.append(signer, fields);
@@ -549,7 +553,8 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new Error('a direct chat is between two people; start a group to talk with more');
-    if (state.tier && space.founder !== this.identity.author) throw new Error(`only ${this.nameOf(space.founder) ?? 'its creator'} lets people into ${space.name}`);
+    if (state.closed) throw new Error(`${space.name} is closed`);
+    if (state.tier && state.founder !== this.identity.author) throw new Error(`only ${this.nameOf(state.founder) ?? 'its creator'} lets people into ${space.name}`);
     const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
     if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
     if (options.access?.length && space.kind !== 'project') throw new Error('board rights are for projects');
@@ -680,6 +685,59 @@ export class WeaveNode implements Backend {
     }));
   }
 
+  async leave(ref: string): Promise<void> {
+    const space = this.#space(ref);
+    if (space.kind === 'direct') throw new Error('a direct chat has no leaving; unfollow or block the person instead');
+    const state = this.#state(space);
+    if (state.founder === this.identity.author) {
+      const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
+      throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
+    }
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_LEAVE, body: {} }));
+    // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
+    this.#spaces.delete(space.id);
+    this.#decoded = undefined;
+    removeSpace(this.home, space.id);
+    for (const topic of [spaceTopic(space)]) await this.#swarm?.leave(topic).catch(() => {});
+  }
+
+  async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (space.kind === 'direct') throw new Error('a direct chat has no owner');
+    if (state.founder !== this.identity.author) throw new Error(`only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
+    if (state.tier) throw new Error("a membership tier stays with its creator; take it off your hub instead");
+    const to = this.resolve(input.to);
+    if (to === this.identity.author) throw new Error("that's you");
+    if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_HANDOVER, body: { to } }));
+    return this.#spaceInfo(space);
+  }
+
+  async closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (space.kind === 'direct') throw new Error("a direct chat can't be closed");
+    if (!canManage(state, this.identity.author)) throw new Error(space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
+    if (!!state.closed === input.closed) return this.#spaceInfo(space);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_CLOSE, body: { closed: input.closed } }));
+    return this.#spaceInfo(space);
+  }
+
+  /** After people leave, a node that may rotate the key does: they can't read what comes next. */
+  #rotateAfterLeaving(space: StoredSpace, state: SpaceState): number {
+    if (space.kind === 'direct' || !canManage(state, this.identity.author) || !state.left.size) return 0;
+    const lastLeft = [...state.left].map((did) => state.removed.get(did) ?? '').reduce((a, b) => (b > a ? b : a), '');
+    const scope = spaceScope(space);
+    const lastRekey = this.replica.events((e) => canonicalKind(e.kind) === KIND_REKEY && e.scope === scope).reduce((a, e) => (e.time > a ? e.time : a), '');
+    if (lastLeft <= lastRekey) return 0;
+    const { fields, epoch, key } = rekey(space, [...state.members.keys()], this.#encryptionKeyOf);
+    space.keys[String(epoch)] = key;
+    this.#saveSpace(space);
+    this.replica.append(this.identity, fields);
+    return 1;
+  }
+
   async removeMember(ref: string, who: string): Promise<void> {
     const space = this.#space(ref);
     const state = this.#state(space);
@@ -688,7 +746,7 @@ export class WeaveNode implements Backend {
     }
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
-    if (member === space.founder) throw new Error(`the founder can't be removed from ${space.name}`);
+    if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
     this.replica.append(this.identity, sealFor(space, { kind: KIND_REMOVE, body: { member } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
@@ -1052,6 +1110,7 @@ export class WeaveNode implements Backend {
   async reconcile(): Promise<number> {
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#sendQueuedRequests());
+    for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -2054,7 +2113,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
-    if (!on && member === space.founder) throw new Error(`the founder always stays a ${role}`);
+    if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
     this.replica.append(this.identity, sealFor(space, { kind: KIND_MAINTAINER, body: { member, on } }));
   }
 
@@ -2129,7 +2188,7 @@ export class WeaveNode implements Backend {
         if (!state.members.has(did) && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
       }
       for (const member of state.members.values()) {
-        if (member.via === group.id && !groupMembers.has(member.did) && member.did !== project.founder) {
+        if (member.via === group.id && !groupMembers.has(member.did) && member.did !== state.founder) {
           changes.push({ project: projectRef, did: member.did, name: this.nameOf(member.did), group: groupRef, change: 'leave' });
         }
       }
@@ -2177,7 +2236,7 @@ export class WeaveNode implements Backend {
     if (direct) {
       // Two people, no membership events: the key itself says who is in.
       const member = (did: Did): [Did, Member] => [did, { did, since: '' }];
-      return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map() };
+      return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map(), left: new Set() };
     }
     const opened = this.#decodeAll().filter((d) => d.space?.id === space.id);
     return spaceState(space.kind, space.founder, opened);
@@ -2210,14 +2269,16 @@ export class WeaveNode implements Backend {
   }
 
   #spaceInfo(space: StoredSpace): SpaceInfo {
+    const state = this.#state(space);
     return {
       id: space.id,
       kind: space.kind,
       name: this.#spaceName(space),
-      founder: space.founder,
-      founderName: this.nameOf(space.founder),
-      members: this.#state(space).members.size,
+      founder: state.founder,
+      founderName: this.nameOf(state.founder),
+      members: state.members.size,
       epoch: currentEpoch(space),
+      ...(state.closed ? { closed: true as const } : {}),
     };
   }
 

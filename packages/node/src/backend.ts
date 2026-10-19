@@ -115,6 +115,8 @@ export interface SpaceInfo extends SpaceRef {
   epoch: number;
   /** Joined with a link that needs the inviter's OK: asked, not let in yet. */
   waiting?: true;
+  /** Closed by its owner or maintainers: kept, read-only. */
+  closed?: true;
 }
 
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
@@ -564,6 +566,12 @@ export interface Backend {
   /** Maintainers: limit who reads and writes a board, by name or did:key, and groups as "group:<name>"; null opens it to everyone. */
   setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]>;
   members(space: string): Promise<MemberInfo[]>;
+  /** Leave a group, project or community: you stop receiving it, and its key rotates. The owner hands it over first. */
+  leave(space: string): Promise<void>;
+  /** The owner makes another member the owner (in projects and communities also a maintainer). */
+  handOver(input: { space: string; to: string }): Promise<SpaceInfo>;
+  /** Owner (groups) or maintainers: close a space (kept, read-only) or open it again. */
+  closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
 
@@ -718,7 +726,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

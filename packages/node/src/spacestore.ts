@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Invite, SpaceKeys } from '@weave/core';
 import { readJson, writeJson, type Home } from './home.ts';
@@ -26,4 +26,9 @@ export function loadSpaces(home: Home): StoredSpace[] {
 
 export function saveSpace(home: Home, space: StoredSpace): void {
   writeJson(join(home.groups, `${space.id}.json`), space);
+}
+
+/** Forget a space's keys on this computer. */
+export function removeSpace(home: Home, id: string): void {
+  rmSync(join(home.groups, `${id}.json`), { force: true });
 }

@@ -11,6 +11,7 @@ import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } fr
 import { Avatar, Menu, Sprite, Toasts, WeaveMark } from './ui.tsx';
 import {
   CommunityAbout,
+  GroupSettings,
   CommunityBanner,
   DelegationBar,
   InboxView,
@@ -73,6 +74,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="zap" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
+          {space.kind === 'group' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} />}
         </>
       )}
     </>
@@ -82,7 +84,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useTick(); // unread state lives in localStorage
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
-    const list = spaces.filter((s) => s.kind === kind);
+    const list = spaces.filter((s) => s.kind === kind && !s.closed);
     return (
       <>
         <li className="tree-head">
@@ -124,6 +126,18 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         {section('community', 'Communities', 'community')}
         {section('project', 'Projects', 'zap')}
         {section('group', 'Groups', 'users')}
+        {spaces.some((s) => s.closed) && (
+          <>
+            <li className="tree-head">
+              <Icon name="lock" /> Closed
+            </li>
+            {spaces
+              .filter((s) => s.closed)
+              .map((s) => (
+                <TreeSpace key={s.id} space={s} route={route} waiting={0} />
+              ))}
+          </>
+        )}
       </ul>
       <button className="new-btn" onClick={onNew}>
         <Icon name="plus" /> New…
@@ -193,7 +207,9 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const invite = () => open({ kind: 'invite', space });
 
   let body: ReactNode;
-  if (space.kind === 'group') {
+  if (space.kind === 'group' && view === 'settings') {
+    body = <GroupSettings group={space} members={list} meDid={me.did} />;
+  } else if (space.kind === 'group') {
     const channel = view === 'c' ? (arg ?? 'general') : 'general';
     body = (
       <section className="pane-main">

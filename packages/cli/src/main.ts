@@ -85,6 +85,9 @@ projects — something being built; participants chat, discuss, vote and work on
   project add-group <project> <group>    invite a whole group: its members take part right away
   project drop-group <project> <group>   stop inviting the group's newcomers
   project rule <project> <group>         admit the group's newcomers without asking; --off to ask again
+  leave <space>                          leave a group, project or community (its key rotates without you)
+  hand-over <space> <who>                make someone else the owner (needed before the owner leaves)
+  close <space> / reopen <space>         close a space (kept, read-only) or open it again (owner, maintainers)
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
   let-in <id> / turn-away <id>           answer someone who asked
@@ -832,6 +835,26 @@ async function main(): Promise<void> {
       if (!args.length && !values.clear) throw new Error('usage: weave pin <id...> -r <community> | -p <project> -b <board>  (--clear unpins all)');
       const boards = await (await backend()).curate({ space: values.community ?? needProject(), board: values.board, pinned: values.clear ? [] : args });
       return out(boards, () => boards.map(boardLine).join('\n'));
+    }
+
+    case 'leave': {
+      if (!args[0]) throw new Error('usage: weave leave <group|project|community>');
+      await (await backend()).leave(args[0]);
+      return out({ left: args[0] }, () => `left ${args[0]}: you no longer receive it, and its key rotates without you`);
+    }
+
+    case 'hand-over': {
+      const [space, to] = args;
+      if (!space || !to) throw new Error('usage: weave hand-over <space> <who>');
+      const s = await (await backend()).handOver({ space, to });
+      return out(s, () => `${s.name} now belongs to ${s.founderName ?? s.founder}`);
+    }
+
+    case 'close':
+    case 'reopen': {
+      if (!args[0]) throw new Error(`usage: weave ${command} <space>`);
+      const s = await (await backend()).closeSpace({ space: args[0], closed: command === 'close' });
+      return out(s, () => (s.closed ? `closed ${s.name}: kept as it is, read-only (weave reopen to undo)` : `${s.name} is open again`));
     }
 
     case 'knocks': {
