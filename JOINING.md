@@ -31,16 +31,16 @@ Already using Weave on another computer? Choose **I already use Weave…** and t
 
 ## 2. You're connected
 
-Weave ships with Martin's contact, so a new identity follows him right away and asks to join **Weave friends**, his free tier. As soon as your node reaches his (keep the app open; he needs to be online too), you're in, and through it in the **Weave** project: its Releases, Ideas, Issues and Proposals boards and its chat.
+Weave ships with martl's contact, so a new identity follows martl right away and asks to join **Weave friends**, martl's free tier. As soon as your node reaches martl's (keep the app open; martl needs to be online too), you're in, and through it in the **Weave** project: its Releases, Ideas, Issues and Proposals boards and its chat.
 
-To become friends and chat privately, send Martin your contact link: **People → My contact link → Copy**, then paste it into any chat. Once he adds you back, **Chats** in the left tree shows your direct chat.
+To become friends and chat privately, send martl your contact link: **People → My contact link → Copy**, then paste it into any chat. Once martl adds you back, **Chats** in the left tree shows your direct chat.
 
 Prefer the terminal? Everything the app does, the CLI does too:
 
 ```bash
-npx weave contact                  # your own link, to send to Martin
+npx weave contact                  # your own link, to send to martl
 npx weave add "weave:contact:…"    # add someone else's
-npx weave dm Martin "Hi!"          # once you're friends
+npx weave dm martl "Hi!"           # once you're friends
 npx weave --help                   # everything else
 ```
 
@@ -74,10 +74,10 @@ npm install
 npm run desktop
 ```
 
-Weave changes quickly; please update when Martin asks, so everyone speaks the same version.
+Weave changes quickly; please update when martl asks, so everyone speaks the same version.
 
 ## When something's off
 
 - **"0 peers" / nothing arrives:** both of you need the app open at the same time. Strict networks (some offices, phone hotspots) can block direct connections; try another network.
 - **The app says it can't reach your node:** close it and open it again.
-- **Found a bug or have an idea?** Tell Martin in your chat, or post it in the Weave project's **Issues** board once you're in.
+- **Found a bug or have an idea?** Tell martl in your chat, or post it in the Weave project's **Issues** board once you're in.

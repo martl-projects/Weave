@@ -1,11 +1,11 @@
 {
   "contacts": [
-    "weave:contact:eyJkaWQiOiJkaWQ6a2V5Ono2TWtzUnV4OGRzckRnUXRwOVNYZ2tMZEVLaHVxUnlEN0R2UFI3ckE0cW0zejJmViIsImVudHJ5Ijp7ImJvb3RzdHJhcCI6W10sInRvcGljcyI6WyJkaWQ6a2V5Ono2TWtzUnV4OGRzckRnUXRwOVNYZ2tMZEVLaHVxUnlEN0R2UFI3ckE0cW0zejJmViJdfSwibmFtZSI6Ik1hcnRpbiIsInYiOjF9"
+    "weave:contact:eyJkaWQiOiJkaWQ6a2V5Ono2TWtuWG1Ld25aZW5peWFrTnNCempUZ21ZTVhBY3QzQjlpenZWZGt6S3lDQ2Q1ZyIsImVudHJ5Ijp7ImJvb3RzdHJhcCI6W10sInRvcGljcyI6WyJkaWQ6a2V5Ono2TWtuWG1Ld25aZW5peWFrTnNCempUZ21ZTVhBY3QzQjlpenZWZGt6S3lDQ2Q1ZyJdfSwibmFtZSI6Im1hcnRsIiwidiI6MX0"
   ],
   "tiers": [
     {
-      "tier": "lz_m0SX-VStGNQoborn7rA",
-      "creator": "did:key:z6MksRux8dsrDgQtp9SXgkLdEKhuqRyD7DvPR7rA4qm3z2fV",
+      "tier": "YXRbK8DY4PDgzBAhxw0aDA",
+      "creator": "did:key:z6MknXmKwnZeniyakNsBzjTgmYMXAct3B9izvVdkzKyCCd5g",
       "note": "Joined through the Weave app"
     }
   ]
