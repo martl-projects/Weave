@@ -370,3 +370,10 @@ a.button-link { display: inline-flex; align-items: center; gap: 4px; color: var(
 .room-say input { flex: 1; }
 .field-row.indent { margin-left: 20px; }
 textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 11px; }
+
+/* ---------- permissions */
+.perm-table { border-collapse: collapse; background: none; font-family: var(--content-font); font-size: 12px; }
+.perm-table td { padding: 2px 12px 2px 0; }
+.perm-list { margin: 0; padding-left: 18px; font-family: var(--content-font); font-size: 12px; }
+.perm-list li { margin: 2px 0; }
+.showcase-item button { align-self: flex-start; }

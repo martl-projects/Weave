@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import type { MembershipRequestInfo } from '@weave/node/client';
 import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
+import { MyProjects } from './hubprojects.tsx';
 import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
@@ -153,7 +154,8 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           )}
         </header>
         <SupportBox did={p.did} name={name} me={p.me} />
-        {p.projects.length > 0 && (
+        {p.me && <MyProjects name={name} />}
+        {!p.me && p.projects.length > 0 && (
           <section className="space-box">
             <h3>{name}'s projects</h3>
             <div className="showcase">
