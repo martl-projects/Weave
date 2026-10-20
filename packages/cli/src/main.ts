@@ -141,6 +141,7 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board add <name>           add a board (maintainers)  [--title <t>] [--type posts|issues|proposals] [--sort hot|new|top] [--position <n>]
   board set <name>           change title, sort or position (maintainers)
   board drop <name>          remove a board; its posts stay in the logs
+  board follow <name>        bring a board's posts to your Home and notify you (releases and showcase by default); unfollow stops
   board access <name>        who may read and write (maintainers)  [--read <who,…>] [--write <who,…>]
                              people by name or did:key, groups as group:<name>; "everyone" opens it again,
                              "" leaves only the maintainers
@@ -423,7 +424,7 @@ const postLine = (p: PostInfo) => {
 };
 const grantees = (list: BoardInfo['access']['read']) => (list?.length ? list.map((g) => (g.group ? `group:${g.name ?? g.group}` : (g.name ?? g.person))).join(', ') : 'maintainers only');
 const boardLine = (b: BoardInfo) =>
-  `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}` +
+  `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}${b.following ? ', following' : ''}` +
   (b.access.read ? `\n${''.padEnd(17)}read: ${grantees(b.access.read)}` : '') +
   (b.access.write ? `\n${''.padEnd(17)}write: ${grantees(b.access.write)}${b.canWrite ? '' : ' (not you)'}` : '');
 const knockLine = (k: KnockInfo) =>
@@ -991,7 +992,11 @@ ${postLine(p)}`);
         const boards = await (await backend()).setBoardAccess({ project: needProject(), board: name, read: list(values.read), write: list(values.write) });
         return out(boards, () => boards.map(boardLine).join('\n'));
       }
-      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access <name> -p <project>');
+      if ((sub === 'follow' || sub === 'unfollow') && name) {
+        const boards = await (await backend()).followBoard({ project: needProject(), board: name, on: sub === 'follow' });
+        return out(boards, () => boards.map(boardLine).join('\n'));
+      }
+      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access|follow|unfollow <name> -p <project>');
       const boards = await (await backend()).setBoard({
         project: needProject(),
         name,

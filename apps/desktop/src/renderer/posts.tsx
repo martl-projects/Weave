@@ -283,6 +283,15 @@ export function PostList({
       <header className="pane-head">
         <b>{title}</b>
         <span className="pane-tools">
+          {board?.following !== undefined && query.space && (
+            <button
+              className={board.following ? 'chosen' : ''}
+              title={board.following ? 'Its posts come to your Home and notify you. Click to stop.' : 'Bring its posts to your Home and get notified about new ones'}
+              onClick={() => attempt(() => api('followBoard', { project: query.space, board: board.name, on: !board.following }).then(bump), board.following ? `Stopped following ${board.title}` : `Following ${board.title}`)}
+            >
+              {board.following ? '✓ Following' : 'Follow'}
+            </button>
+          )}
           {toolbar}
           <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label="Sort posts">
             {SORTS.map((s) => (

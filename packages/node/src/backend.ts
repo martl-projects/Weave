@@ -271,6 +271,8 @@ export interface BoardInfo {
   access: { read?: GranteeInfo[]; write?: GranteeInfo[] };
   /** You may post, vote and chat here. */
   canWrite: boolean;
+  /** Projects: you follow this board, so its posts come to your Home and notify you (releases and showcase by default). */
+  following?: boolean;
 }
 
 /** A person or group a board is open to. */
@@ -733,6 +735,8 @@ export interface Backend {
   phones(): Promise<Array<{ key: string; name: string; paired: string; lastSeen?: string }>>;
   /** Unpair a phone: it's disconnected at once and refused from then on. */
   unpairPhone(key: string): Promise<void>;
+  /** Follow a project's board, or stop: its posts come to your Home and notify you. Private, like Home visibility. */
+  followBoard(input: { project: string; board: string; on: boolean }): Promise<BoardInfo[]>;
   /** Show a community or project on your Home, or not. Private: sealed to you, it follows you to your other devices. */
   setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo>;
   /** Leave a group, project or community: you stop receiving it, and its key rotates. The owner hands it over first. */
@@ -951,7 +955,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

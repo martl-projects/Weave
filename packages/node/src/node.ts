@@ -285,6 +285,10 @@ export const KIND_PAGE = 'weave.project.page';
 export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
 export const KIND_HOME_HIDDEN = 'weave.home.hidden';
+/** Sealed to yourself: {space, board, on}. You follow a project's board: its posts come to Home and notify you. */
+export const KIND_BOARD_FOLLOW = 'weave.board.follow';
+/** Boards you follow until you say otherwise: the announcement-style ones. */
+export const FOLLOWED_BOARDS = ['releases', 'showcase'];
 const SELF_SCOPE = 'self';
 
 
@@ -1242,6 +1246,7 @@ export class WeaveNode implements Backend {
           ...(active ? { active } : {}),
           access: { ...(rules?.read ? { read: info(rules.read) } : {}), ...(rules?.write ? { write: info(rules.write) } : {}) },
           canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
+          ...(space.kind === 'project' ? { following: this.#follows(space.id, b.name) } : {}),
         };
       });
   }
@@ -2971,6 +2976,9 @@ export class WeaveNode implements Backend {
       const title = text('title') || snippet(text('text'));
       if (named.some((d) => typeof d === 'string' && mine.has(d))) return { type: 'coauthor', category: 'requests', title: `${who} named you as co-author`, text: title, open: { inbox: true } };
       if (space?.kind !== 'project' || !title) return undefined;
+      const stored = this.#spaces.get(space.id);
+      const board = stored && this.#spacePosts(stored).posts.find((p) => p.id === item.id)?.board;
+      if (!board || !this.#follows(space.id, board)) return undefined;
       const type = item.kind === KIND_ISSUE ? 'issue' : item.kind === KIND_PROPOSAL ? 'proposal' : 'post';
       return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, open: { space, post: item.id } };
     }
@@ -3383,6 +3391,7 @@ export class WeaveNode implements Backend {
     const friends = from === 'friends' ? new Set(friendsOf(this.#graph(), me)) : new Set<Did>();
     const wants = (kind: 'community' | 'project' | 'public') =>
       !from || from === 'all' || (kind === 'community' ? from === 'communities' : kind === 'project' ? ['projects', 'mine', 'friends'].includes(from) : ['following', 'friends', 'mine'].includes(from));
+    const said = this.#boardFollows();
     const posts: PostInfo[] = [];
     for (const space of this.#spaces.values()) {
       if (hiddenSpaces.has(space.id)) continue;
@@ -3393,6 +3402,7 @@ export class WeaveNode implements Backend {
         if (from === 'friends' && !friends.has(state.founder)) continue;
         const post = this.#projectPost(space);
         if (post) posts.push(post);
+        posts.push(...this.#spacePosts(space).posts.filter((p) => p.board && this.#follows(space.id, p.board, said)));
       }
     }
     if (wants('public')) {
@@ -3430,6 +3440,27 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(space);
   }
 
+  async followBoard(input: { project: string; board: string; on: boolean }): Promise<BoardInfo[]> {
+    const project = this.#project(input.project);
+    const board = this.#board(project, this.#spacePosts(project).boards, input.board);
+    if (this.#follows(project.id, board.name) !== input.on) {
+      this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_BOARD_FOLLOW, body: { space: project.id, board: board.name, on: input.on } }));
+    }
+    return this.boards(project.id);
+  }
+
+  /** Your say on following boards, as "space/board" → on; the latest counts. */
+  #boardFollows(): Map<string, boolean> {
+    const said = new Map<string, boolean>();
+    for (const b of this.#selfBodies(KIND_BOARD_FOLLOW)) if (typeof b.space === 'string' && typeof b.board === 'string' && typeof b.on === 'boolean') said.set(`${b.space}/${b.board}`, b.on);
+    return said;
+  }
+
+  /** Whether you follow a project's board: your latest say, or the default (releases and showcase). */
+  #follows(space: string, board: string, said = this.#boardFollows()): boolean {
+    return said.get(`${space}/${board}`) ?? FOLLOWED_BOARDS.includes(board);
+  }
+
   /** Spaces you hid from Home. */
   #homeHidden(): Set<string> {
     const hidden = new Set<string>();
@@ -3444,7 +3475,8 @@ export class WeaveNode implements Backend {
   /** Everything that can be shown as a post, including every board of every project. */
   #allPosts(): PostInfo[] {
     const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
-    return [...this.#homePosts(), ...boardPosts];
+    // Posts of followed boards are on Home too: each post once.
+    return [...new Map([...this.#homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
   }
 
   /** Where a post's chat lives; a project's own chat is its channels. */

@@ -37,6 +37,7 @@ describe('notices on live events', () => {
     await martl.createProject({ name: 'Weave' });
     await lena.joinSpace(await martl.invite('Weave'));
     syncAll(all);
+    await martl.followBoard({ project: 'Weave', board: 'issues', on: true }); // new issues notify only when you follow the board
     const mine = await martl.submit({ space: 'Weave', board: 'ideas', title: 'Tray icon' });
     const hello = await martl.say({ space: 'Weave', text: 'Morning!' });
     syncAll(all);
