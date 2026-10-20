@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { noAgent, type Backend, type FeedItem } from '@weave/node';
+import { noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -72,16 +72,18 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
-Permissions: your person decides which kinds you may sign (weave_whoami lists yours). When a tool needs one you don't have (for example weave.github.repo, weave.app or weave.vote), ask with weave_request_permission, saying what for: your person allows it with one click in the Weave app's Inbox. Then try again. Don't look for ways around it.
+Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
 3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
 
-A project's app, installed by hosts from a GitHub release:
-1. weave_app_publish publishes the app's manifest (weave.app.json: app, name, services, start.command).
-2. After a release exists on GitHub, weave_app_release points the app at it by tag: Weave fingerprints each file. Hosts then install it with one click in the project's Live tab. Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
+A project's app, installed by hosts with one click (prefer this to asking hosts to install Node.js or build anything):
+1. The repository holds weave.app.json (app, name, services, start). For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
+2. Commit, push, tag (v0.1.0) and push the tag. The workflow makes the release in a few minutes.
+3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Hosts then install it from the project's Live tab. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
+Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
 
 Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
@@ -601,11 +603,23 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   );
 
   server.registerTool(
+    'weave_release_workflow',
+    {
+      title: 'A release workflow for a project app',
+      description:
+        "A GitHub Actions workflow that, on every pushed version tag, builds a JavaScript or TypeScript app as a standalone program for Windows, macOS and Linux (no Node.js needed by hosts) and publishes the GitHub release. Returns the file to add, the start.release to put in weave.app.json, and notes to check (files must be read relative to process.cwd()). Writes nothing itself.",
+      inputSchema: { app: z.string().describe('The app id from weave.app.json'), entry: z.string().describe('The file the app starts from, like server.js') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ app, entry }: { app: string; entry: string }) => releaseWorkflow(app, entry)),
+  );
+
+  server.registerTool(
     'weave_app_release',
     {
       title: "Point a project's app at a GitHub release",
       description:
-        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave downloads each file once to fingerprint it (SHA-256); hosts then install it from the project's Live tab. Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
+        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); hosts then install it from the project's Live tab. Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
       inputSchema: {
         project: z.string(),
         tag: z.string().describe('The release tag, like v1.4'),

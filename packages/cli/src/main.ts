@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import {
   connectDaemon,
   followDaemon,
+  releaseWorkflow,
   loadConfig,
   parseBootstrap,
   resolveHome,
@@ -164,7 +165,8 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
   app show -p <project>      the project's app: ports it shares, buttons
   app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
-  app release <tag> -p <p>   point the app at a GitHub release (maintainers): each file is fingerprinted
+  app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
+  app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   rooms [-p <project>]       open rooms
   room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people]
@@ -353,6 +355,7 @@ const launchText = (l: AppLaunchInfo) =>
 const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
   [
     i.version ? `release: ${i.version}${i.repo ? ` from github.com/${i.repo}` : ''}${i.asset ? ` · ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}` : ` · no file for ${i.platform}`}` : '',
+    i.command && !i.installed ? `the installed build starts with: ${i.command.join(' ')}` : '',
     i.installed ? `installed here: ${i.installed}${i.version && i.installed !== i.version ? ` (update: weave app install)` : ''}` : i.asset ? 'not installed here (weave app install)' : '',
     i.error ? `last install failed: ${i.error}` : '',
     i.steps ? `steps for installing by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : '',
@@ -1183,6 +1186,10 @@ ${postLine(p)}`);
           if (line !== last) console.error(line);
           last = line;
         }
+      }
+      if (sub === 'workflow' && args[1] && args[2]) {
+        const w = releaseWorkflow(args[1], args[2]);
+        return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "release": ${JSON.stringify(w.startRelease)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
       }
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));

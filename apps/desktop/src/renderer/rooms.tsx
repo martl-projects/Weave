@@ -166,11 +166,11 @@ function InstallDialog({ app, launch, onInstall, onClose }: { app: AppManifest; 
             <th>Into</th>
             <td>Weave's apps folder, its own folder for {app.name}</td>
           </tr>
-          {launch.command && (
+          {(i.command ?? launch.command) && (
             <tr>
               <th>Then starts with</th>
               <td>
-                <code>{launch.command.join(' ')}</code>
+                <code>{(i.command ?? launch.command)!.join(' ')}</code>
               </td>
             </tr>
           )}
@@ -178,7 +178,7 @@ function InstallDialog({ app, launch, onInstall, onClose }: { app: AppManifest; 
       </table>
       <p className="small">
         Installing only downloads and unpacks; nothing runs until you start {app.name}. Only install it if you trust the people who maintain it.
-        {launch.command ? ' Installing also approves its start command.' : ''}
+        {i.command ?? launch.command ? ' Installing also approves its start command.' : ''}
       </p>
       <div className="buttons">
         <button onClick={onClose}>Cancel</button>

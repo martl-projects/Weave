@@ -1,4 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 /*
@@ -44,7 +46,9 @@ export class AppProcesses {
 
   start(key: string, command: string[], folder: string): void {
     if (this.running(key)) throw new Error('the app is running already');
-    const [program, ...args] = command;
+    const [named, ...args] = command;
+    // A program in the app's own folder ("band-ab.exe" or "./band-ab"): Windows wouldn't look there by itself.
+    const program = !isAbsolute(named) && existsSync(join(folder, named)) ? join(folder, named) : named;
     // The daemon may run on Electron's Node; the app shouldn't inherit that.
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;

@@ -16,9 +16,12 @@ export const platformKey = (platform: string = process.platform, arch: string = 
 /** Which platform a release file is for, guessed from its name (Gameshow-1.4-win-x64.zip → win32-x64). */
 export function guessPlatform(name: string): string | undefined {
   const n = name.toLowerCase();
-  const os = /mac|darwin|osx|\.dmg$/.test(n) ? 'darwin' : /win|\.exe$|\.msi$/.test(n) ? 'win32' : /linux|\.appimage$|\.deb$/.test(n) ? 'linux' : undefined;
+  // Whole parts of the name (an app called "winner" isn't for Windows).
+  const parts = new Set(n.split(/[^a-z0-9]+/));
+  const has = (...words: string[]) => words.some((w) => parts.has(w));
+  const os = has('mac', 'macos', 'darwin', 'osx', 'dmg') ? 'darwin' : has('win', 'windows', 'win32', 'win64', 'exe', 'msi') ? 'win32' : has('linux', 'appimage', 'deb') ? 'linux' : undefined;
   if (!os) return undefined;
-  const arch = /arm64|aarch64/.test(n) ? 'arm64' : /x64|amd64|x86_64|win64/.test(n) ? 'x64' : /ia32|x86|win32-?32|i386/.test(n) ? 'ia32' : os === 'darwin' && /universal/.test(n) ? 'arm64' : 'x64';
+  const arch = has('arm64', 'aarch64') ? 'arm64' : has('x64', 'amd64', 'win64') || /x86_64/.test(n) ? 'x64' : has('ia32', 'x86', 'i386') ? 'ia32' : os === 'darwin' && has('universal') ? 'arm64' : 'x64';
   return `${os}-${arch}`;
 }
 

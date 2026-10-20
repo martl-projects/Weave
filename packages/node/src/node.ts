@@ -136,6 +136,7 @@ import {
   openMembershipRequest,
   openRekey,
   parseManifest,
+  startCommand,
   type AppAsset,
   parseScope,
   permits,
@@ -1898,18 +1899,24 @@ export class WeaveNode implements Backend {
     return manifest;
   }
 
+  /** The command this computer starts a project's app with: its release build's when Weave installed one. */
+  #startCommand(project: StoredSpace, app: AppManifest | undefined): string[] | undefined {
+    return startCommand(app, platformKey(), !!this.#installed(project.id));
+  }
+
   async appLaunch(ref: string): Promise<AppLaunchInfo> {
     const project = this.#project(ref);
     const app = this.#app(project);
     const start = app?.start;
+    const command = this.#startCommand(project, app);
     const install = this.#installInfo(project, app);
     const folder = this.config.appFolders[project.id];
     const run = this.#apps.status(project.id);
     return {
-      ...(start?.command ? { command: start.command } : {}),
+      ...(command ? { command } : {}),
       ...(start?.hint ? { hint: start.hint } : {}),
       ...(folder ? { folder } : {}),
-      approved: !!start?.command && !!folder && this.config.approvedLaunches[project.id] === launchFingerprint(start.command, folder),
+      approved: !!command && !!folder && this.config.approvedLaunches[project.id] === launchFingerprint(command, folder),
       running: this.#apps.running(project.id),
       ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
       log: run?.log ?? [],
@@ -1931,7 +1938,7 @@ export class WeaveNode implements Backend {
   async launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
     const project = this.#project(input.project);
     const app = this.#app(project);
-    const command = app?.start?.command;
+    const command = this.#startCommand(project, app);
     if (!app || !command) throw new Error(`${project.name}'s app has no start command; start it yourself${app?.start?.hint ? `: ${app.start.hint}` : ''}`);
     const folder = this.config.appFolders[project.id];
     if (!folder) throw new Error(`choose where ${app.name} is on this computer first (the folder with its weave.app.json)`);
@@ -1975,6 +1982,7 @@ export class WeaveNode implements Backend {
       ...(job?.error ? { error: job.error } : {}),
       ...(install?.steps ? { steps: install.steps } : {}),
       ...(install?.app && install.app !== this.#githubApp().slug ? { otherApp: install.app } : {}),
+      ...(asset && startCommand(app, platformKey(), true) ? { command: startCommand(app, platformKey(), true) } : {}),
     };
   }
 
@@ -2028,7 +2036,8 @@ export class WeaveNode implements Backend {
     // The folder holds the project's app: say so the way a checkout would, with its manifest.
     if (!existsSync(joinPath(root, 'weave.app.json'))) writeJson(joinPath(root, 'weave.app.json'), app);
     this.#rememberAppFolder(project.id, root);
-    if (approve && app.start?.command) this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: launchFingerprint(app.start.command, root) } };
+    const command = startCommand(app, platformKey(), true);
+    if (approve && command) this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: launchFingerprint(command, root) } };
     saveConfig(this.home, this.config);
     writeJson(joinPath(dir, 'installed.json'), { tag: release.tag, folder: root, file: release.asset.file, sha256: release.asset.sha256, installed: new Date(this.clock()).toISOString() });
     // Earlier versions Weave installed go.
@@ -2039,14 +2048,25 @@ export class WeaveNode implements Backend {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     const state = this.#maintainerState(project);
-    const app = this.#app(project);
-    if (!app) throw new Error(`${project.name} has no app yet: publish its weave.app.json first ("weave app publish")`);
+    const published = this.#app(project);
     const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = input.repo?.trim() || app.install?.github || (linked.length === 1 ? linked[0].repo : '');
+    const repo = input.repo?.trim() || published?.install?.github || (linked.length === 1 ? linked[0].repo : '');
     if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
     const auth = this.#githubAuth();
     const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
     const release = await client.release(repo, input.tag.trim());
+    // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
+    const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
+    let app: AppManifest;
+    if (atTag) {
+      try {
+        app = parseManifest(JSON.parse(atTag));
+      } catch (error) {
+        throw new Error(`weave.app.json in ${repo} at ${release.tag} isn't right: ${(error as Error).message}`);
+      }
+      if (published && published.app !== app.app) throw new Error(`${repo} at ${release.tag} holds the app "${app.app}", but ${project.name}'s app is "${published.app}"`);
+    } else if (published) app = published;
+    else throw new Error(`${repo} has no weave.app.json at ${release.tag}: add one (app, name, services, start), tag again, and release`);
     // Which file is for which platform: as given, or guessed from the names.
     const chosen = new Map<string, ReleaseAsset>();
     if (input.assets && Object.keys(input.assets).length) {
@@ -2077,7 +2097,7 @@ export class WeaveNode implements Backend {
     }
     // Members download through the app the maintainer uses, when it's their own.
     const own = this.config.githubApp?.slug;
-    const { app: _app, ...before } = app.install ?? {};
+    const { app: _app, ...before } = { ...published?.install, ...app.install };
     const manifest = parseManifest({ ...app, install: { ...before, github: repo, tag: release.tag, assets, ...(own ? { app: own } : {}) } });
     await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
     return manifest;
@@ -2239,7 +2259,7 @@ export class WeaveNode implements Backend {
       joined,
       connected,
       peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      ...(app ? { app: { app: app.app, name: app.name, ...(app.start?.hint ? { startHint: app.start.hint } : {}), ...(app.start?.command ? { canLaunch: true } : {}) } } : {}),
+      ...(app ? { app: { app: app.app, name: app.name, ...(app.start?.hint ? { startHint: app.start.hint } : {}), ...(app.start?.command || app.start?.release ? { canLaunch: true } : {}) } } : {}),
       ...(service ? { service: { id: service.id, label: side?.label ?? (mine ? 'Open' : 'Play'), ready } } : {}),
       ...(url ? { url } : {}),
       time: room.time,

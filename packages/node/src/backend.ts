@@ -475,6 +475,8 @@ export interface AppLaunchInfo {
     steps?: string[];
     /** The GitHub App the release downloads through, when it isn't the one you sign in with. */
     otherApp?: string;
+    /** What the installed release build starts with on this computer. */
+    command?: string[];
   };
 }
 

@@ -28,11 +28,15 @@ function buildArchive(): Buffer {
 /** GitHub as far as releases go: one release whose file can be swapped to test the check. */
 class FakeReleases {
   files = new Map<number, { name: string; bytes: Buffer }>();
+  /** weave.app.json in the repository at the tag, if any. */
+  manifest?: unknown;
   downloads = 0;
   fetch: Fetch = (async (input: string | URL | Request) => {
     const url = new URL(String(input));
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
     if (url.pathname === '/repos/martl/gameshow/releases/tags/v1.4') return json(200, { tag_name: 'v1.4', assets: [...this.files].map(([id, f]) => ({ id, name: f.name, size: f.bytes.length })) });
+    if (url.pathname === '/repos/martl/gameshow/contents/weave.app.json')
+      return this.manifest && url.searchParams.get('ref') === 'v1.4' ? json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(this.manifest)).toString('base64') }) : json(404, { message: 'Not Found' });
     const m = url.pathname.match(/^\/repos\/martl\/gameshow\/releases\/assets\/(\d+)$/);
     const file = m && this.files.get(Number(m[1]));
     if (!file) return json(404, { message: 'Not Found' });
@@ -88,6 +92,33 @@ describe('installing a project app from its release', () => {
     await vi.waitFor(async () => expect((await lena.appLaunch('Gameshow')).log).toContain('gameshow is up'), { timeout: 10_000 });
   });
 
+  it("takes the manifest from the repository at the tag, and starts a release build with its own command", async () => {
+    const github = new FakeReleases();
+    github.files.set(11, { name: 'Gameshow-1.4-mine.tar.gz', bytes: buildArchive() });
+    github.manifest = { app: 'gameshow', name: 'Gameshow 1.4', services: [{ port: 7777 }], start: { command: ['node', 'needs-a-checkout.js'], release: { [platformKey()]: ['node', 'start.js'] } } };
+    const martl = person('martl', github);
+    await martl.createProject({ name: 'Gameshow' });
+    // Nothing published yet: the release brings its own manifest.
+    const manifest = await martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow', assets: { [platformKey()]: 'Gameshow-1.4-mine.tar.gz' } });
+    expect(manifest).toMatchObject({ name: 'Gameshow 1.4', install: { tag: 'v1.4' } });
+
+    // Before installing, the dialog shows what the build will run; a checkout would run start.command.
+    const before = await martl.appLaunch('Gameshow');
+    expect(before.install?.command).toEqual(['node', 'start.js']);
+    await martl.installApp({ project: 'Gameshow', approve: true });
+    const after = await martl.installDone('Gameshow');
+    expect(after.command).toEqual(['node', 'start.js']);
+    expect(after.approved).toBe(true);
+    await martl.launchApp({ project: 'Gameshow' });
+    await vi.waitFor(async () => expect((await martl.appLaunch('Gameshow')).log).toContain('gameshow is up'), { timeout: 10_000 });
+
+    // A tag without a weave.app.json, and no app published: say what's missing.
+    const other = person('Lena', github);
+    await other.createProject({ name: 'Other' });
+    github.manifest = undefined;
+    await expect(other.releaseApp({ project: 'Other', tag: 'v1.4', repo: 'martl/gameshow' })).rejects.toThrow(/no weave.app.json at v1.4/);
+  });
+
   it("refuses a file that isn't the one the maintainer published", async () => {
     const github = new FakeReleases();
     github.files.set(11, { name: 'Gameshow-1.4-mine.tar.gz', bytes: buildArchive() });
@@ -128,5 +159,8 @@ describe('installing a project app from its release', () => {
     expect(guessPlatform('gameshow-darwin-x64.zip')).toBe('darwin-x64');
     expect(guessPlatform('Gameshow Setup.exe')).toBe('win32-x64');
     expect(guessPlatform('checksums.txt')).toBeUndefined();
+    expect(guessPlatform('winner-v1.0.0-linux-x64.tar.gz')).toBe('linux-x64');
+    expect(guessPlatform('band-ab-v0.1.0-mac-arm64.tar.gz')).toBe('darwin-arm64');
+    expect(guessPlatform('app_x86_64_linux.tar.gz')).toBe('linux-x64');
   });
 });

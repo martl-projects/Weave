@@ -180,11 +180,22 @@ export class GitHub {
     await this.#call('DELETE', `/gists/${encodeURIComponent(id)}`);
   }
 
+  /** A file in a repository at a tag or branch, or undefined when there's none. */
+  async fileAt(repo: string, path: string, ref: string): Promise<string | undefined> {
+    try {
+      const { data } = await this.#call<{ content?: string; encoding?: string }>('GET', `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`);
+      return data.content && data.encoding === 'base64' ? Buffer.from(data.content, 'base64').toString('utf8') : undefined;
+    } catch (error) {
+      if (/ 404/.test((error as Error).message)) return undefined;
+      throw error;
+    }
+  }
+
   /** A release by its tag, with its files. */
   async release(repo: string, tag: string): Promise<{ tag: string; assets: ReleaseAsset[] }> {
     const { data } = await this.#call<{ tag_name: string; assets: Array<{ id: number; name: string; size: number }> }>('GET', `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`).catch((error: Error) => {
       if (!/ 404/.test(error.message)) throw error;
-      throw new Error(`GitHub shows no release ${tag} in ${repo}${this.#token ? '' : ': if the repository is private, connect GitHub first (Keys & devices)'}${this.#token ? ', or you have no access to it yet' : ''}`);
+      throw new Error(`GitHub shows no release ${tag} in ${repo}${this.#token ? ', or you have no access to it yet' : ': if the repository is private, connect GitHub first (Keys & devices)'}. If a workflow is building it, try again in a few minutes`);
     });
     return { tag: data.tag_name, assets: data.assets.map((a) => ({ id: a.id, name: a.name, size: a.size })) };
   }

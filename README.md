@@ -176,6 +176,8 @@ npx weave github share Gameshow                   # members: give the space your
 npx weave app release v1.4 -p Gameshow            # maintainers: the release hosts install
 ```
 
+Hosts shouldn't need Node.js or a build setup to run a project's app. For JavaScript and TypeScript apps, `weave app workflow <app> <entry>` prints a GitHub Actions workflow that, on every pushed version tag, builds a standalone program for Windows, macOS and Linux (with Bun) and publishes the GitHub release; `start.release` in `weave.app.json` tells Weave how to start those builds, while `start.command` stays for source checkouts. `weave app release <tag>` then reads `weave.app.json` from the repository at that tag, so every release carries its own manifest.
+
 Signing in uses GitHub's device flow through a GitHub App: no server, no secret, and the sign-in stays on your computer. Each person's sign-in only reaches repositories where the app is installed and they have access themselves.
 
 **Who you trust.** By default that app is [Weave Connect](https://github.com/apps/weave-connect), owned by martldennl. A GitHub App's owner can act on every repository the app is installed on (with a private key, which Weave never uses), so:

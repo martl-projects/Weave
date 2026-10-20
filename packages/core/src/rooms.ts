@@ -43,7 +43,15 @@ export interface AppManifest {
    * `command` (program and arguments, no shell) can be run by Weave in the
    * host's own copy of the app, after the host has seen and approved it.
    */
-  start?: { hint?: string; command?: string[] };
+  start?: {
+    hint?: string;
+    command?: string[];
+    /**
+     * For release builds Weave installed (see install): the command per platform, like
+     * {"win32-x64": ["./band-ab.exe"], "linux-x64": ["./band-ab"]}. `command` stays for source checkouts.
+     */
+    release?: Record<string, string[]>;
+  };
   /** How hosts get the app onto their computer. */
   install?: AppInstall;
 }
@@ -133,18 +141,30 @@ export function parseManifest(input: unknown): AppManifest {
   });
   const rawStart = (m.start && typeof m.start === 'object' ? m.start : {}) as Record<string, unknown>;
   const hint = text(rawStart.hint, 200);
-  let command: string[] | undefined;
-  if (rawStart.command !== undefined) {
-    const parts = rawStart.command;
+  const commandOf = (parts: unknown, where: string): string[] => {
     if (!Array.isArray(parts) || parts.length === 0 || parts.length > 32 || !parts.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.includes('\0'))) {
-      throw new Error('"start.command" is the program and its arguments, e.g. ["node", "server.js"]');
+      throw new Error(`"${where}" is the program and its arguments, e.g. ["node", "server.js"]`);
     }
-    command = parts as string[];
+    return parts as string[];
+  };
+  const command = rawStart.command !== undefined ? commandOf(rawStart.command, 'start.command') : undefined;
+  let release: Record<string, string[]> | undefined;
+  if (rawStart.release && typeof rawStart.release === 'object') {
+    release = {};
+    for (const [platform, parts] of Object.entries(rawStart.release as Record<string, unknown>).slice(0, 12)) {
+      if (!PLATFORM.test(platform)) throw new Error(`"start.release" names platforms like win32-x64, darwin-arm64, linux-x64 (not "${platform}")`);
+      release[platform] = commandOf(parts, `start.release.${platform}`);
+    }
   }
-  const start = hint || command ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}) } : undefined;
+  const start =
+    hint || command || release ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}) } : undefined;
   const install = parseInstall(m.install);
   return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}) };
 }
+
+/** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */
+export const startCommand = (app: AppManifest | undefined, platform: string, releaseBuild: boolean): string[] | undefined =>
+  (releaseBuild ? app?.start?.release?.[platform] : undefined) ?? app?.start?.command;
 
 export interface Room {
   id: string;
