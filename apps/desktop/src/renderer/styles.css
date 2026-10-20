@@ -51,6 +51,11 @@ button .icon { vertical-align: -3px; }
 .desktop { height: 100%; display: grid; place-items: center; }
 .app-window { position: fixed; inset: 0; display: flex; flex-direction: column; }
 .app-window > .title-bar { flex: none; }
+/* The app's own title bar moves the window; its buttons stay clickable. macOS draws its traffic lights at the left. */
+.app-title { -webkit-app-region: drag; user-select: none; }
+.app-title button { -webkit-app-region: no-drag; }
+.app-window.mac .app-title { padding-left: 76px; justify-content: center; }
+.window-inactive .app-title { background: #808080; }
 .title-bar-text { display: flex; align-items: center; gap: 4px; }
 .title-bar-text .mark { background: #fff; }
 

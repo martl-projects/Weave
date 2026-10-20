@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('weave', {
   openApp: (url: string, title: string) => ipcRenderer.invoke('weave:open-app', url, title),
   pickFolder: (title: string) => ipcRenderer.invoke('weave:pick-folder', title),
   show: () => ipcRenderer.invoke('weave:show'),
+  platform: process.platform,
+  windowControl: (action: string) => ipcRenderer.invoke('weave:window', action),
+  onWindowState: (listener: (state: { maximized: boolean; focused: boolean }) => void) => {
+    ipcRenderer.on('weave:window-state', (_event, state) => listener(state));
+  },
   attention: () => ipcRenderer.invoke('weave:attention'),
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('weave:call', method, args),
   onEvent: (listener: (item: FeedItem) => void) => {

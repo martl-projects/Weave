@@ -110,6 +110,15 @@ function showWindow(): void {
 
 ipcMain.handle('weave:show', () => showWindow());
 
+/** The buttons of the app's own title bar. Close hides to the tray like the system's close would. */
+ipcMain.handle('weave:window', (_event, action: string) => {
+  if (!window) return;
+  if (action === 'minimize') window.minimize();
+  else if (action === 'maximize') window.isMaximized() ? window.unmaximize() : window.maximize();
+  else if (action === 'close') window.close();
+  return { maximized: window.isMaximized(), focused: window.isFocused() };
+});
+
 /** Something needs the person: flash the taskbar button until they look, unless they already are. */
 ipcMain.handle('weave:attention', () => {
   if (window && !window.isFocused()) window.flashFrame(true);
@@ -182,6 +191,8 @@ async function createWindow(): Promise<void> {
     title: 'Weave',
     show: !values.screenshot,
     autoHideMenuBar: true,
+    // The app draws its own title bar (with working buttons); macOS keeps its traffic lights over it.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 10, y: 8 } } : { frame: false }),
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -190,6 +201,9 @@ async function createWindow(): Promise<void> {
     },
   });
   window.on('focus', () => window?.flashFrame(false));
+  // The title bar shows Maximize or Restore, and dims when the window isn't active.
+  const state = () => window?.webContents.send('weave:window-state', { maximized: !!window?.isMaximized(), focused: !!window?.isFocused() });
+  for (const change of ['maximize', 'unmaximize', 'focus', 'blur', 'enter-full-screen', 'leave-full-screen'] as const) window.on(change as 'maximize', state);
   // With a tray icon, closing only hides the window: Weave keeps running and notifying. Quit from the tray.
   window.on('close', (event) => {
     if (tray && !quitting) {

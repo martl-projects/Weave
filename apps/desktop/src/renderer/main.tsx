@@ -362,6 +362,26 @@ document.addEventListener('click', (event) => {
 
 // ---------------------------------------------------------------- window
 
+/** Minimize, Maximize/Restore and Close for the app's own title bar (Windows and Linux; macOS has its traffic lights). */
+function WindowButtons() {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    bridge.onWindowState?.((state) => {
+      setMaximized(state.maximized);
+      document.documentElement.classList.toggle('window-inactive', !state.focused);
+    });
+  }, []);
+  if (!bridge.windowControl || bridge.platform === 'darwin') return null;
+  const control = (action: 'minimize' | 'maximize' | 'close') => () => void bridge.windowControl!(action).then((state) => setMaximized(state.maximized));
+  return (
+    <div className="title-bar-controls">
+      <button aria-label="Minimize" tabIndex={-1} onClick={control('minimize')} />
+      <button aria-label={maximized ? 'Restore' : 'Maximize'} tabIndex={-1} onClick={control('maximize')} />
+      <button aria-label="Close" tabIndex={-1} onClick={control('close')} />
+    </div>
+  );
+}
+
 function ToolButton({ icon, label, onClick, href, on, className = '' }: { icon: IconName; label: string; onClick?(): void; href?: string; on?: boolean; className?: string }) {
   const inner = (
     <>
@@ -426,16 +446,12 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}`}>
-      <div className="title-bar">
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+      <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
           <WeaveMark size={14} /> Weave - [{where}]
         </div>
-        <div className="title-bar-controls">
-          <button aria-label="Minimize" tabIndex={-1} />
-          <button aria-label="Maximize" tabIndex={-1} />
-          <button aria-label="Close" tabIndex={-1} onClick={() => window.close()} />
-        </div>
+        <WindowButtons />
       </div>
       <nav className="menubar">
         <Menu

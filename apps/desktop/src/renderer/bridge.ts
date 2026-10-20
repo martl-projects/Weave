@@ -18,6 +18,11 @@ interface Bridge {
   pickFolder(title: string): Promise<string | undefined>;
   /** Bring the app's window to the front (a notification was clicked). */
   show(): Promise<void>;
+  /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */
+  platform?: string;
+  /** The app's own title bar buttons; missing in a browser, which has its own window. */
+  windowControl?(action: 'minimize' | 'maximize' | 'close'): Promise<{ maximized: boolean; focused: boolean }>;
+  onWindowState?(listener: (state: { maximized: boolean; focused: boolean }) => void): void;
   /** Flash the taskbar button until the person looks. */
   attention(): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;

@@ -87,6 +87,8 @@
 :root[data-skin='cozy'] .title-bar-controls button[aria-label='Maximize'] { background-color: #5cc56b; }
 :root[data-skin='cozy'] .title-bar-controls button[aria-label='Close'] { background-color: #ff6b6b; }
 :root[data-skin='cozy'] .title-bar-controls button:hover { filter: brightness(1.1); }
+:root[data-skin='cozy'] .title-bar-controls button[aria-label='Restore'] { background-color: #5cc56b; }
+:root[data-skin='cozy'].window-inactive .app-title { background: #3a4270; }
 
 /* ---------- menu bar and toolbar */
 :root[data-skin='cozy'] .menubar { padding: 4px 6px 2px; gap: 2px; background: var(--cz-cream); }
