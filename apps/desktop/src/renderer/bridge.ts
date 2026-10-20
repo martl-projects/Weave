@@ -16,6 +16,10 @@ interface Bridge {
   openApp(url: string, title: string): Promise<void>;
   /** Let the person pick a folder on this computer; undefined if they cancel. */
   pickFolder(title: string): Promise<string | undefined>;
+  /** Bring the app's window to the front (a notification was clicked). */
+  show(): Promise<void>;
+  /** Flash the taskbar button until the person looks. */
+  attention(): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
 }
@@ -36,6 +40,8 @@ const webBridge: Bridge = {
   openApp: async (url) => {
     window.open(url, '_blank', 'noopener');
   },
+  show: async () => window.focus(),
+  attention: async () => {},
   // A browser can't hand out folder paths: type it.
   pickFolder: async (title) => prompt(`${title}\n\nThe full path of the folder:`)?.trim() || undefined,
   restore: async () => {

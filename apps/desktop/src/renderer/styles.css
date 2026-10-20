@@ -362,6 +362,7 @@ menu[role='tablist'] { margin-bottom: 0; }
 .color { display: flex; align-items: center; gap: 4px; }
 .color input { width: 32px; height: 20px; padding: 0; }
 .space-preview { margin-top: 8px; padding: 12px; background: var(--bg); }
+.notify-row { margin: 8px 0; flex-wrap: nowrap; }
 .welcome { width: min(420px, calc(100vw - 32px)); }
 .welcome-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-family: var(--content-font); font-size: 12px; }
 

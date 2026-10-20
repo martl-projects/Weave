@@ -21,7 +21,26 @@ export interface FeedItem {
   space?: SpaceRef;
   /** Set for events only you can read (private follows, blocks, mutes). */
   private?: true;
+  /** Live events only: set when the event is worth a notification for you. */
+  notice?: Notice;
 }
+
+/**
+ * Why a live event concerns you, ready to show as a notification.
+ * messages: direct messages, @mentions, replies to you or in your posts ·
+ * requests: co-author requests, people asking to join or for a tier ·
+ * activity: new posts, issues and proposals in your projects.
+ */
+export interface Notice {
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal';
+  category: NoticeCategory;
+  title: string;
+  text: string;
+  /** Where it leads: the Inbox, a space's channel, or a post (by id). */
+  open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string };
+}
+
+export type NoticeCategory = 'messages' | 'requests' | 'activity';
 
 export interface SpaceRef {
   id: string;

@@ -52,4 +52,6 @@ await Promise.all([
 ]);
 
 copyFileSync('src/renderer/index.html', 'dist/renderer/index.html');
+// The tray icon (see src/main.ts).
+copyFileSync('assets/icon.png', 'dist/icon.png');
 console.log('desktop app built');

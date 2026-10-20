@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
+import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
@@ -29,7 +30,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -431,6 +432,7 @@ function Shell() {
             { label: 'Keys & devices', onClick: () => navigate('#/keys') },
             'sep',
             { label: 'Refresh', onClick: bump },
+            { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
             'sep',
             ...(Object.keys(SKINS) as Skin[]).map((s) => ({
               label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
@@ -493,6 +495,7 @@ function Shell() {
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
+      {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
     </div>
   );
 }
@@ -516,4 +519,5 @@ function App() {
 }
 
 applySkin(loadSkin());
+startNotifications();
 createRoot(document.getElementById('root')!).render(<App />);

@@ -231,6 +231,7 @@ import {
   type MemberInfo,
   type MessageInfo,
   type Person,
+  type Notice,
   type PostInfo,
   type PostsQuery,
   type Profile,
@@ -583,9 +584,15 @@ export class WeaveNode implements Backend {
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
+    // In order, one at a time: working out a notice may need to read the Inbox.
+    let queue = Promise.resolve();
     const unsubscribe = this.replica.onAppend((event) => {
       const item = this.itemFor(event);
-      if (item && !this.#hiddenAuthors().has(item.author)) onItem(item);
+      if (!item || this.#hiddenAuthors().has(item.author)) return;
+      queue = queue.then(async () => {
+        const notice = await this.#noticeFor(item).catch(() => undefined);
+        onItem(notice ? { ...item, notice } : item);
+      });
     });
     // Rooms change without events (people come and go, room chat): a notice with no content, so views refresh.
     const me = this.identity.author;
@@ -2634,6 +2641,70 @@ export class WeaveNode implements Backend {
       this.#contactCache = { from: decoded, map };
     }
     return this.#contactCache.map;
+  }
+
+  /**
+   * Whether a live event deserves a notification for you, and what it says.
+   * Your own events (from any of your devices or agents) never do, and
+   * neither do older ones arriving while catching up (over a day old).
+   */
+  async #noticeFor(item: FeedItem): Promise<Notice | undefined> {
+    const me = this.identity.author;
+    if (item.author === me || item.private || Date.now() - Date.parse(item.time) > 86_400_000) return undefined;
+    const body = (item.body && typeof item.body === 'object' && !Array.isArray(item.body) ? item.body : {}) as Record<string, Json>;
+    const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
+    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
+    const who = item.authorName ?? this.nameOf(item.author) ?? 'Someone';
+    const space = item.space;
+    const where = space ? `${{ project: 'p/', community: 'r/', group: 'g/', direct: '@' }[space.kind]}${space.name}` : '';
+    const POSTS = [KIND_POST, KIND_THREAD, KIND_ISSUE, KIND_PROPOSAL];
+    const lookup = (id: Json | undefined, kinds: string[]) => {
+      if (typeof id !== 'string') return undefined;
+      try {
+        const found = this.#find(id, kinds);
+        const title = (found.inner.body as Record<string, Json> | null)?.title;
+        return { id: found.id, author: found.event.author, title: typeof title === 'string' ? title : '' };
+      } catch {
+        return undefined;
+      }
+    };
+
+    if (item.kind === KIND_MSG && space) {
+      if (space.kind === 'direct') return { type: 'dm', category: 'messages', title: who, text: snippet(text('text')), open: { space } };
+      const post = lookup(body.post, POSTS);
+      const channel = text('channel') || 'general';
+      const open = post ? { space, post: post.id } : { space, channel };
+      const place = post ? `“${post.title}”` : `${where} #${channel}`;
+      const name = this.nameOf(me)?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (name && new RegExp(`@${name}(?![\\w-])`, 'i').test(text('text')))
+        return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(text('text')), open };
+      if (lookup(body.replyTo, [KIND_MSG, KIND_REPLY])?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to you in ${place}`, text: snippet(text('text')), open };
+      if (post?.author === me) return { type: 'reply', category: 'messages', title: `${who} in your post ${place}`, text: snippet(text('text')), open };
+      return undefined;
+    }
+    if (item.kind === KIND_REPLY && space) {
+      const target = lookup(body.target, POSTS);
+      if (target?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to “${target.title}”`, text: snippet(text('text')), open: { space, post: target.id } };
+      return undefined;
+    }
+    if (item.kind === KIND_POST || item.kind === KIND_ISSUE || item.kind === KIND_PROPOSAL) {
+      const mine = new Set<string>([me, ...this.#agents.map((a) => a.did)]);
+      const named = Array.isArray(body.with) ? body.with : [];
+      const title = text('title') || snippet(text('text'));
+      if (named.some((d) => typeof d === 'string' && mine.has(d))) return { type: 'coauthor', category: 'requests', title: `${who} named you as co-author`, text: title, open: { inbox: true } };
+      if (space?.kind !== 'project' || !title) return undefined;
+      const type = item.kind === KIND_ISSUE ? 'issue' : item.kind === KIND_PROPOSAL ? 'proposal' : 'post';
+      return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, open: { space, post: item.id } };
+    }
+    if (item.kind === KIND_KNOCK) {
+      const knock = (await this.knocks()).find((k) => k.id === item.id);
+      if (knock) return { type: 'knock', category: 'requests', title: `${knock.name ?? who} asks to join ${knock.space.name}`, text: snippet(knock.note), open: { inbox: true } };
+    }
+    if (item.kind === KIND_MEMBERSHIP_REQUEST) {
+      const request = (await this.membershipRequests()).find((r) => r.id === item.id);
+      if (request) return { type: 'membership', category: 'requests', title: `${request.name ?? who} asks for ${request.tier.name}`, text: snippet(request.note), open: { inbox: true } };
+    }
+    return undefined;
   }
 
   /** The event as this node can read it, or undefined if it can't (someone else's space or private data). */

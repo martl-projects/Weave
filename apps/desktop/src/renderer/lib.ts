@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { Theme } from '@weave/node/client';
+import type { FeedItem, Theme } from '@weave/node/client';
 import { api, bridge } from './bridge.ts';
 
 export { api, bridge, type AppState } from './bridge.ts';
@@ -22,7 +22,16 @@ export function bump(): void {
   for (const listener of listeners) listener();
 }
 
-bridge.onEvent(() => {
+const itemListeners = new Set<(item: FeedItem) => void>();
+
+/** Every live event as it arrives (notifications look at them); views refresh through useApi instead. */
+export function onItem(listener: (item: FeedItem) => void): () => void {
+  itemListeners.add(listener);
+  return () => itemListeners.delete(listener);
+}
+
+bridge.onEvent((item) => {
+  if (item) for (const listener of itemListeners) listener(item);
   clearTimeout(pending);
   pending = setTimeout(bump, 120);
 });

@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -68,6 +68,42 @@ ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknow
   }
 });
 
+/** Bring the window back (from the tray, minimized or behind others): a notification was clicked. */
+function showWindow(): void {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+ipcMain.handle('weave:show', () => showWindow());
+
+/** Something needs the person: flash the taskbar button until they look, unless they already are. */
+ipcMain.handle('weave:attention', () => {
+  if (window && !window.isFocused()) window.flashFrame(true);
+});
+
+// Notifications on Windows carry the app's name only with an app user model id.
+if (process.platform === 'win32') app.setAppUserModelId('org.weave.desktop');
+
+let tray: Tray | undefined;
+
+/** A tray icon, so closing the window keeps Weave running (and notifying) in the background. */
+function createTray(): void {
+  const icon = nativeImage.createFromPath(join(__dirname, 'icon.png'));
+  if (icon.isEmpty()) return; // no icon, no tray: closing the window quits as before
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  tray.setToolTip('Weave');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open Weave', click: showWindow },
+      { type: 'separator' },
+      { label: 'Quit Weave', click: () => app.quit() },
+    ]),
+  );
+  tray.on('click', showWindow);
+}
+
 /** A folder on this computer, picked by the person (for a project app's local copy). */
 ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
   const options = { title: String(title ?? 'Choose a folder').slice(0, 80), properties: ['openDirectory' as const] };
@@ -121,6 +157,15 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
     },
   });
+  window.on('focus', () => window?.flashFrame(false));
+  // With a tray icon, closing only hides the window: Weave keeps running and notifying. Quit from the tray.
+  window.on('close', (event) => {
+    if (tray && !quitting) {
+      event.preventDefault();
+      window?.hide();
+    }
+  });
+  if (!values.screenshot) createTray();
   // Links in messages open in the system browser, never inside the app.
   const external = (url: string) => /^https?:\/\//.test(url) && void shell.openExternal(url);
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -155,6 +200,11 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// Quitting (tray, menu, OS shutdown) closes the window for real.
+app.on('before-quit', () => {
+  quitting = true;
+});
 
 app.on('will-quit', () => {
   quitting = true;
