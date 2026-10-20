@@ -23,6 +23,7 @@ export type {
   FeedQuery,
   GitHubInfo,
   HarnessInfo,
+  PermissionRequest,
   HubGitHub,
   InProject,
   InSpace,

@@ -90,6 +90,8 @@ export function startNotifications(): void {
   onItem((item) => {
     const notice = item.notice;
     if (!notice || !loadSettings()[notice.category] || Notification.permission !== 'granted' || looking(notice.open)) return;
+    // An agent's request shows as a popup in the app (see agents.tsx): a notification only when Weave is in the background.
+    if (notice.type === 'permission' && document.hasFocus()) return;
     pending.push(notice);
     clearTimeout(timer);
     timer = setTimeout(flush, 1200);

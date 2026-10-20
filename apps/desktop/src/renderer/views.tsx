@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { MembershipRequestInfo } from '@weave/node/client';
+import type { MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
+import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { ImagePicker, RichEditor } from './editor.tsx';
@@ -367,9 +368,13 @@ export function PeopleView() {
 export function InboxView({ admissions, knocks }: { admissions: Admission[]; knocks: KnockInfo[] }) {
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
+  const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
   return (
     <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {(asks ?? []).map((r) => (
+        <PermissionCard key={r.id} request={r} />
+      ))}
       {(coauthors ?? []).map((c) => (
         <CoauthorCard key={`${c.post.id}-${c.agent ?? ''}`} request={c} />
       ))}

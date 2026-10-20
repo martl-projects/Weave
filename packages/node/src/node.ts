@@ -212,6 +212,7 @@ import {
   type CoauthorRequest,
   type GitHubInfo,
   type HarnessInfo,
+  type PermissionRequest,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -347,7 +348,7 @@ export class WeaveNode implements Backend {
     nameOf: (did) => this.nameOf(did),
     changed: () => this.#emitLive(),
   });
-  #liveListeners = new Set<() => void>();
+  #liveListeners = new Set<(notice?: Notice) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
@@ -658,7 +659,7 @@ export class WeaveNode implements Backend {
     });
     // Rooms change without events (people come and go, room chat): a notice with no content, so views refresh.
     const me = this.identity.author;
-    const onLive = () => onItem({ id: `live-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.live', scope: 'live', body: null, author: me, signer: me, seq: 0 });
+    const onLive = (notice?: Notice) => onItem({ id: `live-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.live', scope: 'live', body: null, author: me, signer: me, seq: 0, ...(notice ? { notice } : {}) });
     this.#liveListeners.add(onLive);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
@@ -1021,6 +1022,61 @@ export class WeaveNode implements Backend {
     agent.permissions = permissions;
     saveAgent(this.home, agent);
     return agentInfo(agent);
+  }
+
+  // ---------------------------------------------------------------- agents asking for more
+
+  get #requestsFile(): string {
+    return joinPath(this.home.dir, 'agent-requests.json');
+  }
+
+  #requests(): PermissionRequest[] {
+    return readJson<PermissionRequest[]>(this.#requestsFile) ?? [];
+  }
+
+  async requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest> {
+    const agent = this.#agents.find((a) => a.name === input.as);
+    if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    const kinds = [...new Set(input.kinds.map((k) => k.trim()))].filter((k) => /^weave\.[a-z0-9.*-]{1,60}$/.test(k));
+    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.github.repo');
+    const missing = kinds.filter((k) => !permits(agent.permissions, k));
+    const now = new Date(this.clock()).toISOString();
+    if (!missing.length) return { id: '', agent: agent.name, kinds, reason: '', time: now, state: 'allowed' };
+    const requests = this.#requests();
+    // Asking again for the same while waiting doesn't make a second request.
+    const open = requests.find((r) => r.state === 'pending' && r.agent === agent.name && missing.every((k) => r.kinds.includes(k)));
+    if (open) return open;
+    const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: missing, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
+    // Keep what's pending, and the last few answers.
+    writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
+    this.#emitLive({
+      type: 'permission',
+      category: 'requests',
+      title: `Your agent ${agent.name} asks for a permission`,
+      text: `To sign ${missing.join(', ')}${request.reason ? `: “${request.reason}”` : ''}`,
+      open: { inbox: true },
+    });
+    return request;
+  }
+
+  async permissionRequests(): Promise<PermissionRequest[]> {
+    return this.#requests().filter((r) => r.state === 'pending' && this.#agents.some((a) => a.name === r.agent));
+  }
+
+  async answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest> {
+    const requests = this.#requests();
+    const request = requests.find((r) => r.id === input.id);
+    if (!request) throw new Error('no such request (it may have been answered already)');
+    if (request.state !== 'pending') return request;
+    if (input.allow) {
+      const agent = this.#agents.find((a) => a.name === request.agent);
+      if (!agent) throw new Error(`the agent ${request.agent} is gone`);
+      await this.updateAgent({ name: agent.name, permissions: [...agent.permissions, ...request.kinds] });
+    }
+    request.state = input.allow ? 'allowed' : 'declined';
+    writeJson(this.#requestsFile, requests);
+    this.#emitLive();
+    return request;
   }
 
   /** What co-authorship needs to know about keys. */
@@ -2167,8 +2223,9 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #emitLive(): void {
-    for (const listener of this.#liveListeners) listener();
+  /** Tell watchers something changed that isn't an event; with a notice, it may also show as a notification. */
+  #emitLive(notice?: Notice): void {
+    for (const listener of this.#liveListeners) listener(notice);
   }
 
   // ---------------------------------------------------------------- identity and keys

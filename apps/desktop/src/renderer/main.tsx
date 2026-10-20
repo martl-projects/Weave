@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { CoauthorRequest, KnockInfo, MembershipRequestInfo } from '@weave/node/client';
+import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
-import { AgentsOffer } from './agents.tsx';
+import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -366,7 +366,8 @@ function Shell() {
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   const { data: knocks } = useApi(() => api<KnockInfo[]>('knocks'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
-  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0);
+  const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
+  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
   // On a phone the places tree is a screen of its own; picking something closes it.
@@ -517,6 +518,7 @@ function App() {
         <>
           <Shell />
           <AgentsOffer />
+          <AgentAsks />
         </>
       )}
       <Toasts />

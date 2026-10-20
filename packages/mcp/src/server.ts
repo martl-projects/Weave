@@ -48,7 +48,13 @@ const chatPlace = (body: unknown): { channel: string } | { post: string } => {
 
 const json = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] });
 
-const failure = (error: unknown) => ({ content: [{ type: 'text' as const, text: `Error: ${(error as Error).message}` }], isError: true });
+const failure = (error: unknown) => {
+  const message = (error as Error).message;
+  // A refusal for lack of a permission: say how to ask for it, instead of leaving it there.
+  const kind = /may not sign (\S+?)[;:,]?(?:\s|$)/.exec(message)?.[1];
+  const hint = kind ? ` You can ask your person for it: weave_request_permission with kinds ["${kind}"] and a short reason; they allow it with one click in the Weave app's Inbox.` : '';
+  return { content: [{ type: 'text' as const, text: `Error: ${message}${hint}` }], isError: true };
+};
 
 /** Wraps a tool body so errors come back as tool errors the agent can read. */
 const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
@@ -66,7 +72,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
-Permissions: your person decides which kinds you may sign. A tool that needs more says so and names the command your person runs to allow it (for example weave.github.repo, weave.app); don't look for ways around it.
+Permissions: your person decides which kinds you may sign (weave_whoami lists yours). When a tool needs one you don't have (for example weave.github.repo, weave.app or weave.vote), ask with weave_request_permission, saying what for: your person allows it with one click in the Weave app's Inbox. Then try again. Don't look for ways around it.
 
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
@@ -482,6 +488,25 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
       inputSchema: { proposal: z.string().min(6), choice: z.enum(['yes', 'no', 'abstain']) },
     },
     run(async ({ proposal, choice }: { proposal: string; choice: 'yes' | 'no' | 'abstain' }) => backend.vote({ proposal, choice, as })),
+  );
+
+  // ---------------------------------------------------------------- asking for permissions
+
+  server.registerTool(
+    'weave_request_permission',
+    {
+      title: 'Ask for a permission',
+      description:
+        "Ask your person to let you sign more kinds of events (like weave.github.repo to link repositories, weave.app to publish apps, weave.vote to vote). The request waits in their Weave Inbox, where they allow or decline it; check weave_whoami afterwards. Say what you want to do with it.",
+      inputSchema: { kinds: z.array(z.string()).min(1).max(10), reason: z.string().max(300).describe('What for, in one sentence') },
+    },
+    run(async ({ kinds, reason }: { kinds: string[]; reason: string }) => {
+      if (!as) throw new Error('you act as the person themself, who may sign everything already');
+      const request = await backend.requestPermission({ as, kinds, reason });
+      return request.state === 'allowed'
+        ? { ...request, note: 'You have these already.' }
+        : { ...request, note: "Waiting in your person's Weave Inbox. Tell them what you asked for and why; check weave_whoami once they answer." };
+    }),
   );
 
   // ---------------------------------------------------------------- GitHub and project apps

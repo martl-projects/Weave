@@ -88,6 +88,32 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('lets an agent ask for a permission, which its person allows from the Inbox', async () => {
+    const { node, call, close } = await setup();
+    // Refused, and told how to ask.
+    const proposal = await node.propose({ project: 'Weave', title: 'Release v0.3' });
+    const refused = await call('weave_vote', { proposal: proposal.id, choice: 'yes' });
+    expect(refused.error).toMatch(/may not sign weave\.vote/);
+    expect(refused.error).toMatch(/weave_request_permission/);
+
+    const asked = (await call('weave_request_permission', { kinds: ['weave.vote', 'weave.post'], reason: 'to vote on the release proposal' })).data;
+    expect(asked).toMatchObject({ agent: 'forge', kinds: ['weave.vote'], state: 'pending', reason: 'to vote on the release proposal' });
+    // Asking again doesn't make a second request.
+    expect((await call('weave_request_permission', { kinds: ['weave.vote'], reason: 'again' })).data.id).toBe(asked.id);
+    expect((await node.permissionRequests()).map((r) => r.kinds)).toEqual([['weave.vote']]);
+
+    await node.answerPermission({ id: asked.id, allow: true });
+    expect(await node.permissionRequests()).toEqual([]);
+    expect((await call('weave_whoami')).data.actingAs.permissions).toContain('weave.vote');
+    expect((await call('weave_request_permission', { kinds: ['weave.vote'], reason: 'x' })).data.state).toBe('allowed');
+
+    // Declined ones change nothing.
+    const other = (await call('weave_request_permission', { kinds: ['weave.app'], reason: 'publish Gameshow' })).data;
+    await node.answerPermission({ id: other.id, allow: false });
+    expect((await call('weave_whoami')).data.actingAs.permissions).not.toContain('weave.app');
+    close();
+  });
+
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
     await call('weave_say', { space: 'Weave', text: 'build is green' });

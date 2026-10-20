@@ -32,7 +32,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -409,6 +409,18 @@ export interface MembershipRequestInfo {
 }
 
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
+/** One of your agents asking to sign more kinds of events; you allow or decline it in the Inbox. */
+export interface PermissionRequest {
+  id: string;
+  agent: string;
+  /** The kinds it asks for (only those it doesn't have yet). */
+  kinds: string[];
+  /** What it wants to do with them, in its words. */
+  reason: string;
+  time: string;
+  state: 'pending' | 'allowed' | 'declined';
+}
+
 export interface CoauthorRequest {
   post: { id: string; short: string; title: string; space?: SpaceRef };
   by: Actor;
@@ -782,6 +794,12 @@ export interface Backend {
   dismissHarnesses(): Promise<void>;
   /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships). */
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
+  /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
+  requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
+  /** Your agents' requests waiting for your answer. */
+  permissionRequests(): Promise<PermissionRequest[]>;
+  /** Allow (adds the kinds to the agent) or decline an agent's request. */
+  answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
   editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
@@ -939,7 +957,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
