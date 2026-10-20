@@ -5,6 +5,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
+import { AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -512,7 +513,12 @@ function App() {
   };
   return (
     <>
-      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : <Shell />}
+      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : (
+        <>
+          <Shell />
+          <AgentsOffer />
+        </>
+      )}
       <Toasts />
     </>
   );

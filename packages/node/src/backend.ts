@@ -48,6 +48,20 @@ export interface SpaceRef {
   name: string;
 }
 
+/** An agent harness on this computer (Claude Code, Codex…) and whether it knows about Weave. */
+export interface HarnessInfo {
+  id: string;
+  name: string;
+  /** The agent it acts as here. */
+  agent: string;
+  /** Its MCP config file. */
+  file: string;
+  /** Weave's entry there: none, this installation's, or another (an old or different setup). */
+  state: 'none' | 'ours' | 'other';
+  /** What to do so it notices a change. */
+  restart: string;
+}
+
 export interface AgentInfo {
   name: string;
   did: Did;
@@ -756,6 +770,16 @@ export interface Backend {
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
   coauthorRequests(): Promise<CoauthorRequest[]>;
+  /** Agent harnesses installed on this computer, and whether you've been asked once to connect them. */
+  harnesses(): Promise<{ offered: boolean; harnesses: HarnessInfo[] }>;
+  /**
+   * Tell a harness about Weave (on) or take Weave out of it (off): its MCP config gets an entry "weave"
+   * running this installation's CLI as the harness's agent, which is created if missing (it may post,
+   * reply, chat and react). The file is backed up first. Also marks the offer as answered.
+   */
+  connectHarness(input: { harness: string; on: boolean }): Promise<{ offered: boolean; harnesses: HarnessInfo[] }>;
+  /** Not now: don't offer connecting harnesses again (Keys & devices still can). */
+  dismissHarnesses(): Promise<void>;
   /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships). */
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
@@ -915,7 +939,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

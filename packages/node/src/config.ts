@@ -11,6 +11,8 @@ export interface Config {
   appFolders: Record<string, string>;
   /** Project id → the start command and folder the person approved (a fingerprint, see applaunch.ts). */
   approvedLaunches: Record<string, string>;
+  /** You've been asked once whether to tell your agent harnesses about Weave. */
+  agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
   githubApp?: { clientId: string; slug: string; name: string; owner: string };
 }
@@ -24,6 +26,7 @@ export function loadConfig(home: Home): Config {
     appFolders: stored.appFolders ?? {},
     approvedLaunches: stored.approvedLaunches ?? {},
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
+    ...(stored.agentsOffered ? { agentsOffered: true } : {}),
   };
 }
 

@@ -42,7 +42,7 @@ export interface PairingOffer {
 
 /** What a phone may call: what the desktop app may, minus key management, agents, local programs and phone pairing. */
 export const PHONE_METHODS: readonly RpcMethod[] = RPC_METHODS.filter(
-  (m) => !['addAgent', 'join', 'revokeKey', 'rotateRoot', 'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'pairPhone', 'phones', 'unpairPhone'].includes(m),
+  (m) => !['addAgent', 'join', 'revokeKey', 'rotateRoot', 'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'pairPhone', 'phones', 'unpairPhone', 'connectHarness'].includes(m),
 );
 
 /** What a pairing link carries. */

@@ -22,6 +22,7 @@ export type {
   FeedItem,
   FeedQuery,
   GitHubInfo,
+  HarnessInfo,
   HubGitHub,
   InProject,
   InSpace,

@@ -5,6 +5,7 @@ import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
 import { LinkedAccountsBox } from './github.tsx';
+import { AgentAppsBox } from './agents.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -240,6 +241,7 @@ export function KeysView() {
         <p className="small">Each computer signs with its own key. To use Weave on another computer, choose “I already use Weave” there and type your words; don't copy your Weave folder.</p>
       </fieldset>
       <PhonesBox />
+      <AgentAppsBox />
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (
         <WordsDialog

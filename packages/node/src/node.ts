@@ -211,6 +211,7 @@ import {
   type ChatInfo,
   type CoauthorRequest,
   type GitHubInfo,
+  type HarnessInfo,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -259,12 +260,13 @@ import {
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
+import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
@@ -349,6 +351,14 @@ export class WeaveNode implements Backend {
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
   #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
+  /** Where harness configs live (your user folder; tests use a temporary one). */
+  harnessHome = homedir();
+  /** How a harness starts this installation's CLI: this process's own program and script (Electron's Node in the packaged app). */
+  mcpLaunch: () => McpLaunch = () => ({
+    command: process.execPath,
+    args: [resolvePath(process.argv[1] ?? ''), ...(this.home.dir === resolveHome().dir ? [] : ['--home', this.home.dir])],
+    env: process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : ({} as Record<string, string>),
+  });
   /** How this node reaches GitHub (tests put a stand-in here). */
   githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
   #githubLogin?: GitHubLogin;
@@ -560,6 +570,40 @@ export class WeaveNode implements Backend {
       items.push(this.#toItem(decoded));
     }
     return items.slice(-(query.limit ?? 50));
+  }
+
+  // ---------------------------------------------------------------- agent harnesses
+
+  /** Harnesses, looked for under harnessHome only (on Windows, Claude Desktop's %APPDATA% too, unless it's a test folder). */
+  #harnessList() {
+    return harnessesIn(this.harnessHome, process.platform, this.harnessHome === homedir() ? process.env.APPDATA : joinPath(this.harnessHome, 'AppData', 'Roaming'));
+  }
+
+  async harnesses(): Promise<{ offered: boolean; harnesses: HarnessInfo[] }> {
+    const launch = this.mcpLaunch();
+    return {
+      offered: this.config.agentsOffered === true,
+      harnesses: this.#harnessList()
+        .filter((h) => h.found)
+        .map((h) => ({ id: h.id, name: h.name, agent: h.agent, file: h.file, state: entryState(h, launch), restart: h.restart })),
+    };
+  }
+
+  async connectHarness(input: { harness: string; on: boolean }): Promise<{ offered: boolean; harnesses: HarnessInfo[] }> {
+    const h = this.#harnessList().find((x) => x.id === input.harness && x.found);
+    if (!h) throw new Error(`${input.harness} isn't installed on this computer`);
+    // An AppImage runs from a mount that moves every start: an entry pointing there would break.
+    if (input.on && process.env.APPIMAGE) throw new Error(`the AppImage can't be started by ${h.name} yet: add Weave from a source checkout (see the README's Agents section)`);
+    if (input.on && !this.#agents.some((a) => a.name === h.agent)) await this.addAgent(h.agent, ['weave.post', 'weave.reply', 'weave.msg', 'weave.react']);
+    writeEntry(h, input.on ? this.mcpLaunch() : null);
+    await this.dismissHarnesses();
+    return this.harnesses();
+  }
+
+  async dismissHarnesses(): Promise<void> {
+    if (this.config.agentsOffered) return;
+    this.config = { ...this.config, agentsOffered: true };
+    saveConfig(this.home, this.config);
   }
 
   async addAgent(name: string, permissions: string[]): Promise<AgentInfo> {
