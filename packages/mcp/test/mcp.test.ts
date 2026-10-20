@@ -74,7 +74,7 @@ describe('Weave over MCP', () => {
     };
 
     const refused = await call('weave_link_repo', { space: 'Weave', repo: 'martl/weave' });
-    expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it with: weave agent can forge .*weave\.github\.repo/);
+    expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.github\.repo/);
     writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));
     const app = await call('weave_app_publish', { project: 'Weave', file: join(node.home.dir, 'weave.app.json') });
     expect(app.error).toMatch(/may not sign weave\.app/);

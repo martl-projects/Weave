@@ -174,10 +174,72 @@ function WordsDialog({ title, intro, since, encryption, onSubmit, onClose }: { t
   );
 }
 
+/** The kinds most agents need, in plain words. Other kinds an agent already has are kept as they are. */
+const AGENT_KINDS: { kind: string; label: string }[] = [
+  { kind: 'weave.post', label: 'Post' },
+  { kind: 'weave.reply', label: 'Reply' },
+  { kind: 'weave.msg', label: 'Chat' },
+  { kind: 'weave.react', label: 'React' },
+  { kind: 'weave.issue.*', label: 'Open and work on issues' },
+  { kind: 'weave.vote', label: 'Vote' },
+  { kind: 'weave.post.coauthor', label: 'Confirm co-authorship' },
+  { kind: 'weave.post.edit', label: 'Edit its posts' },
+  { kind: 'weave.github.repo', label: 'Link GitHub repositories' },
+  { kind: 'weave.github.account', label: 'Give spaces your GitHub account' },
+  { kind: 'weave.app', label: 'Publish apps and releases' },
+];
+
+/** What an agent may sign: checkboxes for the common kinds, saved with updateAgent. */
+function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: string; permissions: string[] }; onClose(): void }) {
+  const [chosen, setChosen] = useState(() => new Set(agent.permissions));
+  const others = agent.permissions.filter((p) => !AGENT_KINDS.some((k) => k.kind === p));
+  const toggle = (kind: string, on: boolean) =>
+    setChosen((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(kind);
+      else next.delete(kind);
+      return next;
+    });
+  return (
+    <Modal title={`What ${agent.name} may do`} onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          const permissions = [...AGENT_KINDS.map((k) => k.kind).filter((k) => chosen.has(k)), ...others];
+          const done = await attempt(() => api('updateAgent', { name: agent.name, permissions }).then(() => (bump(), true)), `Saved what ${agent.name} may do`);
+          if (done) onClose();
+        }}
+      >
+        <p className="small">Everything {agent.name} writes is signed with its own key and shows as “you · {agent.name}”. It can only sign what you tick here.</p>
+        {AGENT_KINDS.map(({ kind, label }) => (
+          <div className="field-row" key={kind}>
+            <input id={`perm-${kind}`} type="checkbox" checked={chosen.has(kind)} onChange={(e) => toggle(kind, e.target.checked)} />
+            <label htmlFor={`perm-${kind}`} title={kind}>
+              {label}
+            </label>
+          </div>
+        ))}
+        {others.length > 0 && (
+          <p className="small">
+            It keeps these too: <code>{others.join(', ')}</code>
+          </p>
+        )}
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default">Save</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
-  const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' }>();
+  const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
   if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
   return (
     <Page title={<><Icon name="lock" /> Keys &amp; devices</>}>
@@ -227,9 +289,12 @@ export function KeysView() {
                 <td>
                   {k.revokedAfter === undefined &&
                     (k.role === 'agent' ? (
-                      <AsyncButton onClick={async () => (await ask(`Revoke the agent ${k.name}? It can't sign anything from now on.`, 'Revoke')) && attempt(() => api('revokeKey', { key: k.did }).then(bump), `${k.name} is revoked`)}>
-                        Revoke
-                      </AsyncButton>
+                      <>
+                        {k.name && k.permissions && <button onClick={() => setDialog({ kind: 'permissions', key: { ...k, name: k.name!, permissions: k.permissions! } })}>Permissions…</button>}{' '}
+                        <AsyncButton onClick={async () => (await ask(`Revoke the agent ${k.name}? It can't sign anything from now on.`, 'Revoke')) && attempt(() => api('revokeKey', { key: k.did }).then(bump), `${k.name} is revoked`)}>
+                          Revoke
+                        </AsyncButton>
+                      </>
                     ) : (
                       <button onClick={() => setDialog({ kind: 'revoke', key: k })}>{k.current ? 'Replace…' : 'Revoke…'}</button>
                     ))}
@@ -256,6 +321,7 @@ export function KeysView() {
           onClose={() => setDialog(undefined)}
         />
       )}
+      {dialog?.kind === 'permissions' && <AgentPermissionsDialog agent={dialog.key} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rotate' && (
         <WordsDialog
           title="Rotate keys"

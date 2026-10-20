@@ -562,7 +562,7 @@ export class WeaveNode implements Backend {
   #agentMay(name: string, kind: string): void {
     const agent = this.#agents.find((a) => a.name === name);
     if (!agent) throw new Error(noAgent(name, this.#agents.map((a) => a.name)));
-    if (!permits(agent.permissions, kind)) throw new Error(`agent "${name}" may not sign ${kind}; its person can allow it with: weave agent can ${name} ${[...agent.permissions, kind].join(',')}`);
+    if (!permits(agent.permissions, kind)) throw new Error(`agent "${name}" may not sign ${kind}; its person can allow it in Keys & devices in the Weave app, or with: weave agent can ${name} ${[...agent.permissions, kind].join(',')}`);
   }
 
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
@@ -2322,6 +2322,7 @@ export class WeaveNode implements Backend {
     for (const grant of this.replica.authority.grantsOf(me)) {
       const signer = grant.subject;
       const head = this.replica.store.head(signer);
+      const held = grant.role === 'agent' ? this.#agents.find((a) => a.did === signer) : undefined;
       out.push({
         did: signer,
         role: grant.role,
@@ -2331,6 +2332,7 @@ export class WeaveNode implements Backend {
         events: head?.seq ?? 0,
         ...(head ? { lastTime: head.time } : {}),
         forked: this.replica.forks.has(signer),
+        ...(held ? { permissions: held.permissions } : {}),
       });
     }
     return out.sort((a, b) => Number(b.current) - Number(a.current) || a.role.localeCompare(b.role) || (a.name ?? '').localeCompare(b.name ?? ''));

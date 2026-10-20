@@ -105,6 +105,8 @@ export interface KeyInfo {
   events: number;
   lastTime?: string;
   forked: boolean;
+  /** For agents whose key this node holds: the kinds it may sign (updateAgent changes them). */
+  permissions?: string[];
 }
 
 export interface Status {
