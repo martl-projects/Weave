@@ -515,3 +515,11 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 /* ---------- co-authors */
 .coauthors .coauthor.asked, .coauthors .coauthor.declined { color: #808080; }
 .coauthors .agent-tag { margin-left: 3px; }
+
+/* ---------- GitHub */
+.github-code .user-code { font: bold 28px/1.4 monospace; letter-spacing: 4px; text-align: center; padding: 8px; margin: 8px 0; background: #fff; cursor: copy; user-select: all; }
+.repo-banner { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 4px; background: #ffffe1; border: 1px solid #808080; }
+.repo-banner > .icon { width: 16px; height: 16px; }
+.error-text { color: #900; }
+.hub-repos { margin: 4px 0; padding-left: 18px; }
+.hub-repo-picker { max-height: 240px; overflow: auto; padding: 4px; background: #fff; }

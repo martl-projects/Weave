@@ -122,6 +122,46 @@ export interface SpaceInfo extends SpaceRef {
   hiddenFromHome?: true;
 }
 
+export interface GitHubInfo {
+  /** This copy of Weave knows the Weave GitHub app (it has its client ID). */
+  available: boolean;
+  /** Where to install the Weave app on repositories, so they can be linked. */
+  installUrl: string;
+  /** Who you're signed in as on this device. */
+  login?: string;
+  /** A sign-in waiting for you to enter the code on GitHub. */
+  pending?: { userCode: string; verificationUri: string; expires: string };
+  /** Why the last sign-in didn't work. */
+  error?: string;
+}
+
+export interface RepoInfo {
+  /** owner/name */
+  repo: string;
+  url: string;
+  /** Only readers of this board, not the whole project. */
+  board?: string;
+  /** Who linked it; their node invites and removes people. */
+  by: Actor;
+  /** You linked it: your GitHub sign-in keeps it in step. */
+  mine?: true;
+  /** For your own: when it was last brought in step, and what went wrong if it didn't. */
+  synced?: string;
+  problem?: string;
+}
+
+export interface SpaceRepos {
+  repos: RepoInfo[];
+  /** You may link repos here (owner or maintainer). */
+  canLink: boolean;
+  /** The GitHub account you gave this space. */
+  shared?: string;
+  /** For whoever linked a repo: people it should include who haven't given their GitHub account. */
+  missing?: Actor[];
+  /** For whoever linked a repo: members and the accounts they gave. */
+  accounts?: Array<{ who: Actor; login: string }>;
+}
+
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
@@ -445,6 +485,16 @@ export interface Profile {
   posts: number;
   /** Projects they show publicly. */
   projects: PublicProject[];
+  /** The GitHub account they show on their hub, and the repositories they chose. */
+  github?: HubGitHub;
+}
+
+export interface HubGitHub {
+  login: string;
+  url: string;
+  repos: string[];
+  /** A gist of that account names their did. False when it doesn't (then it isn't shown); undefined when GitHub couldn't be asked. */
+  verified?: boolean;
 }
 
 export interface ProfileInput {
@@ -621,6 +671,26 @@ export interface Backend {
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
 
+  // GitHub: repositories that follow a space's membership
+  /** Your GitHub sign-in on this device, and a sign-in waiting for its code. */
+  github(): Promise<GitHubInfo>;
+  /** Start signing in to GitHub: a code to enter on github.com. Ask github() until it's done. */
+  connectGithub(): Promise<GitHubInfo>;
+  /** Forget the GitHub sign-in on this device. Repos you linked stop following their spaces until you connect again. */
+  disconnectGithub(): Promise<GitHubInfo>;
+  /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
+  githubRepos(): Promise<string[]>;
+  /** A space's repositories, and whether you gave it your GitHub account. */
+  spaceRepos(space: string): Promise<SpaceRepos>;
+  /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
+  linkRepo(input: { space: string; repo: string; board?: string; on: boolean }): Promise<SpaceRepos>;
+  /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
+  shareGithub(input: { space: string; on: boolean }): Promise<SpaceRepos>;
+  /** Your own public repositories on GitHub, to choose from for your hub. */
+  githubPublicRepos(): Promise<string[]>;
+  /** Show your GitHub account (proven by a public gist naming your did) and some of its repos on your hub, or (on: false) stop. */
+  showGithubOnHub(input: { on: boolean; repos?: string[] }): Promise<Profile>;
+
   // communities
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
   community(ref: string): Promise<CommunityInfo>;
@@ -785,6 +855,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'github', 'connectGithub', 'disconnectGithub', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'githubPublicRepos', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

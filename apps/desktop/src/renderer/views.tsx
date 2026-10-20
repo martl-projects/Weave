@@ -9,6 +9,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
+import { HubGitHubBox, RepoBanner, RepoSettings } from './github.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -155,6 +156,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           )}
         </header>
         <SupportBox did={p.did} name={name} me={p.me} />
+        <HubGitHubBox profile={p} />
         {p.me && <MyProjects name={name} />}
         {!p.me && p.projects.length > 0 && (
           <section className="space-box">
@@ -496,6 +498,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
           </button>
         </span>
       </header>
+      <RepoBanner space={project} />
       <div className="project-split">
         <div className={`hero${page?.banner ? ' has-banner' : ''}`}>
           {page?.banner && <BlobImage src={page.banner} className="hero-bg" />}
@@ -875,6 +878,7 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
           </div>
         ))}
       </fieldset>
+      <RepoSettings space={project} />
       <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />
     </Page>
   );
@@ -953,10 +957,11 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
   );
 }
 
-/** A group's settings: for now, who owns it, leaving and closing. */
+/** A group's settings: its GitHub repositories, who owns it, leaving and closing. */
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
+      <RepoSettings space={group} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
   );
@@ -1030,6 +1035,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
           );
         })}
       </fieldset>
+      <RepoSettings space={community} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
   );

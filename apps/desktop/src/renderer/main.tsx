@@ -10,6 +10,7 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
 import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, Sprite, Toasts, WeaveMark } from './ui.tsx';
+import { RepoBanner } from './github.tsx';
 import {
   CommunityAbout,
   GroupSettings,
@@ -222,6 +223,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
             </button>
           </span>
         </header>
+        <RepoBanner space={space} />
         <ChatView space={space} channel={channel} meDid={me.did} meName={me.name} members={list} />
       </section>
     );

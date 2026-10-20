@@ -21,6 +21,8 @@ export type {
   EdgeInput,
   FeedItem,
   FeedQuery,
+  GitHubInfo,
+  HubGitHub,
   InProject,
   InSpace,
   IssueInfo,
@@ -39,15 +41,18 @@ export type {
   PublishInput,
   ReactionInfo,
   ReplyInfo,
+  RepoInfo,
   RpcMethod,
   Social,
   SpaceInfo,
   SpaceRef,
+  SpaceRepos,
   Status,
   ThreadInfo,
   Whoami,
 } from './backend.ts';
 export { PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
+export { checkGistProof, GITHUB_CLIENT_ID, GitHub, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { ApiClient, connectDaemon, type DaemonInfo } from './client.ts';
 export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';

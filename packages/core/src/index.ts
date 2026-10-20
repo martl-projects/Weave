@@ -202,3 +202,18 @@ export {
   type Grantee,
 } from './access.ts';
 export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
+export {
+  accountsOf,
+  githubProofText,
+  isLogin,
+  isRepoName,
+  KIND_GITHUB_ACCOUNT,
+  KIND_GITHUB_ADDED,
+  KIND_GITHUB_PUBLIC,
+  KIND_GITHUB_REPO,
+  planSync,
+  reposOf,
+  type RepoAccess,
+  type RepoLink,
+  type SyncPlan,
+} from './github.ts';

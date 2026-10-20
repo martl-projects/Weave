@@ -1,0 +1,180 @@
+/*
+ * GitHub, as seen from a Weave node: signing in with GitHub's device flow
+ * (a code the person approves on github.com; no server, no secret, only the
+ * public client ID of the "Weave" GitHub App), and the few repository calls
+ * group access needs. The app may only manage collaborators, and only on the
+ * repositories its owner installed it on.
+ *
+ * `fetch` can be replaced, so tests run against a stand-in GitHub.
+ */
+
+/** The public client ID of the "Weave" GitHub App (app id 5393663; not a secret). WEAVE_GITHUB_CLIENT_ID overrides it, e.g. for a test app. */
+export const GITHUB_CLIENT_ID = process.env.WEAVE_GITHUB_CLIENT_ID ?? 'Iv23liJqCYJwODDieXu5';
+
+/** Where people install the app on their repositories (its public page, github.com/apps/<slug>). */
+export const GITHUB_APP_SLUG = process.env.WEAVE_GITHUB_APP_SLUG ?? 'weave-connect';
+export const githubInstallUrl = (slug = GITHUB_APP_SLUG) => `https://github.com/apps/${slug}/installations/new`;
+
+const API = 'https://api.github.com';
+
+export type Fetch = typeof fetch;
+
+export interface DeviceCode {
+  deviceCode: string;
+  /** What the person types on github.com/login/device, like WDJB-MJHT. */
+  userCode: string;
+  verificationUri: string;
+  /** Seconds between polls. */
+  interval: number;
+  expiresAt: string;
+}
+
+export interface GitHubUser {
+  login: string;
+  id: number;
+}
+
+/** Start signing in: GitHub hands out a code for the person to approve. */
+export async function startDeviceFlow(clientId: string, fetchImpl: Fetch = fetch): Promise<DeviceCode> {
+  if (!clientId) throw new Error("GitHub isn't set up in this copy of Weave yet (no GitHub App client ID)");
+  const res = await fetchImpl('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: clientId }),
+  });
+  const data = (await res.json()) as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error?: string };
+  if (!data.device_code || !data.user_code) throw new Error(`GitHub didn't start the sign-in${data.error ? `: ${data.error}` : ''}`);
+  return {
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUri: data.verification_uri ?? 'https://github.com/login/device',
+    interval: data.interval ?? 5,
+    expiresAt: new Date(Date.now() + (data.expires_in ?? 900) * 1000).toISOString(),
+  };
+}
+
+/** Wait until the person approved the code; resolves to the access token. */
+export async function finishDeviceFlow(clientId: string, code: DeviceCode, fetchImpl: Fetch = fetch, signal?: AbortSignal, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<string> {
+  let interval = code.interval;
+  while (Date.now() < Date.parse(code.expiresAt)) {
+    if (signal?.aborted) throw new Error('sign-in cancelled');
+    await sleep(interval * 1000);
+    const res = await fetchImpl('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, device_code: code.deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
+    });
+    const data = (await res.json()) as { access_token?: string; error?: string; interval?: number };
+    if (data.access_token) return data.access_token;
+    if (data.error === 'authorization_pending') continue;
+    if (data.error === 'slow_down') {
+      interval = data.interval ?? interval + 5;
+      continue;
+    }
+    throw new Error(data.error === 'access_denied' ? 'the sign-in was declined on GitHub' : data.error === 'expired_token' ? 'the code expired: start again' : `GitHub sign-in failed: ${data.error ?? res.status}`);
+  }
+  throw new Error('the code expired: start again');
+}
+
+/** The calls group access needs, with a signed-in person's token. */
+export class GitHub {
+  readonly #token: string;
+  readonly #fetch: Fetch;
+
+  constructor(token: string, fetchImpl: Fetch = fetch) {
+    this.#token = token;
+    this.#fetch = fetchImpl;
+  }
+
+  async #call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; data: T }> {
+    const res = await this.#fetch(`${API}${path}`, {
+      method,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${this.#token}`,
+        'x-github-api-version': '2022-11-28',
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const text = await res.text();
+    const data = (text ? JSON.parse(text) : null) as T;
+    if (res.status >= 400) {
+      const message = (data as { message?: string } | null)?.message;
+      throw new Error(res.status === 401 ? 'GitHub no longer accepts this sign-in: connect GitHub again' : `GitHub said ${res.status}${message ? `: ${message}` : ''}`);
+    }
+    return { status: res.status, data };
+  }
+
+  async user(): Promise<GitHubUser> {
+    const { data } = await this.#call<{ login: string; id: number }>('GET', '/user');
+    return { login: data.login, id: data.id };
+  }
+
+  /** Repositories the Weave app is installed on and this person administers: the ones it can manage. */
+  async repos(): Promise<string[]> {
+    const { data } = await this.#call<{ installations: Array<{ id: number }> }>('GET', '/user/installations?per_page=100');
+    const out: string[] = [];
+    for (const installation of data.installations) {
+      const { data: page } = await this.#call<{ repositories: Array<{ full_name: string; permissions?: { admin?: boolean } }> }>('GET', `/user/installations/${installation.id}/repositories?per_page=100`);
+      for (const repo of page.repositories) if (repo.permissions?.admin !== false) out.push(repo.full_name);
+    }
+    return [...new Set(out)].sort();
+  }
+
+  /** Who has access now, and who was invited and hasn't accepted yet (lowercase logins). */
+  async access(repo: string): Promise<{ collaborators: Set<string>; invited: Map<string, number> }> {
+    const { data: people } = await this.#call<Array<{ login: string }>>('GET', `/repos/${repo}/collaborators?affiliation=direct&per_page=100`);
+    const { data: invites } = await this.#call<Array<{ id: number; invitee: { login: string } | null }>>('GET', `/repos/${repo}/invitations?per_page=100`);
+    return {
+      collaborators: new Set(people.map((p) => p.login.toLowerCase())),
+      invited: new Map(invites.filter((i) => i.invitee).map((i) => [i.invitee!.login.toLowerCase(), i.id])),
+    };
+  }
+
+  /** A public gist with one file (the proof behind a GitHub account on a hub). */
+  async createGist(description: string, filename: string, content: string): Promise<{ id: string; url: string }> {
+    const { data } = await this.#call<{ id: string; html_url: string }>('POST', '/gists', { description, public: true, files: { [filename]: { content } } });
+    return { id: data.id, url: data.html_url };
+  }
+
+  async deleteGist(id: string): Promise<void> {
+    await this.#call('DELETE', `/gists/${encodeURIComponent(id)}`);
+  }
+
+  /** Someone's own public repositories, most recently pushed first. */
+  async publicRepos(login: string): Promise<string[]> {
+    const { data } = await this.#call<Array<{ full_name: string; fork: boolean }>>('GET', `/users/${encodeURIComponent(login)}/repos?type=owner&sort=pushed&per_page=100`);
+    return data.filter((r) => !r.fork).map((r) => r.full_name);
+  }
+
+  /** Give someone read access; GitHub sends them an invitation to accept. */
+  async invite(repo: string, login: string): Promise<void> {
+    await this.#call('PUT', `/repos/${repo}/collaborators/${encodeURIComponent(login)}`, { permission: 'pull' });
+  }
+
+  /** Take access away again: the collaborator, or the invitation they haven't accepted. */
+  async remove(repo: string, login: string, invitation?: number): Promise<void> {
+    if (invitation !== undefined) await this.#call('DELETE', `/repos/${repo}/invitations/${invitation}`);
+    else await this.#call('DELETE', `/repos/${repo}/collaborators/${encodeURIComponent(login)}`);
+  }
+}
+
+/**
+ * Whether a gist proves a GitHub account belongs to a Weave person: it must
+ * be owned by that account and name the person's did. Anyone can check this,
+ * without signing in. Undefined when GitHub couldn't be asked.
+ */
+export async function checkGistProof(gist: string, login: string, did: string, fetchImpl: Fetch = fetch): Promise<boolean | undefined> {
+  try {
+    const res = await fetchImpl(`${API}/gists/${encodeURIComponent(gist)}`, { headers: { accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10_000) });
+    if (res.status === 404) return false;
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { owner?: { login?: string }; files?: Record<string, { content?: string }> };
+    if (data.owner?.login?.toLowerCase() !== login.toLowerCase()) return false;
+    return Object.values(data.files ?? {}).some((f) => f.content?.includes(did));
+  } catch {
+    return undefined;
+  }
+}

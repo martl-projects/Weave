@@ -1,5 +1,16 @@
 import {
   accessOf,
+  accountsOf,
+  canManage as mayManageSpace,
+  isLogin,
+  isRepoName,
+  KIND_GITHUB_ACCOUNT,
+  KIND_GITHUB_ADDED,
+  KIND_GITHUB_PUBLIC,
+  githubProofText,
+  KIND_GITHUB_REPO,
+  planSync,
+  reposOf,
   b64u,
   BLOB_TYPES,
   boardKeyFor,
@@ -198,6 +209,10 @@ import {
   type BoardInfo,
   type ChatInfo,
   type CoauthorRequest,
+  type GitHubInfo,
+  type HubGitHub,
+  type RepoInfo,
+  type SpaceRepos,
   type MembershipRequestInfo,
   type ChannelInfo,
   type CommunityInfo,
@@ -240,9 +255,10 @@ import {
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
-import { resolveHome, type Home } from './home.ts';
+import { readJson, resolveHome, writeJson, type Home } from './home.ts';
+import { checkGistProof, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
@@ -263,6 +279,13 @@ export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
 export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 const SELF_SCOPE = 'self';
+
+/** A GitHub sign-in waiting for its code, or why the last one failed. */
+interface GitHubLogin {
+  code?: DeviceCode;
+  error?: string;
+  cancel: AbortController;
+}
 
 /** An event as this node can read it, before names are resolved. */
 interface Decoded {
@@ -316,6 +339,13 @@ export class WeaveNode implements Backend {
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
   #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
+  /** How this node reaches GitHub (tests put a stand-in here). */
+  githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+  #githubLogin?: GitHubLogin;
+  /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
+  #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
+  /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
+  #gistProofs = new Map<string, Promise<boolean | undefined>>();
   /** The time, in milliseconds (tests move it forward to reach renewals). */
   clock: () => number = Date.now;
   /** Paired phones using this node remotely (see remote.ts). */
@@ -1298,7 +1328,7 @@ export class WeaveNode implements Backend {
    */
   async reconcile(): Promise<number> {
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
@@ -1316,6 +1346,241 @@ export class WeaveNode implements Backend {
       for (const [groupId, dids] of joins) {
         this.#admitAll(project, this.#spaces.get(groupId)!, dids);
         changed += dids.length;
+      }
+    }
+    return changed;
+  }
+
+  // ---------------------------------------------------------------- GitHub: repos that follow a space
+
+  get #githubFile(): string {
+    return joinPath(this.home.dir, 'github.json');
+  }
+
+  /** The GitHub sign-in on this device (kept in the home, never in a log). */
+  #githubAuth(): { token: string; login: string } | undefined {
+    const saved = readJson<{ token?: string; login?: string }>(this.#githubFile);
+    return saved?.token && saved.login ? { token: saved.token, login: saved.login } : undefined;
+  }
+
+  async github(): Promise<GitHubInfo> {
+    const auth = this.#githubAuth();
+    const login = this.#githubLogin;
+    return {
+      available: !!this.githubSetup.clientId,
+      installUrl: githubInstallUrl(),
+      ...(auth ? { login: auth.login } : {}),
+      ...(login?.code ? { pending: { userCode: login.code.userCode, verificationUri: login.code.verificationUri, expires: login.code.expiresAt } } : {}),
+      ...(login?.error ? { error: login.error } : {}),
+    };
+  }
+
+  async connectGithub(): Promise<GitHubInfo> {
+    const { clientId, fetch: fetchImpl, sleep } = this.githubSetup;
+    this.#githubLogin?.cancel.abort();
+    const cancel = new AbortController();
+    const code = await startDeviceFlow(clientId, fetchImpl);
+    const login: GitHubLogin = { code, cancel };
+    this.#githubLogin = login;
+    // Wait for the person to enter the code on GitHub, in the background; github() tells how it went.
+    void finishDeviceFlow(clientId, code, fetchImpl, cancel.signal, sleep)
+      .then(async (token) => {
+        const user = await new GitHub(token, fetchImpl).user();
+        writeJson(this.#githubFile, { token, login: user.login, id: user.id, connected: new Date(this.clock()).toISOString() });
+        this.#githubSynced.clear();
+        if (this.#githubLogin === login) this.#githubLogin = undefined;
+      })
+      .catch((error: Error) => {
+        if (this.#githubLogin === login) this.#githubLogin = cancel.signal.aborted ? undefined : { error: error.message, cancel };
+      });
+    return this.github();
+  }
+
+  async disconnectGithub(): Promise<GitHubInfo> {
+    this.#githubLogin?.cancel.abort();
+    this.#githubLogin = undefined;
+    rmSync(this.#githubFile, { force: true });
+    return this.github();
+  }
+
+  async githubRepos(): Promise<string[]> {
+    const auth = this.#githubAuth();
+    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
+    return new GitHub(auth.token, this.githubSetup.fetch).repos();
+  }
+
+  async spaceRepos(ref: string): Promise<SpaceRepos> {
+    const space = this.#space(ref);
+    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
+    const state = this.#state(space);
+    const entries = this.#entries(space);
+    const me = this.identity.author;
+    const repos = reposOf(entries, (did) => mayManageSpace(state, did));
+    const accounts = accountsOf(entries);
+    const out: SpaceRepos = {
+      repos: repos.map((r): RepoInfo => {
+        const synced = r.by === me ? this.#githubSynced.get(r.repo.toLowerCase()) : undefined;
+        return {
+          repo: r.repo,
+          url: `https://github.com/${r.repo}`,
+          ...(r.board ? { board: r.board } : {}),
+          by: this.#actor(r.by, r.by),
+          ...(r.by === me ? { mine: true as const } : {}),
+          ...(synced ? { synced: new Date(synced.at).toISOString() } : {}),
+          ...(synced?.problem ? { problem: synced.problem } : {}),
+        };
+      }),
+      canLink: mayManageSpace(state, me),
+      ...(accounts.has(me) ? { shared: accounts.get(me)! } : {}),
+    };
+    const mine = repos.filter((r) => r.by === me);
+    if (mine.length) {
+      const wanted = new Set(mine.flatMap((r) => this.#repoReaders(space, state, entries, r.board)));
+      wanted.delete(me);
+      out.missing = [...wanted].filter((did) => !accounts.has(did)).map((did) => this.#actor(did, did));
+      out.accounts = [...accounts].filter(([did]) => wanted.has(did)).map(([did, login]) => ({ who: this.#actor(did, did), login }));
+    }
+    return out;
+  }
+
+  async linkRepo(input: { space: string; repo: string; board?: string; on: boolean }): Promise<SpaceRepos> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
+    const state = this.#state(space);
+    if (!mayManageSpace(state, this.identity.author)) throw new Error(`only the ${space.kind === 'group' ? 'owner' : space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can link repositories`);
+    const repo = input.repo.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
+    if (!isRepoName(repo)) throw new Error('a repository looks like owner/name');
+    const body: Record<string, Json> = { repo, on: input.on };
+    if (input.on) {
+      const board = input.board?.trim();
+      if (board) {
+        if (space.kind !== 'project') throw new Error('only projects have boards');
+        if (!boardsOf('project', this.#entries(space), state.maintainers).some((b) => b.name === board)) throw new Error(`${space.name} has no board "${board}"`);
+        body.board = board;
+      }
+      const match = (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
+      if (!match) throw new Error(`the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
+      body.repo = match;
+    }
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_GITHUB_REPO, body }));
+    this.#githubSynced.delete(repo.toLowerCase());
+    await this.#syncGithub();
+    return this.spaceRepos(space.id);
+  }
+
+  async shareGithub(input: { space: string; on: boolean }): Promise<SpaceRepos> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
+    if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
+    const auth = input.on ? this.#githubAuth() : undefined;
+    if (input.on && !auth) throw new Error('connect GitHub first, so Weave knows your account');
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, on: true } : { on: false } }));
+    return this.spaceRepos(space.id);
+  }
+
+  async githubPublicRepos(): Promise<string[]> {
+    const auth = this.#githubAuth();
+    if (!auth) throw new Error('connect GitHub first');
+    return new GitHub(auth.token, this.githubSetup.fetch).publicRepos(auth.login);
+  }
+
+  async showGithubOnHub(input: { on: boolean; repos?: string[] }): Promise<Profile> {
+    const me = this.identity.author;
+    const before = this.#hubGithub(me);
+    if (!input.on) {
+      if (before) this.replica.append(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { on: false } });
+      return this.profile();
+    }
+    const auth = this.#githubAuth();
+    if (!auth) throw new Error('connect GitHub first');
+    const repos = [...new Set((input.repos ?? before?.repos ?? []).map((r) => r.trim()))].filter(isRepoName).slice(0, 12);
+    // The proof: a public gist of this account naming this did. Made once, kept while the account stays the same.
+    let gist = before && before.login.toLowerCase() === auth.login.toLowerCase() ? before.gist : undefined;
+    if (!gist) gist = (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login))).id;
+    this.replica.append(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: auth.login, gist, repos, on: true } });
+    return this.profile();
+  }
+
+  /** The GitHub account someone shows on their hub (latest word), not checked yet. */
+  #hubGithub(did: Did): { login: string; gist: string; repos: string[] } | undefined {
+    const last = this.replica.events((e) => e.author === did && e.kind === KIND_GITHUB_PUBLIC).sort((a, b) => a.time.localeCompare(b.time)).at(-1);
+    const body = (last?.body ?? {}) as Record<string, unknown>;
+    if (!last || body.on === false || !isLogin(body.login) || typeof body.gist !== 'string' || !/^[A-Za-z0-9]{1,64}$/.test(body.gist)) return undefined;
+    return { login: body.login, gist: body.gist, repos: Array.isArray(body.repos) ? body.repos.filter(isRepoName).slice(0, 12) : [] };
+  }
+
+  /** Who a repo linked to a space should include: its members, or in a project the readers of one board. */
+  #repoReaders(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
+    if (!board || space.kind !== 'project') return [...state.members.keys()];
+    return readersOf(board, state, this.#access(space, state, entries));
+  }
+
+  /**
+   * Bring the repos this person linked in step with their spaces: invite
+   * members who gave their GitHub account, take access away from those Weave
+   * added who left (or whose repo was unlinked). Each repo at most every few
+   * minutes unless something changed; without a GitHub sign-in it waits.
+   */
+  async #syncGithub(): Promise<number> {
+    const auth = this.#githubAuth();
+    const me = this.identity.author;
+    // Every repo this person linked, with everyone it should include.
+    const wanted = new Map<string, { repo: string; logins: Set<string> }>();
+    for (const space of this.#spaces.values()) {
+      if (space.kind === 'direct') continue;
+      const state = this.#state(space);
+      if (!mayManageSpace(state, me)) continue;
+      const entries = this.#entries(space);
+      const links = reposOf(entries, (did) => mayManageSpace(state, did)).filter((r) => r.by === me);
+      if (!links.length) continue;
+      const accounts = accountsOf(entries);
+      for (const link of links) {
+        const key = link.repo.toLowerCase();
+        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>() };
+        for (const did of this.#repoReaders(space, state, entries, link.board)) if (did !== me && accounts.has(did)) entry.logins.add(accounts.get(did)!.toLowerCase());
+        wanted.set(key, entry);
+      }
+    }
+    // Who Weave gave access, per repo: the latest word per repo and login.
+    const added = new Map<string, { repo: string; people: Map<string, boolean> }>();
+    for (const b of this.#selfBodies(KIND_GITHUB_ADDED)) {
+      if (!isRepoName(b.repo) || typeof b.login !== 'string') continue;
+      const key = b.repo.toLowerCase();
+      if (!added.has(key)) added.set(key, { repo: b.repo, people: new Map() });
+      added.get(key)!.people.set(b.login.toLowerCase(), b.on === true);
+    }
+    const repos = new Set([...wanted.keys(), ...[...added].filter(([, a]) => [...a.people.values()].some(Boolean)).map(([key]) => key)]);
+    const now = this.clock();
+    let changed = 0;
+    for (const key of repos) {
+      const repo = wanted.get(key)?.repo ?? added.get(key)!.repo;
+      const want = wanted.get(key)?.logins ?? new Set<string>();
+      if (auth) want.delete(auth.login.toLowerCase());
+      const gave = [...(added.get(key)?.people ?? [])].filter(([, on]) => on).map(([login]) => login);
+      const shape = JSON.stringify([[...want].sort(), gave.sort()]);
+      const last = this.#githubSynced.get(key);
+      if (last && last.shape === shape && now - last.at < (last.problem ? 60_000 : 10 * 60_000)) continue;
+      if (!auth) {
+        this.#githubSynced.set(key, { at: now, shape, problem: 'not connected to GitHub on this device' });
+        continue;
+      }
+      try {
+        const client = new GitHub(auth.token, this.githubSetup.fetch);
+        const plan = planSync(want, await client.access(repo), gave);
+        for (const login of plan.invite) {
+          await client.invite(repo, login);
+          this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
+          changed++;
+        }
+        for (const { login, invitation } of plan.remove) {
+          await client.remove(repo, login, invitation);
+          this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: false } }));
+          changed++;
+        }
+        const after = [...gave.filter((l) => !plan.remove.some((r) => r.login === l)), ...plan.invite].sort();
+        this.#githubSynced.set(key, { at: now, shape: JSON.stringify([[...want].sort(), after]) });
+      } catch (error) {
+        this.#githubSynced.set(key, { at: now, shape, problem: (error as Error).message });
       }
     }
     return changed;
@@ -1347,6 +1612,19 @@ export class WeaveNode implements Backend {
 
   async profile(who?: string): Promise<Profile> {
     const did = who ? this.resolve(who) : this.identity.author;
+    const github = this.#hubGithub(did);
+    if (github) {
+      // Check the proof (once per run) before showing it; a false proof isn't shown at all.
+      const key = `${github.gist}:${github.login}:${did}`;
+      if (!this.#gistProofs.has(key)) this.#gistProofs.set(key, checkGistProof(github.gist, github.login, did, this.githubSetup.fetch));
+      const verified = await this.#gistProofs.get(key)!;
+      if (verified === undefined) this.#gistProofs.delete(key); // GitHub unreachable: ask again next time
+      return { ...this.#profile(did), ...(verified === false ? {} : { github: { login: github.login, url: `https://github.com/${github.login}`, repos: github.repos, ...(verified ? { verified } : {}) } }) };
+    }
+    return this.#profile(did);
+  }
+
+  #profile(did: Did): Profile {
     const graph = this.#graph();
     const me = this.identity.author;
     const mine = graph.get(me);
@@ -1382,7 +1660,7 @@ export class WeaveNode implements Backend {
     const authors = new Set([...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
     authors.delete(this.identity.author);
     const q = query?.trim().toLowerCase();
-    const profiles = await Promise.all([...authors].map((did) => this.profile(did)));
+    const profiles = [...authors].map((did) => this.#profile(did));
     return profiles
       .filter((p) => !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q)))
       .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));

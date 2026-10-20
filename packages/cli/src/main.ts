@@ -18,6 +18,8 @@ import {
   type Bundle,
   type CommunityInfo,
   type FeedItem,
+  type GitHubInfo,
+  type SpaceRepos,
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
@@ -106,6 +108,17 @@ communities — boards of posts that people join, each post with its own chat:
   community members <community>          members and who invited them
   community remove <community> <who>     remove someone and rotate the key (moderators)
   community moderator <community> <who>  make someone a moderator; --off to undo
+
+github — repositories that follow a group, tier or project (members who give their account get read access):
+  github                     your GitHub sign-in on this device
+  github connect             sign in to GitHub with a code (through the Weave GitHub app)
+  github disconnect          forget the sign-in on this device
+  github repos               repositories you can link (the app is installed on them and you're admin)
+  github hub [owner/name…]   show your GitHub account (proven by a public gist) and these repos on your hub; hub off to stop
+  github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  repo list <space>          a space's repositories
+  repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
+  repo unlink <space> <owner/name>   stop it (access Weave gave is taken back)
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
@@ -787,6 +800,67 @@ async function main(): Promise<void> {
         limit: values.n ? Number(values.n) : 25,
       });
       return out(posts, () => posts.map(postLine).join('\n') || '(no posts yet)');
+    }
+
+    case 'github': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const status = (g: GitHubInfo) => (g.login ? `signed in to GitHub as ${g.login}` : g.available ? 'not signed in to GitHub (weave github connect)' : "this copy of Weave can't reach GitHub yet (no GitHub app client ID)");
+      if (!sub) {
+        const g = await b.github();
+        return out(g, () => status(g));
+      }
+      if (sub === 'connect') {
+        const started = await b.connectGithub();
+        console.error(`Open ${started.pending!.verificationUri} and enter the code  ${started.pending!.userCode}`);
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const g = await b.github();
+          if (g.error) throw new Error(g.error);
+          if (!g.pending && g.login) return out(g, () => status(g));
+        }
+      }
+      if (sub === 'disconnect') {
+        const g = await b.disconnectGithub();
+        return out(g, () => 'GitHub sign-in forgotten on this device');
+      }
+      if (sub === 'repos') {
+        const repos = await b.githubRepos();
+        return out(repos, () => repos.join('\n') || '(none: install the Weave GitHub app on a repository you administer)');
+      }
+      if (sub === 'hub') {
+        const off = ref === 'off';
+        const p = await b.showGithubOnHub({ on: !off, repos: off || args.length < 2 ? undefined : args.slice(1) });
+        return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login}${p.github.repos.length ? ` with ${p.github.repos.join(', ')}` : ''}` : 'your hub no longer shows GitHub'));
+      }
+      if ((sub === 'share' || sub === 'unshare') && ref) {
+        const r = await b.shareGithub({ space: ref, on: sub === 'share' });
+        return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
+      }
+      throw new Error('usage: weave github [connect|disconnect|repos|hub [repos…|off]|share <space>|unshare <space>]');
+    }
+
+    case 'repo': {
+      const [sub, ref, repo] = args;
+      const b = await backend();
+      const show = (r: SpaceRepos) =>
+        [
+          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
+          r.repos.length ? '' : '(no repositories)',
+          r.shared ? `you gave it your GitHub account ${r.shared}` : r.repos.length ? 'you haven\'t given it your GitHub account (weave github share)' : '',
+          r.missing?.length ? `without a GitHub account here: ${r.missing.map(actor).join(', ')}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      if (sub === 'list' && ref) {
+        const r = await b.spaceRepos(ref);
+        return out(r, () => show(r));
+      }
+      if ((sub === 'link' || sub === 'unlink') && ref && repo) {
+        const r = await b.linkRepo({ space: ref, repo, board: values.board, on: sub === 'link' });
+        return out(r, () => show(r));
+      }
+      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] | repo unlink <space> <owner/name>');
     }
 
     case 'home': {
