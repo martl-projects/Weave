@@ -178,7 +178,7 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .banner a { color: #cfe2ff; }
 .banner .tag { vertical-align: 3px; }
 .banner-side { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
-.banner-side .votes { margin-bottom: 4px; background: #fff; padding: 2px; }
+.banner-side .votes { margin-bottom: 4px; background: #fff; color: #000; padding: 2px; }
 .board-strip { display: flex; gap: 4px; flex-wrap: wrap; flex: none; padding: 4px 2px; }
 .board-chip {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; color: #000; text-decoration: none;
@@ -205,7 +205,7 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .hero-text h1 { font-size: 24px; text-shadow: 2px 2px 0 #0008; overflow-wrap: anywhere; }
 .hero-meta .tag { vertical-align: 1px; }
 .hero-subtitle { margin: 6px 0 0; font-size: 13px; line-height: 1.35; text-shadow: 1px 1px 0 #0008; }
-.hero-subtitle.muted { opacity: .8; font-style: italic; }
+.hero-subtitle.muted { color: inherit; opacity: .8; font-style: italic; }
 .hero-toggle { margin-top: 8px; }
 .hero a { color: #cfe2ff; }
 /* In a narrow pane: a smaller icon beside the title, votes and buttons in a row below. */
@@ -337,7 +337,7 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .member-main { display: flex; align-items: center; gap: 6px; color: #000; text-decoration: none; }
 .member-main:hover .member-name { text-decoration: underline; }
 .member-name { font-size: 12px; font-weight: bold; color: #2323d0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.crown { margin-left: 3px; color: #d4a000; }
+.crown { margin-left: 3px; color: #a87400; }
 .member-sub { margin-left: 30px; font-size: 11px; color: #555; }
 .member-sub.agent { color: var(--agent); }
 .avatar { position: relative; display: inline-block; flex: none; line-height: 0; }
@@ -347,7 +347,8 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .presence.offline { background: #a0a0a0; }
 
 /* ---------- dialogs */
-.modal-root { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; }
+/* Dialogs keep the app's own colors and type, even when opened from someone's themed hub. */
+.modal-root { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; color: #000; font-family: var(--content-font); }
 .modal-back { position: absolute; inset: 0; background: #0003; }
 .modal { position: relative; width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; }
 .modal.wide { width: min(680px, calc(100vw - 32px)); }
@@ -392,6 +393,9 @@ menu[role='tablist'] { margin-bottom: 0; }
 .space[data-pattern='glow'] { background-image: radial-gradient(800px 400px at 85% -10%, color-mix(in srgb, var(--accent) 35%, transparent), transparent 65%); }
 .space-box { margin-bottom: 12px; padding: 10px 12px; background: var(--surface); color: var(--text); border: 2px solid var(--accent); box-shadow: 3px 3px 0 #0005; }
 .space-box h3 { padding: 2px 6px; margin: -10px -12px 8px; background: var(--accent); color: var(--surface); font-size: 12px; }
+/* Inside a hub, links and quiet text follow the hub's theme, so they stay readable on any colors. */
+.space a:not(.button-link), .space .post-title { color: var(--accent); }
+.space :is(.muted, .post-meta, .post-meta a) { color: color-mix(in srgb, var(--text) 65%, transparent); }
 .space-head { display: flex; gap: 14px; align-items: center; }
 .space-id { flex: 1; min-width: 0; }
 .space-id h1 { font-family: var(--font); color: var(--accent); }

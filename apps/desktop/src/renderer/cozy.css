@@ -345,13 +345,14 @@
 :root[data-skin='cozy'] .member:hover { background: var(--cz-faint); }
 :root[data-skin='cozy'] .member-name { color: var(--cz-frame-2); font-size: 13px; font-weight: 800; }
 :root[data-skin='cozy'] .member-sub { color: var(--cz-muted); font-size: 12px; }
-:root[data-skin='cozy'] .crown { color: #e0a500; }
+:root[data-skin='cozy'] .crown { color: #a87400; }
 :root[data-skin='cozy'] .avatar .sprite { border: 2px solid var(--cz-line); border-radius: 6px; overflow: hidden; }
 :root[data-skin='cozy'] .presence { right: -3px; bottom: -3px; width: 10px; height: 10px; border: 2px solid var(--cz-paper); border-radius: 50%; }
 :root[data-skin='cozy'] .presence.online { background: #3fc35a; }
 :root[data-skin='cozy'] .presence.offline { background: #b8b2a2; }
 
 /* ---------- dialogs, toasts, cards */
+:root[data-skin='cozy'] .modal-root { color: var(--cz-ink); }
 :root[data-skin='cozy'] .modal-back { background: #141a4566; }
 :root[data-skin='cozy'] .modal { box-shadow: 0 5px 0 var(--cz-line), 0 18px 40px #0005; }
 :root[data-skin='cozy'] :is(.modal, .toast, .room, .admission, .tier, .stat) .window-body { font-size: 13px; }
