@@ -230,7 +230,53 @@ export function renderMarkdown(text: string, rich = false): string {
     fragment.append(node.data.slice(last));
     node.replaceWith(fragment);
   }
+  embedLonePostLinks(template.content);
   return template.innerHTML;
+}
+
+/**
+ * A post link alone on its line becomes an embed: a placeholder that
+ * loadEmbeds fills in with a card of the post. A link inside a sentence
+ * stays a link.
+ */
+function embedLonePostLinks(root: DocumentFragment): void {
+  const lone = (nodes: Node[]) => {
+    const meaningful = nodes.filter((n) => !(n.nodeType === Node.TEXT_NODE && !n.textContent?.trim()));
+    const only = meaningful.length === 1 ? meaningful[0] : undefined;
+    const href = only instanceof HTMLAnchorElement ? only.getAttribute('href') ?? '' : '';
+    return POST_LINK.exec(href)?.[0] === href ? POST_LINK.exec(href)![1] : undefined;
+  };
+  const embed = (id: string) => {
+    const box = document.createElement('div');
+    box.className = 'post-embed';
+    box.dataset.post = id;
+    const link = document.createElement('a');
+    link.setAttribute('href', postLink(id));
+    link.textContent = postLink(id);
+    box.append(link);
+    return box;
+  };
+  for (const p of [...root.querySelectorAll('p')]) {
+    if (p.closest('blockquote, li, td')) continue;
+    // Lines of the paragraph, split at line breaks (chat keeps them).
+    const lines: Node[][] = [[]];
+    for (const child of [...p.childNodes]) child.nodeName === 'BR' ? lines.push([]) : lines.at(-1)!.push(child);
+    if (!lines.some((line) => lone(line))) continue;
+    const out: Node[] = [];
+    let text: HTMLParagraphElement | undefined;
+    for (const line of lines) {
+      const id = lone(line);
+      if (id) {
+        out.push(embed(id));
+        text = undefined;
+      } else if (line.some((n) => n.textContent?.trim() || n.nodeType === Node.ELEMENT_NODE)) {
+        if (text) text.append(document.createElement('br'));
+        else out.push((text = document.createElement('p')));
+        text.append(...line);
+      }
+    }
+    p.replaceWith(...out);
+  }
 }
 
 // ---------------------------------------------------------------- images

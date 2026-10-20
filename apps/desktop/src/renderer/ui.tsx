@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { hue, loadBlobImages, renderMarkdown, useBlobUrl } from './lib.ts';
+import type { PostInfo } from '@weave/node/client';
+import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -68,12 +69,74 @@ export function WeaveMark({ size = 26 }: { size?: number }) {
   );
 }
 
+// ---------------------------------------------------------------- post embeds
+
+const embedded = new Map<string, Promise<PostInfo>>();
+// Posts change (votes, chat, edits): fetch them again for the next embed after any live event.
+onItem(() => embedded.clear());
+
+const PREFIX: Record<string, string> = { project: 'p/', community: 'r/', group: 'g/', direct: '@' };
+
+/** Fill in the post embeds renderMarkdown left (.post-embed[data-post]) with a card of each post. */
+export function loadEmbeds(root: HTMLElement): void {
+  for (const box of root.querySelectorAll<HTMLElement>('.post-embed[data-post]:not([data-ready])')) {
+    const id = box.dataset.post!;
+    box.dataset.ready = 'loading';
+    let post = embedded.get(id);
+    if (!post) {
+      post = api<PostInfo>('post', id);
+      embedded.set(id, post);
+      post.catch(() => embedded.delete(id));
+    }
+    post.then(
+      (p) => box.replaceChildren(embedCard(p)),
+      () => {
+        box.classList.add('missing');
+        const link = document.createElement('a');
+        link.setAttribute('href', `weave:post:${id}`);
+        link.textContent = "A post you can't see here";
+        box.replaceChildren(link);
+      },
+    );
+    box.dataset.ready = 'yes';
+  }
+}
+
+/** A post as a card: picture, where and who, title, a bit of the text, votes and chat. The card is its link. */
+function embedCard(p: PostInfo): HTMLElement {
+  const el = (tag: string, className: string, text?: string) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const card = el('a', 'post-embed-card');
+  card.setAttribute('href', `weave:post:${p.id}`);
+  const thumb = el('span', 'post-embed-thumb');
+  if (p.image) {
+    const img = document.createElement('img');
+    img.alt = '';
+    blobUrl(p.image).then((url) => (img.src = url), () => {});
+    thumb.append(img);
+  } else thumb.innerHTML = sprite(p.project?.id ?? p.id, 10, false);
+  const where = [p.space ? `${PREFIX[p.space.kind] ?? ''}${p.space.name}${p.board && p.space.kind === 'project' && p.type !== 'project' ? `/${p.board}` : ''}` : '', `u/${p.by.name ?? shortDid(p.by.did)}`, ago(p.time)].filter(Boolean).join(' · ');
+  const body = el('span', 'post-embed-body');
+  body.append(el('span', 'post-embed-where', where), el('b', 'post-embed-title', p.title));
+  const text = plain(p.text);
+  if (text) body.append(el('span', 'post-embed-text', text.length > 180 ? `${text.slice(0, 180)}…` : text));
+  body.append(el('span', 'post-embed-meta', `▲ ${p.score} · ${p.chat} in chat`));
+  card.append(thumb, body);
+  return card;
+}
+
 /** Markdown from other people, sanitized, with its images loaded from peers. `rich`: a project page, which may use inline styles. */
 export function Markdown({ text, rich }: { text: string; rich?: boolean }) {
   const html = useMemo(() => renderMarkdown(text, rich), [text, rich]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (ref.current) loadBlobImages(ref.current);
+    if (!ref.current) return;
+    loadBlobImages(ref.current);
+    loadEmbeds(ref.current);
   }, [html]);
   return <div ref={ref} className={rich ? 'md md-rich' : 'md'} dangerouslySetInnerHTML={{ __html: html }} />;
 }

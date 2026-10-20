@@ -300,6 +300,18 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .msg-text { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .msg-text p, .md p { margin: 0 0 4px; }
 .msg-text img { display: block; max-width: min(100%, 480px); height: auto; margin: 6px 0; border: 1px solid #808080; }
+/* A post embedded in a post, page or message (a post link alone on its line) */
+.post-embed { max-width: 520px; margin: 6px 0; }
+.post-embed-card { display: flex; gap: 10px; padding: 8px; background: #fff; color: #000; text-decoration: none; font-family: var(--content-font); font-size: 12px; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+.post-embed-card:hover .post-embed-title { text-decoration: underline; }
+.post-embed-thumb { flex: none; width: 56px; height: 56px; overflow: hidden; line-height: 0; image-rendering: pixelated; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080; }
+.post-embed-thumb svg, .post-embed-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.post-embed-thumb img { image-rendering: auto; }
+.post-embed-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.post-embed-where, .post-embed-meta { font-size: 11px; color: #555; }
+.post-embed-title { font-size: 13px; color: var(--link); overflow-wrap: anywhere; }
+.post-embed-text { color: #222; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.post-embed.missing a { font-style: italic; color: #555; }
 .md p:last-child, .msg-text p:last-child { margin-bottom: 0; }
 .md pre, .msg-text pre { padding: 6px 8px; background: #f4f4f4; border: 1px solid #c0c0c0; overflow-x: auto; }
 .md code, .msg-text code { font-family: 'Lucida Console', Consolas, monospace; font-size: 12px; background: #f4f4f4; }

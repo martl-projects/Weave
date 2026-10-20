@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
-import { attempt, Avatar } from './ui.tsx';
+import { attempt, Avatar, loadEmbeds } from './ui.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -65,7 +65,9 @@ function Message({
   const html = useMemo(() => renderMarkdown(m.text), [m.text]);
   const textRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (textRef.current) loadBlobImages(textRef.current);
+    if (!textRef.current) return;
+    loadBlobImages(textRef.current);
+    loadEmbeds(textRef.current);
   }, [html]);
   const mentionsMe = mentionNames.some((name) => new RegExp(`@${name}\\b`, 'i').test(m.text));
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));

@@ -324,6 +324,12 @@
 :root[data-skin='cozy'] .author.is-agent a { color: var(--agent); }
 :root[data-skin='cozy'] .msg-text { font-size: 14px; line-height: 1.45; }
 :root[data-skin='cozy'] :is(.md, .msg-text) :is(pre, code) { background: #f4efe2; border-color: var(--cz-soft); border-radius: 6px; }
+:root[data-skin='cozy'] .post-embed-card { padding: 10px; background: var(--cz-paper); color: var(--cz-ink); border: 2px solid var(--cz-line); border-radius: 12px; box-shadow: var(--cz-lift); font-size: 13px; }
+:root[data-skin='cozy'] .post-embed-card:active { transform: translateY(2px); box-shadow: none; }
+:root[data-skin='cozy'] .post-embed-thumb { border: 2px solid var(--cz-line); border-radius: 8px; box-shadow: none; }
+:root[data-skin='cozy'] .post-embed-title { color: var(--cz-line); font-weight: 800; font-size: 14px; }
+:root[data-skin='cozy'] :is(.post-embed-where, .post-embed-meta) { color: var(--cz-muted); }
+:root[data-skin='cozy'] .post-embed-text { color: var(--cz-ink); }
 :root[data-skin='cozy'] .mention { padding: 0 4px; border-radius: 4px; background: var(--cz-select); color: var(--cz-frame-2); }
 :root[data-skin='cozy'] .reply-line { border-color: #c9c0a8; border-top-left-radius: 8px; }
 :root[data-skin='cozy'] .reaction { min-height: 24px; padding: 0 8px; border-width: 2px; border-color: var(--cz-soft); border-radius: 8px; box-shadow: none; font: 700 12px var(--content-font); }
