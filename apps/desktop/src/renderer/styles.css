@@ -524,3 +524,10 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .error-text { color: #900; }
 .hub-repos { margin: 4px 0; padding-left: 18px; }
 .hub-repo-picker { max-height: 240px; overflow: auto; padding: 4px; background: #fff; }
+
+/* ---------- installing a project's app */
+.install-box { display: flex; align-items: center; gap: 6px; padding: 6px 0; flex-wrap: wrap; }
+.install-box progress { display: block; width: 100%; margin-top: 4px; }
+.install-facts { background: transparent; border-collapse: collapse; margin-bottom: 6px; }
+.install-facts th { text-align: left; padding-right: 10px; vertical-align: top; white-space: nowrap; }
+.install-facts td { padding-bottom: 4px; }

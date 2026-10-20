@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
 import { Page } from './views.tsx';
+import { copy } from './posts.tsx';
 
 /*
  * Rooms: a host shares the project's app from their computer, players use it
@@ -136,6 +137,145 @@ function ApproveLaunch({ app, launch, onApprove, onClose }: { app: AppManifest; 
   );
 }
 
+const mb = (bytes?: number) => (bytes ? `${bytes < 1e6 ? (bytes / 1e6).toFixed(1) : Math.round(bytes / 1e6)} MB` : '');
+
+/** Installing (or updating) the app from its release: what comes from where, and what then runs. */
+function InstallDialog({ app, launch, onInstall, onClose }: { app: AppManifest; launch: AppLaunchInfo; onInstall(): void; onClose(): void }) {
+  const i = launch.install!;
+  return (
+    <Modal title={`${i.installed ? 'Update' : 'Install'} ${app.name} ${i.version ?? ''}`} onClose={onClose}>
+      <table className="install-facts">
+        <tbody>
+          <tr>
+            <th>From</th>
+            <td>
+              github.com/{i.repo}, release {i.version}
+            </td>
+          </tr>
+          <tr>
+            <th>File</th>
+            <td>
+              {i.asset!.file} {i.asset!.size ? `(${mb(i.asset!.size)})` : ''}
+            </td>
+          </tr>
+          <tr>
+            <th>Checked</th>
+            <td>it must match the fingerprint the project's maintainers published in Weave, or it isn't installed</td>
+          </tr>
+          <tr>
+            <th>Into</th>
+            <td>Weave's apps folder, its own folder for {app.name}</td>
+          </tr>
+          {launch.command && (
+            <tr>
+              <th>Then starts with</th>
+              <td>
+                <code>{launch.command.join(' ')}</code>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <p className="small">
+        Installing only downloads and unpacks; nothing runs until you start {app.name}. Only install it if you trust the people who maintain it.
+        {launch.command ? ' Installing also approves its start command.' : ''}
+      </p>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <button className="default" onClick={onInstall}>
+          {i.installed ? 'Update' : 'Install'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** What to paste into an agent harness, so the agent installs the app by hand. */
+const agentPrompt = (project: SpaceInfo, app: AppManifest, launch: AppLaunchInfo) =>
+  [
+    `Please install ${app.name}${launch.install?.version ? ` ${launch.install.version}` : ''} on this computer, for the Weave project "${project.name}".`,
+    launch.install?.repo ? `It lives in the GitHub repository ${launch.install.repo}.` : '',
+    'The project gives these steps:',
+    ...(launch.install?.steps ?? []).map((step, n) => `${n + 1}. ${step}`),
+    `When it works, tell Weave where it is: weave app folder <that folder> -p "${project.name}" (the folder needs the app's weave.app.json).`,
+    'Ask me before running anything that changes more than that folder.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+/** Getting the app: install or update from its release, or have an agent do it by hand. */
+function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo; onPick(): void }) {
+  const [confirming, setConfirming] = useState(false);
+  const i = launch.install;
+  // While installing, look every second.
+  useEffect(() => {
+    if (!i?.progress) return;
+    const timer = setInterval(bump, 1000);
+    return () => clearInterval(timer);
+  }, [!!i?.progress]);
+  if (!i) return null;
+  const install = () => {
+    setConfirming(false);
+    void attempt(() => api('installApp', { project: project.id, approve: true }).then(bump));
+  };
+  const agent = i.steps && (
+    <button onClick={() => copy(agentPrompt(project, app, launch), 'Copied: paste it to your agent')} title="Copies instructions for your agent harness">
+      Copy steps for my agent
+    </button>
+  );
+  if (i.progress)
+    return (
+      <div className="install-box">
+        <span className="grow">
+          {i.progress.state === 'downloading' ? `Downloading ${app.name} ${i.version}… ${mb(i.progress.done)}${i.progress.total ? ` of ${mb(i.progress.total)}` : ''}` : `Unpacking ${app.name} ${i.version}…`}
+          {i.progress.total ? <progress max={i.progress.total} value={i.progress.done} /> : null}
+        </span>
+      </div>
+    );
+  const outdated = i.installed && i.version && i.installed !== i.version;
+  return (
+    <>
+      {i.error && <div className="small error-text">The last install didn't work: {i.error}</div>}
+      {i.asset && (!i.installed || outdated) ? (
+        <div className="install-box">
+          <span className="grow">
+            {outdated ? (
+              <>
+                <b>
+                  {app.name} {i.version}
+                </b>{' '}
+                is out; you have {i.installed}.
+              </>
+            ) : (
+              <>
+                Get{' '}
+                <b>
+                  {app.name} {i.version}
+                </b>{' '}
+                from GitHub ({mb(i.asset.size)}){launch.folder ? ', or keep using your own copy' : ''}.
+              </>
+            )}
+          </span>
+          {agent}
+          <button className="default" onClick={() => setConfirming(true)}>
+            {outdated ? 'Update…' : 'Install…'}
+          </button>
+        </div>
+      ) : !i.asset && !launch.folder ? (
+        <div className="install-box">
+          <span className="grow">
+            {i.version ? `There's no ready-made ${app.name} ${i.version} for this computer (${i.platform}).` : `${app.name} has no ready-made download.`}
+            {i.steps ? ' Your agent can install it by hand.' : ''}
+          </span>
+          {agent}
+          <button onClick={onPick}>Choose folder…</button>
+        </div>
+      ) : null}
+      {confirming && <InstallDialog app={app} launch={launch} onInstall={install} onClose={() => setConfirming(false)} />}
+    </>
+  );
+}
+
 /** The app on this computer: where it is, start and stop, and what it printed. */
 function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
   const { data: launch } = useApi(() => api<AppLaunchInfo>('appLaunch', project.id), [project.id]);
@@ -147,7 +287,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
     if (folder) await attempt(() => api('setAppFolder', { project: project.id, folder }).then(bump), 'Folder saved');
   };
   const start = (approve = false) => attempt(() => api('launchApp', { project: project.id, approve }).then(bump), `${app.name} is starting`);
-  if (!launch.command)
+  if (!launch.command && !launch.install)
     return launch.hint ? (
       <p className="small">
         To host, start {app.name} yourself: {launch.hint}
@@ -156,11 +296,16 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
   return (
     <fieldset className="app-panel">
       <legend>{app.name} on this computer</legend>
-      {!launch.folder ? (
+      <InstallBox project={project} app={app} launch={launch} onPick={pick} />
+      {!launch.command ? (
+        launch.hint && <p className="small">To host, start {app.name} yourself: {launch.hint}</p>
+      ) : launch.install?.progress ? null : !launch.folder ? (
+        launch.install?.asset ? null : (
         <div className="field-row">
           <span className="grow small">To host a room, Weave can start {app.name} for you. Where is it on this computer?</span>
           <button onClick={pick}>Choose folder…</button>
         </div>
+        )
       ) : (
         <>
           <div className="field-row">
@@ -178,7 +323,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
             {launch.log.length > 0 && <button onClick={() => setShowLog(!showLog)}>{showLog ? 'Hide output' : 'Output'}</button>}
           </div>
           <div className="small muted">
-            {launch.command.join(' ')} · in {launch.folder}{' '}
+            {launch.command.join(' ')} · in {launch.install?.installed ? `${app.name} ${launch.install.installed}, installed by Weave` : launch.folder}{' '}
             <a
               href="#"
               onClick={(e) => {

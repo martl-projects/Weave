@@ -1,6 +1,7 @@
 import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
+import { isRepoName } from './github.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -10,6 +11,8 @@ import { isDid } from './keys.ts';
  *   weave.app    {app, name, version, services, start}   a maintainer publishes the project's app manifest;
  *                                                       start: {hint, command}: how the host starts the app; Weave
  *                                                       runs the command only on the host's say-so (see node)
+ *                                                       install: {github, tag, assets, steps}: where hosts get the app,
+ *                                                       see AppInstall
  *                                                       sealed in the project, the latest by a maintainer counts
  *   weave.room   {room, name, service, key, invite, open}
  *                                                       the host announces a room (open) or ends it (open: false);
@@ -41,6 +44,61 @@ export interface AppManifest {
    * host's own copy of the app, after the host has seen and approved it.
    */
   start?: { hint?: string; command?: string[] };
+  /** How hosts get the app onto their computer. */
+  install?: AppInstall;
+}
+
+/**
+ * Getting the app: release files on GitHub, one per platform, each with the
+ * SHA-256 a maintainer published here (Weave refuses a file that doesn't
+ * match, whatever GitHub serves), and steps for an agent where there's no
+ * file for your computer (building from source and the like).
+ */
+export interface AppInstall {
+  /** owner/name of the repository whose release holds the files. */
+  github?: string;
+  /** The release's tag, like v1.4: also the version people see. */
+  tag?: string;
+  /** By platform, as Node names it (win32-x64, darwin-arm64, linux-x64…): the release file. */
+  assets?: Record<string, AppAsset>;
+  /** For an agent installing it by hand. */
+  steps?: string[];
+}
+
+export interface AppAsset {
+  /** The file's name in the release. */
+  file: string;
+  sha256: string;
+  /** In bytes. */
+  size?: number;
+}
+
+const PLATFORM = /^(win32|darwin|linux)-(x64|arm64|ia32|arm)$/;
+const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
+
+/** An install block from untrusted input; undefined when it says nothing usable. */
+export function parseInstall(input: unknown): AppInstall | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const i = input as Record<string, unknown>;
+  const steps = Array.isArray(i.steps) ? i.steps.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim().slice(0, 500)).slice(0, 30) : [];
+  const assets: Record<string, AppAsset> = {};
+  if (i.assets && typeof i.assets === 'object') {
+    for (const [platform, raw] of Object.entries(i.assets as Record<string, unknown>).slice(0, 12)) {
+      const a = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const file = text(a.file, 200);
+      const sha256 = text(a.sha256, 64).toLowerCase();
+      if (!PLATFORM.test(platform) || !file || /[\\/]/.test(file) || !/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`install.assets.${platform}: needs "file" (a name in the release) and its "sha256"`);
+      const size = Number(a.size);
+      assets[platform] = { file, sha256, ...(Number.isInteger(size) && size > 0 ? { size } : {}) };
+    }
+  }
+  const has = Object.keys(assets).length > 0;
+  const github = text(i.github, 140);
+  const tag = text(i.tag, 100);
+  if (has && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
+  if (has && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
+  if (!has && !steps.length) return undefined;
+  return { ...(has ? { github, tag, assets } : {}), ...(steps.length ? { steps } : {}) };
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -81,7 +139,8 @@ export function parseManifest(input: unknown): AppManifest {
     command = parts as string[];
   }
   const start = hint || command ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}) } : undefined;
-  return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}) };
+  const install = parseInstall(m.install);
+  return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}) };
 }
 
 export interface Room {

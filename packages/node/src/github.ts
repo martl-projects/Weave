@@ -29,6 +29,12 @@ export interface DeviceCode {
   expiresAt: string;
 }
 
+export interface ReleaseAsset {
+  id: number;
+  name: string;
+  size: number;
+}
+
 export interface GitHubUser {
   login: string;
   id: number;
@@ -91,7 +97,7 @@ export class GitHub {
       method,
       headers: {
         accept: 'application/vnd.github+json',
-        authorization: `Bearer ${this.#token}`,
+        ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}),
         'x-github-api-version': '2022-11-28',
         ...(body ? { 'content-type': 'application/json' } : {}),
       },
@@ -147,6 +153,27 @@ export class GitHub {
   async publicRepos(login: string): Promise<string[]> {
     const { data } = await this.#call<Array<{ full_name: string; fork: boolean }>>('GET', `/users/${encodeURIComponent(login)}/repos?type=owner&sort=pushed&per_page=100`);
     return data.filter((r) => !r.fork).map((r) => r.full_name);
+  }
+
+  /** A release by its tag, with its files. */
+  async release(repo: string, tag: string): Promise<{ tag: string; assets: ReleaseAsset[] }> {
+    const { data } = await this.#call<{ tag_name: string; assets: Array<{ id: number; name: string; size: number }> }>('GET', `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`).catch((error: Error) => {
+      if (!/ 404/.test(error.message)) throw error;
+      throw new Error(`GitHub shows no release ${tag} in ${repo}${this.#token ? '' : ': if the repository is private, connect GitHub first (Keys & devices)'}${this.#token ? ', or you have no access to it yet' : ''}`);
+    });
+    return { tag: data.tag_name, assets: data.assets.map((a) => ({ id: a.id, name: a.name, size: a.size })) };
+  }
+
+  /** A release file's contents, as a stream (GitHub redirects to its file store). */
+  async download(repo: string, asset: number, signal?: AbortSignal): Promise<{ body: ReadableStream<Uint8Array>; size?: number }> {
+    const res = await this.#fetch(`${API}/repos/${repo}/releases/assets/${asset}`, {
+      headers: { accept: 'application/octet-stream', ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}), 'x-github-api-version': '2022-11-28' },
+      redirect: 'follow',
+      ...(signal ? { signal } : {}),
+    });
+    if (!res.ok || !res.body) throw new Error(res.status === 404 ? `GitHub didn't let you download from ${repo}: do you have access to it?` : `GitHub said ${res.status} for the download`);
+    const size = Number(res.headers.get('content-length'));
+    return { body: res.body, ...(size > 0 ? { size } : {}) };
   }
 
   /** Give someone read access; GitHub sends them an invitation to accept. */

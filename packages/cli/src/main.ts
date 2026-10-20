@@ -160,6 +160,9 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
 rooms: share a project's app live with its participants (needs a running daemon):
   app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
   app show -p <project>      the project's app: ports it shares, buttons
+  app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
+  app release <tag> -p <p>   point the app at a GitHub release (maintainers): each file is fingerprinted
+                             [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   rooms [-p <project>]       open rooms
   room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people]
   room join <room>           join: prints the address to open
@@ -246,6 +249,8 @@ const { values, positionals } = parseArgs({
     to: { type: 'string' },
     title: { type: 'string' },
     with: { type: 'string' },
+    asset: { type: 'string', multiple: true },
+    repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
@@ -339,7 +344,18 @@ const launchText = (l: AppLaunchInfo) =>
     l.command ? `start command: ${l.command.join(' ')}${l.approved ? ' (approved)' : ''}` : `no start command${l.hint ? `; start it yourself: ${l.hint}` : ''}`,
     `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
     l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? (l.exit.stopped ? 'stopped' : `exited by itself (code ${l.exit.code ?? '-'})`) : 'not running',
+    ...(l.install ? [installText(l.install)] : []),
   ].join('\n');
+
+const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
+  [
+    i.version ? `release: ${i.version}${i.repo ? ` from github.com/${i.repo}` : ''}${i.asset ? ` · ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}` : ` · no file for ${i.platform}`}` : '',
+    i.installed ? `installed here: ${i.installed}${i.version && i.installed !== i.version ? ` (update: weave app install)` : ''}` : i.asset ? 'not installed here (weave app install)' : '',
+    i.error ? `last install failed: ${i.error}` : '',
+    i.steps ? `steps for installing by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
 /** One line from the terminal, for questions only a person should answer. */
 async function askLine(question: string): Promise<string> {
@@ -1131,6 +1147,33 @@ ${postLine(p)}`);
         const info = await b.setAppFolder({ project: needProject(), folder: args[1] === undefined ? (process.env.INIT_CWD ?? process.cwd()) : args[1] && resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1]) });
         return out(info, () => launchText(info));
       }
+      if (sub === 'install') {
+        const project = needProject();
+        const info = await b.appLaunch(project);
+        const i = info.install;
+        if (!i?.asset) throw new Error(`no release file for this computer${i ? ` (${i.platform})` : ''}${i?.steps ? `; install it by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : ''}`);
+        const answer = await askLine(`Install ${i.version} from github.com/${i.repo}: ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}, checked against its published SHA-256.${info.command ? `\nIt then starts with: ${info.command.join(' ')}` : ''}\nInstall${info.command ? ' and approve that command' : ''}? [y/N] `);
+        if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not installed');
+        await b.installApp({ project, approve: true });
+        let last = '';
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 500));
+          const now = await b.appLaunch(project);
+          const p = now.install?.progress;
+          if (!p) {
+            if (now.install?.error) throw new Error(now.install.error);
+            return out(now, () => `installed ${now.install?.installed} in ${now.folder}\n${launchText(now)}`);
+          }
+          const line = `${p.state} ${Math.round(p.done / 1e6)}${p.total ? ` of ${Math.round(p.total / 1e6)}` : ''} MB`;
+          if (line !== last) console.error(line);
+          last = line;
+        }
+      }
+      if (sub === 'release' && args[1]) {
+        const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
+        const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
+        return out(app, () => `${app.name} now installs ${app.install?.tag} from github.com/${app.install?.github}:\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}`);
+      }
       if (sub === 'start') {
         const project = needProject();
         let info = await b.appLaunch(project);
@@ -1145,7 +1188,7 @@ ${postLine(p)}`);
         const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
         return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
       }
-      throw new Error('usage: weave app publish|show|folder|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|folder|install|release <tag>|start|stop|status -p <project>');
     }
 
     case 'rooms': {

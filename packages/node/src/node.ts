@@ -136,6 +136,7 @@ import {
   openMembershipRequest,
   openRekey,
   parseManifest,
+  type AppAsset,
   parseScope,
   permits,
   POST_SORTS,
@@ -257,9 +258,10 @@ import {
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
-import { checkGistProof, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
+import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
+import { checkGistProof, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
@@ -282,6 +284,12 @@ export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 const SELF_SCOPE = 'self';
 
 /** A GitHub sign-in waiting for its code, or why the last one failed. */
+/** An app being installed from its release, or why that failed. */
+interface InstallJob {
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+}
+
 interface GitHubLogin {
   code?: DeviceCode;
   error?: string;
@@ -343,6 +351,9 @@ export class WeaveNode implements Backend {
   /** How this node reaches GitHub (tests put a stand-in here). */
   githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
   #githubLogin?: GitHubLogin;
+  /** Apps being installed (or failed to), by project id. */
+  #installs = new Map<string, InstallJob>();
+  #installing = new Map<string, Promise<unknown>>();
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
   /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
@@ -1732,7 +1743,10 @@ export class WeaveNode implements Backend {
   async publishApp(input: { project: string; manifest: unknown; folder?: string }): Promise<AppManifest> {
     const project = this.#project(input.project);
     this.#maintainerState(project);
-    const manifest = parseManifest(input.manifest);
+    let manifest = parseManifest(input.manifest);
+    // weave.app.json usually doesn't list the release files ("weave app release" adds them): keep the ones published.
+    const before = this.#app(project)?.install;
+    if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
     this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
     if (input.folder) this.#rememberAppFolder(project.id, input.folder);
     return manifest;
@@ -1740,7 +1754,9 @@ export class WeaveNode implements Backend {
 
   async appLaunch(ref: string): Promise<AppLaunchInfo> {
     const project = this.#project(ref);
-    const start = this.#app(project)?.start;
+    const app = this.#app(project);
+    const start = app?.start;
+    const install = this.#installInfo(project, app);
     const folder = this.config.appFolders[project.id];
     const run = this.#apps.status(project.id);
     return {
@@ -1751,6 +1767,7 @@ export class WeaveNode implements Backend {
       running: this.#apps.running(project.id),
       ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
       log: run?.log ?? [],
+      ...(install ? { install } : {}),
     };
   }
 
@@ -1781,6 +1798,136 @@ export class WeaveNode implements Backend {
     }
     this.#apps.start(project.id, command, folder);
     return this.appLaunch(project.id);
+  }
+
+  // ---------------------------------------------------------------- installing the app from its release
+
+  /** Where Weave keeps the apps it installed: apps/<project id>/<tag>. */
+  #appsDir(projectId: string): string {
+    return joinPath(this.home.dir, 'apps', projectId);
+  }
+
+  /** The release Weave installed for a project, while the project's app folder still points into it. */
+  #installed(projectId: string): { tag: string; folder: string } | undefined {
+    const record = readJson<{ tag?: string; folder?: string }>(joinPath(this.#appsDir(projectId), 'installed.json'));
+    return record?.tag && record.folder && this.config.appFolders[projectId] === record.folder ? { tag: record.tag, folder: record.folder } : undefined;
+  }
+
+  #installInfo(project: StoredSpace, app: AppManifest | undefined): AppLaunchInfo['install'] {
+    const install = app?.install;
+    const job = this.#installs.get(project.id);
+    if (!install && !job) return undefined;
+    const asset = install?.assets?.[platformKey()];
+    const installed = this.#installed(project.id);
+    return {
+      ...(install?.tag ? { version: install.tag } : {}),
+      ...(install?.github ? { repo: install.github } : {}),
+      ...(asset ? { asset: { file: asset.file, ...(asset.size ? { size: asset.size } : {}) } } : {}),
+      platform: platformKey(),
+      ...(installed ? { installed: installed.tag } : {}),
+      ...(job?.progress ? { progress: { ...job.progress } } : {}),
+      ...(job?.error ? { error: job.error } : {}),
+      ...(install?.steps ? { steps: install.steps } : {}),
+    };
+  }
+
+  async installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
+    const project = this.#project(input.project);
+    const app = this.#app(project);
+    const install = app?.install;
+    const asset = install?.assets?.[platformKey()];
+    if (!app || !install?.github || !install.tag || !asset) throw new Error(`${project.name} has no release file for this computer (${platformKey()})${install?.steps ? ': install it by hand or with your agent, following its steps' : ''}`);
+    if (this.#installs.get(project.id)?.progress) throw new Error(`${app.name} is being installed already`);
+    if (this.#apps.running(project.id)) throw new Error(`stop ${app.name} first`);
+    const job: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
+    this.#installs.set(project.id, job);
+    const done = this.#installRelease(project, app, { github: install.github, tag: install.tag, asset }, input.approve === true).then(
+      () => this.#installs.delete(project.id),
+      (error: Error) => this.#installs.set(project.id, { error: error.message }),
+    );
+    this.#installing.set(project.id, done.finally(() => this.#emitLive()));
+    return this.appLaunch(project.id);
+  }
+
+  /** Resolves when the install running for a project ends (for tests and the CLI). */
+  async installDone(ref: string): Promise<AppLaunchInfo> {
+    const project = this.#project(ref);
+    await this.#installing.get(project.id);
+    return this.appLaunch(project.id);
+  }
+
+  async #installRelease(project: StoredSpace, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, approve: boolean): Promise<void> {
+    const job = this.#installs.get(project.id)!;
+    const dir = this.#appsDir(project.id);
+    mkdirSync(dir, { recursive: true });
+    const auth = this.#githubAuth();
+    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
+    const found = (await client.release(release.github, release.tag)).assets.find((a) => a.name === release.asset.file);
+    if (!found) throw new Error(`the release ${release.tag} on GitHub has no file ${release.asset.file}`);
+    const download = await client.download(release.github, found.id);
+    const total = release.asset.size ?? download.size ?? found.size;
+    job.progress = { state: 'downloading', done: 0, ...(total ? { total } : {}) };
+    const file = joinPath(dir, `.download-${release.asset.file}`);
+    await saveVerified(download.body, file, release.asset.sha256, (n) => {
+      job.progress!.done += n;
+    });
+    job.progress = { state: 'unpacking', done: job.progress.done, ...(total ? { total } : {}) };
+    const target = joinPath(dir, tagFolder(release.tag));
+    rmSync(target, { recursive: true, force: true });
+    const root = unpack(file, target);
+    rmSync(file, { force: true });
+    // The folder holds the project's app: say so the way a checkout would, with its manifest.
+    if (!existsSync(joinPath(root, 'weave.app.json'))) writeJson(joinPath(root, 'weave.app.json'), app);
+    this.#rememberAppFolder(project.id, root);
+    if (approve && app.start?.command) this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: launchFingerprint(app.start.command, root) } };
+    saveConfig(this.home, this.config);
+    writeJson(joinPath(dir, 'installed.json'), { tag: release.tag, folder: root, file: release.asset.file, sha256: release.asset.sha256, installed: new Date(this.clock()).toISOString() });
+    // Earlier versions Weave installed go.
+    for (const entry of readdirSync(dir)) if (entry !== tagFolder(release.tag) && entry !== 'installed.json' && !entry.startsWith('.')) rmSync(joinPath(dir, entry), { recursive: true, force: true });
+  }
+
+  async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string> }): Promise<AppManifest> {
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const app = this.#app(project);
+    if (!app) throw new Error(`${project.name} has no app yet: publish its weave.app.json first ("weave app publish")`);
+    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
+    const repo = input.repo?.trim() || app.install?.github || (linked.length === 1 ? linked[0].repo : '');
+    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
+    const auth = this.#githubAuth();
+    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
+    const release = await client.release(repo, input.tag.trim());
+    // Which file is for which platform: as given, or guessed from the names.
+    const chosen = new Map<string, ReleaseAsset>();
+    if (input.assets && Object.keys(input.assets).length) {
+      for (const [platform, name] of Object.entries(input.assets)) {
+        const asset = release.assets.find((a) => a.name === name);
+        if (!asset) throw new Error(`the release ${release.tag} has no file ${name}`);
+        chosen.set(platform, asset);
+      }
+    } else {
+      for (const asset of release.assets) {
+        const platform = guessPlatform(asset.name);
+        if (platform && !chosen.has(platform)) chosen.set(platform, asset);
+      }
+    }
+    if (!chosen.size) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
+    // Fingerprint each file once, so every host's node can check what it downloads.
+    const assets: Record<string, AppAsset> = {};
+    for (const [platform, asset] of chosen) {
+      const download = await client.download(repo, asset.id);
+      const hash = createHash('sha256');
+      const reader = download.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        hash.update(value);
+      }
+      assets[platform] = { file: asset.name, sha256: hash.digest('hex'), size: asset.size };
+    }
+    const manifest = parseManifest({ ...app, install: { ...app.install, github: repo, tag: release.tag, assets } });
+    this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
+    return manifest;
   }
 
   async stopApp(ref: string): Promise<AppLaunchInfo> {

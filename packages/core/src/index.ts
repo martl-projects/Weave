@@ -175,7 +175,7 @@ export {
   recoveryRoot,
   type RecoveryWords,
 } from './recovery.ts';
-export { KIND_APP, KIND_ROOM, parseManifest, roomsOf, type AppManifest, type AppService, type Room } from './rooms.ts';
+export { KIND_APP, KIND_ROOM, parseInstall, parseManifest, roomsOf, type AppAsset, type AppInstall, type AppManifest, type AppService, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
