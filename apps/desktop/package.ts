@@ -103,7 +103,7 @@ const config: Configuration = {
   },
   icon: 'assets/icon.png',
   artifactName: 'Weave-${version}-${os}-${arch}.${ext}',
-  npmRebuild: false,
+  nativeModules: { npmRebuild: false },
   publish: null,
   win: { target: [{ target: 'nsis', arch: ['x64'] }] },
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
@@ -112,8 +112,7 @@ const config: Configuration = {
     target: [{ target: 'dmg', arch: ['arm64', 'x64'] }],
     category: 'public.app-category.social-networking',
     // Ad-hoc signed until there is an Apple Developer ID: Apple silicon refuses to run unsigned apps at all.
-    identity: '-',
-    hardenedRuntime: false,
+    sign: { identity: '-', hardenedRuntime: false },
   },
   linux: { target: [{ target: 'AppImage', arch: ['x64'] }], category: 'Network' },
   // weave:post:… links open the app at that post (see src/main.ts).
