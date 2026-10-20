@@ -286,6 +286,7 @@ export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 const SELF_SCOPE = 'self';
 
+
 /** A GitHub sign-in waiting for its code, or why the last one failed. */
 /** An app being installed from its release, or why that failed. */
 interface InstallJob {
@@ -537,9 +538,7 @@ export class WeaveNode implements Backend {
   async publish(input: PublishInput): Promise<FeedItem> {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
     if (!signer) throw new Error(noAgent(input.as!, this.#agents.map((a) => a.name)));
-    if (input.as && !permits((signer as AgentKey).permissions, input.kind)) {
-      throw new Error(`agent "${input.as}" may not sign ${input.kind}`);
-    }
+    if (input.as) this.#agentMay(input.as, input.kind);
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
@@ -547,6 +546,13 @@ export class WeaveNode implements Backend {
     const fields: EventFields = space ? sealFor(space, inner) : inner;
     const event = this.replica.append(signer, fields);
     return this.itemFor(event)!;
+  }
+
+  /** An agent may sign this kind, or an error saying how its person allows it. */
+  #agentMay(name: string, kind: string): void {
+    const agent = this.#agents.find((a) => a.name === name);
+    if (!agent) throw new Error(noAgent(name, this.#agents.map((a) => a.name)));
+    if (!permits(agent.permissions, kind)) throw new Error(`agent "${name}" may not sign ${kind}; its person can allow it with: weave agent can ${name} ${[...agent.permissions, kind].join(',')}`);
   }
 
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
@@ -1533,7 +1539,8 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  async linkRepo(input: { space: string; repo: string; board?: string; on: boolean }): Promise<SpaceRepos> {
+  async linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos> {
+    if (input.as) this.#agentMay(input.as, KIND_GITHUB_REPO);
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('direct chats have no repositories');
     const state = this.#state(space);
@@ -1552,19 +1559,20 @@ export class WeaveNode implements Backend {
       if (!match) throw new Error(`the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
       body.repo = match;
     }
-    this.replica.append(this.identity, sealFor(space, { kind: KIND_GITHUB_REPO, body }));
+    await this.publish({ kind: KIND_GITHUB_REPO, body, space: space.id, as: input.as });
     this.#githubSynced.delete(repo.toLowerCase());
     await this.#syncGithub();
     return this.spaceRepos(space.id);
   }
 
-  async shareGithub(input: { space: string; on: boolean }): Promise<SpaceRepos> {
+  async shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos> {
+    if (input.as) this.#agentMay(input.as, KIND_GITHUB_ACCOUNT);
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('direct chats have no repositories');
     if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
     const auth = input.on ? this.#githubAuth() : undefined;
     if (input.on && !auth) throw new Error('connect GitHub first, so Weave knows your account');
-    this.replica.append(this.identity, sealFor(space, { kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, on: true } : { on: false } }));
+    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, on: true } : { on: false }, space: space.id, as: input.as });
     return this.spaceRepos(space.id);
   }
 
@@ -1798,14 +1806,15 @@ export class WeaveNode implements Backend {
     return this.#app(this.#project(ref)) ?? null;
   }
 
-  async publishApp(input: { project: string; manifest: unknown; folder?: string }): Promise<AppManifest> {
+  async publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest> {
+    if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     this.#maintainerState(project);
     let manifest = parseManifest(input.manifest);
     // weave.app.json usually doesn't list the release files ("weave app release" adds them): keep the ones published.
     const before = this.#app(project)?.install;
     if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
-    this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
+    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
     if (input.folder) this.#rememberAppFolder(project.id, input.folder);
     return manifest;
   }
@@ -1947,7 +1956,8 @@ export class WeaveNode implements Backend {
     for (const entry of readdirSync(dir)) if (entry !== tagFolder(release.tag) && entry !== 'installed.json' && !entry.startsWith('.')) rmSync(joinPath(dir, entry), { recursive: true, force: true });
   }
 
-  async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string> }): Promise<AppManifest> {
+  async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
+    if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     const state = this.#maintainerState(project);
     const app = this.#app(project);
@@ -1990,7 +2000,7 @@ export class WeaveNode implements Backend {
     const own = this.config.githubApp?.slug;
     const { app: _app, ...before } = app.install ?? {};
     const manifest = parseManifest({ ...app, install: { ...before, github: repo, tag: release.tag, assets, ...(own ? { app: own } : {}) } });
-    this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
+    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
     return manifest;
   }
 

@@ -746,9 +746,9 @@ export interface Backend {
   /** A space's repositories, and whether you gave it your GitHub account. */
   spaceRepos(space: string): Promise<SpaceRepos>;
   /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
-  linkRepo(input: { space: string; repo: string; board?: string; on: boolean }): Promise<SpaceRepos>;
+  linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
-  shareGithub(input: { space: string; on: boolean }): Promise<SpaceRepos>;
+  shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
   showGithubOnHub(input: { on: boolean }): Promise<Profile>;
 
@@ -850,7 +850,7 @@ export interface Backend {
   projectApp(project: string): Promise<AppManifest | null>;
   /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
   /** Maintainers: publish the app manifest; `folder` (from the CLI) is remembered as this computer's copy of the app. */
-  publishApp(input: { project: string; manifest: unknown; folder?: string }): Promise<AppManifest>;
+  publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest>;
   /** Starting the app here: its command, your folder, whether you approved it, and whether it runs. */
   appLaunch(project: string): Promise<AppLaunchInfo>;
   /**
@@ -860,7 +860,7 @@ export interface Backend {
    */
   installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
   /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
-  releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string> }): Promise<AppManifest>;
+  releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
   setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */

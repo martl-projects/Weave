@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -48,6 +48,43 @@ describe('Weave over MCP', () => {
     expect(data.person.name).toBe('Martin');
     expect(data.actingAs).toMatchObject({ agent: 'forge', permissions: expect.arrayContaining(['weave.reply']) });
     expect(data.projects[0].name).toBe('Weave');
+    close();
+  });
+
+  it('tells the harness how Weave works, including what only the person can do', async () => {
+    const { client, close } = await setup();
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('weave_github_connect');
+    expect(instructions).toContain('Only select repositories');
+    expect(instructions).toMatch(/Things only the person does/);
+    close();
+  });
+
+  it('links repositories and publishes apps only with the permissions for it', async () => {
+    const { node, call, close } = await setup();
+    // A GitHub sign-in on this node, and a GitHub where the app may manage martl/weave.
+    writeFileSync(join(node.home.dir, 'github.json'), JSON.stringify({ token: 't', login: 'martl' }));
+    node.githubSetup = {
+      ...node.githubSetup,
+      fetch: (async (input: string | URL | Request) => {
+        const path = new URL(String(input)).pathname;
+        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : { message: 'Not Found' };
+        return new Response(JSON.stringify(body), { status: 'message' in body ? 404 : 200 });
+      }) as typeof fetch,
+    };
+
+    const refused = await call('weave_link_repo', { space: 'Weave', repo: 'martl/weave' });
+    expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it with: weave agent can forge .*weave\.github\.repo/);
+    writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));
+    const app = await call('weave_app_publish', { project: 'Weave', file: join(node.home.dir, 'weave.app.json') });
+    expect(app.error).toMatch(/may not sign weave\.app/);
+
+    await node.updateAgent({ name: 'forge', permissions: ['weave.post', 'weave.github.repo'] });
+    const linked = await call('weave_link_repo', { space: 'Weave', repo: 'https://github.com/martl/weave' });
+    expect(linked.data.repos).toMatchObject([{ repo: 'martl/weave', by: { name: 'Martin' } }]);
+    // Signed by the agent, on the person's behalf.
+    const event = (await node.feed({ space: 'Weave', kinds: ['weave.github.repo'] })).at(-1)!;
+    expect(event.signerName).toBe('forge');
     close();
   });
 

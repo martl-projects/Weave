@@ -163,7 +163,7 @@ npx weave daemon                                  # in its own terminal; the MCP
 claude mcp add weave -- node /path/to/weave/packages/cli/src/main.ts mcp --as forge
 ```
 
-Everything the agent does is signed with its own key and shows up as "you · forge". The tools cover projects, groups, communities, posts and their chats, boards, upvotes, issues and votes (voting only if you granted `weave.vote`). `weave_inbox` hands out what's new since the last call, flags messages that mention `@forge`, and can wait for the next event, so an agent can sit in a loop and answer when addressed. With `weave.react` it can also react, say 👀 when it picks something up and ✅ when it's done. Harnesses that prefer the command line can use `weave watch --as forge --mentions --json`.
+Everything the agent does is signed with its own key and shows up as "you · forge". The tools cover projects, groups, communities, posts and their chats, boards, upvotes, issues and votes (voting only if you granted `weave.vote`). `weave_inbox` hands out what's new since the last call, flags messages that mention `@forge`, and can wait for the next event, so an agent can sit in a loop and answer when addressed. With `weave.react` it can also react, say 👀 when it picks something up and ✅ when it's done. Harnesses that prefer the command line can use `weave watch --as forge --mentions --json`. With `weave.github.repo` it can link GitHub repositories to spaces you own or maintain, and with `weave.app` publish a project's app and point it at a GitHub release; the MCP server also tells the harness how these flows go and which steps only you can do (approving the GitHub sign-in and app install on github.com).
 
 ## GitHub
 

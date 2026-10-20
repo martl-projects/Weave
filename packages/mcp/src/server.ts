@@ -60,6 +60,26 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
 };
 
 /**
+ * What every harness is told about Weave when it connects: what it is, how
+ * the agent acts, and the flows that need the person (things only they can
+ * do, like approving a GitHub sign-in on github.com).
+ */
+export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
+
+Permissions: your person decides which kinds you may sign. A tool that needs more says so and names the command your person runs to allow it (for example weave.github.repo, weave.app); don't look for ways around it.
+
+GitHub repositories that follow a space (repo access for members):
+1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
+2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, ask your person to install the app from installUrl and choose "Only select repositories". Only they can, on github.com.
+3. weave_link_repo links it to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
+
+A project's app, installed by hosts from a GitHub release:
+1. weave_app_publish publishes the app's manifest (weave.app.json: app, name, services, start.command).
+2. After a release exists on GitHub, weave_app_release points the app at it by tag: Weave fingerprints each file. Hosts then install it with one click in the project's Live tab. Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
+
+Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
+
+/**
  * An MCP server that lets an agent harness take part in Weave: read projects and groups,
  * discussions, chat, issues and votes, write into them, and pick up what's new
  * through an inbox. It talks to a node through the Backend interface, so it
@@ -67,7 +87,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) {
   const as = options.as;
-  const server = new McpServer({ name: 'weave', version: VERSION });
+  const server = new McpServer({ name: 'weave', version: VERSION }, { instructions: INSTRUCTIONS });
 
   // ---------------------------------------------------------------- inbox
   const inbox: InboxItem[] = [];
@@ -458,6 +478,99 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
       inputSchema: { proposal: z.string().min(6), choice: z.enum(['yes', 'no', 'abstain']) },
     },
     run(async ({ proposal, choice }: { proposal: string; choice: 'yes' | 'no' | 'abstain' }) => backend.vote({ proposal, choice, as })),
+  );
+
+  // ---------------------------------------------------------------- GitHub and project apps
+
+  server.registerTool(
+    'weave_github',
+    {
+      title: 'GitHub sign-in',
+      description: "Whether this node is signed in to GitHub (and as whom), a sign-in waiting for its code, the GitHub App it signs in through with its owner, and where to install that app on repositories.",
+      annotations: { readOnlyHint: true },
+    },
+    run(async () => backend.github()),
+  );
+
+  server.registerTool(
+    'weave_github_connect',
+    {
+      title: 'Start a GitHub sign-in',
+      description: 'Starts signing this node in to GitHub. Returns a code and a link: your person enters the code on github.com (only they can). Then check weave_github until it shows the login.',
+    },
+    run(async () => {
+      const g = await backend.connectGithub();
+      return { ...g, tellYourPerson: g.pending ? `Open ${g.pending.verificationUri} and enter the code ${g.pending.userCode} to let Weave use your GitHub account.` : undefined };
+    }),
+  );
+
+  server.registerTool(
+    'weave_github_repos',
+    {
+      title: 'Repositories Weave can manage',
+      description: 'Repositories the GitHub App is installed on that the signed-in person administers: the ones that can be linked. A missing one needs the app installed on it (installUrl in weave_github).',
+      annotations: { readOnlyHint: true },
+    },
+    run(async () => backend.githubRepos()),
+  );
+
+  server.registerTool(
+    'weave_space_repos',
+    {
+      title: "A space's repositories",
+      description: 'Repositories linked to a group, tier or project, who linked them, whether you gave it your GitHub account, and (for whoever linked them) members who have not yet.',
+      inputSchema: { space: z.string().describe('Group, tier or project name or id') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ space }: { space: string }) => backend.spaceRepos(space)),
+  );
+
+  server.registerTool(
+    'weave_link_repo',
+    {
+      title: 'Link a repository',
+      description:
+        'Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). Members who give the space their GitHub account get read access. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository.',
+      inputSchema: { space: z.string(), repo: z.string().describe('owner/name or its github.com link'), board: z.string().optional().describe('In a project: only the readers of this board'), on: z.boolean().default(true) },
+    },
+    run(async ({ space, repo, board, on }: { space: string; repo: string; board?: string; on: boolean }) => backend.linkRepo({ space, repo, board, on, as })),
+  );
+
+  server.registerTool(
+    'weave_share_github',
+    {
+      title: 'Give a space your GitHub account',
+      description: "Give a space the GitHub account this node is signed in with, so its linked repositories invite it (on: false takes it back). Needs the weave.github.account permission.",
+      inputSchema: { space: z.string(), on: z.boolean().default(true) },
+    },
+    run(async ({ space, on }: { space: string; on: boolean }) => backend.shareGithub({ space, on, as })),
+  );
+
+  server.registerTool(
+    'weave_app_publish',
+    {
+      title: "Publish a project's app",
+      description:
+        "Maintainers: publish (or replace) a project's app manifest from its weave.app.json on this computer: the app's id and name, the ports a room may share, and start.command. Release files set by weave_app_release are kept. Needs the weave.app permission.",
+      inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
+    },
+    run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
+  );
+
+  server.registerTool(
+    'weave_app_release',
+    {
+      title: "Point a project's app at a GitHub release",
+      description:
+        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave downloads each file once to fingerprint it (SHA-256); hosts then install it from the project's Live tab. Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
+      inputSchema: {
+        project: z.string(),
+        tag: z.string().describe('The release tag, like v1.4'),
+        repo: z.string().optional().describe("owner/name; default: the project's linked repository"),
+        assets: z.record(z.string(), z.string()).optional(),
+      },
+    },
+    run(async ({ project, tag, repo, assets }: { project: string; tag: string; repo?: string; assets?: Record<string, string> }) => backend.releaseApp({ project, tag, repo, assets, as })),
   );
 
   return {
