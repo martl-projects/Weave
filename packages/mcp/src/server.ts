@@ -82,7 +82,7 @@ GitHub repositories that follow a space (repo access for members):
 
 A project's app, installed by hosts with one click (prefer this to asking hosts to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
-2. Commit, push, tag (v0.1.0) and push the tag. The workflow makes the release in a few minutes.
+2. Commit, push, tag (v0.1.0) and push the tag. Weave installs from a GitHub release with build files attached: a tag alone isn't a release, and GitHub's automatic source archives don't count. The workflow makes that release from the tag in a few minutes; without such a workflow, someone has to create the release and attach the builds on github.com.
 3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Hosts then install it from the project's Live tab. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
 Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
 
@@ -720,8 +720,15 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
       },
     },
     run(async ({ project, tag, repo, assets, wait }: { project: string; tag: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
-      // A pushed tag becomes a release with files a few minutes later: look every 30 seconds.
+      // A pushed tag becomes a release with files a few minutes later, if a workflow makes it: look every 30 seconds.
       const until = Date.now() + (wait ?? 0) * 60_000;
+      if (wait) {
+        const now = await backend.appReleases(project).catch(() => undefined);
+        if (now && !now.releases.some((r) => r.tag === tag) && now.releaseWorkflow === false)
+          throw new Error(
+            `${now.repo} has no workflow that turns a pushed tag into a release, so waiting won't help: a tag alone isn't a release. Add Weave's release workflow (weave_release_workflow) and push the tag again, or ask your person to create the release with build files on github.com.`,
+          );
+      }
       while (Date.now() < until) {
         const ready = await backend.appReleases(project).then(
           (r) => r.releases.some((x) => x.tag === tag && x.files > 0),

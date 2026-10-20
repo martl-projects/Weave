@@ -898,7 +898,7 @@ export interface Backend {
   /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
-  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> }>;
+  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
   /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
   setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */

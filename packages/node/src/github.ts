@@ -180,14 +180,32 @@ export class GitHub {
     await this.#call('DELETE', `/gists/${encodeURIComponent(id)}`);
   }
 
-  /** A file in a repository at a tag or branch, or undefined when there's none. */
-  async fileAt(repo: string, path: string, ref: string): Promise<string | undefined> {
+  /** A file in a repository at a tag or branch (default: its default branch), or undefined when there's none. */
+  async fileAt(repo: string, path: string, ref?: string): Promise<string | undefined> {
     try {
-      const { data } = await this.#call<{ content?: string; encoding?: string }>('GET', `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`);
+      const { data } = await this.#call<{ content?: string; encoding?: string }>('GET', `/repos/${repo}/contents/${path}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`);
       return data.content && data.encoding === 'base64' ? Buffer.from(data.content, 'base64').toString('utf8') : undefined;
     } catch (error) {
       if (/ 404/.test((error as Error).message)) return undefined;
       throw error;
+    }
+  }
+
+  /**
+   * Whether the repository has a GitHub Actions workflow that runs on pushed tags and makes
+   * releases (like Weave's): without one, a pushed tag never becomes a release by itself.
+   * Undefined when GitHub can't say.
+   */
+  async hasReleaseWorkflow(repo: string): Promise<boolean | undefined> {
+    try {
+      const { data } = await this.#call<Array<{ name: string; path: string; type: string }>>('GET', `/repos/${repo}/contents/.github/workflows`);
+      for (const file of data.filter((f) => f.type === 'file' && /\.ya?ml$/.test(f.name))) {
+        const text = await this.fileAt(repo, file.path);
+        if (text && /\btags\b/.test(text) && /release/i.test(text)) return true;
+      }
+      return false;
+    } catch (error) {
+      return / 404/.test((error as Error).message) ? false : undefined;
     }
   }
 

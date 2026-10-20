@@ -28,6 +28,8 @@ function buildArchive(): Buffer {
 /** GitHub as far as releases go: one release whose file can be swapped to test the check. */
 class FakeReleases {
   files = new Map<number, { name: string; bytes: Buffer }>();
+  /** The repository has a workflow that makes releases from tags. */
+  workflow = false;
   /** weave.app.json in the repository at the tag, if any. */
   manifest?: unknown;
   downloads = 0;
@@ -35,6 +37,10 @@ class FakeReleases {
     const url = new URL(String(input));
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
     if (url.pathname === '/repos/martl/gameshow/releases/tags/v1.4') return json(200, { tag_name: 'v1.4', assets: [...this.files].map(([id, f]) => ({ id, name: f.name, size: f.bytes.length })) });
+    if (url.pathname === '/repos/martl/gameshow/contents/.github/workflows')
+      return this.workflow ? json(200, [{ name: 'weave-release.yml', path: '.github/workflows/weave-release.yml', type: 'file' }]) : json(404, { message: 'Not Found' });
+    if (url.pathname === '/repos/martl/gameshow/contents/.github/workflows/weave-release.yml')
+      return json(200, { encoding: 'base64', content: Buffer.from(['on:', '  push:', "    tags: ['v*']", 'jobs:', '  release: {}'].join('\n')).toString('base64') });
     if (url.pathname === '/repos/martl/gameshow/releases')
       return json(200, [
         { tag_name: 'v1.5', name: 'Draft', published_at: null, draft: true, prerelease: false, assets: [] },
@@ -139,8 +145,19 @@ describe('installing a project app from its release', () => {
     await martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow', assets: { [platformKey()]: 'Gameshow-1.4-mine.tar.gz' } });
     expect((await martl.appLaunch('Gameshow')).release).toEqual({ canRelease: true, repo: 'martl/gameshow' });
     expect((await martl.appReleases('Gameshow')).releases).toEqual([{ tag: 'v1.4', name: 'Gameshow 1.4', published: '2026-10-20T10:00:00Z', files: 1, prerelease: false }]);
+    expect((await martl.appReleases('Gameshow')).releaseWorkflow).toBe(false);
+    github.workflow = true;
+    expect((await martl.appReleases('Gameshow')).releaseWorkflow).toBe(true);
     syncAll([martl, lena]);
     expect((await lena.appLaunch('Gameshow')).release?.canRelease).toBe(false);
+  });
+
+  it('says plainly when a release has no build files', async () => {
+    const github = new FakeReleases(); // a release with no files: only GitHub's source archives
+    const martl = person('martl', github);
+    await martl.createProject({ name: 'Gameshow' });
+    await martl.publishApp({ project: 'Gameshow', manifest: { app: 'gameshow', services: [{ port: 7777 }] } });
+    await expect(martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow' })).rejects.toThrow(/has no build files attached.*source archives don't count/);
   });
 
   it("refuses a file that isn't the one the maintainer published", async () => {

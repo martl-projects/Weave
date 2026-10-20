@@ -1937,13 +1937,15 @@ export class WeaveNode implements Backend {
     return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
   }
 
-  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> }> {
+  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
     const project = this.#project(ref);
     const app = this.#app(project);
     const repo = app ? this.#releaseInfo(project, app).repo : undefined;
     if (!repo) throw new Error(`${project.name} has no GitHub repository to take releases from: link one in its settings`);
     const auth = this.#githubAuth();
-    return { repo, releases: await new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(repo) };
+    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
+    const [releases, releaseWorkflow] = await Promise.all([client.releases(repo), client.hasReleaseWorkflow(repo)]);
+    return { repo, releases, ...(releaseWorkflow !== undefined ? { releaseWorkflow } : {}) };
   }
 
   async setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo> {
@@ -2077,6 +2079,10 @@ export class WeaveNode implements Backend {
     const auth = this.#githubAuth();
     const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
     const release = await client.release(repo, input.tag.trim());
+    if (!release.assets.length)
+      throw new Error(
+        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com`,
+      );
     // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
     const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
     let app: AppManifest;

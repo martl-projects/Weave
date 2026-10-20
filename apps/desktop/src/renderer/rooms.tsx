@@ -207,7 +207,7 @@ type Release = { tag: string; name: string; published?: string; files: number; p
 
 /** Maintainers: point the app at one of its repository's GitHub releases (Weave reads weave.app.json at that tag and fingerprints the files). */
 function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: AppManifest; onClose(): void }) {
-  const { data, error } = useApi(() => api<{ repo: string; releases: Release[] }>('appReleases', project.id), [project.id]);
+  const { data, error } = useApi(() => api<{ repo: string; releases: Release[]; releaseWorkflow?: boolean }>('appReleases', project.id), [project.id]);
   const [busy, setBusy] = useState<string>();
   const use = async (tag: string) => {
     setBusy(tag);
@@ -223,8 +223,15 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
         <p className="small">Asking GitHub for releases…</p>
       ) : data.releases.length === 0 ? (
         <p>
-          <b>{data.repo}</b> has no releases yet. Push a version tag (like v0.1.0); if the repository has Weave's release workflow (<code>weave app workflow</code>), it builds one in a few minutes. Then
-          come back here.
+          <b>{data.repo}</b> has no releases yet.{' '}
+          {data.releaseWorkflow === false ? (
+            <>
+              It has no workflow that makes releases from tags either, so a pushed tag alone won't do: add Weave's release workflow (<code>weave app workflow</code>, or ask your agent), or create
+              a release on GitHub and attach the builds.
+            </>
+          ) : (
+            <>Push a version tag (like v0.1.0): its release workflow builds the release in a few minutes. Then come back here.</>
+          )}
         </p>
       ) : (
         <>
