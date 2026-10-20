@@ -44,6 +44,53 @@ describe('following boards', () => {
     await expect(lena.followBoard({ project: 'Weave', board: 'nope', on: true })).rejects.toThrow();
   });
 
+  it('switches a whole project or community off and back on, keeping the board choices', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Weave' });
+    await martl.createCommunity({ name: 'Synths' });
+    await lena.joinSpace(await martl.invite('Weave'));
+    await lena.joinSpace(await martl.invite('Synths'));
+    syncAll([martl, lena]);
+    await lena.followBoard({ project: 'Weave', board: 'ideas', on: true });
+    await martl.submit({ space: 'Weave', board: 'releases', title: 'v0.3' });
+    await martl.submit({ space: 'Weave', board: 'ideas', title: 'Tray icon' });
+    await martl.submit({ space: 'Synths', title: 'Patch of the week' });
+    syncAll([martl, lena]);
+    expect(await home(lena)).toEqual(['ideas Tray icon', 'posts Patch of the week', 'project Weave', 'releases v0.3']);
+
+    await lena.setHomeVisibility({ space: 'Weave', visible: false });
+    await lena.setHomeVisibility({ space: 'Synths', visible: false });
+    expect(await home(lena)).toEqual([]);
+
+    // Back on: the boards Lena followed come back, ideas included.
+    await lena.setHomeVisibility({ space: 'Weave', visible: true });
+    await lena.setHomeVisibility({ space: 'Synths', visible: true });
+    expect(await home(lena)).toEqual(['ideas Tray icon', 'posts Patch of the week', 'project Weave', 'releases v0.3']);
+  });
+
+  it('notifies about new posts in followed communities, and not in unfollowed projects', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Weave' });
+    await martl.createCommunity({ name: 'Synths' });
+    await lena.joinSpace(await martl.invite('Weave'));
+    await lena.joinSpace(await martl.invite('Synths'));
+    syncAll([martl, lena]);
+    await martl.setHomeVisibility({ space: 'Weave', visible: false });
+
+    const items: FeedItem[] = [];
+    const stop = new AbortController();
+    const watching = martl.watch((item) => items.push(item), stop.signal);
+    await lena.submit({ space: 'Synths', title: 'Patch of the week' });
+    await lena.submit({ space: 'Weave', board: 'releases', title: 'v0.3' });
+    syncAll([martl, lena]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stop.abort();
+    await watching;
+    expect(items.filter((i) => i.notice).map((i) => `${i.notice!.title} — ${i.notice!.text}`)).toEqual(['New post in r/Synths — Lena: Patch of the week']);
+  });
+
   it('notifies about new posts only in boards you follow', async () => {
     const martl = person('martl');
     const lena = person('Lena');

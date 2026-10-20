@@ -46,8 +46,8 @@ function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): vo
   const list = spaces.filter((s) => (s.kind === 'community' || s.kind === 'project') && !s.closed);
   const toggle = (s: SpaceInfo, visible: boolean) => attempt(() => api('setHomeVisibility', { space: s.id, visible }).then(bump));
   return (
-    <Modal title="Show on Home" onClose={onClose}>
-      <p className="small">Choose what feeds your Home. Hidden ones stay in the sidebar and work as usual. Only you know what you hide.</p>
+    <Modal title="Follow" onClose={onClose}>
+      <p className="small">What you follow feeds your Home and tells you about new posts; in projects, only from the boards you follow. Unfollowed ones stay in the sidebar and work as usual. Only you know what you follow.</p>
       {(['community', 'project'] as const).map((kind) => {
         const ofKind = list.filter((s) => s.kind === kind);
         return (

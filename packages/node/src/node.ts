@@ -2975,7 +2975,10 @@ export class WeaveNode implements Backend {
       const named = Array.isArray(body.with) ? body.with : [];
       const title = text('title') || snippet(text('text'));
       if (named.some((d) => typeof d === 'string' && mine.has(d))) return { type: 'coauthor', category: 'requests', title: `${who} named you as co-author`, text: title, open: { inbox: true } };
-      if (space?.kind !== 'project' || !title) return undefined;
+      // Unfollowed (off Home): no news from it. Followed communities tell you about every new post.
+      if (!space || !title || this.#homeHidden().has(space.id)) return undefined;
+      if (space.kind === 'community') return { type: 'post', category: 'activity', title: `New post in ${where}`, text: `${who}: ${title}`, open: { space, post: item.id } };
+      if (space.kind !== 'project') return undefined;
       const stored = this.#spaces.get(space.id);
       const board = stored && this.#spacePosts(stored).posts.find((p) => p.id === item.id)?.board;
       if (!board || !this.#follows(space.id, board)) return undefined;

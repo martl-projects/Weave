@@ -14,7 +14,7 @@ import { Modal } from './ui.tsx';
 export const NOTICE_CATEGORIES: Record<NoticeCategory, { label: string; hint: string }> = {
   messages: { label: 'Messages to you', hint: 'Direct messages, @mentions, replies to you and chat in your posts' },
   requests: { label: 'Requests for you', hint: 'Co-author requests, people asking to join or for a tier' },
-  activity: { label: 'Project activity', hint: 'New posts, issues and proposals in your projects' },
+  activity: { label: 'New posts', hint: 'In communities you follow, and in the boards you follow in your projects' },
 };
 
 type Settings = Record<NoticeCategory, boolean>;

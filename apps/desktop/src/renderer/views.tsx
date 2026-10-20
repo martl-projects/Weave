@@ -529,6 +529,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
               <button onClick={() => attempt(() => api('save', { target: info.post!.id, mode: info.post!.saved === 'pinned' ? null : 'pinned' }).then(bump), info.post!.saved === 'pinned' ? 'Unpinned' : 'Pinned to your home')}>
                 <Icon name="mapPin" /> {info.post.saved === 'pinned' ? 'Unpin' : 'Pin'}
               </button>
+              <FollowSpace space={project} />
             </div>
           )}
         </div>
@@ -974,6 +975,21 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
 
 // ---------------------------------------------------------------- communities
 
+/** The top-level switch for a project or community: followed ones are on Home and tell you about new posts. */
+function FollowSpace({ space }: { space: SpaceInfo }) {
+  const on = !space.hiddenFromHome;
+  const what = space.kind === 'project' ? 'the boards you follow here' : 'its posts';
+  return (
+    <button
+      className={on ? 'chosen' : ''}
+      title={on ? `On your Home with ${what}, and new ones notify you. Click to unfollow.` : `Follow to bring ${what} to your Home and get notified`}
+      onClick={() => attempt(() => api('setHomeVisibility', { space: space.id, visible: !on }).then(bump), on ? `Unfollowed ${space.name}` : `Following ${space.name}`)}
+    >
+      {on ? '✓ Following' : 'Follow'}
+    </button>
+  );
+}
+
 export function CommunityBanner({ community, onInvite, onSubmit }: { community: SpaceInfo; onInvite(): void; onSubmit(): void }) {
   const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
   return (
@@ -993,6 +1009,7 @@ export function CommunityBanner({ community, onInvite, onSubmit }: { community: 
         <button onClick={onInvite}>
           <Icon name="userPlus" /> Invite
         </button>
+        <FollowSpace space={community} />
       </div>
     </div>
   );

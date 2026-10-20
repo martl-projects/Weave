@@ -151,7 +151,7 @@ export interface SpaceInfo extends SpaceRef {
   waiting?: true;
   /** Closed by its owner or maintainers: kept, read-only. */
   closed?: true;
-  /** You chose not to see it on Home (only you know). */
+  /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
 }
 
