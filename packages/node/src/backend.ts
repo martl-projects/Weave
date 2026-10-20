@@ -455,6 +455,8 @@ export interface AppLaunchInfo {
   exit?: { code: number | null; time: string; stopped?: true };
   /** The app's last lines of output. */
   log: string[];
+  /** You may point the app at a GitHub release (a maintainer), and the repository its releases come from. */
+  release?: { canRelease: boolean; repo?: string };
   /** Getting the app: its release, the file for this computer, and steps for an agent. */
   install?: {
     /** The release's tag. */
@@ -895,6 +897,8 @@ export interface Backend {
   installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
   /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
+  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> }>;
   /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
   setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
@@ -974,7 +978,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

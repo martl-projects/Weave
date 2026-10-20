@@ -35,6 +35,11 @@ class FakeReleases {
     const url = new URL(String(input));
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
     if (url.pathname === '/repos/martl/gameshow/releases/tags/v1.4') return json(200, { tag_name: 'v1.4', assets: [...this.files].map(([id, f]) => ({ id, name: f.name, size: f.bytes.length })) });
+    if (url.pathname === '/repos/martl/gameshow/releases')
+      return json(200, [
+        { tag_name: 'v1.5', name: 'Draft', published_at: null, draft: true, prerelease: false, assets: [] },
+        { tag_name: 'v1.4', name: 'Gameshow 1.4', published_at: '2026-10-20T10:00:00Z', draft: false, prerelease: false, assets: [...this.files.values()] },
+      ]);
     if (url.pathname === '/repos/martl/gameshow/contents/weave.app.json')
       return this.manifest && url.searchParams.get('ref') === 'v1.4' ? json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(this.manifest)).toString('base64') }) : json(404, { message: 'Not Found' });
     const m = url.pathname.match(/^\/repos\/martl\/gameshow\/releases\/assets\/(\d+)$/);
@@ -117,6 +122,25 @@ describe('installing a project app from its release', () => {
     await other.createProject({ name: 'Other' });
     github.manifest = undefined;
     await expect(other.releaseApp({ project: 'Other', tag: 'v1.4', repo: 'martl/gameshow' })).rejects.toThrow(/no weave.app.json at v1.4/);
+  });
+
+  it('lists the releases maintainers can pick, and says who may', async () => {
+    const github = new FakeReleases();
+    github.files.set(11, { name: 'Gameshow-1.4-mine.tar.gz', bytes: buildArchive() });
+    const martl = person('martl', github);
+    const lena = person('Lena', github);
+    await martl.createProject({ name: 'Gameshow' });
+    await lena.joinSpace(await martl.invite('Gameshow'));
+    await martl.publishApp({ project: 'Gameshow', manifest: { app: 'gameshow', services: [{ port: 7777 }], start: { command: ['node', 'start.js'] } } });
+    // No repository yet: maintainers are told to link one.
+    expect((await martl.appLaunch('Gameshow')).release).toEqual({ canRelease: true });
+    await expect(martl.appReleases('Gameshow')).rejects.toThrow(/link one/);
+
+    await martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow', assets: { [platformKey()]: 'Gameshow-1.4-mine.tar.gz' } });
+    expect((await martl.appLaunch('Gameshow')).release).toEqual({ canRelease: true, repo: 'martl/gameshow' });
+    expect((await martl.appReleases('Gameshow')).releases).toEqual([{ tag: 'v1.4', name: 'Gameshow 1.4', published: '2026-10-20T10:00:00Z', files: 1, prerelease: false }]);
+    syncAll([martl, lena]);
+    expect((await lena.appLaunch('Gameshow')).release?.canRelease).toBe(false);
   });
 
   it("refuses a file that isn't the one the maintainer published", async () => {

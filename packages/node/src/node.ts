@@ -1922,8 +1922,26 @@ export class WeaveNode implements Backend {
       running: this.#apps.running(project.id),
       ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
       log: run?.log ?? [],
+      ...(app ? { release: this.#releaseInfo(project, app) } : {}),
       ...(install ? { install } : {}),
     };
+  }
+
+  /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
+  #releaseInfo(project: StoredSpace, app: AppManifest): { canRelease: boolean; repo?: string } {
+    const state = this.#state(project);
+    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
+    const repo = app.install?.github ?? (linked.length === 1 ? linked[0].repo : undefined);
+    return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
+  }
+
+  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> }> {
+    const project = this.#project(ref);
+    const app = this.#app(project);
+    const repo = app ? this.#releaseInfo(project, app).repo : undefined;
+    if (!repo) throw new Error(`${project.name} has no GitHub repository to take releases from: link one in its settings`);
+    const auth = this.#githubAuth();
+    return { repo, releases: await new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(repo) };
   }
 
   async setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo> {

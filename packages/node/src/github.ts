@@ -191,6 +191,14 @@ export class GitHub {
     }
   }
 
+  /** A repository's recent releases, newest first (drafts left out). */
+  async releases(repo: string): Promise<Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>> {
+    const { data } = await this.#call<Array<{ tag_name: string; name: string | null; published_at: string | null; draft: boolean; prerelease: boolean; assets: unknown[] }>>('GET', `/repos/${repo}/releases?per_page=15`);
+    return data
+      .filter((r) => !r.draft)
+      .map((r) => ({ tag: r.tag_name, name: r.name || r.tag_name, ...(r.published_at ? { published: r.published_at } : {}), files: r.assets.length, prerelease: r.prerelease }));
+  }
+
   /** A release by its tag, with its files. */
   async release(repo: string, tag: string): Promise<{ tag: string; assets: ReleaseAsset[] }> {
     const { data } = await this.#call<{ tag_name: string; assets: Array<{ id: number; name: string; size: number }> }>('GET', `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`).catch((error: Error) => {

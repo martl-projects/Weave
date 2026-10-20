@@ -547,3 +547,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .install-facts th { text-align: left; padding-right: 10px; vertical-align: top; white-space: nowrap; }
 .install-facts td { padding-bottom: 4px; }
 .app-trust { margin-top: 6px; }
+.release-list { width: 100%; border-collapse: collapse; background: transparent; }
+.release-list td { padding: 4px 2px; border-bottom: 1px solid #c0c0c0; }
+.release-list td:last-child { text-align: right; white-space: nowrap; }

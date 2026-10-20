@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
+import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
 import { Page } from './views.tsx';
 import { copy } from './posts.tsx';
@@ -203,9 +203,92 @@ const agentPrompt = (project: SpaceInfo, app: AppManifest, launch: AppLaunchInfo
     .filter(Boolean)
     .join('\n');
 
+type Release = { tag: string; name: string; published?: string; files: number; prerelease: boolean };
+
+/** Maintainers: point the app at one of its repository's GitHub releases (Weave reads weave.app.json at that tag and fingerprints the files). */
+function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: AppManifest; onClose(): void }) {
+  const { data, error } = useApi(() => api<{ repo: string; releases: Release[] }>('appReleases', project.id), [project.id]);
+  const [busy, setBusy] = useState<string>();
+  const use = async (tag: string) => {
+    setBusy(tag);
+    const done = await attempt(() => api<AppManifest>('releaseApp', { project: project.id, tag }).then(bump), `${app.name} ${tag} is ready to install from Live`);
+    setBusy(undefined);
+    if (done !== undefined) onClose();
+  };
+  return (
+    <Modal title={`Use a GitHub release · ${app.name}`} onClose={onClose}>
+      {error ? (
+        <p>{error}</p>
+      ) : !data ? (
+        <p className="small">Asking GitHub for releases…</p>
+      ) : data.releases.length === 0 ? (
+        <p>
+          <b>{data.repo}</b> has no releases yet. Push a version tag (like v0.1.0); if the repository has Weave's release workflow (<code>weave app workflow</code>), it builds one in a few minutes. Then
+          come back here.
+        </p>
+      ) : (
+        <>
+          <p className="small">
+            Releases of <b>{data.repo}</b>. Weave reads <code>weave.app.json</code> at the tag you pick and fingerprints each file once; then everyone in {project.name} can install it here.
+          </p>
+          <table className="release-list">
+            <tbody>
+              {data.releases.map((r) => (
+                <tr key={r.tag}>
+                  <td>
+                    <b>{r.name}</b> {r.name !== r.tag && <span className="small muted">{r.tag}</span>} {r.prerelease && <span className="tag">pre-release</span>}
+                    <div className="small muted">
+                      {r.published ? ago(r.published) : ''} · {r.files} file{r.files === 1 ? '' : 's'}
+                    </div>
+                  </td>
+                  <td>
+                    <button className="default" disabled={!!busy || r.files === 0} title={r.files === 0 ? 'No files to install: GitHub\'s source archives don\'t count' : undefined} onClick={() => use(r.tag)}>
+                      {busy === r.tag ? 'Fingerprinting…' : 'Use this'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Before any release: say so, and let maintainers pick one from GitHub. */
+function NoReleaseBox({ project, app, launch }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo }) {
+  const [picking, setPicking] = useState(false);
+  const r = launch.release;
+  if (launch.install?.version || !r) return null;
+  return (
+    <div className="install-box">
+      <span className="grow small">
+        {r.canRelease ? (
+          r.repo ? (
+            <>
+              No release of {app.name} for people to install yet. Push a version tag to <b>{r.repo}</b> (its release workflow builds one), then pick it here.
+            </>
+          ) : (
+            <>No release of {app.name} yet: link its GitHub repository in the project's settings, and people can install releases with one click.</>
+          )
+        ) : (
+          <>There's no ready-made download of {app.name} yet{launch.folder ? '' : '; if you have a copy, choose its folder'}.</>
+        )}
+      </span>
+      {r.canRelease && r.repo && <button onClick={() => setPicking(true)}>Use a GitHub release…</button>}
+      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
+    </div>
+  );
+}
+
 /** Getting the app: install or update from its release, or have an agent do it by hand. */
 function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo; onPick(): void }) {
   const [confirming, setConfirming] = useState(false);
+  const [picking, setPicking] = useState(false);
   const i = launch.install;
   // While installing, look every second.
   useEffect(() => {
@@ -233,8 +316,21 @@ function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app:
       </div>
     );
   const outdated = i.installed && i.version && i.installed !== i.version;
+  const other = launch.release?.canRelease && launch.release.repo && (
+    <a
+      href="#"
+      className="small"
+      onClick={(e) => {
+        e.preventDefault();
+        setPicking(true);
+      }}
+    >
+      Use another release…
+    </a>
+  );
   return (
     <>
+      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
       {i.error && <div className="small error-text">The last install didn't work: {i.error}</div>}
       {i.otherApp && (
         <div className="small">
@@ -269,6 +365,13 @@ function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app:
           <button className="default" onClick={() => setConfirming(true)}>
             {outdated ? 'Update…' : 'Install…'}
           </button>
+        </div>
+      ) : i.installed && other ? (
+        <div className="install-box">
+          <span className="grow small">
+            {app.name} {i.installed}, installed by Weave.
+          </span>
+          {other}
         </div>
       ) : !i.asset && !launch.folder ? (
         <div className="install-box">
@@ -305,6 +408,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
   return (
     <fieldset className="app-panel">
       <legend>{app.name} on this computer</legend>
+      <NoReleaseBox project={project} app={app} launch={launch} />
       <InstallBox project={project} app={app} launch={launch} onPick={pick} />
       {!launch.command ? (
         launch.hint && <p className="small">To host, start {app.name} yourself: {launch.hint}</p>
