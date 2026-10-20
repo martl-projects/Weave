@@ -144,8 +144,10 @@ export interface SpaceInfo extends SpaceRef {
 export interface GitHubInfo {
   /** This copy of Weave knows the Weave GitHub app (it has its client ID). */
   available: boolean;
-  /** Where to install the Weave app on repositories, so they can be linked. */
+  /** Where to install the app on repositories, so they can be linked. */
   installUrl: string;
+  /** The GitHub App you sign in through, who owns it, and whether it's your own choice (not Weave Connect). */
+  app: { name: string; slug: string; owner: string; url: string; own: boolean };
   /** Who you're signed in as on this device. */
   login?: string;
   /** A sign-in waiting for you to enter the code on GitHub. */
@@ -429,6 +431,8 @@ export interface AppLaunchInfo {
     error?: string;
     /** For an agent, installing it by hand. */
     steps?: string[];
+    /** The GitHub App the release downloads through, when it isn't the one you sign in with. */
+    otherApp?: string;
   };
 }
 
@@ -523,14 +527,13 @@ export interface Profile {
   posts: number;
   /** Projects they show publicly. */
   projects: PublicProject[];
-  /** The GitHub account they show on their hub, and the repositories they chose. */
+  /** The GitHub account they show on their hub. */
   github?: HubGitHub;
 }
 
 export interface HubGitHub {
   login: string;
   url: string;
-  repos: string[];
   /** A gist of that account names their did. False when it doesn't (then it isn't shown); undefined when GitHub couldn't be asked. */
   verified?: boolean;
 }
@@ -716,6 +719,8 @@ export interface Backend {
   connectGithub(): Promise<GitHubInfo>;
   /** Forget the GitHub sign-in on this device. Repos you linked stop following their spaces until you connect again. */
   disconnectGithub(): Promise<GitHubInfo>;
+  /** Sign in through your own GitHub App (its page link, https://github.com/apps/<name>), or null for Weave Connect. Signs you out of the other one. */
+  setGithubApp(app: string | null): Promise<GitHubInfo>;
   /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
   githubRepos(): Promise<string[]>;
   /** A space's repositories, and whether you gave it your GitHub account. */
@@ -724,10 +729,8 @@ export interface Backend {
   linkRepo(input: { space: string; repo: string; board?: string; on: boolean }): Promise<SpaceRepos>;
   /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
   shareGithub(input: { space: string; on: boolean }): Promise<SpaceRepos>;
-  /** Your own public repositories on GitHub, to choose from for your hub. */
-  githubPublicRepos(): Promise<string[]>;
-  /** Show your GitHub account (proven by a public gist naming your did) and some of its repos on your hub, or (on: false) stop. */
-  showGithubOnHub(input: { on: boolean; repos?: string[] }): Promise<Profile>;
+  /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
+  showGithubOnHub(input: { on: boolean }): Promise<Profile>;
 
   // communities
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
@@ -901,7 +904,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'githubPublicRepos', 'showGithubOnHub',
+  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

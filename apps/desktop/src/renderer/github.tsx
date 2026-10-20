@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BoardInfo, GitHubInfo, HubGitHub, Profile, SpaceInfo, SpaceRepos } from '@weave/node/client';
+import type { BoardInfo, GitHubInfo, Profile, SpaceInfo, SpaceRepos } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { copy } from './posts.tsx';
@@ -12,6 +12,26 @@ import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
  * get read access, and lose it when they leave. Weave only ever takes away
  * access it gave.
  */
+
+/**
+ * The honest part about GitHub Apps: whoever owns one can act on every
+ * repository it's installed on (with a key Weave never uses). Shown wherever
+ * people sign in or install it.
+ */
+export function AppTrust({ github }: { github?: GitHubInfo }) {
+  if (!github) return null;
+  const { app } = github;
+  return (
+    <p className="small app-trust">
+      You sign in through the GitHub App{' '}
+      <a href={app.url} target="_blank" rel="noopener noreferrer">
+        {app.name}
+      </a>
+      , owned by <b>{app.owner}</b>
+      {app.own ? ' (your own choice)' : ''}. A GitHub App's owner can act on every repository it's installed on, so install it only on the repositories you link, or use your own app (Keys &amp; devices → Linked accounts).
+    </p>
+  );
+}
 
 /** Signing in to GitHub: the code to type on github.com, until GitHub says yes. */
 export function GitHubConnectDialog({ onClose, onDone }: { onClose(): void; onDone?(login: string): void }) {
@@ -70,9 +90,8 @@ export function GitHubConnectDialog({ onClose, onDone }: { onClose(): void; onDo
           <div className="user-code sunken" title="Click to copy" onClick={() => copy(info.pending!.userCode, 'Code copied')}>
             {info.pending.userCode}
           </div>
-          <p className="small">
-            Weave can then add and remove collaborators on the repositories you install its GitHub app on, nothing else. The sign-in stays on this computer.
-          </p>
+          <p className="small">The sign-in stays on this computer. With it, Weave manages collaborators and downloads releases only on repositories where the app is installed and you have access yourself.</p>
+          <AppTrust github={info} />
         </div>
       )}
       <div className="buttons">
@@ -87,7 +106,9 @@ export function GitHubConnectDialog({ onClose, onDone }: { onClose(): void; onDo
 /** In Keys & devices: the GitHub account this computer is signed in with. */
 export function LinkedAccountsBox() {
   const { data: github } = useApi(() => api<GitHubInfo>('github'), []);
+  const { data: me } = useApi(() => api<Profile>('profile'), []);
   const [connecting, setConnecting] = useState(false);
+  const [ownApp, setOwnApp] = useState(false);
   return (
     <fieldset>
       <legend>Linked accounts</legend>
@@ -114,9 +135,81 @@ export function LinkedAccountsBox() {
           github?.available && <button onClick={() => setConnecting(true)}>Connect…</button>
         )}
       </div>
+      {github && (
+        <div className="field-row">
+          <span className="grow small">
+            Through{' '}
+            <a href={github.app.url} target="_blank" rel="noopener noreferrer">
+              {github.app.name}
+            </a>
+            , owned by {github.app.owner}
+            {github.app.own ? ' (your own app)' : ''}.
+          </span>
+          {github.app.own ? (
+            <AsyncButton onClick={async () => (await ask('Go back to Weave Connect? You sign in again through it.', 'Go back')) && attempt(() => api('setGithubApp', null).then(bump), 'Back to Weave Connect')}>Use Weave Connect</AsyncButton>
+          ) : (
+            <button onClick={() => setOwnApp(true)}>Use your own app…</button>
+          )}
+        </div>
+      )}
+      {github?.login && me && (
+        <div className="field-row">
+          <input
+            type="checkbox"
+            id="github-on-hub"
+            checked={!!me.github}
+            onChange={(e) => void attempt(() => api('showGithubOnHub', { on: e.target.checked }).then(bump), e.target.checked ? 'Your hub shows your GitHub account' : 'Your hub no longer shows GitHub')}
+          />
+          <label htmlFor="github-on-hub">Show {github.login} on my hub</label>
+          <span className="small muted">(proven by a public gist naming your identity, which Weave creates once)</span>
+        </div>
+      )}
       <p className="small">With GitHub connected, groups, tiers and projects can give you access to their repositories, and you can link your own.</p>
       {connecting && <GitHubConnectDialog onClose={() => setConnecting(false)} />}
+      {ownApp && <OwnAppDialog onClose={() => setOwnApp(false)} />}
     </fieldset>
+  );
+}
+
+/** Registering your own GitHub App, so nobody else's app touches your repositories. */
+function OwnAppDialog({ onClose }: { onClose(): void }) {
+  const [link, setLink] = useState('');
+  return (
+    <Modal title="Use your own GitHub App" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const done = await attempt(() => api<GitHubInfo>('setGithubApp', link).then(bump), 'Your own app is set: connect GitHub through it');
+          if (done !== undefined) onClose();
+        }}
+      >
+        <p className="small">Weave Connect's owner could act on every repository it's installed on. With your own app, only you (or your organization) could. Register it once:</p>
+        <ol className="steps small">
+          <li>
+            On GitHub: Settings → Developer settings → GitHub Apps →{' '}
+            <a href="https://github.com/settings/apps/new" target="_blank" rel="noopener noreferrer">
+              New GitHub App
+            </a>{' '}
+            (or the same under your organization).
+          </li>
+          <li>Any name and homepage. Tick “Enable Device Flow”, untick “Expire user authorization tokens”, untick the webhook.</li>
+          <li>Repository permissions: Administration read and write, Contents read-only. Account permissions: Gists read and write (only for showing GitHub on your hub).</li>
+          <li>Where can it be installed: “Any account”, if people outside your account link repositories with it.</li>
+          <li>Don't generate a private key: Weave doesn't need one.</li>
+        </ol>
+        <div className="field-row-stacked">
+          <label htmlFor="own-app">Its public link</label>
+          <input id="own-app" required placeholder="https://github.com/apps/…" value={link} onChange={(e) => setLink(e.target.value)} />
+        </div>
+        <p className="small">Changing apps signs you out of GitHub; connect again through the new one. Members downloading a private release need to sign in through the app installed on that repository.</p>
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default">Use this app</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -267,9 +360,9 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
           <p>
             Weave can't manage any of your repositories yet.{' '}
             <a href={github?.installUrl} target="_blank" rel="noopener noreferrer">
-              Install the Weave app on GitHub
-            </a>{' '}
-            for the repositories you want to share, then come back.
+              Install {github?.app.name ?? 'the app'} on GitHub
+            </a>
+            : choose <b>Only select repositories</b> and pick the ones you want to share, then come back.
           </p>
         ) : (
           <>
@@ -283,9 +376,9 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
               <span className="small muted">
                 Missing one?{' '}
                 <a href={github?.installUrl} target="_blank" rel="noopener noreferrer">
-                  Install the Weave app on it
-                </a>
-                .
+                  Add it to {github?.app.name ?? 'the app'}
+                </a>{' '}
+                (Only select repositories, then tick it).
               </span>
             </div>
             {space.kind === 'project' && boards && boards.length > 0 && (
@@ -302,6 +395,7 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
               </div>
             )}
             <p className="small">Members who give their GitHub account get read access and an invitation from GitHub. When they leave, Weave takes it back. People you added on GitHub yourself stay.</p>
+            <AppTrust github={github} />
           </>
         )}
         <div className="buttons">
@@ -317,108 +411,14 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
   );
 }
 
-/** On a hub: the GitHub account someone shows, proven by a gist naming their did; on your own, choosing it. */
-export function HubGitHubBox({ profile }: { profile: Profile }) {
-  const [editing, setEditing] = useState(false);
+/** Under a hub's name: the GitHub account they show, opening their profile. */
+export function HubGitHubLink({ profile }: { profile: Profile }) {
   const g = profile.github;
-  if (!g && !profile.me) return null;
+  if (!g) return null;
   return (
-    <section className="space-box">
-      <h3>GitHub</h3>
-      {g ? (
-        <>
-          <p>
-            <a href={g.url} target="_blank" rel="noopener noreferrer">
-              {g.login}
-            </a>{' '}
-            {g.verified ? <span className="tag friend" title="A public gist of this account names this identity">✓ proven</span> : <span className="small muted">(not checked: GitHub unreachable)</span>}
-          </p>
-          {g.repos.length > 0 && (
-            <ul className="hub-repos">
-              {g.repos.map((r) => (
-                <li key={r}>
-                  <a href={`https://github.com/${r}`} target="_blank" rel="noopener noreferrer">
-                    {r}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      ) : (
-        <p className="small">Show your GitHub account and the repositories you want people to see. Weave proves the account is yours with a public gist naming your identity.</p>
-      )}
-      {profile.me && (
-        <div className="buttons">
-          {g && <AsyncButton onClick={() => attempt(() => api('showGithubOnHub', { on: false }).then(bump), 'Your hub no longer shows GitHub')}>Hide</AsyncButton>}
-          <button onClick={() => setEditing(true)}>{g ? 'Choose repositories…' : 'Show GitHub…'}</button>
-        </div>
-      )}
-      {editing && <HubGitHubDialog current={g} onClose={() => setEditing(false)} />}
-    </section>
-  );
-}
-
-function HubGitHubDialog({ current, onClose }: { current?: HubGitHub; onClose(): void }) {
-  const { data: github, reload } = useApi(() => api<GitHubInfo>('github'), []);
-  const { data: repos, error } = useApi(() => (github?.login ? api<string[]>('githubPublicRepos') : Promise.resolve(undefined)), [github?.login]);
-  const [chosen, setChosen] = useState<string[]>(current?.repos ?? []);
-  const [connecting, setConnecting] = useState(false);
-
-  if (github && !github.login)
-    return connecting ? (
-      <GitHubConnectDialog onClose={onClose} onDone={() => (setConnecting(false), reload())} />
-    ) : (
-      <Modal title="Show GitHub on your hub" onClose={onClose}>
-        <p>{github.available ? 'Connect your GitHub account first.' : "This copy of Weave can't reach GitHub yet."}</p>
-        <div className="buttons">
-          <button onClick={onClose}>Cancel</button>
-          <button className="default" onClick={() => setConnecting(true)} disabled={!github.available}>
-            Connect GitHub…
-          </button>
-        </div>
-      </Modal>
-    );
-
-  const toggle = (r: string) => setChosen(chosen.includes(r) ? chosen.filter((x) => x !== r) : [...chosen, r].slice(0, 12));
-  return (
-    <Modal title="Show GitHub on your hub" onClose={onClose}>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const done = await attempt(() => api('showGithubOnHub', { on: true, repos: chosen }).then(bump), 'Your hub shows GitHub');
-          if (done !== undefined) onClose();
-        }}
-      >
-        {error ? (
-          <p>{error}</p>
-        ) : !repos ? (
-          <p className="small">…</p>
-        ) : (
-          <>
-            <p className="small">
-              Your hub shows <b>{github?.login}</b>{current ? '' : ', proven by a public gist Weave creates in your account (it names your identity)'}. Pick up to 12 public repositories:
-            </p>
-            <div className="hub-repo-picker sunken">
-              {repos.length === 0 && <p className="small">No public repositories.</p>}
-              {repos.map((r) => (
-                <div className="field-row" key={r}>
-                  <input type="checkbox" id={`repo-${r}`} checked={chosen.includes(r)} onChange={() => toggle(r)} />
-                  <label htmlFor={`repo-${r}`}>{r}</label>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-        <div className="buttons">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="default" disabled={!repos}>
-            Show on my hub
-          </button>
-        </div>
-      </form>
-    </Modal>
+    <a className="hub-github" href={g.url} target="_blank" rel="noopener noreferrer" title={g.verified ? 'A public gist of this GitHub account names this identity' : "Not checked: GitHub couldn't be reached"}>
+      <Icon name="github" /> {g.login}
+      {g.verified && ' ✓'}
+    </a>
   );
 }

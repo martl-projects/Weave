@@ -63,6 +63,8 @@ export interface AppInstall {
   assets?: Record<string, AppAsset>;
   /** For an agent installing it by hand. */
   steps?: string[];
+  /** The GitHub App (its slug) the release is reached through, when not Weave's default: a private repo's files only download through an app installed on it. */
+  app?: string;
 }
 
 export interface AppAsset {
@@ -98,7 +100,8 @@ export function parseInstall(input: unknown): AppInstall | undefined {
   if (has && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
   if (has && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
   if (!has && !steps.length) return undefined;
-  return { ...(has ? { github, tag, assets } : {}), ...(steps.length ? { steps } : {}) };
+  const app = text(i.app, 100);
+  return { ...(has ? { github, tag, assets } : {}), ...(steps.length ? { steps } : {}), ...(has && /^[a-z0-9][a-z0-9-]{0,99}$/.test(app) ? { app } : {}) };
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/;

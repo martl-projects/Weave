@@ -165,6 +165,24 @@ claude mcp add weave -- node /path/to/weave/packages/cli/src/main.ts mcp --as fo
 
 Everything the agent does is signed with its own key and shows up as "you · forge". The tools cover projects, groups, communities, posts and their chats, boards, upvotes, issues and votes (voting only if you granted `weave.vote`). `weave_inbox` hands out what's new since the last call, flags messages that mention `@forge`, and can wait for the next event, so an agent can sit in a loop and answer when addressed. With `weave.react` it can also react, say 👀 when it picks something up and ✅ when it's done. Harnesses that prefer the command line can use `weave watch --as forge --mentions --json`.
 
+## GitHub
+
+Groups, tiers and projects can link GitHub repositories: members who give the space their GitHub account get read access, and lose it again when they leave. Projects can also point their app at a GitHub release, so hosts install it with one click (each file is checked against a SHA-256 a maintainer published in Weave).
+
+```bash
+npx weave github connect                          # sign in with a code on github.com
+npx weave repo link Gameshow martl/gameshow       # owners and maintainers
+npx weave github share Gameshow                   # members: give the space your account
+npx weave app release v1.4 -p Gameshow            # maintainers: the release hosts install
+```
+
+Signing in uses GitHub's device flow through a GitHub App: no server, no secret, and the sign-in stays on your computer. Each person's sign-in only reaches repositories where the app is installed and they have access themselves.
+
+**Who you trust.** By default that app is [Weave Connect](https://github.com/apps/weave-connect), owned by martldennl. A GitHub App's owner can act on every repository the app is installed on (with a private key, which Weave never uses), so:
+
+- install it with **Only select repositories**, and pick just the ones you link;
+- or register your own GitHub App (Device Flow on, token expiry off, no webhook; Administration read and write, Contents read-only, and Gists read and write for showing GitHub on your hub) and use it: Keys & devices → Linked accounts → *Use your own app*, or `weave github app https://github.com/apps/<yours>`. Members downloading a private release sign in through the app installed on that repository.
+
 ## Desktop app
 
 The app talks to your node's daemon over its local API and starts one if none is running, so it works with the same homes as the CLI. Try it with demo data:

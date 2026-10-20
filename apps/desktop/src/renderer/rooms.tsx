@@ -236,6 +236,15 @@ function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app:
   return (
     <>
       {i.error && <div className="small error-text">The last install didn't work: {i.error}</div>}
+      {i.otherApp && (
+        <div className="small">
+          {app.name}'s releases download through the GitHub App{' '}
+          <a href={`https://github.com/apps/${i.otherApp}`} target="_blank" rel="noopener noreferrer">
+            {i.otherApp}
+          </a>
+          . If the repository is private, sign in through that app (Keys &amp; devices → Linked accounts → Use your own app).
+        </div>
+      )}
       {i.asset && (!i.installed || outdated) ? (
         <div className="install-box">
           <span className="grow">

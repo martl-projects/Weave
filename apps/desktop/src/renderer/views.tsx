@@ -9,7 +9,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
-import { HubGitHubBox, RepoBanner, RepoSettings } from './github.tsx';
+import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -134,6 +134,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
                 {p.posts} public post{p.posts === 1 ? '' : 's'}
               </span>
             </div>
+            <HubGitHubLink profile={p} />
           </div>
           {p.me && (
             <div className="space-actions">
@@ -156,7 +157,6 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           )}
         </header>
         <SupportBox did={p.did} name={name} me={p.me} />
-        <HubGitHubBox profile={p} />
         {p.me && <MyProjects name={name} />}
         {!p.me && p.projects.length > 0 && (
           <section className="space-box">

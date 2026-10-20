@@ -21,7 +21,6 @@ class FakeGitHub {
   #nextId = 1;
   calls: string[] = [];
   gists = new Map<string, { owner: string; content: string }>();
-  publicRepos = new Map<string, string[]>();
 
   addRepo(name: string, collaborators: string[] = []): void {
     this.repos.set(name, { collaborators: new Set(collaborators), invitations: new Map() });
@@ -54,6 +53,8 @@ class FakeGitHub {
         this.#tokens.set(token, code.login);
         return json(200, { access_token: token, token_type: 'bearer' });
       }
+      if (url.pathname === '/apps/my-weave') return json(200, { slug: 'my-weave', name: 'My Weave', client_id: 'Iv1.mine', owner: { login: 'lena-gh' } });
+      if (url.pathname.startsWith('/apps/')) return json(404, { message: 'Not Found' });
       const gist = url.pathname.match(/^\/gists\/(\w+)$/);
       if (gist && method === 'GET') {
         const g = this.gists.get(gist[1]);
@@ -69,7 +70,6 @@ class FakeGitHub {
         this.gists.set(id, { owner: who, content: Object.values(files)[0].content });
         return json(201, { id, html_url: `https://gist.github.com/${id}` });
       }
-      if (url.pathname === `/users/${who}/repos`) return json(200, (this.publicRepos.get(who) ?? []).map((full_name) => ({ full_name, fork: false })));
       if (url.pathname === '/user/installations') return json(200, { installations: [{ id: 7 }] });
       if (url.pathname === '/user/installations/7/repositories') return json(200, { repositories: [...this.repos.keys()].filter((r) => r.startsWith(`${who}/`)).map((full_name) => ({ full_name, permissions: { admin: true } })) });
       const m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/(collaborators|invitations)(?:\/([^/]+))?$/);
@@ -190,30 +190,45 @@ describe('GitHub repos that follow a space', () => {
 
   it('shows a GitHub account on the hub only with a gist of that account naming the did', async () => {
     const github = new FakeGitHub();
-    github.publicRepos.set('martl', ['martl/weave', 'martl/gameshow']);
     const martl = person('martl', github, 'martl');
     const lena = person('Lena', github, 'lena-gh');
 
     await expect(martl.showGithubOnHub({ on: true })).rejects.toThrow(/connect GitHub first/);
     await connect(martl);
-    expect(await martl.githubPublicRepos()).toEqual(['martl/weave', 'martl/gameshow']);
-    const mine = await martl.showGithubOnHub({ on: true, repos: ['martl/weave', 'not a repo'] });
-    expect(mine.github).toEqual({ login: 'martl', url: 'https://github.com/martl', repos: ['martl/weave'], verified: true });
+    const mine = await martl.showGithubOnHub({ on: true });
+    expect(mine.github).toEqual({ login: 'martl', url: 'https://github.com/martl', verified: true });
     expect(github.gists.size).toBe(1);
 
-    // Others see it, checked against GitHub; changing the repos keeps the same gist.
-    await martl.showGithubOnHub({ on: true, repos: ['martl/gameshow'] });
+    // Others see it, checked against GitHub; showing it again makes no new gist.
+    await martl.showGithubOnHub({ on: true });
     expect(github.gists.size).toBe(1);
     martl.replica.events().forEach((e) => lena.replica.ingest(e));
-    expect((await lena.profile(martl.identity.author)).github).toMatchObject({ login: 'martl', repos: ['martl/gameshow'], verified: true });
+    expect((await lena.profile(martl.identity.author)).github).toMatchObject({ login: 'martl', verified: true });
 
     // A claim without a matching gist isn't shown.
-    await lena.publish({ kind: 'weave.github.public', body: { login: 'martl', gist: [...github.gists.keys()][0], repos: [], on: true } });
+    await lena.publish({ kind: 'weave.github.public', body: { login: 'martl', gist: [...github.gists.keys()][0], on: true } });
     expect((await lena.profile()).github).toBeUndefined();
 
     await martl.showGithubOnHub({ on: false });
     martl.replica.events().forEach((e) => lena.replica.ingest(e));
     expect((await lena.profile(martl.identity.author)).github).toBeUndefined();
+  });
+
+  it('signs in through your own GitHub App when you choose one, and says whose app it is', async () => {
+    const github = new FakeGitHub();
+    const lena = person('Lena', github, 'lena-gh');
+    expect((await lena.github()).app).toEqual({ name: 'Weave Connect', slug: 'weave-connect', owner: 'martldennl', url: 'https://github.com/apps/weave-connect', own: false });
+    await connect(lena);
+
+    await expect(lena.setGithubApp('https://github.com/apps/nobody-here')).rejects.toThrow(/no public app/);
+    const mine = await lena.setGithubApp('https://github.com/apps/my-weave');
+    expect(mine.app).toMatchObject({ name: 'My Weave', owner: 'lena-gh', own: true });
+    expect(mine.installUrl).toBe('https://github.com/apps/my-weave/installations/new');
+    // The sign-in went through the other app: it's gone.
+    expect(mine.login).toBeUndefined();
+
+    const back = await lena.setGithubApp(null);
+    expect(back.app.own).toBe(false);
   });
 
   it('plans: never re-invites someone who declined, never removes people added by hand', () => {

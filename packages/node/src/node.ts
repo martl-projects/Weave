@@ -259,7 +259,7 @@ import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
-import { checkGistProof, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
+import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
@@ -1389,20 +1389,39 @@ export class WeaveNode implements Backend {
     return saved?.token && saved.login ? { token: saved.token, login: saved.login } : undefined;
   }
 
+  /** The GitHub App this node signs in through: your own, or Weave Connect. */
+  #githubApp(): GitHubApp {
+    return this.config.githubApp ?? { ...DEFAULT_GITHUB_APP, clientId: this.githubSetup.clientId };
+  }
+
   async github(): Promise<GitHubInfo> {
     const auth = this.#githubAuth();
     const login = this.#githubLogin;
+    const app = this.#githubApp();
     return {
-      available: !!this.githubSetup.clientId,
-      installUrl: githubInstallUrl(),
+      available: !!app.clientId,
+      installUrl: githubInstallUrl(app.slug),
+      app: { name: app.name, slug: app.slug, owner: app.owner, url: `https://github.com/apps/${app.slug}`, own: !!this.config.githubApp },
       ...(auth ? { login: auth.login } : {}),
       ...(login?.code ? { pending: { userCode: login.code.userCode, verificationUri: login.code.verificationUri, expires: login.code.expiresAt } } : {}),
       ...(login?.error ? { error: login.error } : {}),
     };
   }
 
+  async setGithubApp(link: string | null): Promise<GitHubInfo> {
+    const app = link?.trim() ? await lookUpGitHubApp(link, this.githubSetup.fetch) : undefined;
+    const before = this.#githubApp().clientId;
+    const { githubApp: _old, ...rest } = this.config;
+    this.config = app && app.clientId !== DEFAULT_GITHUB_APP.clientId ? { ...rest, githubApp: app } : rest;
+    saveConfig(this.home, this.config);
+    // A sign-in belongs to the app it went through.
+    if (this.#githubApp().clientId !== before) await this.disconnectGithub();
+    return this.github();
+  }
+
   async connectGithub(): Promise<GitHubInfo> {
-    const { clientId, fetch: fetchImpl, sleep } = this.githubSetup;
+    const { fetch: fetchImpl, sleep } = this.githubSetup;
+    const { clientId } = this.#githubApp();
     this.#githubLogin?.cancel.abort();
     const cancel = new AbortController();
     const code = await startDeviceFlow(clientId, fetchImpl);
@@ -1504,13 +1523,7 @@ export class WeaveNode implements Backend {
     return this.spaceRepos(space.id);
   }
 
-  async githubPublicRepos(): Promise<string[]> {
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first');
-    return new GitHub(auth.token, this.githubSetup.fetch).publicRepos(auth.login);
-  }
-
-  async showGithubOnHub(input: { on: boolean; repos?: string[] }): Promise<Profile> {
+  async showGithubOnHub(input: { on: boolean }): Promise<Profile> {
     const me = this.identity.author;
     const before = this.#hubGithub(me);
     if (!input.on) {
@@ -1519,20 +1532,20 @@ export class WeaveNode implements Backend {
     }
     const auth = this.#githubAuth();
     if (!auth) throw new Error('connect GitHub first');
-    const repos = [...new Set((input.repos ?? before?.repos ?? []).map((r) => r.trim()))].filter(isRepoName).slice(0, 12);
     // The proof: a public gist of this account naming this did. Made once, kept while the account stays the same.
     let gist = before && before.login.toLowerCase() === auth.login.toLowerCase() ? before.gist : undefined;
     if (!gist) gist = (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login))).id;
-    this.replica.append(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: auth.login, gist, repos, on: true } });
+    if (before?.gist === gist) return this.profile();
+    this.replica.append(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: auth.login, gist, on: true } });
     return this.profile();
   }
 
   /** The GitHub account someone shows on their hub (latest word), not checked yet. */
-  #hubGithub(did: Did): { login: string; gist: string; repos: string[] } | undefined {
+  #hubGithub(did: Did): { login: string; gist: string } | undefined {
     const last = this.replica.events((e) => e.author === did && e.kind === KIND_GITHUB_PUBLIC).sort((a, b) => a.time.localeCompare(b.time)).at(-1);
     const body = (last?.body ?? {}) as Record<string, unknown>;
     if (!last || body.on === false || !isLogin(body.login) || typeof body.gist !== 'string' || !/^[A-Za-z0-9]{1,64}$/.test(body.gist)) return undefined;
-    return { login: body.login, gist: body.gist, repos: Array.isArray(body.repos) ? body.repos.filter(isRepoName).slice(0, 12) : [] };
+    return { login: body.login, gist: body.gist };
   }
 
   /** Who a repo linked to a space should include: its members, or in a project the readers of one board. */
@@ -1645,7 +1658,7 @@ export class WeaveNode implements Backend {
       if (!this.#gistProofs.has(key)) this.#gistProofs.set(key, checkGistProof(github.gist, github.login, did, this.githubSetup.fetch));
       const verified = await this.#gistProofs.get(key)!;
       if (verified === undefined) this.#gistProofs.delete(key); // GitHub unreachable: ask again next time
-      return { ...this.#profile(did), ...(verified === false ? {} : { github: { login: github.login, url: `https://github.com/${github.login}`, repos: github.repos, ...(verified ? { verified } : {}) } }) };
+      return { ...this.#profile(did), ...(verified === false ? {} : { github: { login: github.login, url: `https://github.com/${github.login}`, ...(verified ? { verified } : {}) } }) };
     }
     return this.#profile(did);
   }
@@ -1828,6 +1841,7 @@ export class WeaveNode implements Backend {
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
       ...(install?.steps ? { steps: install.steps } : {}),
+      ...(install?.app && install.app !== this.#githubApp().slug ? { otherApp: install.app } : {}),
     };
   }
 
@@ -1837,6 +1851,8 @@ export class WeaveNode implements Backend {
     const install = app?.install;
     const asset = install?.assets?.[platformKey()];
     if (!app || !install?.github || !install.tag || !asset) throw new Error(`${project.name} has no release file for this computer (${platformKey()})${install?.steps ? ': install it by hand or with your agent, following its steps' : ''}`);
+    if (install.app && install.app !== this.#githubApp().slug && this.#githubAuth())
+      throw new Error(`${app.name}'s releases go through the GitHub App "${install.app}", and you sign in through "${this.#githubApp().slug}": switch to it in Keys & devices → Linked accounts (https://github.com/apps/${install.app})`);
     if (this.#installs.get(project.id)?.progress) throw new Error(`${app.name} is being installed already`);
     if (this.#apps.running(project.id)) throw new Error(`stop ${app.name} first`);
     const job: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
@@ -1925,7 +1941,10 @@ export class WeaveNode implements Backend {
       }
       assets[platform] = { file: asset.name, sha256: hash.digest('hex'), size: asset.size };
     }
-    const manifest = parseManifest({ ...app, install: { ...app.install, github: repo, tag: release.tag, assets } });
+    // Members download through the app the maintainer uses, when it's their own.
+    const own = this.config.githubApp?.slug;
+    const { app: _app, ...before } = app.install ?? {};
+    const manifest = parseManifest({ ...app, install: { ...before, github: repo, tag: release.tag, assets, ...(own ? { app: own } : {}) } });
     this.replica.append(this.identity, sealFor(project, { kind: KIND_APP, body: manifest as unknown as Json }));
     return manifest;
   }

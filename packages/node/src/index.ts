@@ -52,7 +52,7 @@ export type {
   Whoami,
 } from './backend.ts';
 export { PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
-export { checkGistProof, GITHUB_CLIENT_ID, GitHub, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
+export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { ApiClient, connectDaemon, type DaemonInfo } from './client.ts';
 export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';

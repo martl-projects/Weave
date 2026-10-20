@@ -113,8 +113,9 @@ github — repositories that follow a group, tier or project (members who give t
   github                     your GitHub sign-in on this device
   github connect             sign in to GitHub with a code (through the Weave GitHub app)
   github disconnect          forget the sign-in on this device
+  github app <link>|default  sign in through your own GitHub App (https://github.com/apps/…) instead of Weave Connect
   github repos               repositories you can link (the app is installed on them and you're admin)
-  github hub [owner/name…]   show your GitHub account (proven by a public gist) and these repos on your hub; hub off to stop
+  github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
@@ -821,7 +822,9 @@ async function main(): Promise<void> {
     case 'github': {
       const [sub, ref] = args;
       const b = await backend();
-      const status = (g: GitHubInfo) => (g.login ? `signed in to GitHub as ${g.login}` : g.available ? 'not signed in to GitHub (weave github connect)' : "this copy of Weave can't reach GitHub yet (no GitHub app client ID)");
+      const status = (g: GitHubInfo) =>
+        `${g.login ? `signed in to GitHub as ${g.login}` : g.available ? 'not signed in to GitHub (weave github connect)' : "this copy of Weave can't reach GitHub yet (no GitHub app client ID)"}
+through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.app.own ? ', your own choice' : ''}`;
       if (!sub) {
         const g = await b.github();
         return out(g, () => status(g));
@@ -836,6 +839,11 @@ async function main(): Promise<void> {
           if (!g.pending && g.login) return out(g, () => status(g));
         }
       }
+      if (sub === 'app') {
+        const g = await b.setGithubApp(!ref || ref === 'default' ? null : ref);
+        return out(g, () => `${status(g)}
+(sign in again: weave github connect)`);
+      }
       if (sub === 'disconnect') {
         const g = await b.disconnectGithub();
         return out(g, () => 'GitHub sign-in forgotten on this device');
@@ -846,14 +854,14 @@ async function main(): Promise<void> {
       }
       if (sub === 'hub') {
         const off = ref === 'off';
-        const p = await b.showGithubOnHub({ on: !off, repos: off || args.length < 2 ? undefined : args.slice(1) });
-        return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login}${p.github.repos.length ? ` with ${p.github.repos.join(', ')}` : ''}` : 'your hub no longer shows GitHub'));
+        const p = await b.showGithubOnHub({ on: !off });
+        return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login} (${p.github.url})` : 'your hub no longer shows GitHub'));
       }
       if ((sub === 'share' || sub === 'unshare') && ref) {
         const r = await b.shareGithub({ space: ref, on: sub === 'share' });
         return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
       }
-      throw new Error('usage: weave github [connect|disconnect|repos|hub [repos…|off]|share <space>|unshare <space>]');
+      throw new Error('usage: weave github [connect|disconnect|app <link>|default|repos|hub [off]|share <space>|unshare <space>]');
     }
 
     case 'repo': {

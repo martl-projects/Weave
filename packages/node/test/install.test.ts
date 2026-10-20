@@ -106,6 +106,21 @@ describe('installing a project app from its release', () => {
     expect(existsSync(join(martl.home.dir, 'apps', (await martl.spaces('project'))[0].id, 'v1.4'))).toBe(false);
   });
 
+  it("names the maintainer's own GitHub App, and tells members who sign in through another one", async () => {
+    const github = new FakeReleases();
+    github.files.set(11, { name: 'Gameshow-1.4-mine.tar.gz', bytes: buildArchive() });
+    const martl = person('martl', github);
+    const lena = person('Lena', github);
+    await martl.createProject({ name: 'Gameshow' });
+    await lena.joinSpace(await martl.invite('Gameshow'));
+    martl.config = { ...martl.config, githubApp: { clientId: 'Iv1.martl', slug: 'martls-app', name: "martl's app", owner: 'martl' } };
+    await martl.publishApp({ project: 'Gameshow', manifest: { app: 'gameshow', name: 'Gameshow', services: [{ port: 7777 }] } });
+    const manifest = await martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow', assets: { [platformKey()]: 'Gameshow-1.4-mine.tar.gz' } });
+    expect(manifest.install?.app).toBe('martls-app');
+    syncAll([martl, lena]);
+    expect((await lena.appLaunch('Gameshow')).install?.otherApp).toBe('martls-app');
+  });
+
   it('guesses platforms from file names', () => {
     expect(guessPlatform('Gameshow-1.4-win-x64.zip')).toBe('win32-x64');
     expect(guessPlatform('gameshow_1.4_macos_arm64.tar.gz')).toBe('darwin-arm64');

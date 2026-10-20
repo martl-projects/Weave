@@ -14,7 +14,7 @@ import type { Did } from './keys.ts';
  *                         GitHub account access" (one personal account each, never a team)
  *   weave.github.added    {repo, login, on}    sealed to the owner: who Weave gave access, so it
  *                         only ever takes away what it gave
- *   weave.github.public   {login, gist, repos} public: a GitHub account shown on the hub, proven
+ *   weave.github.public   {login, gist}        public: a GitHub account shown on the hub, proven
  *                         by a gist of that account naming the person's did
  */
 export const KIND_GITHUB_REPO = 'weave.github.repo';

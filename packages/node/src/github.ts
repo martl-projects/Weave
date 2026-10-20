@@ -1,23 +1,54 @@
 /*
  * GitHub, as seen from a Weave node: signing in with GitHub's device flow
  * (a code the person approves on github.com; no server, no secret, only the
- * public client ID of the "Weave" GitHub App), and the few repository calls
- * group access needs. The app may only manage collaborators, and only on the
- * repositories its owner installed it on.
+ * public client ID of a GitHub App), and the few repository calls group
+ * access and app installs need.
+ *
+ * Which app: Weave Connect by default. A GitHub App's owner can act on every
+ * repository the app is installed on (with a private key Weave never uses),
+ * so people who'd rather not trust that owner register their own app and
+ * enter it in Linked accounts.
  *
  * `fetch` can be replaced, so tests run against a stand-in GitHub.
  */
 
-/** The public client ID of the "Weave" GitHub App (app id 5393663; not a secret). WEAVE_GITHUB_CLIENT_ID overrides it, e.g. for a test app. */
-export const GITHUB_CLIENT_ID = process.env.WEAVE_GITHUB_CLIENT_ID ?? 'Iv23liJqCYJwODDieXu5';
-
-/** Where people install the app on their repositories (its public page, github.com/apps/<slug>). */
-export const GITHUB_APP_SLUG = process.env.WEAVE_GITHUB_APP_SLUG ?? 'weave-connect';
-export const githubInstallUrl = (slug = GITHUB_APP_SLUG) => `https://github.com/apps/${slug}/installations/new`;
-
 const API = 'https://api.github.com';
 
 export type Fetch = typeof fetch;
+
+/** A GitHub App people sign in through: its public client ID (not a secret), its page (github.com/apps/<slug>) and who owns it. */
+export interface GitHubApp {
+  clientId: string;
+  slug: string;
+  name: string;
+  /** The GitHub account that owns the app. */
+  owner: string;
+}
+
+/** Weave Connect (app id 5393663), owned by martldennl. WEAVE_GITHUB_CLIENT_ID and WEAVE_GITHUB_APP_SLUG override it, e.g. for a test app. */
+export const DEFAULT_GITHUB_APP: GitHubApp = {
+  clientId: process.env.WEAVE_GITHUB_CLIENT_ID ?? 'Iv23liJqCYJwODDieXu5',
+  slug: process.env.WEAVE_GITHUB_APP_SLUG ?? 'weave-connect',
+  name: 'Weave Connect',
+  owner: 'martldennl',
+};
+export const GITHUB_CLIENT_ID = DEFAULT_GITHUB_APP.clientId;
+
+/** Where people install an app on their repositories. */
+export const githubInstallUrl = (slug = DEFAULT_GITHUB_APP.slug) => `https://github.com/apps/${slug}/installations/new`;
+
+/** A GitHub App's public facts from its page link (https://github.com/apps/<slug>) or slug. */
+export async function lookUpGitHubApp(link: string, fetchImpl: Fetch = fetch): Promise<GitHubApp> {
+  const slug = link.trim().replace(/^https:\/\/github\.com\/apps\//, '').replace(/\/.*$/, '');
+  if (!/^[a-z0-9][a-z0-9-]{0,99}$/.test(slug)) throw new Error("that isn't a GitHub App's page: it looks like https://github.com/apps/<name>");
+  const res = await fetchImpl(`${API}/apps/${slug}`, { headers: { accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10_000) });
+  if (res.status === 404) throw new Error(`GitHub has no public app "${slug}": make it installable on any account, or check the link`);
+  if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+  const data = (await res.json()) as { client_id?: string; slug?: string; name?: string; owner?: { login?: string } };
+  if (!data.client_id) throw new Error(`GitHub didn't give the client ID of ${slug}`);
+  return { clientId: data.client_id, slug: data.slug ?? slug, name: data.name ?? slug, owner: data.owner?.login ?? '?' };
+}
+
 
 export interface DeviceCode {
   deviceCode: string;
@@ -147,12 +178,6 @@ export class GitHub {
 
   async deleteGist(id: string): Promise<void> {
     await this.#call('DELETE', `/gists/${encodeURIComponent(id)}`);
-  }
-
-  /** Someone's own public repositories, most recently pushed first. */
-  async publicRepos(login: string): Promise<string[]> {
-    const { data } = await this.#call<Array<{ full_name: string; fork: boolean }>>('GET', `/users/${encodeURIComponent(login)}/repos?type=owner&sort=pushed&per_page=100`);
-    return data.filter((r) => !r.fork).map((r) => r.full_name);
   }
 
   /** A release by its tag, with its files. */
