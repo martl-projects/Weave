@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { MembershipRequestInfo } from '@weave/node/client';
-import type { Actor, Admission, BoardInfo, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
+import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { MyProjects } from './hubprojects.tsx';
@@ -364,9 +364,13 @@ export function PeopleView() {
 
 export function InboxView({ admissions, knocks }: { admissions: Admission[]; knocks: KnockInfo[] }) {
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
+  const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   return (
     <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {(coauthors ?? []).map((c) => (
+        <CoauthorCard key={`${c.post.id}-${c.agent ?? ''}`} request={c} />
+      ))}
       {knocks.map((k) => (
         <KnockCard key={k.id} knock={k} />
       ))}
@@ -377,6 +381,30 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
         <AdmissionCard key={`${a.project.id}-${a.did}-${a.group.id}-${a.change}`} admission={a} />
       ))}
     </Page>
+  );
+}
+
+/** A post that names you (or your agent) as co-author. */
+export function CoauthorCard({ request: r }: { request: CoauthorRequest }) {
+  const who = r.agent ? `your agent ${r.agent}` : 'you';
+  const answer = (on: boolean) => attempt(() => api('confirmCoauthor', { post: r.post.id, on, as: r.agent }).then(bump), on ? 'Confirmed: you show as co-author' : 'Declined');
+  return (
+    <div className="admission window">
+      <div className="window-body">
+        <Avatar did={r.by.did} size={32} />
+        <div className="grow">
+          <b>{r.by.name ?? shortDid(r.by.did)}</b>
+          {r.by.agent && <span className="agent-tag">{r.by.agent} · agent</span>} names {who} as co-author of{' '}
+          <a href={`#/post/${r.post.id}`}>“{r.post.title}”</a>
+          {r.post.space && <span className="small muted"> in {r.post.space.name}</span>}.
+          <div className="small muted">Confirming signs it with {r.agent ? `${r.agent}'s key` : 'your key'}: everyone can check it was really {who}.</div>
+        </div>
+        <AsyncButton onClick={() => answer(false)}>Decline</AsyncButton>
+        <AsyncButton className="default" onClick={() => answer(true)}>
+          Confirm
+        </AsyncButton>
+      </div>
+    </div>
   );
 }
 

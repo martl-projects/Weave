@@ -73,6 +73,11 @@ export function createAndSaveAgent(home: Home, author: Did, name: string, permis
   return { ...key, name, permissions };
 }
 
+/** Save an agent key again (after its permissions changed). */
+export function saveAgent(home: Home, agent: AgentKey): void {
+  writeJson(join(home.agents, `${agent.name}.json`), toStored(agent, { name: agent.name, permissions: agent.permissions }));
+}
+
 export function loadAgents(home: Home): AgentKey[] {
   let files: string[];
   try {

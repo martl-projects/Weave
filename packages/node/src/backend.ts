@@ -240,6 +240,11 @@ export interface PostInfo {
   time: string;
   /** When its author last edited it. */
   edited?: string;
+  /**
+   * Co-authors: people and agents the post names. Everyone sees the confirmed
+   * ones; its author also sees who was asked and who declined.
+   */
+  coauthors?: Array<Actor & { state: 'asked' | 'confirmed' | 'declined' }>;
   /** Latest activity: the post or its chat. */
   active: string;
   score: number;
@@ -320,6 +325,15 @@ export interface MembershipRequestInfo {
    * said (`ok` is missing until it was checked). Valid keys are let in automatically.
    */
   license?: { key: string; ok?: boolean; reason?: string; email?: string };
+}
+
+/** A post naming you (or one of your agents) as co-author, waiting for your answer. */
+export interface CoauthorRequest {
+  post: { id: string; short: string; title: string; space?: SpaceRef };
+  by: Actor;
+  /** Set when it names your agent rather than you. */
+  agent?: string;
+  time: string;
 }
 
 /** A live room in a project: a host shares the project's app, players use it through a tunnel. */
@@ -619,7 +633,14 @@ export interface Backend {
   /** One post by id (full or short), including projects. */
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo>;
+  /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
+  confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
+  /** Posts that name you or one of your agents as co-author and wait for an answer. */
+  coauthorRequests(): Promise<CoauthorRequest[]>;
+  /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships). */
+  updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
   /** Your own post: change its title, text, link or image (empty removes a link or image). Leave out what stays. */
   editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
@@ -762,10 +783,10 @@ export interface Backend {
 export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
-  'whoami', 'publish', 'feed', 'addAgent', 'join', 'status',
+  'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot',

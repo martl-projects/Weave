@@ -511,3 +511,7 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .page { font-size: 14px; }
   .window.modal, .window.modal.wide { width: calc(100vw - 12px) !important; max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; }
 }
+
+/* ---------- co-authors */
+.coauthors .coauthor.asked, .coauthors .coauthor.declined { color: #808080; }
+.coauthors .agent-tag { margin-left: 3px; }

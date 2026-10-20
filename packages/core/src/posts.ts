@@ -1,7 +1,7 @@
 import { parseBlobRef } from './blobs.ts';
 import type { Json } from './bytes.ts';
 import { KIND_ISSUE, KIND_PROPOSAL, KIND_THREAD, type Entry } from './collab.ts';
-import type { Did } from './keys.ts';
+import { isDid, type Did } from './keys.ts';
 import type { SpaceKind } from './spaces.ts';
 
 /*
@@ -10,8 +10,11 @@ import type { SpaceKind } from './spaces.ts';
  * one board of posts. Every post has a chat (weave.msg with `post`) instead of
  * a comment tree.
  *
- *   weave.post     {title, text, link, image, board, share}
- *                                                      a post in a community or in a project's board; image: a wblob: reference
+ *   weave.post     {title, text, link, image, board, share, with}
+ *                                                      a post in a community or in a project's board; image: a wblob: reference;
+ *                                                      with: co-authors it names (people's identifiers or agents' keys)
+ *   weave.post.coauthor {target, on}                  someone named in `with` confirms (or declines) being a co-author;
+ *                                                      only confirmed ones are shown (see coauthorsOf)
  *   weave.post.edit   {target, title, text, link, image}
  *                                                      the post's author changes it; the latest edit counts
  *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
@@ -30,6 +33,7 @@ import type { SpaceKind } from './spaces.ts';
 export const KIND_POST = 'weave.post';
 export const KIND_POST_EDIT = 'weave.post.edit';
 export const KIND_POST_DELETE = 'weave.post.delete';
+export const KIND_POST_COAUTHOR = 'weave.post.coauthor';
 export const KIND_UPVOTE = 'weave.upvote';
 export const KIND_BOARD = 'weave.board';
 export const KIND_CURATE = 'weave.curate';
@@ -172,6 +176,48 @@ export interface Post {
   time: string;
   /** When its author last edited it. */
   edited?: string;
+  /** Co-authors the post names; each still has to confirm (see coauthorsOf). */
+  with?: Did[];
+}
+
+/** At most this many co-authors per post. */
+export const MAX_COAUTHORS = 10;
+
+function withOf(body: Json, author: Did, signer: Did): Did[] {
+  const list = field(body, 'with');
+  if (!Array.isArray(list)) return [];
+  const out = new Set<Did>();
+  for (const did of list) if (isDid(did) && did !== author && did !== signer) out.add(did);
+  return [...out].slice(0, MAX_COAUTHORS);
+}
+
+export type CoauthorState = 'asked' | 'confirmed' | 'declined';
+
+/** What co-authorship needs to know about keys: whose a key is, and whether it's an agent's. */
+export interface KeyFacts {
+  personOf(key: Did): Did;
+  isAgent(key: Did): boolean;
+}
+
+/**
+ * Where each co-author a post names stands. A confirmation counts when it is
+ * signed by that very key (an agent confirming itself), or by its person
+ * from one of their own devices (a person for themselves, or for their agent).
+ * Another agent of the same person can't confirm on their behalf. The latest
+ * answer counts, so a co-author can change their mind.
+ */
+export function coauthorsOf(post: Post, entries: Entry[], keys: KeyFacts): Array<{ did: Did; state: CoauthorState }> {
+  const named = post.with ?? [];
+  if (!named.length) return [];
+  const state = new Map<Did, CoauthorState>(named.map((did) => [did, 'asked']));
+  for (const e of entries.filter((x) => x.kind === KIND_POST_COAUTHOR && str(x.body, 'target', 200) === post.id).sort(byTime)) {
+    const signer = e.event.signer;
+    for (const did of named) {
+      const counts = signer === did || (!keys.isAgent(signer) && e.event.author === keys.personOf(did));
+      if (counts) state.set(did, field(e.body, 'on') === false ? 'declined' : 'confirmed');
+    }
+  }
+  return named.map((did) => ({ did, state: state.get(did)! }));
 }
 
 function shareOf(body: Json): Share | undefined {
@@ -217,7 +263,18 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const board = kind === 'project' ? (boardName(field(e.body, 'board')) ?? 'releases') : COMMUNITY_BOARD;
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
-      posts.push({ ...base, type: 'post', board, title, text, ...(/^https?:\/\//.test(link) ? { link } : {}), ...(image ? { image } : {}), ...(share ? { share } : {}) });
+      const coauthors = withOf(e.body, e.event.author, e.event.signer);
+      posts.push({
+        ...base,
+        type: 'post',
+        board,
+        title,
+        text,
+        ...(/^https?:\/\//.test(link) ? { link } : {}),
+        ...(image ? { image } : {}),
+        ...(share ? { share } : {}),
+        ...(coauthors.length ? { with: coauthors } : {}),
+      });
     } else if (kind === 'project' && e.kind === KIND_THREAD && str(e.body, 'title')) {
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     } else if (kind === 'project' && (e.kind === KIND_ISSUE || e.kind === KIND_PROPOSAL) && str(e.body, 'title')) {

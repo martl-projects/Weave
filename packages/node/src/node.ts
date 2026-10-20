@@ -93,6 +93,10 @@ import {
   KIND_MUTE,
   KIND_POST,
   KIND_POST_DELETE,
+  KIND_POST_COAUTHOR,
+  coauthorsOf,
+  MAX_COAUTHORS,
+  type KeyFacts,
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
@@ -193,6 +197,7 @@ import {
   type Backend,
   type BoardInfo,
   type ChatInfo,
+  type CoauthorRequest,
   type MembershipRequestInfo,
   type ChannelInfo,
   type CommunityInfo,
@@ -241,7 +246,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
-import { createAndSaveAgent, loadAgents, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
+import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
@@ -849,7 +854,7 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > 200) throw new Error('titles are at most 200 characters');
@@ -862,6 +867,16 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
+    if (input.with?.length) {
+      if (input.with.length > MAX_COAUTHORS) throw new Error(`name at most ${MAX_COAUTHORS} co-authors`);
+      const state = this.#state(space);
+      const named = [...new Set(input.with.map((ref) => this.#resolveCoauthor(ref)))];
+      for (const did of named) {
+        const person = this.replica.authority.personOf(did);
+        if (!state.members.has(person)) throw new Error(`${this.nameOf(person) ?? did} isn't in ${space.name}, so they can't confirm`);
+      }
+      body.with = named;
+    }
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
       if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
@@ -870,6 +885,104 @@ export class WeaveNode implements Backend {
     }
     const { id } = await this.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
     return this.post(id);
+  }
+
+  async confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo> {
+    const post = await this.post(input.post);
+    const agent = input.as ? this.#agents.find((a) => a.name === input.as) : undefined;
+    if (input.as && !agent) throw new Error(`no agent named "${input.as}"`);
+    const me = agent?.did ?? this.identity.author;
+    const named = this.#namedIn(post.id);
+    if (!named) throw new Error("that post doesn't name any co-authors");
+    if (!named.includes(me) && !named.some((did) => this.replica.authority.personOf(did) === this.identity.author && !agent)) {
+      throw new Error(agent ? `that post doesn't name ${agent.name} as a co-author` : "that post doesn't name you as a co-author");
+    }
+    await this.publish({ kind: KIND_POST_COAUTHOR, body: { target: post.id, on: input.on }, space: post.space?.id, as: input.as });
+    return this.post(post.id);
+  }
+
+  async coauthorRequests(): Promise<CoauthorRequest[]> {
+    const me = this.identity.author;
+    const mine = new Map(this.#agents.map((a) => [a.did, a.name]));
+    const out: CoauthorRequest[] = [];
+    for (const { posts, entries, space } of this.#postSources()) {
+      for (const p of posts) {
+        if (!p.with || p.author === me) continue;
+        for (const c of coauthorsOf(p, entries, this.#keyFacts)) {
+          if (c.state !== 'asked' || (c.did !== me && !mine.has(c.did))) continue;
+          out.push({
+            post: { id: p.id, short: p.id.slice(0, 8), title: p.title, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}) },
+            by: this.#actor(p.author, p.signer),
+            ...(mine.has(c.did) ? { agent: mine.get(c.did)! } : {}),
+            time: p.time,
+          });
+        }
+      }
+    }
+    return out.sort((a, b) => b.time.localeCompare(a.time));
+  }
+
+  async updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo> {
+    const agent = this.#agents.find((a) => a.name === input.name);
+    if (!agent) throw new Error(`no agent named "${input.name}"`);
+    const permissions = [...new Set(input.permissions.map((p) => p.trim()).filter(Boolean))];
+    if (permissions.includes('*')) throw new Error("agents can't get every permission: name the kinds they may sign");
+    this.replica.append(this.identity, delegation(agent.did, 'agent', permissions, agent.name));
+    agent.permissions = permissions;
+    saveAgent(this.home, agent);
+    return agentInfo(agent);
+  }
+
+  /** What co-authorship needs to know about keys. */
+  #keyFacts: KeyFacts = {
+    personOf: (key) => this.replica.authority.personOf(key),
+    isAgent: (key) => this.replica.authority.grant(key)?.role === 'agent',
+  };
+
+  /** A co-author by name, did:key, your agent's name, or someone's agent as "person·agent". */
+  #resolveCoauthor(ref: string): Did {
+    const text = ref.trim();
+    if (isDid(text)) return text;
+    const split = /^(.+?)\s*[·/]\s*([a-z0-9-]+)$/.exec(text);
+    if (split) {
+      const person = this.resolve(split[1]);
+      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.name === split[2] && g.revokedAfter === undefined);
+      if (!grant) throw new Error(`${split[1]} has no agent named "${split[2]}"`);
+      return grant.subject;
+    }
+    const mine = this.#agents.find((a) => a.name === text);
+    return mine ? mine.did : this.resolve(text);
+  }
+
+  /** A key as an actor: an agent shows with its person. */
+  #keyActor(did: Did) {
+    const grant = this.replica.authority.grant(did);
+    if (grant?.role === 'agent') return { did: grant.author, ...(this.nameOf(grant.author) ? { name: this.nameOf(grant.author) } : {}), ...(grant.name ? { agent: grant.name } : {}) };
+    return { did, ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}) };
+  }
+
+  /** The co-authors a post names, wherever it is. */
+  #namedIn(postId: string): Did[] | undefined {
+    for (const { posts } of this.#postSources()) {
+      const post = posts.find((p) => p.id === postId);
+      if (post) return post.with;
+    }
+    return undefined;
+  }
+
+  /** Every post this node can read, with the entries around it: per project and community, and the public ones. */
+  #postSources(): Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> {
+    const out: Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      const entries = this.#entries(space);
+      out.push({ posts: postsOf(space.kind, entries, this.#state(space).maintainers), entries, space });
+    }
+    const entries = this.#decodeAll()
+      .filter((d) => !d.space && !d.private)
+      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    out.push({ posts: postsOf(undefined, entries), entries });
+    return out;
   }
 
   async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo> {
@@ -2524,7 +2637,7 @@ export class WeaveNode implements Backend {
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves() };
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
     const posts = postsOf(space.kind, entries, state.maintainers)
       .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
       .map((p) => {
@@ -2569,7 +2682,7 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode> }): PostInfo {
+  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[] }): PostInfo {
     const score = ctx.scores.get(p.id);
     const chat = ctx.chats.get(p.id);
     const saved = ctx.saves.get(p.id);
@@ -2592,6 +2705,14 @@ export class WeaveNode implements Backend {
       pinned: false,
       ...(saved ? { saved } : {}),
     };
+    if (p.with && ctx.entries) {
+      // Everyone sees confirmed co-authors; the post's author also sees who was asked and who declined.
+      const own = p.author === this.identity.author;
+      const coauthors = coauthorsOf(p, ctx.entries, this.#keyFacts)
+        .filter((c) => own || c.state === 'confirmed')
+        .map((c) => ({ ...this.#keyActor(c.did), state: c.state }));
+      if (coauthors.length) info.coauthors = coauthors;
+    }
     if (p.share) {
       info.share = { ...(p.share.space ? { space: p.share.space } : {}), post: p.share.post, member: !!p.share.space && this.#spaces.has(p.share.space.id) };
       if (p.share.project) {
@@ -2609,7 +2730,7 @@ export class WeaveNode implements Backend {
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
       .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves() };
+    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries };
     return postsOf(undefined, entries)
       .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
       .map((p) => this.#postInfo(p, undefined, ctx));

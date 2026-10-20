@@ -29,6 +29,28 @@ export async function startChat(did: string): Promise<void> {
   }
 }
 
+/**
+ * A post's co-authors after its byline: "with Lena ✓, Lena · codex ✓". Its
+ * author also sees who was asked or declined. Each confirmation is signed by
+ * the co-author (or their own person), so this is never just a claim.
+ */
+export function Coauthors({ post }: { post: PostInfo }) {
+  if (!post.coauthors?.length) return null;
+  return (
+    <span className="coauthors" title="Co-authors confirm with their own signature">
+      {' with '}
+      {post.coauthors.map((c, i) => (
+        <span key={`${c.did}-${c.agent ?? ''}`} className={`coauthor ${c.state}`}>
+          {i > 0 && ', '}
+          {c.name ?? shortDid(c.did)}
+          {c.agent && <span className="agent-tag">{c.agent} · agent</span>}
+          {c.state === 'confirmed' ? ' ✓' : c.state === 'declined' ? ' (declined)' : ' (asked)'}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export const actorName = (a: Actor, meDid: string) => (a.did === meDid && !a.agent ? 'you' : (a.name ?? shortDid(a.did)));
 
 const BOARD_ICONS: Record<string, IconName> = { releases: 'megaphone', ideas: 'lightbulb', issues: 'bug', proposals: 'flag', posts: 'notes' };
@@ -218,6 +240,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
           )}
           <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
           {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
+          <Coauthors post={post} />
           {' · '}
           {ago(post.time)}
           {post.edited && <span title={`edited ${new Date(post.edited).toLocaleString()}`}> · edited</span>}
@@ -402,7 +425,8 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
               </>
             )}
             <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
-            {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>} · {ago(post.time)}
+            {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
+            <Coauthors post={post} /> · {ago(post.time)}
             {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
           </div>
           {post.link && (
@@ -464,11 +488,12 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
   const [image, setImage] = useState('');
+  const [coauthors, setCoauthors] = useState<string[]>([]);
   const writable = boards?.filter((b) => b.canWrite !== false);
   const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined }), 'Posted');
+    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, with: coauthors.length ? coauthors : undefined }), 'Posted');
     if (post) {
       onClose();
       bump();
@@ -522,6 +547,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
             <label>Text (optional)</label>
             <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
           </div>
+          {target && (!chosenBoard || chosenBoard.type === 'posts') && <CoauthorPicker space={target.id} value={coauthors} onChange={setCoauthors} />}
           <div className="buttons">
             <button type="button" onClick={onClose}>
               Cancel
@@ -531,6 +557,53 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
         </form>
       )}
     </Modal>
+  );
+}
+
+/** Who wrote this with you: people in the space, their agents, and your own agents. Each one confirms before it shows. */
+function CoauthorPicker({ space, value, onChange }: { space: string; value: string[]; onChange(v: string[]): void }) {
+  const { data: members } = useApi(() => api<MemberInfo[]>('members', space), [space]);
+  const { data: me } = useApi(() => api<{ did: string; agents: Array<{ name: string }> }>('whoami'), []);
+  const [adding, setAdding] = useState('');
+  if (!members || !me) return null;
+  const options = [
+    ...me.agents.map((a) => ({ key: a.name, label: `${a.name} · your agent` })),
+    ...members.filter((m) => m.did !== me.did).flatMap((m) => [{ key: m.did, label: m.name ?? shortDid(m.did) }, ...m.agents.map((a) => ({ key: `${m.did}·${a}`, label: `${m.name ?? shortDid(m.did)} · ${a}` }))]),
+  ];
+  const label = (key: string) => options.find((o) => o.key === key)?.label ?? key;
+  const left = options.filter((o) => !value.includes(o.key));
+  return (
+    <div className="field-row-stacked">
+      <label>Written with (optional)</label>
+      <div className="grantees">
+        {value.map((key) => (
+          <span key={key} className="chip">
+            {label(key)}
+            <button type="button" className="small-btn" title="Remove" onClick={() => onChange(value.filter((k) => k !== key))}>
+              ✕
+            </button>
+          </span>
+        ))}
+        {left.length > 0 && value.length < 10 && (
+          <select
+            value={adding}
+            aria-label="Add a co-author"
+            onChange={(e) => {
+              if (e.target.value) onChange([...value, e.target.value]);
+              setAdding('');
+            }}
+          >
+            <option value="">Add a person or agent…</option>
+            {left.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {value.length > 0 && <span className="small muted">Each one confirms with their own signature before they show as co-author.</span>}
+    </div>
   );
 }
 

@@ -55,6 +55,7 @@ usage: weave <command> [options]
   mcp                        serve this node to an agent harness over MCP (stdio)  [--as <agent>]
   join <topic>               listen on a DHT topic
   agent add <name>           create a key for an agent [--can <kinds>]  default: weave.post,weave.reply
+  agent can <name> <kinds>   change what an agent may sign, e.g. weave.post,weave.post.coauthor
   agent list                 list your agents
   bootstrap <host:port...>   use these DHT bootstrap nodes (e.g. a local testnet); --clear for defaults
 
@@ -112,6 +113,9 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   home hide <space> / home show <space>   leave a community or project off your home (only you know)
   read <id>                  a post and its chat
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>] [--image <file>]
+                             [--with <who,…>]: co-authors (people, your agents, or person·agent); each confirms first
+  coauthor <id> yes|no       confirm (or decline) being named as co-author  [--as <agent>] for your agent
+  coauthors                  posts waiting for your answer as co-author
                              (in a project's issues or proposals board this opens an issue or a proposal)
   edit <id>                  change your post           [--title <t>] [--text <t>] [--link <url>] [--image <file>] ("" removes a link or image)
   delete <id>                take a post down: yours, or any where you moderate (it stays in the logs)
@@ -228,6 +232,7 @@ const { values, positionals } = parseArgs({
     link: { type: 'string' },
     to: { type: 'string' },
     title: { type: 'string' },
+    with: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
@@ -381,8 +386,9 @@ const where = (p: PostInfo) => (p.space ? `${{ project: 'p', community: 'r', gro
 const postLine = (p: PostInfo) => {
   const vote = p.myVote > 0 ? '▲' : p.myVote < 0 ? '▼' : ' ';
   const marks = [p.pinned && 'pinned', p.saved === 'pinned' ? 'on your home' : p.saved, p.issue && `[${p.issue.status}]`, p.proposal && (p.proposal.closed ? (p.proposal.passed ? '[passed]' : '[rejected]') : '[voting]')].filter(Boolean).join(' ');
+  const coauthors = p.coauthors?.length ? ` with ${p.coauthors.map((c) => `${actor(c)}${c.state === 'confirmed' ? ' ✓' : c.state === 'declined' ? ' (declined)' : ' (asked)'}`).join(', ')}` : '';
   return `${p.short}  ${vote}${String(p.score).padStart(3)}  ${p.title}${marks ? `  ${marks}` : ''}
-                 ${where(p)} · ${actor(p.by)} · ${p.chat} in chat${p.link ? ` · ${p.link}` : ''}`;
+                 ${where(p)} · ${actor(p.by)}${coauthors} · ${p.chat} in chat${p.link ? ` · ${p.link}` : ''}`;
 };
 const grantees = (list: BoardInfo['access']['read']) => (list?.length ? list.map((g) => (g.group ? `group:${g.name ?? g.group}` : (g.name ?? g.person))).join(', ') : 'maintainers only');
 const boardLine = (b: BoardInfo) =>
@@ -610,7 +616,11 @@ async function main(): Promise<void> {
         const { agents } = await (await backend()).whoami();
         return out(agents, () => agents.map((a) => `${a.name}  ${a.did}  can: ${a.permissions.join(', ')}`).join('\n') || '(no agents)');
       }
-      throw new Error('usage: weave agent add <name> [--can <kinds>] | weave agent list');
+      if (sub === 'can' && name && args[2]) {
+        const agent = await (await backend()).updateAgent({ name, permissions: args[2].split(',') });
+        return out(agent, () => `agent ${agent.name} can now: ${agent.permissions.join(', ')}`);
+      }
+      throw new Error('usage: weave agent add <name> [--can <kinds>] | weave agent can <name> <kinds> | weave agent list');
     }
 
     case 'group': {
@@ -805,6 +815,20 @@ async function main(): Promise<void> {
       );
     }
 
+    case 'coauthor': {
+      const [ref, answer] = args;
+      if (!ref || !['yes', 'no'].includes(answer)) throw new Error('usage: weave coauthor <post id> yes|no [--as <agent>]');
+      const p = await (await backend()).confirmCoauthor({ post: ref, on: answer === 'yes', as: values.as });
+      return out(p, () => postLine(p));
+    }
+
+    case 'coauthors': {
+      const list = await (await backend()).coauthorRequests();
+      return out(list, () =>
+        list.map((r) => `${r.post.short}  ${r.post.title}  — ${actor(r.by)} names ${r.agent ? `your agent ${r.agent}` : 'you'} as co-author\n          weave coauthor ${r.post.short} yes${r.agent ? ` --as ${r.agent}` : ''}  ·  weave coauthor ${r.post.short} no${r.agent ? ` --as ${r.agent}` : ''}`).join('\n') || '(nothing to answer)',
+      );
+    }
+
     case 'submit': {
       const title = args.join(' ').trim();
       if (!title) throw new Error('usage: weave submit <title...> -r <community> | -p <project> [-b <board>]');
@@ -812,7 +836,8 @@ async function main(): Promise<void> {
       if (!space) throw new Error('where? add -r <community> or -p <project> (with -b <board>)');
       const b = await backend();
       const image = values.image ? await uploadImage(b, values.image) : undefined;
-      const p = await b.submit({ space, board: values.board, title, text: values.text, link: values.link, image, as: values.as });
+      const coauthors = values.with?.split(',').map((w) => w.trim()).filter(Boolean);
+      const p = await b.submit({ space, board: values.board, title, text: values.text, link: values.link, image, with: coauthors, as: values.as });
       return out(p, () => postLine(p));
     }
 
