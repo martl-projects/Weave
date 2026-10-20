@@ -56,6 +56,7 @@ export type {
 } from './backend.ts';
 export { noAgent, PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
 export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
+export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
 export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { ApiClient, connectDaemon, followDaemon, type DaemonInfo } from './client.ts';

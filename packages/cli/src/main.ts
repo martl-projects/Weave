@@ -6,6 +6,9 @@ import { parseArgs } from 'node:util';
 import {
   connectDaemon,
   followDaemon,
+  checkManifest,
+  MANIFEST_EXAMPLE,
+  MANIFEST_RULES,
   releaseWorkflow,
   loadConfig,
   parseBootstrap,
@@ -165,6 +168,8 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
   app show -p <project>      the project's app: ports it shares, buttons
   app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
+  app check [file]           check a weave.app.json (default: here), every problem at once
+  app example                an annotated weave.app.json and its rules
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
@@ -1187,6 +1192,30 @@ ${postLine(p)}`);
           last = line;
         }
       }
+      if (sub === 'check') {
+        const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1] ?? values.file ?? 'weave.app.json');
+        if (!existsSync(file)) throw new Error(`no manifest at ${file}: weave app check --example shows one`);
+        let input: unknown;
+        try {
+          input = JSON.parse(readFileSync(file, 'utf8'));
+        } catch (error) {
+          throw new Error(`${file} isn't valid JSON: ${(error as Error).message}`);
+        }
+        const checked = checkManifest(input);
+        out(checked, () =>
+          [
+            checked.problems.length ? `${checked.problems.length} problem${checked.problems.length === 1 ? '' : 's'}:\n${checked.problems.map((p) => `  ✗ ${p}`).join('\n')}` : `${file}: fine`,
+            checked.warnings.length ? `worth a look:\n${checked.warnings.map((w) => `  ! ${w}`).join('\n')}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        );
+        if (checked.problems.length) process.exitCode = 1;
+        return;
+      }
+      if (sub === 'example') {
+        return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
+      }
       if (sub === 'workflow' && args[1] && args[2]) {
         const w = releaseWorkflow(args[1], args[2]);
         return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "release": ${JSON.stringify(w.startRelease)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
@@ -1210,7 +1239,7 @@ ${postLine(p)}`);
         const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
         return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
       }
-      throw new Error('usage: weave app publish|show|folder|install|release <tag>|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|check|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
     }
 
     case 'rooms': {

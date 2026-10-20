@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -80,7 +80,7 @@ GitHub repositories that follow a space (repo access for members):
 3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
 
 A project's app, installed by hosts with one click (prefer this to asking hosts to install Node.js or build anything):
-1. The repository holds weave.app.json (app, name, services, start). For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
+1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
 2. Commit, push, tag (v0.1.0) and push the tag. The workflow makes the release in a few minutes.
 3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Hosts then install it from the project's Live tab. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
 Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
@@ -600,6 +600,30 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
       inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
     },
     run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
+  );
+
+  server.registerTool(
+    'weave_app_manifest',
+    {
+      title: "A project app's manifest: rules, example, check",
+      description:
+        "weave.app.json describes a project's app: its id and name, the ports a room shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+      inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ file, manifest }: { file?: string; manifest?: unknown }) => {
+      if (file === undefined && manifest === undefined) return { rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE };
+      let input = manifest;
+      if (file !== undefined) {
+        try {
+          input = JSON.parse(readFileSync(file, 'utf8'));
+        } catch (error) {
+          return { ok: false, problems: [`${file} isn't readable JSON: ${(error as Error).message}`], warnings: [] };
+        }
+      }
+      const checked = checkManifest(input);
+      return { ok: checked.problems.length === 0, ...checked, ...(checked.problems.length ? { rules: MANIFEST_RULES } : {}) };
+    }),
   );
 
   server.registerTool(

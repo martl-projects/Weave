@@ -119,48 +119,129 @@ const path = (value: unknown): string => {
   return p.startsWith('/') ? p : `/${p}`;
 };
 
-/** A manifest checked and cleaned, or an error saying what's wrong with it. */
-export function parseManifest(input: unknown): AppManifest {
-  const m = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+/** What checking a manifest found: every problem at once (it can't be used until they're fixed), things worth a look, and the manifest as Weave reads it. */
+export interface ManifestCheck {
+  problems: string[];
+  warnings: string[];
+  manifest?: AppManifest;
+}
+
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install']);
+
+/** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
+export function checkManifest(input: unknown): ManifestCheck {
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return { problems: ['a manifest is a JSON object, like {"app": "band-ab", "services": [...]}'], warnings };
+  const m = input as Record<string, unknown>;
+  for (const key of Object.keys(m)) if (!KNOWN.has(key)) warnings.push(`"${key}" isn't part of a manifest and is ignored (known: ${[...KNOWN].join(', ')})`);
+
   const app = text(m.app, 32);
-  if (!SLUG.test(app)) throw new Error('"app" is a short id: lowercase letters, digits and dashes');
+  if (!SLUG.test(app)) problems.push('"app" is a short id: lowercase letters, digits and dashes, like "band-ab"');
   const name = text(m.name, 40) || app;
-  if (!Array.isArray(m.services) || m.services.length === 0) throw new Error('"services" lists at least one port to share');
-  const services = m.services.slice(0, 8).map((raw, i): AppService => {
-    const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    const port = Number(s.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`service ${i + 1}: "port" is 1 to 65535`);
-    const id = text(s.id, 32) || `service-${i + 1}`;
-    if (!SLUG.test(id)) throw new Error(`service ${i + 1}: "id" uses lowercase letters, digits and dashes`);
-    const protocol = s.protocol === 'tcp' ? 'tcp' : 'http';
-    const open = (s.open && typeof s.open === 'object' ? s.open : {}) as Record<string, Record<string, unknown> | undefined>;
-    const side = (o: Record<string, unknown> | undefined, label: string) => (o ? { path: path(o.path), label: text(o.label, 30) || label } : undefined);
-    const host = side(open.host, 'Open');
-    const joiner = side(open.joiner, 'Play');
-    return { id, port, protocol, ...(host || joiner ? { open: { ...(host ? { host } : {}), ...(joiner ? { joiner } : {}) } } : {}) };
-  });
+  if (!text(m.name, 40)) warnings.push('"name" is what people see; without it they see the id');
+
+  let services: AppService[] = [];
+  if (!Array.isArray(m.services) || m.services.length === 0) problems.push('"services" lists at least one port to share, like [{"port": 3000}]');
+  else {
+    if (m.services.length > 8) warnings.push('only the first 8 services count');
+    services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
+      const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const where = `services[${i}]`;
+      let ok = true;
+      const port = Number(s.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) (problems.push(`${where}: "port" is the port the app listens on, 1 to 65535`), (ok = false));
+      const id = text(s.id, 32) || `service-${i + 1}`;
+      if (!SLUG.test(id)) (problems.push(`${where}: "id" uses lowercase letters, digits and dashes`), (ok = false));
+      if (s.protocol !== undefined && s.protocol !== 'http' && s.protocol !== 'tcp') warnings.push(`${where}: "protocol" is "http" or "tcp"; taking http`);
+      const protocol = s.protocol === 'tcp' ? 'tcp' : 'http';
+      const open = (s.open && typeof s.open === 'object' ? s.open : {}) as Record<string, Record<string, unknown> | undefined>;
+      for (const key of Object.keys(open)) if (key !== 'host' && key !== 'joiner') warnings.push(`${where}.open: "${key}" is ignored; "host" and "joiner" are the two sides`);
+      const side = (o: Record<string, unknown> | undefined, label: string, which: string) => {
+        if (!o) return undefined;
+        if (typeof o.path !== 'string') warnings.push(`${where}.open.${which}: "path" is the page to open, like "/play"; using "/"`);
+        return { path: path(o.path), label: text(o.label, 30) || label };
+      };
+      const host = side(open.host, 'Open', 'host');
+      const joiner = side(open.joiner, 'Play', 'joiner');
+      if (protocol === 'http' && !host && !joiner) warnings.push(`${where}: no "open": rooms show no button to open the app (add open.host and open.joiner)`);
+      return ok ? [{ id, port, protocol, ...(host || joiner ? { open: { ...(host ? { host } : {}), ...(joiner ? { joiner } : {}) } } : {}) }] : [];
+    });
+  }
+
   const rawStart = (m.start && typeof m.start === 'object' ? m.start : {}) as Record<string, unknown>;
   const hint = text(rawStart.hint, 200);
-  const commandOf = (parts: unknown, where: string): string[] => {
+  const commandOf = (parts: unknown, where: string): string[] | undefined => {
     if (!Array.isArray(parts) || parts.length === 0 || parts.length > 32 || !parts.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.includes('\0'))) {
-      throw new Error(`"${where}" is the program and its arguments, e.g. ["node", "server.js"]`);
+      problems.push(`"${where}" is the program and its arguments as a list, without a shell, like ["node", "server.js"]`);
+      return undefined;
     }
     return parts as string[];
   };
   const command = rawStart.command !== undefined ? commandOf(rawStart.command, 'start.command') : undefined;
   let release: Record<string, string[]> | undefined;
-  if (rawStart.release && typeof rawStart.release === 'object') {
-    release = {};
-    for (const [platform, parts] of Object.entries(rawStart.release as Record<string, unknown>).slice(0, 12)) {
-      if (!PLATFORM.test(platform)) throw new Error(`"start.release" names platforms like win32-x64, darwin-arm64, linux-x64 (not "${platform}")`);
-      release[platform] = commandOf(parts, `start.release.${platform}`);
+  if (rawStart.release !== undefined) {
+    if (!rawStart.release || typeof rawStart.release !== 'object' || Array.isArray(rawStart.release)) problems.push('"start.release" maps platforms to commands, like {"win32-x64": ["./band-ab.exe"]}');
+    else {
+      release = {};
+      for (const [platform, parts] of Object.entries(rawStart.release as Record<string, unknown>).slice(0, 12)) {
+        if (!PLATFORM.test(platform)) problems.push(`"start.release" names platforms like win32-x64, darwin-arm64, darwin-x64, linux-x64 (not "${platform}")`);
+        else {
+          const c = commandOf(parts, `start.release.${platform}`);
+          if (c) release[platform] = c;
+        }
+      }
     }
   }
+  if (rawStart.command === undefined && rawStart.release === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release for release builds)');
+  if (rawStart.release !== undefined && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
   const start =
     hint || command || release ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}) } : undefined;
-  const install = parseInstall(m.install);
-  return { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}) };
+
+  let install: AppInstall | undefined;
+  try {
+    install = parseInstall(m.install);
+  } catch (error) {
+    problems.push((error as Error).message);
+  }
+  if (install?.assets) warnings.push('"install.assets" are usually added by weave app release, which fingerprints each file; no need to write them');
+
+  if (problems.length) return { problems, warnings };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}) } };
 }
+
+/** A manifest checked and cleaned, or an error naming everything that's wrong with it. */
+export function parseManifest(input: unknown): AppManifest {
+  const checked = checkManifest(input);
+  if (!checked.manifest) throw new Error(checked.problems.join('; '));
+  return checked.manifest;
+}
+
+/** An example weave.app.json, for people and agents writing one. */
+export const MANIFEST_EXAMPLE = {
+  app: 'band-ab',
+  name: 'BAND AB!',
+  services: [{ id: 'show', port: 3000, protocol: 'http', open: { host: { path: '/host', label: 'Open the stage' }, joiner: { path: '/play', label: 'Play' } } }],
+  start: {
+    hint: 'node server.js',
+    command: ['node', 'server.js'],
+    release: { 'win32-x64': ['./band-ab.exe'], 'darwin-arm64': ['./band-ab'], 'darwin-x64': ['./band-ab'], 'linux-x64': ['./band-ab'] },
+  },
+  install: { steps: ['git clone the repository', 'npm ci', 'npm start'] },
+};
+
+/** What each part of a manifest means, and the rules. */
+export const MANIFEST_RULES = [
+  'The file is weave.app.json at the top of the repository. A host runs the app on their computer; a room shares it with the project through an encrypted tunnel.',
+  'app: a short id, lowercase letters, digits and dashes (it stays the same across versions). name: what people see.',
+  'services: the ports the app listens on, at most 8. A room shares exactly these ports and nothing else on the host\'s computer. Each has a port, an optional id, and protocol "http" (default) or "tcp".',
+  'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label.',
+  'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after the host approves it once.',
+  'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
+  'start.hint: one line for hosts who start it by hand.',
+  'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
+  'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
+];
 
 /** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */
 export const startCommand = (app: AppManifest | undefined, platform: string, releaseBuild: boolean): string[] | undefined =>

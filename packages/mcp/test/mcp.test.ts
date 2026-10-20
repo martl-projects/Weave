@@ -130,6 +130,19 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('teaches and checks app manifests, every problem at once', async () => {
+    const { call, close } = await setup();
+    const guide = (await call('weave_app_manifest')).data;
+    expect(guide.rules.join(' ')).toContain('start.release');
+    // The example passes its own check.
+    expect((await call('weave_app_manifest', { manifest: guide.example })).data).toMatchObject({ ok: true, problems: [] });
+    const bad = (await call('weave_app_manifest', { manifest: { app: 'Band AB', services: [{ port: 0 }], start: { command: 'node server.js' } } })).data;
+    expect(bad.ok).toBe(false);
+    expect(bad.problems).toHaveLength(3);
+    expect(bad.rules).toBeDefined();
+    close();
+  });
+
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
     await call('weave_say', { space: 'Weave', text: 'build is green' });
