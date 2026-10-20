@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { ago, api, bump, navigate, plain, shortDid, useApi } from './lib.ts';
+import { ago, api, bump, navigate, plain, postLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast } from './ui.tsx';
 import { ImagePicker, RichEditor } from './editor.tsx';
 
@@ -677,44 +677,68 @@ export function ShareDialog({ post, spaces, onClose }: { post: PostInfo; spaces:
   const communities = spaces.filter((s) => s.kind === 'community' && s.id !== post.space?.id);
   const [to, setTo] = useState(communities[0]?.id ?? (post.type === 'project' ? 'followers' : ''));
   const [text, setText] = useState('');
+  const link = postLink(post.id);
+  const into = communities.length > 0 || post.type === 'project';
   return (
     <Modal title={`Share “${post.title}”`} onClose={onClose}>
-      <form
-        className="form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          const shared = await attempt(() => api<PostInfo>('share', { post: post.id, to, text: text || undefined }), 'Shared');
-          if (shared) {
-            bump();
-            onClose();
-          }
-        }}
-      >
+      <div className="field-row-stacked">
+        <label htmlFor="share-link">Link to send someone</label>
         <div className="field-row">
-          <label htmlFor="share-to">Share to:</label>
-          <select id="share-to" value={to} onChange={(e) => setTo(e.target.value)}>
-            {communities.map((c) => (
-              <option key={c.id} value={c.id}>
-                {spaceLabel(c)}
-              </option>
-            ))}
-            {post.type === 'project' && <option value="followers">My followers (public page only)</option>}
-          </select>
+          <input id="share-link" className="grow" readOnly value={link} onFocus={(e) => e.target.select()} />
+          <button type="button" className={into ? '' : 'default'} onClick={() => copy(link, 'Link copied')}>
+            Copy link
+          </button>
         </div>
-        <div className="field-row-stacked">
-          <label htmlFor="share-text">Say something (optional)</label>
-          <textarea id="share-text" rows={3} placeholder={plain(post.text).slice(0, 120)} value={text} onChange={(e) => setText(e.target.value)} />
-        </div>
-        {post.type === 'project' && <p className="small">People in the community see the project's name and description, and can talk about it in the post's chat. Only you decide who joins.</p>}
+        <p className="small">
+          {post.space && post.space.kind !== 'direct'
+            ? `Opens the post in Weave for people in ${spaceLabel(post.space)}; it shows nobody else anything.`
+            : `Opens the post in Weave. It's public: people who follow ${post.by.name ?? 'its author'} can open it.`}
+        </p>
+      </div>
+      {into ? (
+        <form
+          className="form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const shared = await attempt(() => api<PostInfo>('share', { post: post.id, to, text: text || undefined }), 'Shared');
+            if (shared) {
+              bump();
+              onClose();
+            }
+          }}
+        >
+          <div className="field-row">
+            <label htmlFor="share-to">Share to:</label>
+            <select id="share-to" value={to} onChange={(e) => setTo(e.target.value)}>
+              {communities.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {spaceLabel(c)}
+                </option>
+              ))}
+              {post.type === 'project' && <option value="followers">My followers (public page only)</option>}
+            </select>
+          </div>
+          <div className="field-row-stacked">
+            <label htmlFor="share-text">Say something (optional)</label>
+            <textarea id="share-text" rows={3} placeholder={plain(post.text).slice(0, 120)} value={text} onChange={(e) => setText(e.target.value)} />
+          </div>
+          {post.type === 'project' && <p className="small">People in the community see the project's name and description, and can talk about it in the post's chat. Only you decide who joins.</p>}
+          <div className="buttons">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="default" disabled={!to}>
+              Share
+            </button>
+          </div>
+        </form>
+      ) : (
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="default" disabled={!to}>
-            Share
+            Close
           </button>
         </div>
-      </form>
+      )}
     </Modal>
   );
 }

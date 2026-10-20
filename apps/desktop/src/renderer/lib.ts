@@ -183,12 +183,20 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
-/** DOMPurify's default allowed URLs, plus wblob: references. */
-const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
+/** DOMPurify's default allowed URLs, plus wblob: references and Weave links. */
+const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob|weave):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
+
+/** A post link (weave:post:…) and the id it names. */
+export const POST_LINK = /weave:post:([A-Za-z0-9_-]+)/;
+export const postLink = (id: string) => `weave:post:${id}`;
+
+/** What renderMarkdown picks out of plain text: @mentions and post links. */
+const INLINE = /@[\w-]+|weave:post:[A-Za-z0-9_-]+/;
 
 /**
  * Markdown (bold, italics, code, links, lists, images) rendered safely: messages
- * come from other people, so the HTML is sanitized, and @mentions become chips.
+ * come from other people, so the HTML is sanitized, @mentions become chips and
+ * post links become links.
  * `rich` (project pages) also keeps inline styles; the page container keeps
  * them from reaching outside it.
  */
@@ -204,15 +212,17 @@ export function renderMarkdown(text: string, rich = false): string {
   const texts: Text[] = [];
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (!node.parentElement?.closest('code, pre, a') && /@[\w-]+/.test(node.data)) texts.push(node);
+    if (!node.parentElement?.closest('code, pre, a') && INLINE.test(node.data)) texts.push(node);
   }
   for (const node of texts) {
     const fragment = document.createDocumentFragment();
     let last = 0;
-    for (const match of node.data.matchAll(/@[\w-]+/g)) {
+    for (const match of node.data.matchAll(new RegExp(INLINE, 'g'))) {
       fragment.append(node.data.slice(last, match.index));
-      const chip = document.createElement('span');
-      chip.className = 'mention';
+      const post = POST_LINK.exec(match[0]);
+      const chip = document.createElement(post ? 'a' : 'span');
+      if (post) chip.setAttribute('href', postLink(post[1]));
+      else chip.className = 'mention';
       chip.textContent = match[0];
       fragment.append(chip);
       last = match.index! + match[0].length;

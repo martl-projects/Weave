@@ -107,6 +107,7 @@ import {
   KIND_POST_COAUTHOR,
   coauthorsOf,
   MAX_COAUTHORS,
+  postRefOf,
   type KeyFacts,
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
@@ -959,6 +960,7 @@ export class WeaveNode implements Backend {
   }
 
   async post(ref: string): Promise<PostInfo> {
+    ref = postRefOf(ref ?? '');
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
     if (matches.length === 0) throw new Error(`no post found with id ${ref}`);

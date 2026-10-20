@@ -9,9 +9,9 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
-import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
-import { Avatar, Menu, Sprite, Toasts, WeaveMark } from './ui.tsx';
+import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, POST_LINK, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
+import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
+import { Avatar, Menu, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
 import {
   CommunityAbout,
@@ -330,11 +330,35 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
   );
 }
 
+/** A post by its id alone, as a post link opens it: shown where it lives when that's one of your places. */
 function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: SpaceInfo[] }) {
   const { data, error } = useApi(() => api<PostInfo>('post', id), [id]);
-  if (error) return <Page title="Post">{error}</Page>;
-  return data ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
+  const home = data && postHref(data);
+  useEffect(() => {
+    if (home && home !== `#/post/${data.id}`) location.replace(home); // no back step into this redirect
+  }, [home]);
+  if (error)
+    return (
+      <Page title="Post">
+        {/no post found/.test(error) ? "This post isn't on this computer. It may be in a community or project you're not in, or it hasn't reached you yet." : error}
+      </Page>
+    );
+  return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
+
+/** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. */
+function openLink(link: string): void {
+  const post = POST_LINK.exec(link);
+  if (post) navigate(`#/post/${post[1]}`);
+  else toast('Paste this link into “Join with an invite link…” or “Add someone”');
+}
+bridge.onLink(openLink);
+document.addEventListener('click', (event) => {
+  const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"]');
+  if (!anchor) return;
+  event.preventDefault();
+  openLink(anchor.getAttribute('href')!);
+});
 
 // ---------------------------------------------------------------- window
 

@@ -273,7 +273,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
 
   server.registerTool(
     'weave_read_post',
-    { title: 'Read a post', description: 'A post with its chat. Id or its first 8 characters.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
+    { title: 'Read a post', description: 'A post with its chat. Id, its first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
     run(async ({ post, limit }: { post: string; limit?: number }) => {
       const p = await backend.post(post);
       const chat = p.space && p.type !== 'project' ? await backend.messages(undefined, { post: p.id, limit: limit ?? 50 }) : [];

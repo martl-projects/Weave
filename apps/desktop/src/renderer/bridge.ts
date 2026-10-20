@@ -22,6 +22,8 @@ interface Bridge {
   attention(): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
+  /** A weave: link the app was opened with (clicked somewhere outside it). */
+  onLink(listener: (link: string) => void): void;
 }
 
 declare global {
@@ -59,6 +61,8 @@ const webBridge: Bridge = {
   onEvent: (listener) => {
     new EventSource('/events').onmessage = (message) => listener(JSON.parse(message.data));
   },
+  // A browser tab is never handed links.
+  onLink: () => {},
 };
 
 export const bridge: Bridge = window.weave ?? webBridge;

@@ -127,6 +127,8 @@ export {
   KIND_POST_COAUTHOR,
   coauthorsOf,
   MAX_COAUTHORS,
+  postLink,
+  postRefOf,
   type CoauthorState,
   type KeyFacts,
   KIND_POST_EDIT,

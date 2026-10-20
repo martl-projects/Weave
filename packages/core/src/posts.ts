@@ -181,6 +181,19 @@ export interface Post {
   with?: Did[];
 }
 
+/*
+ * A post link names a post and nothing else: it opens the post for whoever can
+ * already see it (its community or project, or anyone for a public post), so it
+ * can go anywhere a message can.
+ */
+const POST_LINK_PREFIX = 'weave:post:';
+const POST_LINK_PATTERN = /weave:post:([A-Za-z0-9_-]+)/;
+
+export const postLink = (id: string): string => POST_LINK_PREFIX + id;
+
+/** The post a link points to, also from inside a longer message; anything else is taken as an id as it is. */
+export const postRefOf = (text: string): string => POST_LINK_PATTERN.exec(text)?.[1] ?? text.trim();
+
 /** At most this many co-authors per post. */
 export const MAX_COAUTHORS = 10;
 

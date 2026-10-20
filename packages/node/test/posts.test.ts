@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { postLink } from '@weave/core';
 import { WeaveNode } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -236,6 +237,24 @@ describe('posts, boards and communities', () => {
     sync(martin, lena);
     expect((await lena.posts({ space: 'Synths' }))[0].pinned).toBe(true);
     expect((await lena.posts()).map((p) => p.title)).toContain('My first case');
+  });
+
+  it('opens a post from its link, for people who can see it', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const ada = person('Ada');
+    await martin.createCommunity({ name: 'Synths' });
+    await lena.joinSpace(await martin.invite('Synths'));
+    sync(martin, lena);
+    const post = await martin.submit({ space: 'Synths', title: 'Look at this case' });
+    sync(martin, lena);
+    sync(martin, ada);
+
+    const link = postLink(post.id);
+    expect(link).toBe(`weave:post:${post.id}`);
+    expect(await lena.post(link)).toMatchObject({ id: post.id, title: 'Look at this case' });
+    expect((await lena.post(`Have a look: ${link} !`)).id).toBe(post.id);
+    await expect(ada.post(link)).rejects.toThrow(/no post found/); // not in Synths: the link shows her nothing
   });
 
   it('saves and pins posts privately, and shares projects into communities and to followers', async () => {

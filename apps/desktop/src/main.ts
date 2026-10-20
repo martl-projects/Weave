@@ -9,6 +9,7 @@ import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
 // --route <hash>       start on a view, e.g. "#/groups"
 // --screenshot <file>  render, save a PNG of the window and quit (for checks)
+// weave:post:…         open at that post (how the OS hands over a clicked link)
 const { values } = parseArgs({
   args: process.argv.slice(app.isPackaged ? 1 : 2),
   strict: false,
@@ -22,6 +23,36 @@ let daemon: RunningDaemon | undefined;
 let window: BrowserWindow | undefined;
 let watching = new AbortController();
 let quitting = false;
+
+// weave:post:… links: the OS starts the app with one (registered by the installer,
+// see `protocols` in package.ts), or hands it to the app that's already open.
+const LINK = /^weave:[a-z]+:[A-Za-z0-9_-]{1,200}$/;
+const linkIn = (argv: string[]) => argv.find((arg) => LINK.test(arg));
+let pendingLink = linkIn(process.argv);
+let loaded = false;
+
+function openLink(link: string): void {
+  pendingLink = link;
+  if (!window || !loaded) return; // sent once the window has loaded
+  pendingLink = undefined;
+  showWindow();
+  window.webContents.send('weave:link', link);
+}
+
+// One window for your own Weave home, so a clicked link reaches it. Windows on
+// other homes (--home, for testing with several people) stay separate.
+const primary = homeArg || process.env.WEAVE_HOME || values.screenshot ? true : app.requestSingleInstanceLock();
+if (!primary) app.quit();
+app.on('second-instance', (_event, argv) => {
+  const link = linkIn(argv);
+  if (link) openLink(link);
+  else showWindow();
+});
+// macOS hands links over as an event, also before the app is ready.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  if (LINK.test(url)) openLink(url);
+});
 
 async function connect(): Promise<void> {
   watching.abort();
@@ -166,8 +197,8 @@ async function createWindow(): Promise<void> {
     }
   });
   if (!values.screenshot) createTray();
-  // Links in messages open in the system browser, never inside the app.
-  const external = (url: string) => /^https?:\/\//.test(url) && void shell.openExternal(url);
+  // Links in messages open in the system browser, never inside the app; Weave links open here.
+  const external = (url: string) => (LINK.test(url) ? openLink(url) : /^https?:\/\//.test(url) && void shell.openExternal(url));
   window.webContents.setWindowOpenHandler(({ url }) => {
     external(url);
     return { action: 'deny' };
@@ -177,6 +208,10 @@ async function createWindow(): Promise<void> {
       event.preventDefault();
       external(url);
     }
+  });
+  window.webContents.on('did-finish-load', () => {
+    loaded = true;
+    if (pendingLink) openLink(pendingLink);
   });
   await window.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: ((values.route as string | undefined) ?? '').replace(/^#/, '') });
 
@@ -189,6 +224,9 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  if (!primary) return;
+  // The installer registers the installed app; a development build leaves the link handler alone.
+  if (app.isPackaged && !app.isDefaultProtocolClient('weave')) app.setAsDefaultProtocolClient('weave');
   if (hasIdentity(home)) {
     try {
       await connect();

@@ -78,6 +78,8 @@ const config: Configuration = {
     hardenedRuntime: false,
   },
   linux: { target: [{ target: 'AppImage', arch: ['x64'] }], category: 'Network' },
+  // weave:post:… links open the app at that post (see src/main.ts).
+  protocols: [{ name: 'Weave link', schemes: ['weave'] }],
 };
 await build({ config, dir: process.argv.includes('--dir') });
 console.log('installers in apps/desktop/release/');

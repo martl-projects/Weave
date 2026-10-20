@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('weave', {
   onEvent: (listener: (item: FeedItem) => void) => {
     ipcRenderer.on('weave:event', (_event, item: FeedItem) => listener(item));
   },
+  onLink: (listener: (link: string) => void) => {
+    ipcRenderer.on('weave:link', (_event, link: string) => listener(link));
+  },
 });

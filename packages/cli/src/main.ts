@@ -130,7 +130,7 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
                              on your home: [--from all|communities|projects|mine|friends|following]
   home hide <space> / home show <space>   leave a community or project off your home (only you know)
-  read <id>                  a post and its chat
+  read <id|link>             a post and its chat (and its weave:post: link to send)
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>] [--image <file>]
                              [--with <who,…>]: co-authors (people, your agents, or person·agent); each confirms first
   coauthor <id> yes|no       confirm (or decline) being named as co-author  [--as <agent>] for your agent
@@ -906,7 +906,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
     }
 
     case 'read': {
-      if (!args[0]) throw new Error('usage: weave read <id>');
+      if (!args[0]) throw new Error('usage: weave read <id or weave:post: link>');
       const b = await backend();
       const p = await b.post(args[0]);
       const chat = p.space && p.type !== 'project' ? await b.messages(undefined, { post: p.id, limit: values.n ? Number(values.n) : 30 }) : [];
@@ -914,6 +914,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         [
           postLine(p),
           p.text ? `\n${p.text}\n` : '',
+          `  link: weave:post:${p.id}`,
           p.project && !p.project.member ? `  (a project you're not in: ${p.project.name} [${p.project.status}] — ask in the chat to be invited)` : '',
           p.type === 'project' ? `  chat in its channels: weave chat -p "${p.title}"` : '',
           ...chat.map((m) => `  ${m.short}  ${actor(m.by).padEnd(20)}  ${m.text}`),
