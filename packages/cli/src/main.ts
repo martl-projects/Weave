@@ -5,6 +5,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
+  followDaemon,
   loadConfig,
   parseBootstrap,
   resolveHome,
@@ -623,7 +624,8 @@ async function main(): Promise<void> {
     case 'mcp': {
       // stdout belongs to the MCP protocol from here on; messages for people go to stderr.
       // The daemon is the one process writing to the home, and the only way to see what peers send.
-      const b = await backend({ needsDaemon: true });
+      // Follow it rather than pin it: it may start later, or restart on another port.
+      const b = followDaemon(home);
       const { serveStdio } = await import('@weave/mcp');
       return serveStdio(b, { as: values.as });
     }

@@ -95,9 +95,13 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   const watching = new AbortController();
   let mySigner: string | undefined;
 
-  void backend.whoami().then((me) => {
-    mySigner = as ? me.agents.find((a) => a.name === as)?.did : me.signer;
-  });
+  // Who "we" are, to leave our own writes out of the inbox; asked again until the node answers.
+  const findSigner = () =>
+    backend.whoami().then(
+      (me) => void (mySigner = as ? me.agents.find((a) => a.name === as)?.did : me.signer),
+      () => void setTimeout(findSigner, 5000),
+    );
+  void findSigner();
 
   const mentionPattern = as ? new RegExp(`@${as.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i') : undefined;
 

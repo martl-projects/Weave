@@ -90,6 +90,65 @@ export class ApiClient {
   }
 }
 
+/** The daemon can't be reached: gone, restarted elsewhere, or a new token. */
+const unreachable = (error: unknown): boolean => {
+  const e = error as NodeJS.ErrnoException & { cause?: { code?: string } };
+  return ['ECONNREFUSED', 'ECONNRESET', 'EPIPE'].includes(e.code ?? e.cause?.code ?? '') || e.message === 'unauthorized';
+};
+
+const notRunning = () => new Error("Weave isn't running on this computer: start the Weave app (or weave daemon), then try again");
+
+/**
+ * A Backend that follows this home's daemon, for long-running clients like
+ * the MCP server: every call reads daemon.json, so a restarted daemon (new
+ * port, new token) is found again, and one that isn't running yet just
+ * makes calls fail with a clear message until it is. The event stream
+ * reconnects by itself.
+ */
+export function followDaemon(home: Home): Backend {
+  let current: { port: number; token: string; client: ApiClient } | undefined;
+  const client = (): ApiClient => {
+    const info = readJson<DaemonInfo>(home.daemon);
+    if (!info) throw notRunning();
+    if (current?.port !== info.port || current.token !== info.token) current = { port: info.port, token: info.token, client: new ApiClient(info.port, info.token) };
+    return current.client;
+  };
+  const call = async (method: RpcMethod, args: unknown[]): Promise<unknown> => {
+    try {
+      return await client().call(method, args);
+    } catch (error) {
+      if (!unreachable(error)) throw error;
+      // Maybe it restarted just now: read daemon.json again and try once more.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      current = undefined;
+      try {
+        return await client().call(method, args);
+      } catch (again) {
+        throw unreachable(again) ? notRunning() : again;
+      }
+    }
+  };
+  const watch = async (onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> => {
+    while (!signal.aborted) {
+      try {
+        await client().watch(onItem, signal);
+      } catch {
+        // not running, or it went away: look again shortly
+      }
+      if (signal.aborted) return;
+      current = undefined;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  };
+  return new Proxy({} as Backend, {
+    get(_target, prop) {
+      if (prop === 'watch') return watch;
+      if (typeof prop === 'string' && RPC_METHODS.includes(prop as RpcMethod)) return (...args: unknown[]) => call(prop as RpcMethod, args);
+      return undefined;
+    },
+  });
+}
+
 /** A client for the daemon running on this home, or undefined if none answers. */
 export async function connectDaemon(home: Home): Promise<ApiClient | undefined> {
   const info = readJson<DaemonInfo>(home.daemon);
