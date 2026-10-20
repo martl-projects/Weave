@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import type { BoardInfo, GitHubInfo, Profile, SpaceInfo, SpaceRepos } from '@weave/node/client';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { AppOpen, BoardInfo, GitHubInfo, Profile, SpaceInfo, SpaceRepos } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { copy } from './posts.tsx';
+import { ago, api, bridge, bump, navigate, onItem, shortDid, useApi } from './lib.ts';
+import { copy, spaceHref } from './posts.tsx';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /*
@@ -260,10 +260,47 @@ export function RepoBanner({ space }: { space: SpaceInfo }) {
   );
 }
 
+// ---------------------------------------------------------------- agents opening the app for their person
+
+/** A Link a repository dialog an agent asked for, waiting for that space's settings to show it. */
+let wantedLink: { space: string; repo?: string } | undefined;
+const linkListeners = new Set<() => void>();
+const subscribeLink = (listener: () => void) => (linkListeners.add(listener), () => void linkListeners.delete(listener));
+
+/** Where a space's settings are: groups and tiers, and projects, have Settings; a community its About page. */
+const settingsHref = (space: NonNullable<AppOpen['space']>) => `${spaceHref(space)}/${space.kind === 'community' ? 'about' : 'settings'}`;
+
+let opening = false;
+
+/** Agents can bring the app to the front, at a space, its Link a repository dialog or the Inbox (weave_open_in_app). Once per app. */
+export function startAppOpens(): void {
+  if (opening) return;
+  opening = true;
+  onItem((item) => {
+    if (item.kind !== 'weave.open') return;
+    const open = item.body as unknown as AppOpen;
+    void bridge.show();
+    if (open.what === 'inbox' || !open.space) return navigate('#/inbox');
+    if (open.what === 'link-repo') {
+      wantedLink = { space: open.space.id, ...(open.repo ? { repo: open.repo } : {}) };
+      for (const listener of linkListeners) listener();
+      return navigate(settingsHref(open.space));
+    }
+    navigate(spaceHref(open.space));
+  });
+}
+
 /** In a space's settings: its repositories, linking more (owner, maintainers), and your account. */
 export function RepoSettings({ space }: { space: SpaceInfo }) {
   const { data } = useApi(() => api<SpaceRepos>('spaceRepos', space.id), [space.id]);
-  const [linking, setLinking] = useState(false);
+  const [linking, setLinking] = useState<false | { repo?: string }>(false);
+  // An agent asked for this space's link dialog: open it, with its repository.
+  const wanted = useSyncExternalStore(subscribeLink, () => wantedLink);
+  useEffect(() => {
+    if (wanted?.space !== space.id) return;
+    setLinking({ repo: wanted.repo });
+    wantedLink = undefined;
+  }, [wanted, space.id]);
   const { share, dialog } = useShare(space);
   if (!data) return null;
   return (
@@ -306,23 +343,30 @@ export function RepoSettings({ space }: { space: SpaceInfo }) {
       )}
       {data.canLink && (
         <div className="buttons">
-          <button onClick={() => setLinking(true)}>Link a repository…</button>
+          <button onClick={() => setLinking({})}>Link a repository…</button>
         </div>
       )}
-      {linking && <LinkRepoDialog space={space} onClose={() => setLinking(false)} />}
+      {linking && <LinkRepoDialog space={space} initialRepo={linking.repo} onClose={() => setLinking(false)} />}
       {dialog}
     </fieldset>
   );
 }
 
-function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
+function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; initialRepo?: string; onClose(): void }) {
   const { data: github, reload } = useApi(() => api<GitHubInfo>('github'), []);
-  const { data: repos, error } = useApi(() => (github?.login ? api<string[]>('githubRepos') : Promise.resolve(undefined)), [github?.login]);
+  const { data: repos, error, reload: reloadRepos } = useApi(() => (github?.login ? api<string[]>('githubRepos') : Promise.resolve(undefined)), [github?.login]);
   const { data: boards } = useApi(() => (space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
-  const [repo, setRepo] = useState('');
+  const [repo, setRepo] = useState(initialRepo ?? '');
   const [board, setBoard] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const chosen = repo || repos?.[0] || '';
+  // Coming back from GitHub (after adding a repository to the app): look again.
+  useEffect(() => {
+    window.addEventListener('focus', reloadRepos);
+    return () => window.removeEventListener('focus', reloadRepos);
+  }, [reloadRepos]);
+  const known = (r: string) => repos?.find((x) => x.toLowerCase() === r.toLowerCase());
+  const missing = repo && repos && !known(repo) ? repo : undefined;
+  const chosen = (repo && known(repo)) || (missing ? '' : repos?.[0]) || '';
 
   if (github && !github.login)
     return connecting ? (
@@ -356,6 +400,19 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
           <p>{error}</p>
         ) : !repos ? (
           <p className="small">{github ? 'Asking GitHub which repositories Weave may manage…' : '…'}</p>
+        ) : missing ? (
+          <div className="install-box">
+            <span className="grow">
+              <b>{missing}</b> isn't in {github?.app.name ?? 'the app'} yet.{' '}
+              <a href={github?.installUrl} target="_blank" rel="noopener noreferrer">
+                Add it on GitHub
+              </a>
+              : choose <b>Only select repositories</b>, tick it, save, and come back. Weave looks again then.
+            </span>
+            <button type="button" onClick={reloadRepos}>
+              Look again
+            </button>
+          </div>
         ) : repos.length === 0 ? (
           <p>
             Weave can't manage any of your repositories yet.{' '}
@@ -402,7 +459,7 @@ function LinkRepoDialog({ space, onClose }: { space: SpaceInfo; onClose(): void 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default" disabled={!repos?.length}>
+          <button className="default" disabled={!chosen}>
             Link
           </button>
         </div>

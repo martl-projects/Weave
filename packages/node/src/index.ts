@@ -24,6 +24,7 @@ export type {
   GitHubInfo,
   HarnessInfo,
   PermissionRequest,
+  AppOpen,
   HubGitHub,
   InProject,
   InSpace,

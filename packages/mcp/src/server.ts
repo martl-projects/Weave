@@ -76,8 +76,8 @@ Permissions: your person decides which kinds you may sign (weave_whoami lists yo
 
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
-2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, ask your person to install the app from installUrl and choose "Only select repositories". Only they can, on github.com.
-3. weave_link_repo links it to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
+2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
+3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
 
 A project's app, installed by hosts from a GitHub release:
 1. weave_app_publish publishes the app's manifest (weave.app.json: app, name, services, start.command).
@@ -507,6 +507,20 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         ? { ...request, note: 'You have these already.' }
         : { ...request, note: "Waiting in your person's Weave Inbox. Tell them what you asked for and why; check weave_whoami once they answer." };
     }),
+  );
+
+  server.registerTool(
+    'weave_open_in_app',
+    {
+      title: 'Open Weave for your person',
+      description:
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox. Tell them what to do there.",
+      inputSchema: { what: z.enum(['link-repo', 'space', 'inbox']), space: z.string().optional().describe('Group, tier or project name or id'), repo: z.string().optional().describe('For link-repo: owner/name') },
+    },
+    run(async ({ what, space, repo }: { what: 'link-repo' | 'space' | 'inbox'; space?: string; repo?: string }) => ({
+      ...(await backend.openInApp({ what, space, repo })),
+      note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
+    })),
   );
 
   // ---------------------------------------------------------------- GitHub and project apps

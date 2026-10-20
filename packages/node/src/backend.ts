@@ -411,6 +411,14 @@ export interface MembershipRequestInfo {
 }
 
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
+/** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
+export interface AppOpen {
+  what: 'link-repo' | 'space' | 'inbox';
+  space?: SpaceRef;
+  /** For link-repo: the repository to have chosen (owner/name). */
+  repo?: string;
+}
+
 /** One of your agents asking to sign more kinds of events; you allow or decline it in the Inbox. */
 export interface PermissionRequest {
   id: string;
@@ -800,6 +808,8 @@ export interface Backend {
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
+  /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
@@ -961,7 +971,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

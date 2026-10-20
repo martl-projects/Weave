@@ -12,7 +12,7 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
 import { boardIcon, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, Sprite, Toasts, WeaveMark } from './ui.tsx';
-import { RepoBanner } from './github.tsx';
+import { RepoBanner, startAppOpens } from './github.tsx';
 import {
   CommunityAbout,
   GroupSettings,
@@ -528,4 +528,5 @@ function App() {
 
 applySkin(loadSkin());
 startNotifications();
+startAppOpens();
 createRoot(document.getElementById('root')!).render(<App />);

@@ -213,6 +213,7 @@ import {
   type GitHubInfo,
   type HarnessInfo,
   type PermissionRequest,
+  type AppOpen,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -353,6 +354,8 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
+  /** Watchers told where the app should take its person (see openInApp). */
+  #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
@@ -665,8 +668,12 @@ export class WeaveNode implements Backend {
     const me = this.identity.author;
     const onLive = (notice?: Notice) => onItem({ id: `live-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.live', scope: 'live', body: null, author: me, signer: me, seq: 0, ...(notice ? { notice } : {}) });
     this.#liveListeners.add(onLive);
+    // Not an event either: the app comes to the front there; other watchers see no text and leave it.
+    const onOpen = (open: AppOpen) => onItem({ id: `open-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.open', scope: 'live', body: open as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#openListeners.add(onOpen);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
+    this.#openListeners.delete(onOpen);
     unsubscribe();
   }
 
@@ -1061,6 +1068,17 @@ export class WeaveNode implements Backend {
       open: { inbox: true },
     });
     return request;
+  }
+
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen> {
+    if (!['link-repo', 'space', 'inbox'].includes(input.what)) throw new Error('what is link-repo, space or inbox');
+    const space = input.space ? this.#space(input.space) : undefined;
+    if (input.what !== 'inbox' && !space) throw new Error('say which space');
+    const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
+    if (repo && !isRepoName(repo)) throw new Error('a repository looks like owner/name');
+    const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}), ...(repo ? { repo } : {}) };
+    for (const listener of this.#openListeners) listener(open);
+    return open;
   }
 
   async permissionRequests(): Promise<PermissionRequest[]> {

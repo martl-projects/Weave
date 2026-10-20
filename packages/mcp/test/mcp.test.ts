@@ -114,6 +114,22 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('brings the app to the front at the link dialog, without it landing in the agent inbox', async () => {
+    const { node, call, close } = await setup();
+    const seen: Array<{ kind: string; body: unknown }> = [];
+    const watching = new AbortController();
+    void node.watch((item) => seen.push(item), watching.signal);
+    await new Promise((r) => setTimeout(r, 30));
+    const opened = await call('weave_open_in_app', { what: 'link-repo', space: 'Weave', repo: 'https://github.com/martldennl/gameshow' });
+    expect(opened.data).toMatchObject({ what: 'link-repo', space: { kind: 'project', name: 'Weave' }, repo: 'martldennl/gameshow' });
+    await new Promise((r) => setTimeout(r, 30));
+    watching.abort();
+    expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'link-repo', repo: 'martldennl/gameshow' });
+    expect((await call('weave_inbox', {})).data.items ?? []).toEqual([]);
+    expect((await call('weave_open_in_app', { what: 'link-repo' })).error).toMatch(/say which space/);
+    close();
+  });
+
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
     await call('weave_say', { space: 'Weave', text: 'build is green' });
