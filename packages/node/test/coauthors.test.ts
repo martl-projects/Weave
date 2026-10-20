@@ -63,6 +63,34 @@ describe('co-authors', () => {
     expect(await seenBy(martl, post)).toEqual(['Lena confirmed', 'martl·claude declined', 'Lena·codex confirmed']);
   });
 
+  it('lets the author name co-authors later by editing; only the author can', async () => {
+    const martl = person('martl');
+    const julian = person('Julian');
+    await martl.createProject({ name: 'Weave' });
+    await julian.joinSpace(await martl.invite('Weave'));
+    await martl.addAgent('claude', ['weave.post']);
+    syncAll([martl, julian]);
+
+    const post = await martl.submit({ space: 'Weave', board: 'ideas', title: 'GitHub sync', as: 'claude' });
+    await martl.editPost({ post: post.id, with: ['Julian'] });
+    syncAll([martl, julian]);
+    expect((await julian.coauthorRequests()).map((r) => r.post.title)).toEqual(['GitHub sync']);
+    await julian.confirmCoauthor({ post: post.id, on: true });
+    syncAll([martl, julian]);
+    expect(await seenBy(martl, post)).toEqual(['Julian confirmed']);
+
+    // Julian can't change martl's post; a forged edit counts for nothing.
+    await expect(julian.editPost({ post: post.id, with: [] })).rejects.toThrow(/only its author/);
+    await julian.publish({ kind: 'weave.post.edit', body: { target: post.id, with: [] }, space: post.space!.id });
+    syncAll([martl, julian]);
+    expect(await seenBy(martl, post)).toEqual(['Julian confirmed']);
+
+    // The author can take the list back.
+    await martl.editPost({ post: post.id, with: [] });
+    syncAll([martl, julian]);
+    expect(await seenBy(julian, post)).toEqual([]);
+  });
+
   it("doesn't let an agent confirm for its person, or anyone name people outside the space", async () => {
     const martl = person('martl');
     const lena = person('Lena');

@@ -711,8 +711,8 @@ export interface Backend {
   coauthorRequests(): Promise<CoauthorRequest[]>;
   /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships). */
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
-  /** Your own post: change its title, text, link or image (empty removes a link or image). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo>;
+  /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
+  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */

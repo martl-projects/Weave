@@ -42,7 +42,7 @@ export function Coauthors({ post }: { post: PostInfo }) {
       {post.coauthors.map((c, i) => (
         <span key={`${c.did}-${c.agent ?? ''}`} className={`coauthor ${c.state}`}>
           {i > 0 && ', '}
-          {c.name ?? shortDid(c.did)}
+          <a href={`#/space/${encodeURIComponent(c.did)}`}>{c.name ?? shortDid(c.did)}</a>
           {c.agent && <span className="agent-tag">{c.agent} · agent</span>}
           {c.state === 'confirmed' ? ' ✓' : c.state === 'declined' ? ' (declined)' : ' (asked)'}
         </span>
@@ -613,9 +613,14 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
   const [text, setText] = useState(post.text);
   const [link, setLink] = useState(post.link ?? '');
   const [image, setImage] = useState(post.image ?? '');
+  const { data: me } = useApi(() => api<{ did: string }>('whoami'), []);
+  // The picker's keys: people by did, your own agents by name, others' agents as "did·agent".
+  const named = (post.coauthors ?? []).map((c) => (!c.agent ? c.did : me && c.did === me.did ? c.agent : `${c.did}·${c.agent}`));
+  const [coauthors, setCoauthors] = useState<string[]>();
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    const changes: Record<string, string> = {};
+    const changes: Record<string, string | string[]> = {};
+    if (coauthors && coauthors.join() !== named.join()) changes.with = coauthors;
     if (title.trim() !== post.title) changes.title = title;
     if (text !== post.text) changes.text = text;
     if (link.trim() !== (post.link ?? '')) changes.link = link.trim();
@@ -646,6 +651,7 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
           <label>Text (optional)</label>
           <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
         </div>
+        {post.space && me && <CoauthorPicker space={post.space.id} value={coauthors ?? named} onChange={setCoauthors} />}
         <p className="small">Everyone sees the new version, marked as edited. Earlier versions stay in the logs.</p>
         <div className="buttons">
           <button type="button" onClick={onClose}>

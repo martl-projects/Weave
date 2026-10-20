@@ -897,16 +897,7 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
-    if (input.with?.length) {
-      if (input.with.length > MAX_COAUTHORS) throw new Error(`name at most ${MAX_COAUTHORS} co-authors`);
-      const state = this.#state(space);
-      const named = [...new Set(input.with.map((ref) => this.#resolveCoauthor(ref)))];
-      for (const did of named) {
-        const person = this.replica.authority.personOf(did);
-        if (!state.members.has(person)) throw new Error(`${this.nameOf(person) ?? did} isn't in ${space.name}, so they can't confirm`);
-      }
-      body.with = named;
-    }
+    if (input.with?.length) body.with = this.#coauthorList(space, input.with);
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
       if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
@@ -970,6 +961,18 @@ export class WeaveNode implements Backend {
   };
 
   /** A co-author by name, did:key, your agent's name, or someone's agent as "person·agent". */
+  /** Co-authors to name in a space: resolved, each one a member who can confirm. */
+  #coauthorList(space: StoredSpace, refs: string[]): Did[] {
+    if (refs.length > MAX_COAUTHORS) throw new Error(`name at most ${MAX_COAUTHORS} co-authors`);
+    const state = this.#state(space);
+    const named = [...new Set(refs.map((ref) => this.#resolveCoauthor(ref)))];
+    for (const did of named) {
+      const person = this.replica.authority.personOf(did);
+      if (!state.members.has(person)) throw new Error(`${this.nameOf(person) ?? did} isn't in ${space.name}, so they can't confirm`);
+    }
+    return named;
+  }
+
   #resolveCoauthor(ref: string): Did {
     const text = ref.trim();
     if (isDid(text)) return text;
@@ -1015,7 +1018,7 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; as?: string }): Promise<PostInfo> {
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
     const post = await this.#ownPost(input.post, 'edit');
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
@@ -1035,7 +1038,12 @@ export class WeaveNode implements Backend {
       if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
       body.image = image;
     }
-    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link or image');
+    if (input.with !== undefined) {
+      const space = post.space && this.#spaces.get(post.space.id);
+      if (!space) throw new Error("co-authors are named in the space a post is in, and you aren't in it");
+      body.with = this.#coauthorList(space, input.with);
+    }
+    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link, image or co-authors');
     await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
     return this.post(post.id);
   }

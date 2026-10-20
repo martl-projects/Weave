@@ -916,10 +916,11 @@ async function main(): Promise<void> {
     }
 
     case 'edit': {
-      if (!args[0]) throw new Error('usage: weave edit <id> [--title <t>] [--text <t>] [--link <url>]');
+      if (!args[0]) throw new Error('usage: weave edit <id> [--title <t>] [--text <t>] [--link <url>] [--with <who,…> ("" for none)]');
       const b = await backend();
       const image = values.image === undefined ? undefined : values.image === '' ? '' : await uploadImage(b, values.image);
-      const p = await b.editPost({ post: args[0], title: values.title, text: values.text, link: values.link, image, as: values.as });
+      const coauthors = values.with === undefined ? undefined : values.with.split(',').map((w) => w.trim()).filter(Boolean);
+      const p = await b.editPost({ post: args[0], title: values.title, text: values.text, link: values.link, image, with: coauthors, as: values.as });
       return out(p, () => `edited
 ${postLine(p)}`);
     }

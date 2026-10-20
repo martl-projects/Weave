@@ -12,7 +12,8 @@ import type { SpaceKind } from './spaces.ts';
  *
  *   weave.post     {title, text, link, image, board, share, with}
  *                                                      a post in a community or in a project's board; image: a wblob: reference;
- *                                                      with: co-authors it names (people's identifiers or agents' keys)
+ *                                                      with: co-authors it names (people's identifiers or agents' keys);
+ *                                                      an edit by its author may carry a new `with` list
  *   weave.post.coauthor {target, on}                  someone named in `with` confirms (or declines) being a co-author;
  *                                                      only confirmed ones are shown (see coauthorsOf)
  *   weave.post.edit   {target, title, text, link, image}
@@ -308,6 +309,12 @@ function reviseAll(posts: Post[], entries: Entry[], maintainers: Set<Did>): Post
     const image = field(e.body, 'image');
     if (image === '') delete post.image;
     else if (parseBlobRef(image)) post.image = (image as string).trim();
+    // A new list of co-authors replaces the old one; confirmations already given still count.
+    if (Array.isArray(field(e.body, 'with'))) {
+      const named = withOf(e.body, post.author, post.signer);
+      if (named.length) post.with = named;
+      else delete post.with;
+    }
     post.edited = e.event.time;
   }
   return posts.filter((p) => !deleted.has(p.id));
