@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
+import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
@@ -225,6 +226,8 @@ async function createWindow(): Promise<void> {
 
 app.whenReady().then(async () => {
   if (!primary) return;
+  // macOS: the app menu offers to install the `weave` command (Windows' installer puts it on the PATH).
+  if (process.platform === 'darwin' && hasCommand()) Menu.setApplicationMenu(Menu.buildFromTemplate(macMenu()));
   // The installer registers the installed app; a development build leaves the link handler alone.
   if (app.isPackaged && !app.isDefaultProtocolClient('weave')) app.setAsDefaultProtocolClient('weave');
   if (hasIdentity(home)) {

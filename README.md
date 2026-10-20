@@ -52,6 +52,8 @@ npm run dev:mesh -- --people 4 --seconds 20
 
 ## Using the CLI
 
+The installed app brings the `weave` command along: the Windows installer puts it on your PATH, and on macOS **Weave → Install 'weave' Command…** links `/usr/local/bin/weave` (see [JOINING.md](JOINING.md), also for Linux). It's a small script in the app's `resources/bin` that runs the bundled CLI with the app's own Node (`ELECTRON_RUN_AS_NODE=1`). In a checkout, `npx weave` runs it from source.
+
 Each Weave home (default `~/.weave`, or `--home <dir>`) is one person's node. To try two people on one machine against a local DHT:
 
 ```bash

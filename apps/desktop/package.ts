@@ -53,6 +53,39 @@ writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon',
 execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
 
+// --- the `weave` command: small scripts in resources/bin that run the bundled
+// CLI with the app's own Node. The Windows installer puts that folder on the
+// PATH (installer.nsh); on macOS the app's menu links /usr/local/bin/weave to it
+// (src/command.ts).
+function writeShims(bin: string, exe: string, windows: boolean): void {
+  mkdirSync(bin, { recursive: true });
+  const sh = [
+    '#!/bin/sh',
+    "# The weave command, run by the Weave app's own Node.",
+    'self=$0',
+    'while [ -L "$self" ]; do',
+    '  link=$(readlink "$self")',
+    '  case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac',
+    'done',
+    'bin=$(cd "$(dirname "$self")" && pwd)',
+    `ELECTRON_RUN_AS_NODE=1 exec "$bin/${exe}" "$bin/../daemon/weave.mjs" "$@"`,
+    '',
+  ];
+  writeFileSync(join(bin, 'weave'), sh.join('\n'), { mode: 0o755 });
+  if (!windows) return;
+  const cmd = [
+    '@echo off',
+    "rem The weave command, run by the Weave app's own Node.",
+    'setlocal',
+    'set ELECTRON_RUN_AS_NODE=1',
+    `"%~dp0${exe.replaceAll('/', '\\')}" "%~dp0..\\daemon\\weave.mjs" %*`,
+    'if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%',
+    'endlocal',
+    '',
+  ];
+  writeFileSync(join(bin, 'weave.cmd'), cmd.join('\r\n'));
+}
+
 // --- installers
 const config: Configuration = {
   appId: 'org.weave.desktop',
@@ -61,15 +94,20 @@ const config: Configuration = {
   directories: { app: 'pack/app', output: 'release' },
   // Copied by hand: extraResources would leave out the daemon's node_modules.
   afterPack: async ({ appOutDir, electronPlatformName, packager }) => {
-    const resources = electronPlatformName === 'darwin' ? join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources') : join(appOutDir, 'resources');
+    const mac = electronPlatformName === 'darwin';
+    const resources = mac ? join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources') : join(appOutDir, 'resources');
     cpSync('pack/daemon', join(resources, 'daemon'), { recursive: true });
+    // The app's executable, seen from resources/bin.
+    const exe = mac ? `../../MacOS/${packager.appInfo.productFilename}` : electronPlatformName === 'win32' ? `../../${packager.appInfo.productFilename}.exe` : `../../${(packager as unknown as { executableName: string }).executableName}`;
+    writeShims(join(resources, 'bin'), exe, electronPlatformName === 'win32');
   },
   icon: 'assets/icon.png',
   artifactName: 'Weave-${version}-${os}-${arch}.${ext}',
   npmRebuild: false,
   publish: null,
   win: { target: [{ target: 'nsis', arch: ['x64'] }] },
-  nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true },
+  // installer.nsh puts resources/bin (the weave command) on the user's PATH.
+  nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
   mac: {
     target: [{ target: 'dmg', arch: ['arm64', 'x64'] }],
     category: 'public.app-category.social-networking',

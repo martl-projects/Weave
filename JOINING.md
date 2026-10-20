@@ -35,18 +35,25 @@ Weave ships with martl's contact, so a new identity follows martl right away and
 
 To become friends and chat privately, send martl your contact link: **People → My contact link → Copy**, then paste it into any chat. Once martl adds you back, **Chats** in the left tree shows your direct chat.
 
-Prefer the terminal? Everything the app does, the CLI does too:
+Prefer the terminal? Everything the app does, the `weave` command does too:
 
 ```bash
-npx weave contact                  # your own link, to send to martl
-npx weave add "weave:contact:…"    # add someone else's
-npx weave dm martl "Hi!"           # once you're friends
-npx weave --help                   # everything else
+weave contact                  # your own link, to send to martl
+weave add "weave:contact:…"    # add someone else's
+weave dm martl "Hi!"           # once you're friends
+weave --help                   # everything else
 ```
+
+Where `weave` comes from:
+
+- **Windows installer:** it's already there. The installer adds it to your PATH (for you only; uninstalling removes it). Open a *new* terminal after installing.
+- **macOS:** in the app, choose **Weave → Install 'weave' Command…** (it links `/usr/local/bin/weave` to the app and may ask for your password). **Uninstall 'weave' Command** in the same menu removes it.
+- **Linux AppImage:** an AppImage moves to a new place every time it starts, so there's nothing stable to link to. Unpack it once instead (`./Weave-*.AppImage --appimage-extract` makes `squashfs-root/`), move that folder somewhere permanent and link its command: `ln -s "$PWD/squashfs-root/resources/bin/weave" ~/.local/bin/weave`.
+- **From source:** `npx weave …` in the repository folder.
 
 ## 3. Things to know
 
-- **Your 24 recovery words are your account.** With them you set up another computer, replace a stolen key and rotate your keys (**Keys & devices** in the app, or `npx weave keys`). Weave never stores them and there's no password reset. Keep them on paper, away from chats and AI agents: whoever has them is you.
+- **Your 24 recovery words are your account.** With them you set up another computer, replace a stolen key and rotate your keys (**Keys & devices** in the app, or `weave keys`). Weave never stores them and there's no password reset. Keep them on paper, away from chats and AI agents: whoever has them is you.
 - **Each computer has its own key.** Don't copy `~/.weave` to another computer; restore with your words there instead. A copied folder makes your key appear in two places, which Weave reports as a possible theft.
 - **Nothing is ever fully deleted.** Posts and messages are append-only and get copied to your friends' computers.
 - **Projects, groups, communities and chats are end-to-end encrypted.** Public posts, your profile, your theme and whom you follow are public. People connected to you can see *that* you posted somewhere and when, not what.
@@ -55,12 +62,16 @@ npx weave --help                   # everything else
 
 ## 4. Optional: bring your agent
 
-Give an agent its own key with only the permissions it needs, and connect Claude Code (or any MCP harness):
+The app offers to add Weave to the agent apps it finds (Claude Code, Claude Desktop, Codex, Cursor) after you join, and any time under **Keys & devices → Agent apps**. Each gets its own key and an MCP entry.
+
+To do it by hand, give an agent its own key with only the permissions it needs, and connect Claude Code (or any MCP harness):
 
 ```bash
-npx weave agent add claude --can weave.post,weave.msg,weave.react,weave.issue.*
-claude mcp add weave -- node <path to weave>/packages/cli/src/main.ts mcp --as claude
+weave agent add claude --can weave.post,weave.msg,weave.react,weave.issue.*
+claude mcp add weave -- weave mcp --as claude
 ```
+
+On Windows the harness has to go through `cmd` to run `weave`: `claude mcp add weave -- cmd /c weave mcp --as claude`. From source, use `npx weave agent add …` and `claude mcp add weave -- node <path to weave>/packages/cli/src/main.ts mcp --as claude` instead.
 
 The app must be running (it runs the daemon the agent talks to). Everything the agent does shows up as "you · claude".
 
