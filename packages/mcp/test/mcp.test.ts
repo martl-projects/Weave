@@ -143,6 +143,25 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('lets an agent upload images and dress the project page, with the permissions for it', async () => {
+    const { node, call, close } = await setup();
+    const png = join(node.home.dir, 'icon.png');
+    writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const uploaded = (await call('weave_upload_image', { file: png })).data;
+    expect(uploaded.ref).toMatch(/^wblob:/);
+    expect((await call('weave_upload_image', { file: join(node.home.dir, 'notes.txt') })).error).toMatch(/\.png, \.jpg/);
+
+    const refused = await call('weave_set_project_page', { project: 'Weave', subtitle: 'Build together' });
+    expect(refused.error).toMatch(/may not sign weave\.project\.page/);
+    await node.updateAgent({ name: 'forge', permissions: ['weave.post', 'weave.project.page'] });
+    const page = (await call('weave_set_project_page', { project: 'Weave', subtitle: 'Build together', icon: uploaded.ref, body: `![stage](${uploaded.ref})` })).data;
+    expect(page).toMatchObject({ subtitle: 'Build together', icon: uploaded.ref });
+    expect((await node.project('Weave')).page.subtitle).toBe('Build together');
+    // Making it public also needs weave.project.public.
+    expect((await call('weave_set_project_page', { project: 'Weave', public: true })).error).toMatch(/weave\.project\.public/);
+    close();
+  });
+
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
     await call('weave_say', { space: 'Weave', text: 'build is green' });

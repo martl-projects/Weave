@@ -836,7 +836,7 @@ export interface Backend {
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
-  setProjectPage(input: { project: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
+  setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
   /** Store an image (base64) encrypted; returns its wblob: reference to put in a post or page. */
   putBlob(input: { data: string; type: string }): Promise<string>;
   /** An image by its wblob: reference, from disk or fetched from peers; base64. */

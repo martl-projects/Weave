@@ -1348,9 +1348,10 @@ export class WeaveNode implements Backend {
     };
   }
 
-  async setProjectPage(input: { project: string } & Partial<ProjectPage>): Promise<ProjectInfo> {
+  async setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo> {
     const project = this.#project(input.project);
     const state = this.#maintainerState(project);
+    if (input.as) this.#agentMay(input.as, KIND_PAGE);
     if (input.status !== undefined && !PROJECT_STATUSES.includes(input.status)) throw new Error(`status is one of ${PROJECT_STATUSES.join(', ')}`);
     for (const image of [input.icon, input.banner]) if (image && !parseBlobRef(image)) throw new Error('icons and banners are uploaded images (wblob: references)');
     const before = this.#page(project, state);
@@ -1370,13 +1371,14 @@ export class WeaveNode implements Backend {
       status: input.status ?? before.status,
       public: input.public ?? before.public,
     };
-    this.replica.append(this.identity, sealFor(project, { kind: KIND_PAGE, body: { ...page } }));
+    if (input.as && (page.public || before.public)) this.#agentMay(input.as, KIND_PUBLIC_PROJECT);
+    await this.publish({ kind: KIND_PAGE, body: { ...page }, space: project.id, as: input.as });
     // Public projects keep a public copy of their page; making it private publishes a withdrawal.
     if (page.public || before.public) {
       const body: Record<string, Json> = page.public
         ? { project: project.id, name: project.name, title: page.title, subtitle: page.subtitle, ...(page.icon ? { icon: page.icon } : {}), description: page.description, status: page.status, public: true }
         : { project: project.id, public: false };
-      this.replica.append(this.identity, { kind: KIND_PUBLIC_PROJECT, body });
+      await this.publish({ kind: KIND_PUBLIC_PROJECT, body, as: input.as });
     }
     return this.project(project.id);
   }

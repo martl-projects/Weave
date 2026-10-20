@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { extname } from 'node:path';
 import { z } from 'zod';
 import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
 
@@ -84,6 +85,10 @@ A project's app, installed by hosts with one click (prefer this to asking hosts 
 2. Commit, push, tag (v0.1.0) and push the tag. The workflow makes the release in a few minutes.
 3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Hosts then install it from the project's Live tab. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
 Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
+
+A project's page is what people see first: a hero card with an icon, a banner, the title and a subtitle, and below it the page itself (Markdown, with images). weave_project shows it; weave_set_project_page changes it (needs weave.project.page, and weave.project.public while the page is public). Images go up with weave_upload_image first, which gives a wblob: reference for icon, banner, or ![](…) in the body. There are no store-style capsules or screenshot fields: put screenshots in the body. See weave_set_project_page for sizes.
+
+Releases: weave_app_releases lists the repository's releases and how many files each has. weave_app_release can wait for a release the workflow is still building. Your person can also pick a release themselves in the project's Live tab ("Use a GitHub release…").
 
 Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
@@ -525,6 +530,57 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     })),
   );
 
+  // ---------------------------------------------------------------- project pages
+
+  const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+
+  server.registerTool(
+    'weave_upload_image',
+    {
+      title: 'Upload an image',
+      description:
+        "Store an image from this computer in Weave (encrypted; members fetch it from each other) and get its wblob: reference, for a project's icon or banner or for ![](wblob:…) in a page or post. PNG, JPEG, WebP or GIF, at most 2 MB: scale big images down first (icons 512×512, banners about 1800×600, page images up to 1600 wide).",
+      inputSchema: { file: z.string().describe('Path to the image') },
+    },
+    run(async ({ file }: { file: string }) => {
+      const type = IMAGE_TYPES[extname(file).toLowerCase()];
+      if (!type) throw new Error('images are .png, .jpg, .webp or .gif');
+      const size = statSync(file).size;
+      if (size > 2 * 1024 * 1024) throw new Error(`${file} is ${(size / 1024 / 1024).toFixed(1)} MB; images are at most 2 MB: scale it down (icons 512×512, banners about 1800×600)`);
+      const ref = await backend.putBlob({ data: readFileSync(file).toString('base64'), type });
+      return { ref, use: `icon or banner: "${ref}"; in Markdown: ![description](${ref})` };
+    }),
+  );
+
+  server.registerTool(
+    'weave_set_project_page',
+    {
+      title: "Change a project's page",
+      description: [
+        "Maintainers: the project's page, what people see first. Leave out what stays; an empty icon or banner removes it.",
+        'title: the heading (the project name when empty). subtitle: one or two lines on the hero card.',
+        'body: the page itself, Markdown; images as ![description](wblob:…) from weave_upload_image, up to 1600 px wide; screenshots and art go here.',
+        'icon: square, 512×512 is plenty; shown at 88 px on the hero card and small in lists and hubs.',
+        'banner: wide, about 3:1 (like 1800×600); shown behind the title, darkened and cropped to fit, so keep the important part in the middle and no text in it.',
+        'status: idea, active, paused, shipped or archived. public: true shows title, subtitle, icon and status on your person\'s hub to everyone; the body stays among members.',
+        'Needs weave.project.page (and weave.project.public while the page is public).',
+      ].join(' '),
+      inputSchema: {
+        project: z.string(),
+        title: z.string().max(100).optional(),
+        subtitle: z.string().max(300).optional(),
+        body: z.string().optional(),
+        icon: z.string().optional().describe('wblob: reference, or "" to remove'),
+        banner: z.string().optional().describe('wblob: reference, or "" to remove'),
+        status: z.enum(['idea', 'active', 'paused', 'shipped', 'archived']).optional(),
+        public: z.boolean().optional(),
+      },
+    },
+    run(async (input: { project: string; title?: string; subtitle?: string; body?: string; icon?: string; banner?: string; status?: 'idea' | 'active' | 'paused' | 'shipped' | 'archived'; public?: boolean }) =>
+      (await backend.setProjectPage({ ...input, as })).page,
+    ),
+  );
+
   // ---------------------------------------------------------------- GitHub and project apps
 
   server.registerTool(
@@ -639,6 +695,17 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   );
 
   server.registerTool(
+    'weave_app_releases',
+    {
+      title: "A project app's GitHub releases",
+      description: "The releases of the project's repository, newest first, with how many files each has (a release workflow attaches them last). Use it to see whether a pushed tag has become a release yet.",
+      inputSchema: { project: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ project }: { project: string }) => backend.appReleases(project)),
+  );
+
+  server.registerTool(
     'weave_app_release',
     {
       title: "Point a project's app at a GitHub release",
@@ -649,9 +716,22 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
         tag: z.string().describe('The release tag, like v1.4'),
         repo: z.string().optional().describe("owner/name; default: the project's linked repository"),
         assets: z.record(z.string(), z.string()).optional(),
+        wait: z.number().min(0).max(20).optional().describe('Minutes to wait for the release and its files, while a workflow builds it'),
       },
     },
-    run(async ({ project, tag, repo, assets }: { project: string; tag: string; repo?: string; assets?: Record<string, string> }) => backend.releaseApp({ project, tag, repo, assets, as })),
+    run(async ({ project, tag, repo, assets, wait }: { project: string; tag: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
+      // A pushed tag becomes a release with files a few minutes later: look every 30 seconds.
+      const until = Date.now() + (wait ?? 0) * 60_000;
+      while (Date.now() < until) {
+        const ready = await backend.appReleases(project).then(
+          (r) => r.releases.some((x) => x.tag === tag && x.files > 0),
+          () => false,
+        );
+        if (ready) break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, Math.max(0, until - Date.now()))));
+      }
+      return backend.releaseApp({ project, tag, repo, assets, as });
+    }),
   );
 
   return {

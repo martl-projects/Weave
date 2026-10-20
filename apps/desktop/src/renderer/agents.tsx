@@ -125,6 +125,8 @@ const KIND_WORDS: Record<string, string> = {
   'weave.github.repo': 'link GitHub repositories to spaces you own or maintain',
   'weave.github.account': 'give spaces your GitHub account',
   'weave.app': "publish projects' apps and point them at releases",
+  'weave.project.page': "change your projects' pages",
+  'weave.project.public': 'show projects on your public hub',
 };
 const kindWords = (kinds: string[]) => kinds.map((k) => KIND_WORDS[k] ?? k).join(', ');
 
