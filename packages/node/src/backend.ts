@@ -183,6 +183,12 @@ export interface SpaceRepos {
   accounts?: Array<{ who: Actor; login: string }>;
 }
 
+/** What to say when someone acts as an agent this node doesn't have (often an MCP server started with an old --as). */
+export const noAgent = (name: string, agents: string[]): string =>
+  `this node has no agent named "${name}"${agents.length ? ` (its agents: ${agents.join(', ')})` : ' (it has no agents yet)'}. ` +
+  `Create it with: weave agent add ${name} --can weave.post,weave.reply` +
+  (agents.length ? `, or act as ${agents.length === 1 ? 'it' : 'one of them'}: start the MCP server with --as ${agents[0]}` : '');
+
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 

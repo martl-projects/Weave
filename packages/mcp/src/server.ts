@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import type { Backend, FeedItem } from '@weave/node';
+import { noAgent, type Backend, type FeedItem } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -149,7 +149,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     run(async () => {
       const [me, spaces] = await Promise.all([backend.whoami(), backend.spaces()]);
       const agent = as ? me.agents.find((a) => a.name === as) : undefined;
-      if (as && !agent) throw new Error(`this node has no agent named "${as}"`);
+      if (as && !agent) throw new Error(noAgent(as, me.agents.map((a) => a.name)));
       return {
         person: { name: me.name, did: me.did },
         actingAs: agent ? { agent: agent.name, did: agent.did, permissions: agent.permissions } : 'the person themself',

@@ -254,6 +254,7 @@ import {
   type ThreadInfo,
   type TierInfo,
   type Whoami,
+  noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
@@ -525,7 +526,7 @@ export class WeaveNode implements Backend {
 
   async publish(input: PublishInput): Promise<FeedItem> {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
-    if (!signer) throw new Error(`no agent named "${input.as}"`);
+    if (!signer) throw new Error(noAgent(input.as!, this.#agents.map((a) => a.name)));
     if (input.as && !permits((signer as AgentKey).permissions, input.kind)) {
       throw new Error(`agent "${input.as}" may not sign ${input.kind}`);
     }
@@ -929,7 +930,7 @@ export class WeaveNode implements Backend {
   async confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo> {
     const post = await this.post(input.post);
     const agent = input.as ? this.#agents.find((a) => a.name === input.as) : undefined;
-    if (input.as && !agent) throw new Error(`no agent named "${input.as}"`);
+    if (input.as && !agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
     const me = agent?.did ?? this.identity.author;
     const named = this.#namedIn(post.id);
     if (!named) throw new Error("that post doesn't name any co-authors");
