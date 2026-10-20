@@ -143,6 +143,8 @@ export interface FeedQuery {
 
 /** A group, project or community this node belongs to. */
 export interface SpaceInfo extends SpaceRef {
+  /** Projects: the icon from the project's page (wblob: reference), if it has one. */
+  icon?: string;
   founder: Did;
   founderName?: string;
   members: number;
@@ -241,6 +243,8 @@ export interface PublicProject {
   id: string;
   name: string;
   description: string;
+  /** The page's icon (wblob: reference), if it has one. */
+  icon?: string;
   status: ProjectStatus;
   time: string;
 }
@@ -340,7 +344,7 @@ export interface PostInfo {
   /** You saved it, or pinned it to the top of your home. */
   saved?: SaveMode;
   /** For projects and shared projects. */
-  project?: { id: string; name: string; description: string; status: string; participants?: number; member: boolean };
+  project?: { id: string; name: string; description: string; status: string; icon?: string; participants?: number; member: boolean };
   /** For shared posts: where the original lives, and whether you can open it. */
   share?: { space?: SpaceRef; post: string; member: boolean };
   issue?: { status: IssueStatus; labels: string[]; assignee?: Actor };

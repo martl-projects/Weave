@@ -1230,7 +1230,7 @@ export class WeaveNode implements Backend {
 
   async share(input: { post: string; to: string; text?: string }): Promise<PostInfo> {
     const post = await this.post(input.post);
-    const project = post.project ? { id: post.project.id, name: post.project.name, description: post.project.description, status: post.project.status } : undefined;
+    const project = post.project ? { id: post.project.id, name: post.project.name, description: post.project.description, status: post.project.status, ...(post.project.icon ? { icon: post.project.icon } : {}) } : undefined;
     const text = input.text?.trim() || post.text;
     if (input.to === 'followers') {
       const page = project && this.#spaces.has(project.id) ? this.#page(this.#spaces.get(project.id)!, this.#state(this.#spaces.get(project.id)!)) : undefined;
@@ -1879,6 +1879,7 @@ export class WeaveNode implements Backend {
         id: body.project as string,
         name: body.name as string,
         description: typeof body.description === 'string' ? body.description : '',
+        ...(parseBlobRef(body.icon) ? { icon: body.icon as string } : {}),
         status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
         time,
       }));
@@ -3277,6 +3278,7 @@ export class WeaveNode implements Backend {
       founderName: this.nameOf(state.founder),
       members: state.members.size,
       epoch: currentEpoch(space),
+      ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
       ...(state.closed ? { closed: true as const } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
@@ -3390,7 +3392,7 @@ export class WeaveNode implements Backend {
       chat: messages.length,
       pinned: false,
       ...(saved ? { saved } : {}),
-      project: { id: project.id, name: project.name, description: page.description, status: page.status, participants: state.members.size, member: true },
+      project: { id: project.id, name: project.name, description: page.description, status: page.status, ...(page.icon ? { icon: page.icon } : {}), participants: state.members.size, member: true },
     };
   }
 
@@ -3429,7 +3431,8 @@ export class WeaveNode implements Backend {
       info.share = { ...(p.share.space ? { space: p.share.space } : {}), post: p.share.post, member: !!p.share.space && this.#spaces.has(p.share.space.id) };
       if (p.share.project) {
         const mine = this.#spaces.get(p.share.project.id);
-        info.project = { ...p.share.project, member: !!mine, ...(mine ? { participants: this.#state(mine).members.size } : {}) };
+        const icon = mine ? this.#page(mine, this.#state(mine)).icon : p.share.project.icon;
+        info.project = { ...p.share.project, ...(icon ? { icon } : {}), member: !!mine, ...(mine ? { participants: this.#state(mine).members.size } : {}) };
       }
     }
     return info;

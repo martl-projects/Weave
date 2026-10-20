@@ -137,7 +137,7 @@ export const isUnread = (key: string, latest?: string): boolean => !!latest && l
 // ---------------------------------------------------------------- formatting
 
 /** Markdown reduced to plain text, for one-line previews. */
-export const plain = (text: string) => text.replace(/```[\s\S]*?```/g, '[code]').replace(/[*_`~>#]+/g, '').replace(/\s+/g, ' ').trim();
+export const plain = (text: string) => text.replace(/```[\s\S]*?```/g, '[code]').replace(/weave:post:[A-Za-z0-9_-]+/g, '[post]').replace(/[*_`~>#]+/g, '').replace(/\s+/g, ' ').trim();
 
 export const shortDid = (did: string) => `${did.slice(8, 14)}…${did.slice(-4)}`;
 

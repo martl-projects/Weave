@@ -3,7 +3,7 @@ import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, 
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bump, navigate, plain, postLink, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast } from './ui.tsx';
 import { ImagePicker, RichEditor } from './editor.tsx';
 
 // ---------------------------------------------------------------- names and links
@@ -216,7 +216,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`}>
       <VoteBox post={post} />
       <a className={`thumb${post.image ? ' has-image' : ''}`} href={href}>
-        {post.image ? <BlobImage src={post.image} alt="" /> : <Sprite seed={post.project?.id ?? post.id} size={64} />}
+        {post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -396,7 +396,7 @@ function ProjectCard({ post }: { post: PostInfo }) {
   const project = post.project!;
   return (
     <div className="project-card sunken">
-      <Sprite seed={project.id} size={48} />
+      <ProjectIcon id={project.id} icon={project.icon} size={48} />
       <div className="grow">
         <b>p/{project.name}</b> <span className={`tag status-${project.status}`}>{project.status}</span>
         {project.description && <p className="small">{plain(project.description).slice(0, 300)}</p>}

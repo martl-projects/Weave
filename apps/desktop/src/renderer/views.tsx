@@ -9,7 +9,7 @@ import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx'
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
-import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, Sprite, toast, WeaveMark } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
 
 const textOf = (item: FeedItem): string => {
@@ -165,7 +165,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
             <div className="showcase">
               {p.projects.map((project) => (
                 <article className="showcase-item" key={project.id}>
-                  <Sprite seed={project.id} size={48} />
+                  <ProjectIcon id={project.id} icon={project.icon} size={48} />
                   <div>
                     <b>{project.name}</b> <span className={`tag status-${project.status}`}>{project.status}</span>
                     {project.description && <Markdown text={project.description} />}

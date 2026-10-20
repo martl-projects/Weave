@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AppManifest, MemberInfo, ProjectInfo, SpaceInfo, TierInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bump, navigate, shortDid, useApi } from './lib.ts';
-import { attempt, Markdown, Modal, Sprite } from './ui.tsx';
+import { attempt, Markdown, Modal, ProjectIcon } from './ui.tsx';
 
 /*
  * The projects box on your own hub: every project you maintain, not only the
@@ -104,7 +104,7 @@ export function MyProjects({ name }: { name: string }) {
       <div className="showcase">
         {mine.map((project) => (
           <article className="showcase-item" key={project.id}>
-            <Sprite seed={project.id} size={48} />
+            <ProjectIcon id={project.id} icon={project.page.icon} size={48} />
             <div className="grow">
               <a href={`#/p/${project.id}`}>
                 <b>{project.name}</b>

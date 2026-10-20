@@ -159,7 +159,7 @@ export interface Share {
   space?: { kind: SpaceKind; id: string; name: string };
   post: string;
   /** A snapshot of the project, when a project was shared, so people outside it see what it is. */
-  project?: { id: string; name: string; description: string; status: string };
+  project?: { id: string; name: string; description: string; status: string; icon?: string };
 }
 
 export interface Post {
@@ -245,7 +245,15 @@ function shareOf(body: Json): Share | undefined {
     post,
     ...(str(space, 'id', 100) && ['group', 'project', 'community'].includes(spaceKind) ? { space: { kind: spaceKind, id: str(space, 'id', 100), name: str(space, 'name', 40) } } : {}),
     ...(str(project, 'id', 100) && str(project, 'name', 100)
-      ? { project: { id: str(project, 'id', 100), name: str(project, 'name', 100), description: str(project, 'description', 2000), status: str(project, 'status', 20) } }
+      ? {
+          project: {
+            id: str(project, 'id', 100),
+            name: str(project, 'name', 100),
+            description: str(project, 'description', 2000),
+            status: str(project, 'status', 20),
+            ...(parseBlobRef(field(project, 'icon')) ? { icon: str(project, 'icon', 200).trim() } : {}),
+          },
+        }
       : {}),
   };
 }

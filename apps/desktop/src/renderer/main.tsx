@@ -11,7 +11,7 @@ import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, POST_LINK, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
-import { Avatar, Menu, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
+import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
 import {
   CommunityAbout,
@@ -35,11 +35,11 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'invite'; space: Sp
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, face, label, on, unread, badge, depth = 0 }: { href: string; icon?: IconName; sprite?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; depth?: number }) {
   return (
     <li style={{ paddingLeft: depth * 14 }}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
-        {sprite ? <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
+        {sprite ? image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
         {!!badge && <span className="badge">{badge}</span>}
       </a>
@@ -59,7 +59,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const [view, arg] = [route[2], route[3]];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} />
       {open && (
         <>
           {space.kind === 'project' &&

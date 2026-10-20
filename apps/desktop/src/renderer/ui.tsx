@@ -47,6 +47,16 @@ export function Sprite({ seed, size = 40, face = false, className = '' }: { seed
   return <span className={`sprite ${className}`} style={{ width: size, height: size }} dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
+/** A project's picture: the icon from its page, or else its pixel sprite. */
+export function ProjectIcon({ id, icon, size = 40, className = '' }: { id: string; icon?: string; size?: number; className?: string }) {
+  if (!icon) return <Sprite seed={id} size={size} className={className} />;
+  return (
+    <span className={`project-icon ${className}`} style={{ width: size, height: size }}>
+      <BlobImage src={icon} alt="" />
+    </span>
+  );
+}
+
 export function Avatar({ did, size = 32, status }: { did: string; name?: string; size?: number; status?: 'online' | 'offline' }) {
   return (
     <span className="avatar" style={{ width: size, height: size }}>
@@ -117,6 +127,11 @@ function embedCard(p: PostInfo): HTMLElement {
     const img = document.createElement('img');
     img.alt = '';
     blobUrl(p.image).then((url) => (img.src = url), () => {});
+    thumb.append(img);
+  } else if (p.project?.icon) {
+    const img = document.createElement('img');
+    img.alt = '';
+    blobUrl(p.project.icon).then((url) => (img.src = url), () => {});
     thumb.append(img);
   } else thumb.innerHTML = sprite(p.project?.id ?? p.id, 10, false);
   const where = [p.space ? `${PREFIX[p.space.kind] ?? ''}${p.space.name}${p.board && p.space.kind === 'project' && p.type !== 'project' ? `/${p.board}` : ''}` : '', `u/${p.by.name ?? shortDid(p.by.did)}`, ago(p.time)].filter(Boolean).join(' · ');
