@@ -26,11 +26,20 @@ function syncAll(nodes: WeaveNode[]): void {
   for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) pass(from, to);
 }
 
-/** What each node keeps up to date as events arrive must equal decoding everything from scratch. */
-function same(nodes: WeaveNode[]): void {
+/** What people see, from one node: posts and members of the project, if they're in it. */
+async function view(node: WeaveNode): Promise<string> {
+  const posts = await node.posts({ space: 'Weave' }).catch(() => []);
+  const members = await node.members('Weave').catch(() => []);
+  return JSON.stringify({ posts: posts.map((p) => [p.id, p.title, p.board, p.score, p.chat]), members: members.map((m) => [m.did, m.name]) });
+}
+
+/** What each node keeps up to date as events arrive (and caches) must equal decoding everything from scratch. */
+async function same(nodes: WeaveNode[]): Promise<void> {
   for (const node of nodes) {
     const kept = node._decodedIds();
+    const seen = await view(node);
     expect(node._decodedIds(true)).toEqual(kept);
+    expect(await view(node)).toBe(seen);
   }
 }
 
@@ -41,25 +50,25 @@ describe('decoding as events arrive', () => {
     const kofi = person('Kofi');
     const all = [martin, lena, kofi];
     // Decode once, so later events take the incremental path.
-    same(all);
+    await same(all);
 
     await martin.createProject({ name: 'Weave' });
     await lena.joinSpace(await martin.invite('Weave'));
     await kofi.joinSpace(await martin.invite('Weave'));
     syncAll(all);
-    same(all);
+    await same(all);
 
     await martin.submit({ space: 'Weave', title: 'First idea', text: 'one' });
     await lena.submit({ space: 'Weave', title: 'Second idea' });
     await kofi.say({ space: 'Weave', text: 'hello all' });
     // One at a time, in different orders, decoding in between.
     pass(lena, martin);
-    same(all);
+    await same(all);
     pass(kofi, martin);
     pass(martin, lena);
-    same(all);
+    await same(all);
     syncAll(all);
-    same(all);
+    await same(all);
 
     // A read-limited board: its key reaches readers, which makes more events readable.
     await martin.setBoard({ project: 'Weave', name: 'core', title: 'Core', type: 'posts' });
@@ -68,26 +77,26 @@ describe('decoding as events arrive', () => {
     syncAll(all);
     await lena.reconcile();
     syncAll(all);
-    same(all);
+    await same(all);
 
     // An agent: a key event, then what it signs.
     await martin.addAgent('helper', ['weave.post', 'weave.msg']);
     await martin.submit({ space: 'Weave', title: 'From the helper', as: 'helper' });
     syncAll(all);
-    same(all);
+    await same(all);
 
     // Direct chats and private notes.
     await lena.say({ space: 'Kofi', text: 'just between us' }).catch(() => undefined);
     const idea = (await martin.posts({ space: 'Weave' })).find((p) => p.title === 'First idea')!;
     await martin.save({ target: idea.id, mode: 'saved' });
     syncAll(all);
-    same(all);
+    await same(all);
 
     // Removal rotates the key; what comes after is for the rest.
     await martin.removeMember('Weave', 'Kofi');
     await martin.submit({ space: 'Weave', title: 'After Kofi left' });
     syncAll(all);
-    same(all);
+    await same(all);
 
     // And the views agree with what people should see.
     expect((await lena.posts({ space: 'Weave' })).map((p) => p.title)).toContain('After Kofi left');

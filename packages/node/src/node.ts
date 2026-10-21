@@ -420,6 +420,16 @@ export class WeaveNode implements Backend {
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
   #decodedRevision = 0;
+  /** Bumped when everything is decoded again; per-space caches from before don't count then. */
+  #decodedGeneration = 0;
+  /** The decoded events of each space, in replica order, kept with #decoded. */
+  #bySpace = new Map<string, Decoded[]>();
+  /** Bumped when an event of that space is added. */
+  #spaceRevision = new Map<string, number>();
+  /** Results computed from all decoded events, valid until the decoded events change. */
+  #memos = new Map<string, { revision: number; value: unknown }>();
+  /** State, entries and access of each space, valid while their key (generation and space revision) holds. */
+  #spaceCache = new Map<string, { key: string; state?: SpaceState; entries?: Entry[]; access?: Access }>();
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
   #directs = new Map<string, { space: StoredSpace; peer: Did }>();
   #directByPeer = new Map<Did, StoredSpace>();
@@ -1209,7 +1219,7 @@ export class WeaveNode implements Backend {
     }
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
-      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
     out.push({ posts: postsOf(undefined, entries), entries });
     return out;
   }
@@ -1254,7 +1264,7 @@ export class WeaveNode implements Backend {
     const post = await this.post(ref);
     if (post.type !== 'post') throw new Error(`only posts can be changed this way; this is a ${post.type}`);
     // Old ideas threads show up as posts too, but are weave.thread events.
-    if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && eventId(d.event) === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
+    if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && d.id === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
     if (post.by.did === this.identity.author) return post;
     const space = post.space && this.#spaces.get(post.space.id);
     if (action === 'delete' && space && this.#state(space).maintainers.has(this.identity.author)) return post;
@@ -2984,9 +2994,11 @@ export class WeaveNode implements Backend {
 
   /** Bodies of your own self-sealed events of one kind. */
   #selfBodies(kind: string): Array<Record<string, unknown>> {
-    return this.#decodeAll()
-      .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
-      .map((d) => d.inner.body as Record<string, unknown>);
+    return this.#memo(`self:${kind}`, () =>
+      this.#decodeAll()
+        .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
+        .map((d) => d.inner.body as Record<string, unknown>),
+    );
   }
 
   // ---------------------------------------------------------------- direct chats between friends
@@ -3438,8 +3450,8 @@ export class WeaveNode implements Backend {
       const member = (did: Did): [Did, Member] => [did, { did, since: '' }];
       return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map(), left: new Set() };
     }
-    const opened = this.#decodeAll().filter((d) => d.space?.id === space.id);
-    return spaceState(space.kind, space.founder, opened);
+    const slot = this.#cacheFor(space.id);
+    return (slot.state ??= spaceState(space.kind, space.founder, this.#decodedIn(space.id)));
   }
 
   #page(project: StoredSpace, state: SpaceState): ProjectPage {
@@ -3520,10 +3532,12 @@ export class WeaveNode implements Backend {
 
   /** Your saves, from your self-sealed events. */
   #saves(): Map<string, SaveMode> {
-    const mine = this.#decodeAll()
-      .filter((d) => d.private && d.inner.kind === KIND_SAVE)
-      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    return savesOf(mine);
+    return this.#memo('saves', () => {
+      const mine = this.#decodeAll()
+        .filter((d) => d.private && d.inner.kind === KIND_SAVE)
+        .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
+      return savesOf(mine);
+    });
   }
 
   /** How many messages each post's chat has, and when the latest came. */
@@ -3646,7 +3660,7 @@ export class WeaveNode implements Backend {
     const hidden = this.#hiddenAuthors();
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
-      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
     const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries };
     return postsOf(undefined, entries)
       .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
@@ -3823,6 +3837,15 @@ export class WeaveNode implements Backend {
           return decoded ? [decoded] : [];
         });
         this.#decodedRevision++;
+        this.#decodedGeneration++;
+        this.#bySpace.clear();
+        this.#spaceCache.clear();
+        for (const d of this.#decoded) {
+          if (!d.space) continue;
+          const list = this.#bySpace.get(d.space.id);
+          if (list) list.push(d);
+          else this.#bySpace.set(d.space.id, [d]);
+        }
       }
       if (!this.#takeBoardKeys(this.#decoded)) break;
     }
@@ -3855,8 +3878,50 @@ export class WeaveNode implements Backend {
     }
     decoded.splice(lo, 0, d);
     this.#decodedRevision++;
+    if (d.space) {
+      const id = d.space.id;
+      const list = this.#bySpace.get(id) ?? [];
+      let a = 0;
+      let b = list.length;
+      while (a < b) {
+        const mid = (a + b) >>> 1;
+        if (replicaOrder(list[mid].event, event) <= 0) a = mid + 1;
+        else b = mid;
+      }
+      list.splice(a, 0, d);
+      this.#bySpace.set(id, list);
+      this.#spaceRevision.set(id, (this.#spaceRevision.get(id) ?? 0) + 1);
+    }
     // A board key for us makes more events readable: that drops the decoded events (see #takeBoardKeys).
     if (d.inner.kind === KIND_BOARD_KEY) this.#takeBoardKeys([d]);
+  }
+
+  /** A result computed from all decoded events, kept until they change. Callers must not change what it returns. */
+  #memo<T>(name: string, compute: () => T): T {
+    this.#decodeAll();
+    const hit = this.#memos.get(name);
+    if (hit && hit.revision === this.#decodedRevision) return hit.value as T;
+    const value = compute();
+    this.#memos.set(name, { revision: this.#decodedRevision, value });
+    return value;
+  }
+
+  /** The decoded events of one space, in replica order. */
+  #decodedIn(spaceId: string): Decoded[] {
+    this.#decodeAll();
+    return this.#bySpace.get(spaceId) ?? [];
+  }
+
+  /** The cache slot of a space, emptied when the space's events or everything decoded changed. */
+  #cacheFor(spaceId: string): { key: string; state?: SpaceState; entries?: Entry[]; access?: Access } {
+    this.#decodeAll();
+    const key = `${this.#decodedGeneration}:${this.#spaceRevision.get(spaceId) ?? 0}`;
+    let slot = this.#spaceCache.get(spaceId);
+    if (slot?.key !== key) {
+      slot = { key };
+      this.#spaceCache.set(spaceId, slot);
+    }
+    return slot;
   }
 
   /** For tests: the ids of the decoded events, as kept up to date or (rebuild) decoded from scratch. */
@@ -3885,16 +3950,20 @@ export class WeaveNode implements Backend {
   }
 
   #graph() {
-    const edges: EdgeEvent[] = this.#decodeAll()
-      .filter((d) => (EDGE_KINDS as readonly string[]).includes(d.inner.kind))
-      .map((d) => ({ author: d.event.author, kind: d.inner.kind, body: d.inner.body, time: d.event.time, signer: d.event.signer, seq: d.event.seq }));
-    return socialGraph(edges);
+    return this.#memo('graph', () => {
+      const edges: EdgeEvent[] = this.#decodeAll()
+        .filter((d) => (EDGE_KINDS as readonly string[]).includes(d.inner.kind))
+        .map((d) => ({ author: d.event.author, kind: d.inner.kind, body: d.inner.body, time: d.event.time, signer: d.event.signer, seq: d.event.seq }));
+      return socialGraph(edges);
+    });
   }
 
   /** Authors I blocked or muted: their events are left out of feeds. */
   #hiddenAuthors(): Set<Did> {
-    const mine = this.#graph().get(this.identity.author);
-    return new Set([...(mine?.blocked ?? []), ...(mine?.muted ?? [])]);
+    return this.#memo('hidden', () => {
+      const mine = this.#graph().get(this.identity.author);
+      return new Set([...(mine?.blocked ?? []), ...(mine?.muted ?? [])]);
+    });
   }
 
   /**
@@ -3905,17 +3974,24 @@ export class WeaveNode implements Backend {
 
   /** A space's readable events from members, as entries for the collaboration functions. */
   #entries(space: StoredSpace): Entry[] {
+    const slot = this.#cacheFor(space.id);
+    if (slot.entries) return slot.entries;
     const state = this.#state(space);
-    const entries = this.#decodeAll()
-      .filter((d) => d.space?.id === space.id && (this.#mine(d.event) || visibleIn(state, d.event, d.inner)))
-      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    return space.kind === 'project' ? this.#writable(space, state, entries) : entries;
+    const entries = this.#decodedIn(space.id)
+      .filter((d) => this.#mine(d.event) || visibleIn(state, d.event, d.inner))
+      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    return (slot.entries = space.kind === 'project' ? this.#writable(space, state, entries) : entries);
   }
 
   // ---------------------------------------------------------------- internals: board access
 
   #access(space: StoredSpace, state: SpaceState, entries: Entry[]): Access {
-    return accessOf(entries, state, inviteRightsOf(entries, state));
+    // Cached only for the space's own state and entries (callers sometimes pass others).
+    const slot = this.#cacheFor(space.id);
+    if (slot.access && slot.state === state && slot.entries === entries) return slot.access;
+    const access = accessOf(entries, state, inviteRightsOf(entries, state));
+    if (slot.state === state && slot.entries === entries) slot.access = access;
+    return access;
   }
 
   /** Where issues and proposals that don't name a board live: the first board of their type. */
@@ -4034,10 +4110,7 @@ export class WeaveNode implements Backend {
   /** An event by full id or a unique prefix (at least 6 characters), limited to some kinds. */
   #find(ref: string, kinds: string[]): Decoded & { id: string } {
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
-    const matches = this.#decodeAll()
-      .filter((d) => kinds.includes(d.inner.kind))
-      .map((d) => ({ ...d, id: eventId(d.event) }))
-      .filter((d) => d.id.startsWith(ref));
+    const matches = this.#decodeAll().filter((d) => kinds.includes(d.inner.kind) && d.id.startsWith(ref));
     if (matches.length === 0) throw new Error(`nothing found with id ${ref}`);
     if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
     return matches[0];
