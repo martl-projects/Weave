@@ -40,6 +40,7 @@ import {
   type BoardRule,
   type Lifetime,
   KIND_CARRY,
+  KIND_SHRED,
   HISTORIES,
   epochsToShare,
   type HistorySetting,
@@ -363,6 +364,17 @@ interface Decoded {
 
 /** The order replica.events() returns: claimed time, then signer, then seq. */
 const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
+
+/** An event as a carry restates it: its id, who wrote it when, and what it said. */
+const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
+  id: d.id,
+  author: d.event.author,
+  signer: d.event.signer,
+  seq: d.event.seq,
+  time: d.event.time,
+  kind: d.inner.kind,
+  body: d.inner.body,
+});
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
 const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.channel', 'weave.curate', 'weave.theme']);
@@ -904,7 +916,7 @@ export class WeaveNode implements Backend {
 
   /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
   #keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, via: _via, ...keys } = space;
+    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, ...keys } = space;
     return keys;
   }
 
@@ -942,28 +954,56 @@ export class WeaveNode implements Backend {
     const events = this.#decodedIn(space.id)
       .filter((d) => (classOf(canonicalKind(d.inner.kind)) === 'control' || CARRIED_STATE.has(d.inner.kind)) && d.inner.kind !== KIND_CARRY && !d.board)
       .filter((d) => !shared.has(String((d.event.body as { epoch?: unknown } | null)?.epoch ?? '')))
-      .map((d) => ({ id: d.id, author: d.event.author, signer: d.event.signer, seq: d.event.seq, time: d.event.time, kind: d.inner.kind, body: d.inner.body }));
+      .map(carriedItem);
     if (events.length) this.replica.write(this.identity, sealFor(space, { kind: KIND_CARRY, body: { events: events as unknown as Json } }));
   }
 
   /**
-   * A carry becomes the events it restates, if it comes from whoever handed us
-   * this space's keys (we trust them for the keys already). Our own carries
-   * restate what we hold anyway.
+   * A carry becomes the events it restates (see #trustedCarries for whose).
    */
-  #expandCarry(d: Decoded): Decoded[] {
-    if (d.inner.kind !== KIND_CARRY) return [d];
-    const space = d.space as StoredSpace | undefined;
-    if (!space?.via || d.event.author !== space.via) return [];
+  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined): Decoded[] {
+    if (d.inner.kind !== KIND_CARRY || !space) return [];
     const items = (d.inner.body as { events?: unknown } | null)?.events;
     if (!Array.isArray(items)) return [];
     const out: Decoded[] = [];
     for (const item of items as Array<Record<string, unknown>>) {
       if (typeof item?.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || typeof item.kind !== 'string' || !Number.isSafeInteger(item.seq)) continue;
       const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, time: item.time, body: null };
-      out.push({ id: item.id, event, inner: { kind: item.kind, body: (item.body ?? null) as Json }, space: d.space, carried: true });
+      out.push({ id: item.id, event, inner: { kind: item.kind, body: (item.body ?? null) as Json }, space, carried: true, ...(d.board ? { board: d.board } : {}) });
     }
     return out;
+  }
+
+  /**
+   * The events restated in the carries we trust: from whoever handed us a
+   * space's keys (a newcomer trusts them for the keys already), from someone
+   * who manages the space by the state we read ourselves (never by what a
+   * carry says), and our own private ones (what we wrote, kept before keys
+   * were shredded).
+   */
+  #trustedCarries(decoded: Decoded[]): Decoded[] {
+    const carries = decoded.filter((d) => d.inner.kind === KIND_CARRY);
+    if (!carries.length) return [];
+    const states = new Map<string, SpaceState>();
+    const stateOf = (space: StoredSpace) => {
+      let state = states.get(space.id);
+      if (!state) {
+        state = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id && d.inner.kind !== KIND_CARRY));
+        states.set(space.id, state);
+      }
+      return state;
+    };
+    return carries.flatMap((d) => {
+      if (d.private) {
+        // Our own: {space, events} kept in our private space.
+        const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
+        return d.event.author === this.identity.author && space ? this.#expandCarry(d, space) : [];
+      }
+      const space = d.space as StoredSpace | undefined;
+      if (!space) return [];
+      const trusted = d.event.author === space.via || canManage(stateOf(space), d.event.author);
+      return trusted ? this.#expandCarry(d, space) : [];
+    });
   }
 
   /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
@@ -980,7 +1020,8 @@ export class WeaveNode implements Backend {
   /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
   #rotateMonthly(space: StoredSpace): number {
     const state = this.#state(space);
-    if (space.kind === 'direct' || state.history?.value !== '30d' || !canManage(state, this.identity.author)) return 0;
+    const forgets = space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state)).values()].some((r) => r.keepDays);
+    if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !canManage(state, this.identity.author)) return 0;
     const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
     if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
     this.#rotateKey(space);
@@ -1703,6 +1744,7 @@ export class WeaveNode implements Backend {
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
+    changed += this.#applyShreds();
     changed += this.#forget();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
@@ -3748,7 +3790,7 @@ export class WeaveNode implements Backend {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
       if (!space || !canManage(this.#state(space), event.author)) return;
       const opened = this.#tryOpen((me) => openRekey(event, me));
-      if (opened && !space.keys[String(opened.epoch)]) {
+      if (opened && !space.keys[String(opened.epoch)] && !space.shredded?.includes(opened.epoch)) {
         space.keys[String(opened.epoch)] = opened.key;
         this.#saveSpace(space);
       }
@@ -3767,7 +3809,7 @@ export class WeaveNode implements Backend {
     const known = this.#spaces.get(opened.space.id);
     if (known) {
       let added = false;
-      for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch]) (known.keys[epoch] = key), (added = true);
+      for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch))) (known.keys[epoch] = key), (added = true);
       for (const [board, epochs] of Object.entries((opened.space as StoredSpace).boards ?? {})) {
         for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch]) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
       }
@@ -4005,6 +4047,85 @@ export class WeaveNode implements Backend {
     const maxMB = valid(input.maxMB, 1_000_000, 'the size limit in MB');
     this.replica.write(this.identity, sealFor(space, { kind: KIND_BOARD_RULE, body: { board: board.name, keepDays, maxMB } }));
     return this.boards(space.id);
+  }
+
+  async shred(input: { space: string; before: string }): Promise<{ epochs: number[]; carried: number }> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('a direct chat has nobody who manages it: there is nothing to shred');
+    const state = this.#state(space);
+    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} shred its old keys`);
+    const before = Date.parse(input.before);
+    if (Number.isNaN(before)) throw new Error('before is a date, e.g. 2026-09-01');
+    // An epoch ends when the next one begins; the current one can't be shredded.
+    const starts = this.#epochStarts(space);
+    const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
+    const ended = epochs.slice(0, -1).filter((e, i) => (starts.get(epochs[i + 1]) ?? '') !== '' && Date.parse(starts.get(epochs[i + 1])!) <= before);
+    if (!ended.length) throw new Error(`no key of ${space.name} ended before ${input.before.slice(0, 10)}${epochs.length < 2 ? ': it has had one key all along' : ''}`);
+    const carried = this.#carryForward(space, new Set(ended));
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_SHRED, body: { epochs: ended } }));
+    return { epochs: ended, carried };
+  }
+
+  /**
+   * Before old keys go: restate under the current key what the space still
+   * keeps from those epochs: its control events and latest state, posts its
+   * rules keep (and their chat), read-limited boards' with their own key.
+   */
+  #carryForward(space: StoredSpace, epochs: Set<number>): number {
+    const posts = this.#spacePosts(space).posts;
+    const gone = new Set(posts.filter((p) => p.lifetime && isDue(p.lifetime, this.clock())).map((p) => p.id));
+    const around = this.#aroundPosts(this.#entries(space));
+    const goneWith = new Set([...gone].flatMap((id) => (around.get(id)?.ids ?? []).map((x) => x.id)));
+    const items = this.#decodedIn(space.id).filter((d) => {
+      const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
+      const inEpochs = d.carried || (Number.isSafeInteger(epoch) && epochs.has(epoch as number));
+      return inEpochs && d.inner.kind !== KIND_CARRY && !gone.has(d.id) && !goneWith.has(d.id);
+    });
+    const byBoard = new Map<string, Decoded[]>();
+    for (const d of items) byBoard.set(d.board ?? '', [...(byBoard.get(d.board ?? '') ?? []), d]);
+    for (const [board, list] of byBoard) {
+      const inner: Inner = { kind: KIND_CARRY, body: { events: list.map(carriedItem) as unknown as Json } };
+      const keys = board ? space.boards?.[board] : undefined;
+      const latest = keys ? Math.max(...Object.keys(keys).map(Number)) : -1;
+      if (board && latest < 0) continue; // a board we can't read: we hold none of it to carry
+      this.replica.write(this.identity, sealFor(space, board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
+    }
+    return items.length;
+  }
+
+  /** Apply the shreds of those who manage our spaces (each once: a shredded key is gone). */
+  #applyShreds(): number {
+    let applied = 0;
+    for (const space of [...this.#spaces.values()]) {
+      const state = this.#state(space);
+      for (const d of this.#decodedIn(space.id)) {
+        if (d.inner.kind !== KIND_SHRED || d.carried || !canManage(state, d.event.author)) continue;
+        const epochs = (d.inner.body as { epochs?: unknown } | null)?.epochs;
+        if (!Array.isArray(epochs)) continue;
+        const live = epochs.filter((e): e is number => Number.isSafeInteger(e) && !!space.keys[String(e)]);
+        if (live.length) {
+          this.#applyShred(space, live);
+          applied++;
+        }
+      }
+    }
+    return applied;
+  }
+
+  /** A shred from someone who manages the space: keep what we wrote, then let those keys go, with the bodies sealed with them. */
+  #applyShred(space: StoredSpace, epochs: number[]): void {
+    const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
+    if (!doomed.size) return;
+    // Our own work stays with us: restated in our private space first.
+    const mine = this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
+    if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
+    const scope = spaceScope(space);
+    for (const r of this.replica.events((r) => r.scope === scope && r.class === 'content' && !r.missing)) {
+      if (doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) && isWireItemV2(r.wire)) this.replica.store.dropBody(r.wire.e.body as string);
+    }
+    for (const e of doomed) delete space.keys[String(e)];
+    space.shredded = [...new Set([...(space.shredded ?? []), ...doomed])];
+    this.#saveSpace(space);
   }
 
   async keepPost(target: string): Promise<PostInfo> {
@@ -4278,13 +4399,15 @@ export class WeaveNode implements Backend {
     for (let round = 0; round < 4; round++) {
       if (!this.#decoded) {
         this.#ensureDirects();
-        const decoded = this.replica.events().flatMap((event) => {
+        const plain = this.replica.events().flatMap((event) => {
           const d = this.#decode(event);
-          return d ? this.#expandCarry(d) : [];
+          return d ? [d] : [];
         });
+        const decoded = [...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)];
         // What a carry restates and we can read ourselves counts once, as read.
+        // (and restated by several carries, once).
         const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
-        this.#decoded = decoded.filter((d) => !d.carried || !read.has(d.id)).sort((a, b) => replicaOrder(a.event, b.event));
+        this.#decoded = decoded.filter((d) => !d.carried || (!read.has(d.id) && (read.add(d.id), true))).sort((a, b) => replicaOrder(a.event, b.event));
         this.#decodedRevision++;
         this.#decodedGeneration++;
         this.#bySpace.clear();
@@ -4324,6 +4447,14 @@ export class WeaveNode implements Backend {
       this.#decoded = undefined;
       return;
     }
+    if (d.inner.kind === KIND_SHRED)
+      setImmediate(() => {
+        try {
+          this.#applyShreds();
+        } catch {
+          // closed in the meantime: the next start applies it
+        }
+      });
     let lo = 0;
     let hi = decoded.length;
     while (lo < hi) {

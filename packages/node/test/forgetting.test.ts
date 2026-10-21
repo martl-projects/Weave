@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { isWireItemV2 } from '@weave/core';
-import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { WeaveNode, closeOpenStores, loadSpaces } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -93,5 +93,55 @@ describe('forgetting by rule', () => {
     await martin.curate({ space: 'Weave', board: 'ideas', pinned: [post.id] });
     expect((await martin.post(post.id)).lifetime).toMatchObject({ forever: 'pinned' });
     await martin.close();
+  });
+
+  it('shreds old keys after carrying forward what the rules keep, and everyone keeps their own', async () => {
+    const [martin, lena, kofi, ada] = [person('Martin'), person('Lena'), person('Kofi'), person('Ada')];
+    const all = [martin, lena, kofi, ada];
+    const syncAll = () => {
+      for (let round = 0; round < 3; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
+    };
+    await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    await kofi.joinSpace(await martin.invite('Weave'));
+    syncAll();
+    // Ada comes in through Lena: Martin's carry counts for her because he manages the space.
+    await martin.setMaintainer({ project: 'Weave', who: 'Lena', on: true });
+    syncAll();
+    await ada.joinSpace(await lena.invite('Weave'));
+    syncAll();
+    await martin.setBoardRule({ space: 'Weave', board: 'ideas', keepDays: 20 });
+    await lena.submit({ space: 'Weave', title: 'Lena old' });
+    const liked = await kofi.submit({ space: 'Weave', title: 'Kofi liked' });
+    await kofi.submit({ space: 'Weave', title: 'Kofi quiet' });
+    await lena.submit({ space: 'Weave', board: 'issues', title: 'Old bug' });
+    syncAll();
+    await martin.upvote({ target: liked.id, value: 1 });
+    syncAll();
+
+    // A month on, the space gets a new key (it has a rule), and new posts go under it.
+    martin.clock = () => Date.now() + 31 * day;
+    await martin.reconcile();
+    syncAll();
+    expect((await kofi.spaces('project'))[0].epoch).toBe(1);
+    await lena.submit({ space: 'Weave', title: 'New' });
+    syncAll();
+    await expect(kofi.shred({ space: 'Weave', before: new Date(Date.now() + 32 * day).toISOString() })).rejects.toThrow(/manage/);
+
+    const done = await martin.shred({ space: 'Weave', before: new Date(Date.now() + 32 * day).toISOString() });
+    expect(done.epochs).toEqual([0]);
+    syncAll();
+    for (const node of all) await node.reconcile();
+    syncAll();
+
+    const titles = async (node: WeaveNode) => (await node.posts({ space: 'Weave' })).map((p) => p.title).sort();
+    // Kept by the rules: carried forward. Due: gone, except for whoever wrote it.
+    expect(await titles(kofi)).toEqual(['Kofi liked', 'Kofi quiet', 'New', 'Old bug']);
+    expect(await titles(lena)).toEqual(['Kofi liked', 'Lena old', 'New', 'Old bug']);
+    expect(await titles(ada)).toEqual(['Kofi liked', 'New', 'Old bug']);
+    // The key is gone everywhere, and the space is whole: members and roles came along.
+    for (const node of all) expect(Object.keys(loadSpaces(node.home).find((x) => x.name === 'Weave')!.keys)).toEqual(['1']);
+    expect((await ada.members('Weave')).map((m) => m.name).sort()).toEqual(['Ada', 'Kofi', 'Lena', 'Martin']);
+    for (const node of all) await node.close();
   });
 });

@@ -49,3 +49,13 @@ Forgetting by honest nodes can't recall copies others kept. Shredding can: `weav
 3. Transparency: PostInfo `lifetime`, `fading()` with Keep and Pin, Inbox and post UI, board rule UI; tests.
 4. Shredding: kind, carry-forward, trust for carries, monthly keys for spaces with rules, `weave shred`; tests.
 5. Release v0.6 with a release post.
+
+## As built
+
+- **Defaults:** communities keep everything too until a moderator sets a rule. The spec lets them forget by default; doing that to existing communities would forget without anyone deciding it.
+- **Carries are trusted by the state read without them:** from whoever handed over the keys (newcomers), from those who manage the space by the state a node folds from what it reads itself, and a node's own private carries. Several carries restating one event count once.
+- **Your own work and shredding:** before a node lets shredded keys go, it restates what it wrote in those epochs in its private space, so its own devices keep it; others see it only if the rules kept it (carried by the manager).
+- **Read-limited boards** are carried forward under their own board key, so a shred doesn't widen who reads them.
+- **Shredded keys are never taken again**, from rekeys or gifts (`shredded` is kept with the space).
+- **Monthly keys** for spaces whose boards forget, so old months can be shredded.
+- Shredding is on the command line (`weave shred <space> <date>`); the app shows rules, lifetimes and warnings.

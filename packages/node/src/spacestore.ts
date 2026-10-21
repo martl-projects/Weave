@@ -11,6 +11,8 @@ export interface StoredSpace extends SpaceKeys {
   boards?: Record<string, Record<string, string>>;
   /** Who handed us the keys (inviter or giver): the one whose carry of earlier history we take. */
   via?: Did;
+  /** Epochs shredded by the space's managers: their keys are gone and never taken again. */
+  shredded?: number[];
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {

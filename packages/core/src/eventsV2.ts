@@ -45,6 +45,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.space.close',
   'weave.space.history',
   'weave.space.carry',
+  'weave.space.shred',
   'weave.space.rekey',
   'weave.space.gift',
   'weave.group.create', // older names of the space events above

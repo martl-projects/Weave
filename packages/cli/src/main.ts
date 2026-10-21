@@ -103,6 +103,7 @@ projects — something being built; participants chat, discuss, vote and work on
   history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
   rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
   keep <post> / fading                   start a post's time again / your posts others will forget soon
+  shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
   let-in <id> / turn-away <id>           answer someone who asked
@@ -1118,6 +1119,13 @@ ${postLine(p)}`);
           ? `posts in ${b.title} stay ${b.rule.keepDays ? `${b.rule.keepDays} days after their last activity, longer with upvotes` : 'for good'}${b.rule.maxMB ? `, up to ${b.rule.maxMB} MB in all` : ''} (from 14 days after now at the earliest)`
           : `posts in ${b.title} stay for good`,
       );
+    }
+
+    case 'shred': {
+      const [space, before] = args;
+      if (!space || !before) throw new Error('usage: weave shred <space> <date>   (the keys that ended before that date)');
+      const r = await (await backend()).shred({ space, before });
+      return out(r, () => `carried ${r.carried} events forward; everyone in ${space} deletes ${r.epochs.length === 1 ? 'one old key' : `${r.epochs.length} old keys`}, so every copy of what was sealed with ${r.epochs.length === 1 ? 'it' : 'them'} becomes unreadable`);
     }
 
     case 'keep': {

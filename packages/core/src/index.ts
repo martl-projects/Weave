@@ -64,6 +64,7 @@ export {
   KIND_CLOSE,
   KIND_HISTORY,
   KIND_CARRY,
+  KIND_SHRED,
   HISTORIES,
   epochsToShare,
   type HistorySetting,

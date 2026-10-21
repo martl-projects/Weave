@@ -69,6 +69,8 @@ export type HistorySetting = 'all' | '30d' | 'joining';
  * that person only.
  */
 export const KIND_CARRY = 'weave.space.carry';
+/** `{epochs}`: members delete these keys of the space, so every copy of what they sealed becomes unreadable. */
+export const KIND_SHRED = 'weave.space.shred';
 export const HISTORIES: readonly HistorySetting[] = ['all', '30d', 'joining'];
 const DAY = 24 * 3600 * 1000;
 
