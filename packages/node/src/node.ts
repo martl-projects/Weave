@@ -474,12 +474,13 @@ export class WeaveNode implements Backend {
     });
   }
 
-  static open(dir?: string): WeaveNode {
+  /** Open a home. `migrate: false` leaves a home from before v0.4 as it is, for looking at it (and comparing). */
+  static open(dir?: string, options: { migrate?: boolean } = {}): WeaveNode {
     const home = resolveHome(dir);
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
     const node = new WeaveNode(home, identity);
-    node.#migrate();
+    if (options.migrate !== false) node.#migrate();
     return node;
   }
 

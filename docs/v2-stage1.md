@@ -129,3 +129,28 @@ A space's DHT topic becomes `H("weave/rendezvous/v2" ‖ key(epoch))` for its cu
 5. Rotating meeting points.
 6. Migration, backup, farewell.
 7. End-to-end over a testnet; release v0.4 with a release post and a "please update" note.
+
+## As built (what changed on the way)
+
+- **Root keys keep signing v1.** Not only identity and rotation: everything a root key signs (delegating devices, revoking them) stays v1. A root signs rarely, from recovery words, often on a device that doesn't hold all of its history yet; its v1 chain turns that into a gap instead of a second event with the same number (a fork). Homes from before device keys, where the root signs everything, stay v1 altogether and sync as root logs.
+- **Which v1 logs travel.** v1 logs are per key across all spaces, so they can't be split by space without gaps. They travel whole, but only for keys that never wrote v2 (frozen history of people who haven't moved) and for root keys (the identity foundation); to v0.3 peers, all of them.
+- **Gifts of keys** (to people let in through a knock or a tier) go in the giver's and recipient's direct space, which members-only sync carries between exactly those two; v0.3 had a scope of their own for them. Re-signed old gifts go to public, where v0.3 had them anyway.
+- **The farewell** carries `moved: '0.4'` and v0.4 doesn't show it: v0.4 peers never get it (it's in a moved key's v1 log), and the person who moved shouldn't see it either.
+- **Bodies are read with their events** (one join), and a content event without its body isn't decoded until the body comes; then it's decoded like a new event.
+- **The session also re-announces** when the node's spaces change (join, leave, new key, new contact), and re-checks the peer's last tags against its own new spaces.
+- **Known limit: the grace key.** Tags and meeting points also use a space's previous key, so members who haven't got a new key yet still meet the rest. Someone removed holds that previous key until the next rekey after, so until then peers keep handing them the space's new events, sealed with a key they don't have: they can't read them, but see that and when something was written. A second rekey (or the next one for any reason) ends it. Stage 2 (keys at rest and history for newcomers) can close it by having members drop the grace once everyone they know holds the new key.
+
+### Measured
+
+`node --expose-gc scripts/bench.ts run <dir>` on a v2 home of three people with 10,014 events (1,548 posts), stage 1 against stage 0's v1 home:
+
+| | stage 0 (v1 home) | stage 1 (v2 home) |
+|---|---|---|
+| feed (50 items), again | 155 ms | 92–224 ms |
+| posts of the busy project | 24 ms | 40 ms |
+| one post by id | 40 ms | 44 ms |
+| write a message, then read posts | 67 ms | 62 ms |
+| members | 1.7 ms | 1.4 ms |
+| open | 39 ms | 56 ms |
+
+Reading records costs a little more than v1 events (bodies apart, numbers checked across versions); the folds are still the bulk, and become incremental with member-held content in stage 4.

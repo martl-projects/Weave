@@ -74,7 +74,8 @@ describe('projects, groups and the social graph between daemons', () => {
 
     // Members read the group; the founder sees the invite chain.
     await until(async () => texts(await bob.node.feed({ space: 'Synths' })).includes('welcome to the synth group'));
-    await until(async () => (await alice.node.members('Synths')).length === 3);
+    // Names come with each person's public events, which may arrive after their join.
+    await until(async () => (await alice.node.members('Synths')).filter((m) => m.name).length === 3);
     const members = await alice.node.members('Synths');
     expect(members.find((m) => m.name === 'Bob')?.invitedByName).toBe('Alice');
 
