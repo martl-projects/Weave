@@ -2,6 +2,20 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.3.1 · 2026-10-21
+
+- Ask to update when a newer Weave is out
+- Refuse over-long posts instead of cutting them silently, and count characters
+- Show Memberships in the app's look, not in default hub colors
+- Add a Clean look: corporate, efficient, minimal
+- Drop the Arcade look's mouse glow and falling blocks
+- Add an Arcade look: a CRT cabinet with a rippling Tetris well
+- Let apps ask hosts for settings like an API key, kept on the host's computer
+- Let apps ask Weave who their players are: the app API and @weave/sdk
+- Tell joiners when the host's app isn't running, instead of a blank window
+- Move to electron-builder 27, which drops the deprecated libraries
+- Use Weave's own title bar, with working window buttons
+
 ## v0.3.0 · 2026-10-20
 
 - Bring the weave command along with the installed app
