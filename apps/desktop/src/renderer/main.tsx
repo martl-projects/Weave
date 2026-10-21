@@ -11,7 +11,7 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadSkin, navigate, POST_LINK, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
+import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, POST_LINK, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
@@ -430,6 +430,7 @@ function Shell() {
   const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0) + (fading?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
+  const [mode, setMode] = useState<Mode>(loadMode);
   // On a phone the places tree is a screen of its own; picking something closes it.
   const [placesOpen, setPlacesOpen] = useState(false);
   const routeKey = route.join('/');
@@ -508,6 +509,16 @@ function Shell() {
               onClick: () => {
                 applySkin(s);
                 setSkin(s);
+              },
+            })),
+            'sep',
+            // Light or dark: the Clean look has both; Arcade is always dark, Windows 95 and Cozy always light.
+            ...(Object.keys(MODES) as Mode[]).map((m) => ({
+              label: `${m === mode ? '● ' : ''}${MODES[m]}`,
+              disabled: skin !== 'clean',
+              onClick: () => {
+                applyMode(m);
+                setMode(m);
               },
             })),
           ]}
@@ -601,6 +612,7 @@ function App() {
 }
 
 applySkin(loadSkin());
+applyMode(loadMode());
 startNotifications();
 startAppOpens();
 createRoot(document.getElementById('root')!).render(<App />);

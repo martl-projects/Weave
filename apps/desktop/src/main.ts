@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
 import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
@@ -217,7 +217,8 @@ async function createWindow(): Promise<void> {
     height: 820,
     minWidth: 760,
     minHeight: 520,
-    backgroundColor: '#f4f5f7', // the Clean look's canvas, so the window doesn't flash dark while it loads
+    // The Clean look's canvas, light or dark like the system, so the window doesn't flash while it loads.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c111d' : '#f4f5f7',
     title: 'Weave',
     show: !values.screenshot,
     autoHideMenuBar: true,

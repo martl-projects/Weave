@@ -394,6 +394,30 @@ export function loadSkin(): Skin {
   return saved && saved in SKINS ? (saved as Skin) : 'clean';
 }
 
+/** Light or dark, for looks that have both (Clean): your choice, or the system's. Local, like the look. */
+export const MODES = { auto: 'Match system', light: 'Light', dark: 'Dark' } as const;
+export type Mode = keyof typeof MODES;
+const MODE_KEY = 'weave.mode';
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+
+export function loadMode(): Mode {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(MODE_KEY);
+  } catch {}
+  return saved && saved in MODES ? (saved as Mode) : 'auto';
+}
+
+/** Set data-mode (light or dark) on the page; "auto" follows the system as it changes. */
+export function applyMode(mode: Mode): void {
+  const set = () => (document.documentElement.dataset.mode = mode === 'auto' ? (systemDark.matches ? 'dark' : 'light') : mode);
+  systemDark.onchange = mode === 'auto' ? set : null;
+  set();
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {}
+}
+
 export function applySkin(skin: Skin): void {
   document.documentElement.dataset.skin = skin;
   try {
