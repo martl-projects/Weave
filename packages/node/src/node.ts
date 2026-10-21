@@ -203,6 +203,9 @@ import {
   type WeaveRecord,
   eventId,
   recordOfV1,
+  recordOfV2,
+  canonicalIdV2,
+  type WireItemV2,
   signEventV2,
   KIND_IDENTITY,
   KIND_ROTATE,
@@ -578,7 +581,7 @@ export class WeaveNode implements Backend {
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
-    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces() });
+    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items) });
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
@@ -923,7 +926,7 @@ export class WeaveNode implements Backend {
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
     removeSpace(this.home, space.id);
-    this.#announceSoon();
+    this.#announceNow();
     for (const topic of spaceTopics(space)) await this.#swarm?.leave(topic).catch(() => {});
   }
 
@@ -3493,7 +3496,8 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
     this.#spaces.set(space.id, space);
     saveSpace(this.home, space);
-    this.#announceSoon();
+    // At once: what is written next in this space must not reach anyone who lost it.
+    this.#announceNow();
   }
 
   /**
@@ -3503,7 +3507,13 @@ export class WeaveNode implements Backend {
    * private space, which only its other devices hold.
    */
   #heldSpaces(): HeldSpace[] {
-    this.#ensureDirects();
+    // Listing may derive new direct chats, which would announce again: not from inside.
+    this.#listingSpaces = true;
+    try {
+      this.#ensureDirects();
+    } finally {
+      this.#listingSpaces = false;
+    }
     const held = (space: SpaceKeys): HeldSpace => ({
       space: spaceScope(space),
       keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
@@ -3515,7 +3525,24 @@ export class WeaveNode implements Backend {
     ];
   }
 
+  /** Rekey events a peer ahead of us offered: take a key from those signed for a manager of the space, if a box opens for us. */
+  #offeredKeys(items: WireItemV2[]): void {
+    for (const { e } of items) {
+      const record = recordOfV2(canonicalIdV2(e), e);
+      if (canonicalKind(record.kind) !== KIND_REKEY || !this.replica.authority.check(record).ok) continue;
+      this.#takeKeys(record);
+    }
+  }
+
   #announcing = false;
+  #listingSpaces = false;
+
+  /** Tell peers which spaces this node holds, right away (a key changed), and join the right meeting points soon. */
+  #announceNow(): void {
+    if (!this.#swarm || this.#listingSpaces) return;
+    this.#swarm.announce();
+    this.#announceSoon();
+  }
 
   /** Tell peers which spaces this node holds, once the current change is done. */
   #announceSoon(): void {

@@ -1,7 +1,7 @@
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { Duplex } from 'node:stream';
-import { b64u, canonicalIdV2, isWireItemV2, utf8, type Did, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
+import { b64u, canonicalIdV2, isWireItemV2, utf8, verifyEventV2, type Did, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
 import type { BlobSource } from './session.ts';
 
 /*
@@ -19,6 +19,10 @@ import type { BlobSource } from './session.ts';
  *   minus a week; everything for a space new to this node). Answered with
  *   `have {space, ids}`, the ids held; the asker `fetch`es what it lacks.
  * - `items {items}`: v2 events `{e, b?}`.
+ * - `keys {space, items}`: a space's rekey events, for a peer that proved only
+ *   the space's previous key: a member who is behind takes the new key from
+ *   them (if a box opens for them) and says hello again; someone removed has no
+ *   box and gets nothing else of the space.
  * - `heads` / `events`: v1 logs, whole, as v0.3 sends them; only of keys that
  *   never wrote v2 (frozen history) and root keys (the identity foundation).
  * - `want` / `blob`: blobs by hash, as before.
@@ -34,20 +38,23 @@ export type Message2 =
   | { t: 'have'; space: string; ids: string[] }
   | { t: 'fetch'; space: string; ids: string[] }
   | { t: 'items'; items: unknown[] }
+  | { t: 'keys'; space: string; items: unknown[] }
   | { t: 'heads'; heads: Record<string, number> }
   | { t: 'events'; events: unknown[] }
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
-/** A space this node holds, with the keys that prove it: the current epoch's and the one before. */
+/** A space this node holds, with the keys that prove it: the current epoch's first, then the one before. */
 export interface HeldSpace {
   space: string;
   keys: Uint8Array[];
 }
 
-/** What a session needs to know of the node: which spaces it holds. */
+/** What a session needs to know of the node: which spaces it holds, and where rekey events offered by peers go. */
 export interface SpaceAccess {
   spaces(): HeldSpace[];
+  /** Rekey events of a space from a peer that holds a newer key: the node takes a key from them if it may. */
+  offerKeys?(items: WireItemV2[]): void;
 }
 
 const MAX_FRAME = 4 * 1024 * 1024;
@@ -70,7 +77,10 @@ export class PeerSession2 {
   readonly #handshakeHash: Uint8Array;
   /** Spaces both ends hold (public always), and those whose sync has started on this connection. */
   #shared = new Set<string>(['public']);
-  #started = new Set<string>();
+  /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
+  #behind = new Set<string>();
+  /** Per space whose sync has started, the tag of the key it started with: a new key starts it again. */
+  #started = new Map<string, string>();
   /** The tags of the peer's last hello. */
   #peerTags?: unknown[];
   /** What the peer is known to hold: v1 heads, and v2 events by canonical id (`<id>+body` with the body). */
@@ -203,6 +213,13 @@ export class PeerSession2 {
           this.#sendItems(items);
         }
         break;
+      case 'keys':
+        // Only from a peer that holds a space we hold too; taken by the node, never stored as they come.
+        if (v2 && (this.#shared.has(message.space) || this.#behind.has(message.space) || this.#peerHasKeyOf(message.space)) && Array.isArray(message.items)) {
+          const items = message.items.filter((item): item is WireItemV2 => isWireItemV2(item) && item.e.space === message.space && item.e.class === 'control' && verifyEventV2(item.e));
+          if (items.length) this.#access.offerKeys?.(items);
+        }
+        break;
       case 'items':
         if (v2 && Array.isArray(message.items)) {
           for (const item of message.items) {
@@ -232,15 +249,25 @@ export class PeerSession2 {
     this.#peerTags = tags;
     const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
     const shared = new Set(['public']);
-    for (const { space, keys } of this.#access.spaces()) if (keys.some((key) => theirs.has(spaceTag(key, this.#handshakeHash)))) shared.add(space);
+    const behind = new Set<string>();
+    const startedWith = new Map<string, string>([['public', '']]);
+    for (const { space, keys } of this.#access.spaces()) {
+      if (keys[0]) startedWith.set(space, spaceTag(keys[0], this.#handshakeHash));
+      const [current, ...earlier] = keys;
+      if (current && theirs.has(spaceTag(current, this.#handshakeHash))) shared.add(space);
+      else if (earlier.some((key) => theirs.has(spaceTag(key, this.#handshakeHash)))) behind.add(space);
+    }
     this.#shared = shared;
+    for (const space of behind) if (!this.#behind.has(space)) this.#sendKeys(space);
+    this.#behind = behind;
     for (const space of shared) {
-      if (this.#started.has(space)) continue;
-      this.#started.add(space);
+      const key = startedWith.get(space) ?? '';
+      if (this.#started.get(space) === key) continue;
+      this.#started.set(space, key);
       this.#startSpace(space);
     }
     // A space the peer left starts again if it comes back.
-    for (const space of this.#started) if (!shared.has(space)) this.#started.delete(space);
+    for (const space of this.#started.keys()) if (!shared.has(space)) this.#started.delete(space);
   }
 
   #startSpace(space: string): void {
@@ -253,6 +280,21 @@ export class PeerSession2 {
     this.#send({ t: 'chains', space, heads });
     const since = newest ? new Date(Date.parse(newest) - RECENT_MS).toISOString() : '';
     this.#send({ t: 'sync', space, since });
+  }
+
+  /** A space's rekey events, for a peer that holds only its previous key. */
+  #sendKeys(space: string): void {
+    const items = this.replica.store
+      .inSpace2(space)
+      .filter(({ event }) => event.class === 'control' && /\.rekey$/.test(event.kind))
+      .map(({ event }): WireItemV2 => ({ e: event }));
+    if (items.length) this.#send({ t: 'keys', space, items });
+  }
+
+  /** Does the peer's last hello show any key we hold of this space? (Keys come from someone ahead of us, whose current key we don't hold yet.) */
+  #peerHasKeyOf(space: string): boolean {
+    const theirs = new Set((this.#peerTags ?? []).filter((t): t is string => typeof t === 'string'));
+    return this.#access.spaces().some((held) => held.space === space && held.keys.some((key) => theirs.has(spaceTag(key, this.#handshakeHash))));
   }
 
   /** Control events of a space the peer lacks, in chain order per signer. */
@@ -276,6 +318,8 @@ export class PeerSession2 {
   #offer(items: WireItemV2[]): void {
     if (this.#peerVersion === 1) return;
     this.#sendItems(items.filter((item) => this.#shared.has(item.e.space)));
+    // A new key of a space the peer is behind in: theirs to take, if a box is for them.
+    for (const item of items) if (this.#behind.has(item.e.space) && item.e.class === 'control' && /\.rekey$/.test(item.e.kind)) this.#send({ t: 'keys', space: item.e.space, items: [{ e: item.e }] });
   }
 
   #sendItems(items: WireItemV2[]): void {

@@ -155,4 +155,43 @@ describe('PeerSession2: members-only sync', () => {
     expect(old.replica.events().some((r) => r.v === 2)).toBe(false);
     expect(a.replica.events((r) => r.author === old.me.author)).toEqual([]);
   });
+
+  it('gives a peer that holds only the previous key the rekey events and nothing else', async () => {
+    const [k0, k1] = [randomBytes(32), randomBytes(32)];
+    // A rekeyed after removing someone: it holds the new key first, the old one second.
+    const a: Peer = { replica: new Replica(), me: createIdentity(), spaces: [{ space: 'group:r', keys: [k1, k0] }] };
+    const removed: Peer = { replica: new Replica(), me: createIdentity(), spaces: [{ space: 'group:r', keys: [k0] }] };
+    say(a, 'group:r', 'before');
+    a.replica.append2(a.me, { kind: 'weave.space.rekey', space: 'group:r', body: { epoch: 1, boxes: {} } });
+    say(a, 'group:r', 'after the rekey');
+    const offered: string[] = [];
+    const [sa, sr] = duplexPair();
+    new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces } });
+    new PeerSession2(removed.replica, sr, { access: { spaces: () => removed.spaces, offerKeys: (items) => offered.push(...items.map((i) => i.e.kind)) } });
+    await settle(a, removed);
+    expect(offered).toEqual(['weave.space.rekey']);
+    expect(removed.replica.events((r) => r.scope === 'group:r')).toHaveLength(0);
+  });
+
+  it('lets a member who is behind take the new key, then sync everything', async () => {
+    const [k0, k1] = [randomBytes(32), randomBytes(32)];
+    const a: Peer = { replica: new Replica(), me: createIdentity(), spaces: [{ space: 'group:r', keys: [k1, k0] }] };
+    const behind: Peer = { replica: new Replica(), me: createIdentity(), spaces: [{ space: 'group:r', keys: [k0] }] };
+    a.replica.append2(a.me, { kind: 'weave.space.rekey', space: 'group:r', body: { epoch: 1, boxes: {} } });
+    say(a, 'group:r', 'after the rekey');
+    const [sa, sb] = duplexPair();
+    new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces } });
+    const session: PeerSession2 = new PeerSession2(behind.replica, sb, {
+      access: {
+        spaces: () => behind.spaces,
+        // The node opens its box and keeps the new key, then says hello again.
+        offerKeys: () => {
+          behind.spaces = [{ space: 'group:r', keys: [k1, k0] }];
+          setImmediate(() => session.announce());
+        },
+      },
+    });
+    await settle(a, behind);
+    expect(texts(behind, 'group:r')).toEqual(['after the rekey', null]); // the rekey event has no text
+  });
 });

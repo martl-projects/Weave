@@ -88,9 +88,11 @@ describe('projects, groups and the social graph between daemons', () => {
     // Alice removes Bob; the key rotates; Bob can't read what comes next, Carol can.
     await until(async () => (await carol.node.members('Synths')).length === 3);
     await alice.node.removeMember('Synths', 'Bob');
-    await alice.node.publish({ kind: 'weave.post', body: { text: 'after bob' }, space: 'Synths' });
+    const after = await alice.node.publish({ kind: 'weave.post', body: { text: 'after bob' }, space: 'Synths' });
     await until(async () => texts(await carol.node.feed({ space: 'Synths' })).includes('after bob'));
-    await until(async () => (await bob.node.status()).events >= (await alice.node.status()).events);
+    // Bob doesn't even get it sealed: he proves only the key from before.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(bob.node.replica.events((r) => r.id === after.id)).toHaveLength(0);
     expect(texts(await bob.node.feed({ space: 'Synths' }))).not.toContain('after bob');
     expect((await carol.node.spaces('project'))[0].epoch).toBe(1);
   });
