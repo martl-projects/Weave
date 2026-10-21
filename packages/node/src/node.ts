@@ -53,6 +53,7 @@ import {
   boardsOf,
   canManage,
   canonicalKind,
+  classOf,
   channelName,
   channelsOf,
   CHOICES,
@@ -430,8 +431,12 @@ export class WeaveNode implements Backend {
   #personEvents = new Map<Did, WeaveEvent[]>();
   /** Results computed from all decoded events, valid until the decoded events change. */
   #memos = new Map<string, { revision: number; value: unknown }>();
-  /** State, entries and access of each space, valid while their key (generation and space revision) holds. */
-  #spaceCache = new Map<string, { key: string; state?: SpaceState; entries?: Entry[]; access?: Access }>();
+  /** Bumped when a control event of that space is added (members, roles, keys, rules): all that its state depends on. */
+  #controlRevision = new Map<string, number>();
+  /** Each space's state, valid while generation and control revision hold: chat and posts leave it alone. */
+  #stateCache = new Map<string, { key: string; state: SpaceState }>();
+  /** Entries and access of each space, valid while generation and space revision hold. */
+  #spaceCache = new Map<string, { key: string; entries?: Entry[]; access?: Access; accessFor?: SpaceState }>();
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
   #directs = new Map<string, { space: StoredSpace; peer: Did }>();
   #directByPeer = new Map<Did, StoredSpace>();
@@ -458,9 +463,9 @@ export class WeaveNode implements Backend {
     this.replica.onAppend((event) => {
       if (isKeys(event)) this.#takeKeys(event);
       this.#decodedAdd(event);
-      // Key events change whose events count for whom; anything else, only its author's.
+      // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
-      else this.#personEvents.delete(event.author);
+      else this.#personEventsAdd(event);
     });
   }
 
@@ -2650,6 +2655,22 @@ export class WeaveNode implements Backend {
    * A person's own events, from every key that signs for them (root keys and
    * devices; agents too), valid ones only, oldest first.
    */
+  /** An accepted event of a person whose list is kept: into its place (time, then seq), no rescan. */
+  #personEventsAdd(event: WeaveEvent): void {
+    const list = this.#personEvents.get(event.author);
+    if (!list) return;
+    if (this.replica.authority.personOf(event.signer) !== event.author) return void this.#personEvents.delete(event.author);
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const e = list[mid];
+      if ((e.time.localeCompare(event.time) || e.seq - event.seq) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    list.splice(lo, 0, event);
+  }
+
   #eventsOf(person: Did): WeaveEvent[] {
     const kept = this.#personEvents.get(person);
     if (kept) return kept;
@@ -3459,8 +3480,13 @@ export class WeaveNode implements Backend {
       const member = (did: Did): [Did, Member] => [did, { did, since: '' }];
       return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map(), left: new Set() };
     }
-    const slot = this.#cacheFor(space.id);
-    return (slot.state ??= spaceState(space.kind, space.founder, this.#decodedIn(space.id)));
+    this.#decodeAll();
+    const key = `${this.#decodedGeneration}:${this.#controlRevision.get(space.id) ?? 0}`;
+    const kept = this.#stateCache.get(space.id);
+    if (kept?.key === key) return kept.state;
+    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id));
+    this.#stateCache.set(space.id, { key, state });
+    return state;
   }
 
   #page(project: StoredSpace, state: SpaceState): ProjectPage {
@@ -3849,6 +3875,7 @@ export class WeaveNode implements Backend {
         this.#decodedGeneration++;
         this.#bySpace.clear();
         this.#spaceCache.clear();
+        this.#stateCache.clear();
         for (const d of this.#decoded) {
           if (!d.space) continue;
           const list = this.#bySpace.get(d.space.id);
@@ -3900,6 +3927,7 @@ export class WeaveNode implements Backend {
       list.splice(a, 0, d);
       this.#bySpace.set(id, list);
       this.#spaceRevision.set(id, (this.#spaceRevision.get(id) ?? 0) + 1);
+      if (classOf(canonicalKind(d.inner.kind)) === 'control') this.#controlRevision.set(id, (this.#controlRevision.get(id) ?? 0) + 1);
     }
     // A board key for us makes more events readable: that drops the decoded events (see #takeBoardKeys).
     if (d.inner.kind === KIND_BOARD_KEY) this.#takeBoardKeys([d]);
@@ -3922,7 +3950,7 @@ export class WeaveNode implements Backend {
   }
 
   /** The cache slot of a space, emptied when the space's events or everything decoded changed. */
-  #cacheFor(spaceId: string): { key: string; state?: SpaceState; entries?: Entry[]; access?: Access } {
+  #cacheFor(spaceId: string): { key: string; entries?: Entry[]; access?: Access; accessFor?: SpaceState } {
     this.#decodeAll();
     const key = `${this.#decodedGeneration}:${this.#spaceRevision.get(spaceId) ?? 0}`;
     let slot = this.#spaceCache.get(spaceId);
@@ -3997,9 +4025,9 @@ export class WeaveNode implements Backend {
   #access(space: StoredSpace, state: SpaceState, entries: Entry[]): Access {
     // Cached only for the space's own state and entries (callers sometimes pass others).
     const slot = this.#cacheFor(space.id);
-    if (slot.access && slot.state === state && slot.entries === entries) return slot.access;
+    if (slot.access && slot.accessFor === state && slot.entries === entries) return slot.access;
     const access = accessOf(entries, state, inviteRightsOf(entries, state));
-    if (slot.state === state && slot.entries === entries) slot.access = access;
+    if (slot.entries === entries) Object.assign(slot, { access, accessFor: state });
     return access;
   }
 

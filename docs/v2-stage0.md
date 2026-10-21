@@ -128,6 +128,22 @@ Stage 0 ships: types, `signEventV2`, `verifyEventV2`, `eventIdV2`, `bodyHash`, `
 
 A benchmark script (`scripts/bench.ts`) builds a home with 1k, 10k and 100k events across a few projects, communities and direct chats, and times: start-up, `feed()`, `posts()` of a busy project, `post(ref)`, an append with an open view, and memory. Run before and after; the numbers go in the Work item.
 
+### Measured (stage 0 done)
+
+`node --expose-gc scripts/bench.ts run <dir>` on a home of three people with 10,014 events (1,548 posts, the rest chat and upvotes), v0.3.2 against v2 stage 0, same history:
+
+| | v0.3.2 | v2 stage 0 |
+|---|---|---|
+| feed (50 items), again | 5,669 ms | 155 ms |
+| posts of the busy project | 1,036 ms | 24 ms |
+| one post by id | 2,109 ms | 40 ms |
+| write a message, then read posts | 1,396 ms | 67 ms |
+| members | 87 ms | 1.7 ms |
+| open | 27 ms | 39 ms (first open imports the logs once: 271 ms) |
+| heap after these reads | 21 MB | 24 MB |
+
+What's left on the write path is folding a space's entries and posts again after each event in it; that becomes incremental with the per-space storage of stage 1 and the member-held content of stage 4.
+
 ## Tests
 
 - **Store equivalence:** the same random sequence of appends into `MemoryStore` and `SqliteStore` gives identical `head`, `get`, `range`, `signers`.
