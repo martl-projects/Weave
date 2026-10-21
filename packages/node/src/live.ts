@@ -14,6 +14,8 @@ import type { HyperDHT } from 'hyperswarm';
  * chat, relayed by the host) and opens one more connection per TCP connection
  * the app makes (its HTTP requests, WebSockets), each forwarded to the one
  * port the room shares. Players connect only to the host, never to each other.
+ * The host also tells players whether its app answers on that port, so they
+ * wait for it instead of opening a window onto nothing.
  */
 
 export interface RoomMessage {
@@ -53,6 +55,9 @@ interface Hosting {
   server: DhtServer;
   controls: Map<DhtSocket, Did>;
   chat: RoomMessage[];
+  /** Whether the app answers on the room's port, as last checked. */
+  appReady: boolean;
+  watch?: NodeJS.Timeout;
 }
 
 interface Joined {
@@ -63,11 +68,14 @@ interface Joined {
   chat: RoomMessage[];
   peers: Did[];
   connected: boolean;
+  /** Whether the host's app is running; hosts before this was sent only report connections. */
+  appReady?: boolean;
 }
 
 const MAX_CHAT = 200;
 const MAX_LINE = 8_192;
 const MAX_CONTROLS = 64;
+const APP_CHECK_MS = 2000;
 
 const send = (socket: DhtSocket, message: Record<string, Json>) => socket.write(`${JSON.stringify(message)}\n`);
 
@@ -123,6 +131,12 @@ export class LiveRooms {
     return this.#hosting.has(roomId) || !!this.#joined.get(roomId)?.connected;
   }
 
+  /** Player side: connected, and the host's app answers (as far as the host says). */
+  appReady(roomId: string): boolean {
+    const joined = this.#joined.get(roomId);
+    return !!joined?.connected && joined.appReady !== false;
+  }
+
   localPort(roomId: string): number | undefined {
     return this.#joined.get(roomId)?.port;
   }
@@ -133,9 +147,11 @@ export class LiveRooms {
     if (this.#hosting.has(room.id)) return;
     const dht = this.#need();
     const server = dht.createServer();
-    const hosting: Hosting = { room, server, controls: new Map(), chat: [] };
+    const hosting: Hosting = { room, server, controls: new Map(), chat: [], appReady: false };
     server.on('connection', (socket) => void this.#accept(hosting, socket).catch(() => socket.destroy()));
     await server.listen(roomKeyPair(this.#host.seed(room.id)));
+    await this.#checkApp(hosting);
+    hosting.watch = setInterval(() => void this.#checkApp(hosting), APP_CHECK_MS).unref();
     this.#hosting.set(room.id, hosting);
     this.#host.changed();
   }
@@ -144,6 +160,7 @@ export class LiveRooms {
     const hosting = this.#hosting.get(roomId);
     if (!hosting) return;
     this.#hosting.delete(roomId);
+    clearInterval(hosting.watch);
     for (const socket of hosting.controls.keys()) socket.destroy();
     await hosting.server.close().catch(() => {});
     this.#host.changed();
@@ -173,7 +190,7 @@ export class LiveRooms {
     onLines(socket, rest, (message) => {
       if (message.type === 'say' && typeof message.text === 'string') this.#post(hosting, person, message.text);
     });
-    send(socket, { type: 'state', peers: this.peers(hosting.room.id), chat: hosting.chat.slice(-50) as unknown as Json });
+    send(socket, { type: 'state', peers: this.peers(hosting.room.id), chat: hosting.chat.slice(-50) as unknown as Json, appReady: hosting.appReady });
     this.#broadcastState(hosting);
     this.#host.changed();
   }
@@ -198,6 +215,16 @@ export class LiveRooms {
     hosting.chat.push(message);
     if (hosting.chat.length > MAX_CHAT) hosting.chat.splice(0, hosting.chat.length - MAX_CHAT);
     for (const socket of hosting.controls.keys()) send(socket, { type: 'chat', message: message as unknown as Json });
+    this.#host.changed();
+  }
+
+  /** Tell players when the app starts or stops answering on the room's port. */
+  async #checkApp(hosting: Hosting): Promise<void> {
+    const port = this.#host.servicePort(hosting.room);
+    const ready = !!port && (await portOpen(port));
+    if (ready === hosting.appReady) return;
+    hosting.appReady = ready;
+    for (const socket of hosting.controls.keys()) send(socket, { type: 'app', ready });
     this.#host.changed();
   }
 
@@ -261,7 +288,11 @@ export class LiveRooms {
       if (this.#joined.get(joined.room.id) === joined) setTimeout(() => this.#connectControl(joined), 3000).unref();
     });
     onLines(socket, Buffer.alloc(0), (message) => {
-      if (message.type === 'state') joined.connected = true;
+      if (message.type === 'state') {
+        joined.connected = true;
+        joined.appReady = typeof message.appReady === 'boolean' ? message.appReady : undefined;
+      }
+      if (message.type === 'app' && typeof message.ready === 'boolean') joined.appReady = message.ready;
       if (message.type === 'state' || message.type === 'peers') joined.peers = (message.peers as Did[]) ?? [];
       if (message.type === 'state') joined.chat = (message.chat as unknown as RoomMessage[]) ?? [];
       if (message.type === 'chat') {

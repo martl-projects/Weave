@@ -102,6 +102,18 @@ describe('rooms and shared apps', () => {
     // Nothing of it is in anyone's logs.
     for (const node of [martin, lena]) expect(JSON.stringify(node.replica.events())).not.toContain('ready!');
 
+    // The host's app stops: players stay connected but wait for it, with no address to open onto nothing.
+    app.closeAllConnections();
+    await new Promise<void>((resolve) => app.close(() => resolve()));
+    const waiting = await until(async () => {
+      const info = (await lena.rooms('Gameshow'))[0];
+      return info.service?.ready === false ? info : undefined;
+    });
+    expect(waiting).toMatchObject({ connected: true });
+    expect(waiting.url).toBeUndefined();
+    await new Promise<void>((resolve) => app.listen(appPort, '127.0.0.1', () => resolve()));
+    await until(async () => (await lena.rooms('Gameshow'))[0].url);
+
     // Someone who learned the room key but isn't in the project gets nothing through.
     const eve = WeaveNode.init('Eve', mkdtempSync(join(tmpdir(), 'weave-rooms-')));
     nodes.push(eve);

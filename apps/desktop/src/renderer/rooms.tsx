@@ -74,7 +74,9 @@ function RoomCard({ room }: { room: RoomInfo }) {
         ▶ {label}
       </button>
     ) : (
-      <button disabled>Waiting for {room.host.name ?? 'the host'}…</button>
+      <button disabled>
+        {room.connected ? `Waiting for ${room.host.name ?? 'the host'} to start ${room.app?.name ?? 'the app'}…` : `Waiting for ${room.host.name ?? 'the host'}…`}
+      </button>
     );
   return (
     <article className="room window">

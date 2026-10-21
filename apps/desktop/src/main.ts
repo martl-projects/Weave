@@ -178,8 +178,25 @@ ipcMain.handle('weave:open-app', (_event, url: string, title: string) => {
     return { action: 'deny' };
   });
   appWindow.on('page-title-updated', (event) => event.preventDefault()); // keep "App · Room" as the title
+  // Electron shows a blank page when a load fails (the host's app stopped, the tunnel dropped): say so, and retry.
+  appWindow.webContents.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
+    if (!isMainFrame || code === -3 || !APP_ADDRESS.test(failedUrl)) return; // -3: a load that was replaced
+    void appWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(appErrorPage(name, failedUrl, description))}`);
+  });
   void appWindow.loadURL(url);
 });
+
+/** What an app window shows when its app can't be reached; it tries again by itself every few seconds. */
+function appErrorPage(name: string, url: string, reason: string): string {
+  const html = (text: string) => text.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  return `<!doctype html><meta charset="utf-8"><title>${html(name)}</title>
+<style>body{font:15px system-ui,sans-serif;background:#0d0e12;color:#e6e6e6;display:grid;place-items:center;height:100vh;margin:0;text-align:center}
+p{max-width:28em;line-height:1.5}small{color:#8a8f98}button{font:inherit;padding:.5em 1.4em;margin-top:.5em;cursor:pointer}</style>
+<div><h2>Can't reach ${html(name)}</h2>
+<p>The app may not be running on the host's computer yet, or the connection to the host dropped. Weave tries again every few seconds.</p>
+<button id="retry">Try again</button><p><small>${html(reason)}</small></p></div>
+<script>const go=()=>location.replace(${JSON.stringify(url).replace(/</g, '\\u003c')});document.getElementById('retry').onclick=go;setTimeout(go,4000);</script>`;
+}
 
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({

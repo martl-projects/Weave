@@ -2272,11 +2272,11 @@ export class WeaveNode implements Backend {
     const service = app?.services.find((s) => s.id === room.service) ?? app?.services[0];
     const joined = mine ? this.#live.isHosting(room.id) : this.#live.isJoined(room.id);
     const connected = this.#live.connected(room.id);
-    const ready = mine ? !!service && (await portOpen(service.port)) : connected;
+    const ready = mine ? !!service && (await portOpen(service.port)) : this.#live.appReady(room.id);
     const side = mine ? service?.open?.host : service?.open?.joiner;
     const path = side?.path ?? '/';
     const localPort = this.#live.localPort(room.id);
-    const url = mine ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && connected && app ? `http://${app.app}.weave.localhost:${localPort}${path}` : undefined;
+    const url = mine ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && ready && app ? `http://${app.app}.weave.localhost:${localPort}${path}` : undefined;
     return {
       id: room.id,
       project: { id: project.id, kind: 'project', name: project.name },
