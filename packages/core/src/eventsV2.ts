@@ -1,0 +1,212 @@
+import { sha256 } from '@noble/hashes/sha2.js';
+import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
+import { isDid, publicKeyFromDid, sign, verify, type Did } from './keys.ts';
+import type { SigningIdentity } from './events.ts';
+
+/*
+ * The v2 event format (spec: "Scaling: the v2 wire format"). Defined and tested
+ * here in stage 0; the wire switches to it in stage 1.
+ *
+ * Two classes of event:
+ *
+ * - control: who may do what — identity, delegation, members, roles, keys,
+ *   rules. Chained per (signer, space) by seq and prev, so a reader knows it has
+ *   all of them and in order, and a fork shows. The body is inline: control
+ *   events are small and must never go missing.
+ * - content: everything else — posts, chat, votes, reactions, edits, and
+ *   latest-wins state like a page or a profile. Standalone: no seq, no prev, so
+ *   any of them can be fetched, skipped or forgotten without leaving a gap. The
+ *   event signs the hash of its body; the body travels and is stored apart and
+ *   may be missing (forgotten, not yet fetched) without the event losing its
+ *   meaning or its signature.
+ *
+ * A sealed event shows its class but not its inner kind; a reader checks after
+ * decrypting that the inner kind belongs to the class the event claims.
+ */
+
+/** Kinds that decide who may do what: chained, complete, never forgotten. */
+export const CONTROL_KINDS: ReadonlySet<string> = new Set([
+  // identity and keys
+  'weave.identity',
+  'weave.rotate',
+  'weave.delegate',
+  'weave.revoke',
+  // spaces and membership
+  'weave.space.create',
+  'weave.space.join',
+  'weave.space.leave',
+  'weave.space.remove',
+  'weave.space.handover',
+  'weave.space.close',
+  'weave.space.rekey',
+  'weave.space.gift',
+  'weave.group.create', // older names of the space events above
+  'weave.group.join',
+  'weave.group.rekey',
+  'weave.group.remove',
+  'weave.invite',
+  'weave.membership',
+  'weave.tier',
+  // project roles and rules
+  'weave.project.admit',
+  'weave.project.decline',
+  'weave.project.group',
+  'weave.project.maintainer',
+  'weave.project.roster',
+  'weave.project.rule',
+  'weave.board',
+  'weave.board.access',
+  'weave.board.key',
+  'weave.github.repo',
+  'weave.vote.delegate',
+]);
+
+export type EventClass = 'control' | 'content';
+
+/** The class a kind belongs to; a sealed event carries the class of what's inside. */
+export const classOf = (kind: string): EventClass => (CONTROL_KINDS.has(kind) ? 'control' : 'content');
+
+interface HeaderV2 {
+  v: 2;
+  author: Did;
+  signer: Did;
+  /** 'public', 'self', or '<space kind>:<space id>'. */
+  space: string;
+  time: string;
+  kind: string;
+}
+
+export interface UnsignedControlEventV2 extends HeaderV2 {
+  class: 'control';
+  /** Position in this signer's chain in this space, from 1. */
+  seq: number;
+  /** Id of the previous control event of this signer in this space. */
+  prev: string | null;
+  body: Json;
+}
+
+export interface UnsignedContentEventV2 extends HeaderV2 {
+  class: 'content';
+  /** Hash of the body (see bodyHash); the body itself travels apart. */
+  body: string;
+  /** The v1 event this one re-signs (stage 1 migration), so references to the old id keep working. */
+  was?: string;
+}
+
+export type ControlEventV2 = UnsignedControlEventV2 & { sig: string };
+export type ContentEventV2 = UnsignedContentEventV2 & { sig: string };
+export type EventV2 = ControlEventV2 | ContentEventV2;
+
+export interface EventFieldsV2 {
+  kind: string;
+  space?: string;
+  body?: Json;
+  time?: string;
+  /** The class to sign as; defaults to the kind's class. Sealed events pass their inner kind's class. */
+  class?: EventClass;
+  was?: string;
+}
+
+const SIGNING_CONTEXT = 'weave/event/v2\n';
+
+const signingBytes = (event: UnsignedControlEventV2 | UnsignedContentEventV2): Uint8Array => utf8(SIGNING_CONTEXT + canonicalJson(event as unknown as Json));
+
+/** The hash a content event signs in place of its body. */
+export const bodyHash = (body: Json): string => b64u.encode(sha256(utf8(canonicalJson(body))));
+
+/** Content address of a signed v2 event. A content event's id covers its body's hash, so it doesn't change when the body is missing. */
+export const eventIdV2 = (event: EventV2): string => b64u.encode(sha256(utf8(canonicalJson(event as unknown as Json))));
+
+/** Sign a control event, chained to `head`: this signer's latest control event in the same space, if any. */
+export function signControlEventV2(identity: SigningIdentity, head: ControlEventV2 | undefined, fields: EventFieldsV2): ControlEventV2 {
+  const space = fields.space ?? 'public';
+  if (head && (head.signer !== identity.did || head.space !== space)) throw new Error('head is not this signer’s latest event in this space');
+  const unsigned: UnsignedControlEventV2 = {
+    v: 2,
+    class: 'control',
+    author: identity.author,
+    signer: identity.did,
+    space,
+    seq: head ? head.seq + 1 : 1,
+    prev: head ? eventIdV2(head) : null,
+    time: fields.time ?? new Date().toISOString(),
+    kind: fields.kind,
+    body: fields.body ?? null,
+  };
+  return { ...unsigned, sig: b64u.encode(sign(signingBytes(unsigned), identity.keys.secretKey)) };
+}
+
+/** Sign a content event; returns the event and the body that travels apart. */
+export function signContentEventV2(identity: SigningIdentity, fields: EventFieldsV2): { event: ContentEventV2; body: Json } {
+  const body = fields.body ?? null;
+  const unsigned: UnsignedContentEventV2 = {
+    v: 2,
+    class: 'content',
+    author: identity.author,
+    signer: identity.did,
+    space: fields.space ?? 'public',
+    time: fields.time ?? new Date().toISOString(),
+    kind: fields.kind,
+    body: bodyHash(body),
+    ...(fields.was ? { was: fields.was } : {}),
+  };
+  return { event: { ...unsigned, sig: b64u.encode(sign(signingBytes(unsigned), identity.keys.secretKey)) }, body };
+}
+
+/** Sign a v2 event of the right class for its kind (or the class given). Control events need their chain head. */
+export function signEventV2(identity: SigningIdentity, head: ControlEventV2 | undefined, fields: EventFieldsV2): { event: EventV2; body?: Json } {
+  return (fields.class ?? classOf(fields.kind)) === 'control' ? { event: signControlEventV2(identity, head, fields) } : signContentEventV2(identity, fields);
+}
+
+export function verifyEventV2(event: EventV2): boolean {
+  const { sig, ...unsigned } = event;
+  try {
+    return verify(b64u.decode(sig), signingBytes(unsigned), publicKeyFromDid(event.signer));
+  } catch {
+    return false;
+  }
+}
+
+/** Does this body belong to this content event? */
+export const bodyMatches = (event: ContentEventV2, body: Json): boolean => bodyHash(body) === event.body;
+
+const KIND_PATTERN = /^[a-z0-9]+(\.[a-z0-9_-]+)+$/;
+const SPACE_PATTERN = /^(public|self|[a-z]+:[A-Za-z0-9_-]{1,64})$/;
+const HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Structural validation of untrusted input; does not check the signature. */
+export function isWellFormedV2(value: unknown): value is EventV2 {
+  if (!value || typeof value !== 'object') return false;
+  const e = value as Record<string, unknown>;
+  const header =
+    e.v === 2 &&
+    isDid(e.author) &&
+    isDid(e.signer) &&
+    typeof e.space === 'string' && SPACE_PATTERN.test(e.space) &&
+    typeof e.time === 'string' && !Number.isNaN(Date.parse(e.time)) &&
+    typeof e.kind === 'string' && KIND_PATTERN.test(e.kind) &&
+    typeof e.sig === 'string';
+  if (!header) return false;
+  // A sealed event hides its inner kind, so only an open kind must match its class.
+  const sealed = e.kind === 'weave.sealed';
+  if (e.class === 'control') {
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'seq', 'prev', 'time', 'kind', 'body', 'sig']);
+    return (
+      Object.keys(e).every((k) => allowed.has(k)) &&
+      (sealed || CONTROL_KINDS.has(e.kind as string)) &&
+      Number.isSafeInteger(e.seq) && (e.seq as number) >= 1 &&
+      (e.seq === 1 ? e.prev === null : typeof e.prev === 'string' && HASH_PATTERN.test(e.prev)) &&
+      'body' in e
+    );
+  }
+  if (e.class === 'content') {
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'time', 'kind', 'body', 'was', 'sig']);
+    return (
+      Object.keys(e).every((k) => allowed.has(k)) &&
+      (sealed || !CONTROL_KINDS.has(e.kind as string)) &&
+      typeof e.body === 'string' && HASH_PATTERN.test(e.body) &&
+      (e.was === undefined || (typeof e.was === 'string' && HASH_PATTERN.test(e.was)))
+    );
+  }
+  return false;
+}
