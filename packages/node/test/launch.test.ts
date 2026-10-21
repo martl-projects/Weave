@@ -54,6 +54,45 @@ describe('starting a project app', () => {
     await node.close();
   });
 
+  it('hands the settings the host typed (an API key…) to this app alone, and only the ones it names', async () => {
+    const node = WeaveNode.init('Martin', temp());
+    await node.createProject({ name: 'Gameshow' });
+    const folder = temp();
+    const withEnv = {
+      ...manifest(['node', 'server.js']),
+      env: [
+        { name: 'DEEPSEEK_API_KEY', label: 'DeepSeek API key', secret: true, hint: 'platform.deepseek.com → API keys' },
+        { name: 'SHOW_LANGUAGE', label: 'Language', optional: true },
+      ],
+    };
+    writeFileSync(join(folder, 'weave.app.json'), JSON.stringify(withEnv));
+    // The app prints what it got (in a real app: it just uses it).
+    writeFileSync(join(folder, 'server.js'), "console.log('key=' + process.env.DEEPSEEK_API_KEY + ' lang=' + process.env.SHOW_LANGUAGE + ' api=' + !!process.env.WEAVE_API); setInterval(() => {}, 1000);");
+    await node.publishApp({ project: 'Gameshow', manifest: withEnv, folder });
+
+    expect((await node.appLaunch('Gameshow')).settings).toEqual([
+      { name: 'DEEPSEEK_API_KEY', label: 'DeepSeek API key', secret: true, hint: 'platform.deepseek.com → API keys', set: false },
+      { name: 'SHOW_LANGUAGE', label: 'Language', optional: true, set: false },
+    ]);
+    await expect(node.launchApp({ project: 'Gameshow', approve: true })).rejects.toThrow(/needs DeepSeek API key first/);
+    await expect(node.setAppSetting({ project: 'Gameshow', name: 'PATH', value: 'x' })).rejects.toThrow(/doesn't ask for PATH/);
+
+    const info = await node.setAppSetting({ project: 'Gameshow', name: 'DEEPSEEK_API_KEY', value: '  sk-test-123\n' });
+    expect(info.settings?.map((s) => s.set)).toEqual([true, false]);
+    expect(JSON.stringify(info)).not.toContain('sk-test-123'); // never shown again
+    // Nothing of it reaches the project's events.
+    expect(JSON.stringify(node.replica.events())).not.toContain('sk-test-123');
+
+    await node.launchApp({ project: 'Gameshow', approve: true });
+    const running = await until(() => node.appLaunch('Gameshow'), (i) => i.log.some((l) => l.startsWith('key=')));
+    expect(running.log).toContain('key=sk-test-123 lang=undefined api=true');
+    await until(() => node.stopApp('Gameshow'), (i) => !i.running);
+
+    await node.setAppSetting({ project: 'Gameshow', name: 'DEEPSEEK_API_KEY', value: null });
+    expect((await node.appLaunch('Gameshow')).settings?.[0].set).toBe(false);
+    await node.close();
+  });
+
   it("only accepts a folder that holds this project's app", async () => {
     const node = WeaveNode.init('Martin', temp());
     await node.createProject({ name: 'Gameshow' });

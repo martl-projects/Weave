@@ -169,6 +169,8 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app show -p <project>      the project's app: ports it shares, buttons
   app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
   app check [file]           check a weave.app.json (default: here), every problem at once
+  app set <NAME> -p <p>      fill in a setting the app asks for (an API key…), typed, kept on this computer only
+  app unset <NAME> -p <p>    remove it again
   app env -p <project>       WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT for an app you start yourself (@weave/sdk reads them)
   app example                an annotated weave.app.json and its rules
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
@@ -356,6 +358,7 @@ const launchText = (l: AppLaunchInfo) =>
     `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
     l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? (l.exit.stopped ? 'stopped' : `exited by itself (code ${l.exit.code ?? '-'})`) : 'not running',
     ...(l.install ? [installText(l.install)] : []),
+    ...(l.settings?.length ? [`settings (kept on this computer):\n${l.settings.map((x) => `  ${x.name.padEnd(22)} ${x.set ? '✓ set' : x.optional ? '– not set (optional)' : '✗ not set: weave app set ' + x.name} · ${x.label}`).join('\n')}`] : []),
   ].join('\n');
 
 const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
@@ -368,6 +371,32 @@ const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
   ]
     .filter(Boolean)
     .join('\n');
+
+/** A line typed without showing it (for secrets), from a terminal only. */
+async function askHidden(question: string): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error('run this in a terminal: it asks you to type the value (it never goes on the command line, where it would end up in your shell history)');
+  process.stdout.write(question);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  let value = '';
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        for (const ch of chunk.toString('utf8')) {
+          if (ch === '\r' || ch === '\n') return (process.stdin.off('data', onData), resolve(value));
+          if (ch === '\u0003') return (process.stdin.off('data', onData), reject(new Error('cancelled')));
+          if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
+          else value += ch;
+        }
+      };
+      process.stdin.on('data', onData);
+    });
+  } finally {
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+    process.stdout.write('\n');
+  }
+}
 
 /** One line from the terminal, for questions only a person should answer. */
 async function askLine(question: string): Promise<string> {
@@ -1215,6 +1244,18 @@ ${postLine(p)}`);
         if (checked.problems.length) process.exitCode = 1;
         return;
       }
+      if (sub === 'set' && args[1]) {
+        const project = needProject();
+        const setting = (await b.appLaunch(project)).settings?.find((x) => x.name === args[1]);
+        if (!setting) throw new Error(`the app doesn't ask for ${args[1]}: weave app status -p ${project} lists its settings`);
+        const value = setting.secret ? await askHidden(`${setting.label} (not shown): `) : await askLine(`${setting.label}: `);
+        const info = await b.setAppSetting({ project, name: setting.name, value });
+        return out(info.settings, () => `${setting.label} ${value.trim() ? 'saved on this computer' : 'not changed (empty)'}; ${info.settings?.filter((x) => !x.optional && !x.set).length ? 'still missing: ' + info.settings.filter((x) => !x.optional && !x.set).map((x) => x.name).join(', ') : 'the app has what it needs'}`);
+      }
+      if (sub === 'unset' && args[1]) {
+        const info = await b.setAppSetting({ project: needProject(), name: args[1], value: null });
+        return out(info.settings, () => `${args[1]} removed from this computer`);
+      }
       if (sub === 'env') {
         const env = await b.appEnv(needProject());
         const line = ([k, v]: [string, string]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
@@ -1246,7 +1287,7 @@ ${postLine(p)}`);
         const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
         return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
       }
-      throw new Error('usage: weave app publish|show|check|env|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|check|set <NAME>|unset <NAME>|env|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
     }
 
     case 'rooms': {

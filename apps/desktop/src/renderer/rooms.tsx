@@ -397,6 +397,64 @@ function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app:
   );
 }
 
+/** One setting the app asks hosts for (an API key…): typed here, kept on this computer, never shown again when secret. */
+function SettingRow({ project, setting }: { project: SpaceInfo; setting: NonNullable<AppLaunchInfo['settings']>[number] }) {
+  const [editing, setEditing] = useState(!setting.set);
+  const [value, setValue] = useState('');
+  useEffect(() => setEditing(!setting.set), [setting.set]);
+  const save = (next: string | null) =>
+    attempt(() => api('setAppSetting', { project: project.id, name: setting.name, value: next }).then(() => (setValue(''), bump())), next ? `${setting.label} saved on this computer` : `${setting.label} removed`);
+  return (
+    <div className="app-setting">
+      <label htmlFor={`setting-${setting.name}`}>
+        {setting.label}
+        {setting.optional ? <span className="muted"> (optional)</span> : null}
+      </label>
+      {editing ? (
+        <form
+          className="field-row"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (value.trim()) void save(value);
+          }}
+        >
+          <input id={`setting-${setting.name}`} className="grow" type={setting.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={value} placeholder={setting.name} onChange={(e) => setValue(e.target.value)} />
+          <button type="submit" disabled={!value.trim()}>
+            Save
+          </button>
+          {setting.set && (
+            <button type="button" onClick={() => (setValue(''), setEditing(false))}>
+              Cancel
+            </button>
+          )}
+        </form>
+      ) : (
+        <div className="field-row">
+          <span className="grow">✓ Saved on this computer</span>
+          <button onClick={() => setEditing(true)}>Change…</button>
+          <AsyncButton onClick={() => save(null)}>Remove</AsyncButton>
+        </div>
+      )}
+      {setting.hint && <div className="small muted">{setting.hint}</div>}
+    </div>
+  );
+}
+
+/** Settings the app asks for. Values stay on this computer and go to this app alone when Weave starts it. */
+function AppSettings({ project, app, launch }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo }) {
+  if (!launch.settings?.length) return null;
+  return (
+    <div className="app-settings">
+      <div className="small">
+        {app.name} asks for {launch.settings.length === 1 ? 'a setting' : 'settings'}. Whatever you type stays on this computer: Weave hands it to {app.name} when it starts it here, and to nobody else (not the project, the room or your agents).
+      </div>
+      {launch.settings.map((s) => (
+        <SettingRow key={s.name} project={project} setting={s} />
+      ))}
+    </div>
+  );
+}
+
 /** The app on this computer: where it is, start and stop, and what it printed. */
 function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
   const { data: launch } = useApi(() => api<AppLaunchInfo>('appLaunch', project.id), [project.id]);
@@ -408,6 +466,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
     if (folder) await attempt(() => api('setAppFolder', { project: project.id, folder }).then(bump), 'Folder saved');
   };
   const start = (approve = false) => attempt(() => api('launchApp', { project: project.id, approve }).then(bump), `${app.name} is starting`);
+  const missing = (launch.settings ?? []).filter((s) => !s.optional && !s.set);
   if (!launch.command && !launch.install)
     return launch.hint ? (
       <p className="small">
@@ -419,6 +478,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
       <legend>{app.name} on this computer</legend>
       <NoReleaseBox project={project} app={app} launch={launch} />
       <InstallBox project={project} app={app} launch={launch} onPick={pick} />
+      <AppSettings project={project} app={app} launch={launch} />
       {!launch.command ? (
         launch.hint && <p className="small">To host, start {app.name} yourself: {launch.hint}</p>
       ) : launch.install?.progress ? null : !launch.folder ? (
@@ -438,7 +498,12 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
             {launch.running ? (
               <AsyncButton onClick={() => attempt(() => api('stopApp', project.id).then(bump), 'Stopped')}>Stop app</AsyncButton>
             ) : (
-              <button className="default" onClick={() => (launch.approved ? void start() : setAsking(true))}>
+              <button
+                className="default"
+                disabled={missing.length > 0}
+                title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined}
+                onClick={() => (launch.approved ? void start() : setAsking(true))}
+              >
                 ▶ Start {app.name}
               </button>
             )}

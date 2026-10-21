@@ -13,6 +13,8 @@ import { isRepoName } from './github.ts';
  *                                                       runs the command only on the host's say-so (see node)
  *                                                       install: {github, tag, assets, steps}: where hosts get the app,
  *                                                       see AppInstall
+ *                                                       env: [{name, label, secret, optional, hint}]: settings the host
+ *                                                       fills in (an API key…), see AppSetting; only names, never values
  *                                                       sealed in the project, the latest by a maintainer counts
  *   weave.room   {room, name, service, key, invite, open}
  *                                                       the host announces a room (open) or ends it (open: false);
@@ -54,7 +56,32 @@ export interface AppManifest {
   };
   /** How hosts get the app onto their computer. */
   install?: AppInstall;
+  /** Settings each host fills in on their own computer, handed to the app as environment variables when Weave starts it. */
+  env?: AppSetting[];
 }
+
+/**
+ * A setting the app reads from its environment, like an API key. The manifest
+ * only names it; each host types the value on their computer, where it stays
+ * (never in the project, a room or the repository), and Weave hands it to this
+ * app alone when it starts it.
+ */
+export interface AppSetting {
+  /** The environment variable, like DEEPSEEK_API_KEY. */
+  name: string;
+  /** What hosts see, like "DeepSeek API key". */
+  label: string;
+  /** Hidden while typed and never shown again. */
+  secret?: true;
+  /** The app runs without it (Weave starts it anyway). */
+  optional?: true;
+  /** Where to get it, like "platform.deepseek.com → API keys". */
+  hint?: string;
+}
+
+/** Variables an app may not ask hosts for: they change how programs start or what they load. */
+const ENV_RESERVED = /^(WEAVE_|NODE_|LD_|DYLD_|PATH$|PATHEXT$|COMSPEC$|SYSTEMROOT$|WINDIR$|HOME$|USERPROFILE$|APPDATA$|LOCALAPPDATA$|TEMP$|TMP$|PYTHON|ELECTRON_|BUN_)/i;
+const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 /**
  * Getting the app: release files on GitHub, one per platform, each with the
@@ -126,7 +153,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -206,8 +233,29 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   if (install?.assets) warnings.push('"install.assets" are usually added by weave app release, which fingerprints each file; no need to write them');
 
+  const env: AppSetting[] = [];
+  if (m.env !== undefined) {
+    if (!Array.isArray(m.env)) problems.push('"env" lists settings hosts fill in, like [{"name": "DEEPSEEK_API_KEY", "label": "DeepSeek API key", "secret": true}]');
+    else {
+      if (m.env.length > 16) warnings.push('only the first 16 settings in "env" count');
+      for (const [i, raw] of m.env.slice(0, 16).entries()) {
+        const e = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        const where = `env[${i}]`;
+        const name = text(e.name, 64);
+        if (!ENV_NAME.test(name)) { problems.push(`${where}: "name" is an environment variable in capitals, digits and _, like DEEPSEEK_API_KEY`); continue; }
+        if (ENV_RESERVED.test(name)) { problems.push(`${where}: ${name} can't be a setting: it changes how programs start (Weave sets WEAVE_* itself)`); continue; }
+        if (env.some((x) => x.name === name)) { problems.push(`${where}: ${name} is listed twice`); continue; }
+        if ('value' in e || 'default' in e) problems.push(`${where}: a manifest names a setting but never holds its value (it's in the repository): each host types it in Weave`);
+        const label = text(e.label, 60) || name;
+        if (!text(e.label, 60)) warnings.push(`${where}: "label" is what hosts see, like "DeepSeek API key"`);
+        const hint = text(e.hint, 200);
+        env.push({ name, label, ...(e.secret === true ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}) });
+      }
+    }
+  }
+
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}) } };
 }
 
 /** A manifest checked and cleaned, or an error naming everything that's wrong with it. */
@@ -228,6 +276,7 @@ export const MANIFEST_EXAMPLE = {
     release: { 'win32-x64': ['./band-ab.exe'], 'darwin-arm64': ['./band-ab'], 'darwin-x64': ['./band-ab'], 'linux-x64': ['./band-ab'] },
   },
   install: { steps: ['git clone the repository', 'npm ci', 'npm start'] },
+  env: [{ name: 'DEEPSEEK_API_KEY', label: 'DeepSeek API key', secret: true, optional: true, hint: 'platform.deepseek.com → API keys' }],
 };
 
 /** What each part of a manifest means, and the rules. */
@@ -239,6 +288,7 @@ export const MANIFEST_RULES = [
   'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after the host approves it once.',
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.hint: one line for hosts who start it by hand.',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Each host types it in Weave (Live tab, or weave app set), it stays on their computer, and Weave hands it to this app alone when it starts it. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",

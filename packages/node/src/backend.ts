@@ -1,5 +1,5 @@
 import type { GumroadLink } from '@weave/core';
-import type { AppManifest, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -478,6 +478,8 @@ export interface AppLaunchInfo {
   exit?: { code: number | null; time: string; stopped?: true };
   /** The app's last lines of output. */
   log: string[];
+  /** Settings the app asks hosts for (an API key…), and whether this computer has a value; values never leave this computer. */
+  settings?: Array<AppSetting & { set: boolean }>;
   /** You may point the app at a GitHub release (a maintainer), and the repository its releases come from. */
   release?: { canRelease: boolean; repo?: string };
   /** Getting the app: its release, the file for this computer, and steps for an agent. */
@@ -927,6 +929,11 @@ export interface Backend {
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
   launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
   stopApp(project: string): Promise<AppLaunchInfo>;
+  /**
+   * Fill in one of the settings the app's manifest asks for (value: null clears it). Kept on this computer only,
+   * in app-settings.json, and handed to this app alone when Weave starts it; never synced, shown or given to agents.
+   */
+  setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo>;
   /** The app API's address and this project's token, for an app started by hand (Weave sets them itself when it starts the app). Valid until Weave restarts. */
   appEnv(project: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
@@ -1003,7 +1010,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

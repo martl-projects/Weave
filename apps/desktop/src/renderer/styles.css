@@ -495,6 +495,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 /* ---------- starting a project's app */
 .app-panel .status-dot { width: 10px; height: 10px; border: 1px solid #404040; background: #808080; flex: none; }
 .app-panel .status-dot.on { background: #00c000; }
+.app-settings { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.app-setting label { display: block; font-weight: bold; margin-bottom: 2px; }
 .app-log { max-height: 180px; overflow: auto; margin: 4px 0 0; padding: 4px 6px; background: #000; color: #c0c0c0; font: 11px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; }
 .approve-launch { display: flex; gap: 10px; align-items: flex-start; }
 .launch-command { margin: 4px 0; padding: 4px 6px; background: #fff; border: 1px solid #808080; font: 12px 'Lucida Console', Consolas, monospace; white-space: pre-wrap; word-break: break-all; }

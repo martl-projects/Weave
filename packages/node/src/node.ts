@@ -1935,6 +1935,7 @@ export class WeaveNode implements Backend {
       running: this.#apps.running(project.id),
       ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
       log: run?.log ?? [],
+      ...(app?.env ? { settings: app.env.map((e) => ({ ...e, set: !!this.#appSettings()[project.id]?.[e.name] })) } : {}),
       ...(app ? { release: this.#releaseInfo(project, app) } : {}),
       ...(install ? { install } : {}),
     };
@@ -1984,7 +1985,41 @@ export class WeaveNode implements Backend {
       this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: fingerprint } };
       saveConfig(this.home, this.config);
     }
-    this.#apps.start(project.id, command, folder, { ...(await this.appEnv(project.id)) });
+    const values = this.#appSettings()[project.id] ?? {};
+    const missing = (app.env ?? []).filter((e) => !e.optional && !values[e.name]);
+    if (missing.length) throw new Error(`${app.name} needs ${missing.map((e) => e.label).join(', ')} first: fill ${missing.length === 1 ? 'it' : 'them'} in under Live (or weave app set ${missing[0].name} -p ${project.name})`);
+    // Only the settings this manifest names, and Weave's own variables last, so a setting can't stand in for them.
+    const settings = Object.fromEntries((app.env ?? []).filter((e) => values[e.name]).map((e) => [e.name, values[e.name]]));
+    this.#apps.start(project.id, command, folder, { ...settings, ...(await this.appEnv(project.id)) });
+    return this.appLaunch(project.id);
+  }
+
+  // ---------------------------------------------------------------- app settings
+
+  get #appSettingsFile(): string {
+    return joinPath(this.home.dir, 'app-settings.json');
+  }
+
+  /** Values hosts typed for their apps' settings: project id → variable → value. This computer only. */
+  #appSettings(): Record<string, Record<string, string>> {
+    return readJson<Record<string, Record<string, string>>>(this.#appSettingsFile) ?? {};
+  }
+
+  async setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo> {
+    const project = this.#project(input.project);
+    const app = this.#app(project);
+    const setting = app?.env?.find((e) => e.name === input.name);
+    if (!app || !setting) throw new Error(`${app?.name ?? project.name} doesn't ask for ${input.name}${app?.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
+    const value = typeof input.value === 'string' ? input.value.trim() : '';
+    if (value.length > 4096 || value.includes('\0')) throw new Error(`${setting.label} is too long`);
+    const all = this.#appSettings();
+    const mine = { ...(all[project.id] ?? {}) };
+    if (value) mine[setting.name] = value;
+    else delete mine[setting.name];
+    if (Object.keys(mine).length) all[project.id] = mine;
+    else delete all[project.id];
+    writeJson(this.#appSettingsFile, all);
+    this.#emitLive();
     return this.appLaunch(project.id);
   }
 
