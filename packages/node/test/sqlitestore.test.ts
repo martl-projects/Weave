@@ -140,7 +140,7 @@ describe('SqliteStore', () => {
 
   it('moves a real node onto weave.db with its history intact, and keeps the old logs if it can’t', async () => {
     const dir = temp();
-    const node = WeaveNode.init('Martin', dir);
+    const node = WeaveNode.init('Martin', dir, { writeVersion: 1 });
     await node.createProject({ name: 'Weave' });
     await node.submit({ space: 'Weave', title: 'Before the move' });
     await node.close();

@@ -7,6 +7,8 @@ import type { ControlEventV2, EventV2 } from './eventsV2.ts';
 export interface StoredV2 {
   id: string;
   event: EventV2;
+  /** A content event's body, when the store read it along (all2 does); else look it up with body(). */
+  body?: Json;
 }
 
 /**
@@ -38,8 +40,12 @@ export interface LogStore {
   chainAt(signer: Did, space: string, seq: number): ControlEventV2 | undefined;
   /** A key's latest control event in a space. */
   chainHead(signer: Did, space: string): ControlEventV2 | undefined;
-  /** Every v2 event (in no particular order). */
+  /** Every v2 event (in no particular order), content events with their bodies where held. */
   all2(): StoredV2[];
+  /** Keys with v2 events. */
+  signers2(): Did[];
+  /** A key's v2 events, by n. */
+  range2(signer: Did): StoredV2[];
   body(hash: string): Json | undefined;
   /** Keep a body; the caller checked it against its event's hash. */
   putBody(hash: string, body: Json): void;
@@ -64,8 +70,8 @@ export class MemoryV2 {
       chain.push(event);
       this.#chains.set(`${event.signer} ${event.space}`, chain);
     }
-    this.#byId.set(id, item);
-    this.#byNumber.set(numberKey, item);
+    this.#byId.set(id, { id, event });
+    this.#byNumber.set(numberKey, { id, event });
     this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
   }
 
@@ -90,7 +96,18 @@ export class MemoryV2 {
   }
 
   all2(): StoredV2[] {
-    return [...this.#byId.values()];
+    return [...this.#byId.values()].map((item) => {
+      const body = item.event.class === 'content' ? this.#bodies.get(item.event.body) : undefined;
+      return body === undefined ? item : { ...item, body };
+    });
+  }
+
+  signers2(): Did[] {
+    return [...this.#numbers.keys()];
+  }
+
+  range2(signer: Did): StoredV2[] {
+    return [...this.#byId.values()].filter(({ event }) => event.signer === signer).sort((a, b) => a.event.n - b.event.n);
   }
 
   body(hash: string): Json | undefined {

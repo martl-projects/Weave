@@ -36,8 +36,10 @@ export class Replica {
   #pending = new Map<string, WeaveEvent | WireItemV2>();
   /** Keys seen signing two different events with the same number: a sign the key is used where it shouldn't be. */
   readonly forks = new Set<Did>();
-  #listeners = new Set<(event: WeaveEvent) => void>();
-  #recordListeners = new Set<(record: WeaveRecord) => void>();
+  #listeners = new Set<(record: WeaveRecord) => void>();
+
+  /** 1 writes as v0.3 did: for tests that build an older home. */
+  writeVersion: 1 | 2 = 2;
 
   /** A store that already holds events (e.g. loaded from disk) is trusted as-is; delegations in it are re-applied. */
   constructor(store: LogStore = new MemoryStore()) {
@@ -56,16 +58,10 @@ export class Replica {
     for (let round = 0; round < 2; round++) for (const event of grants) this.authority.apply(event);
   }
 
-  /** Called for every newly accepted v1 event. Returns an unsubscribe function. */
-  onAppend(listener: (event: WeaveEvent) => void): () => void {
+  /** Called for every newly accepted event of either version, and again for a content event when its missing body arrives. Returns an unsubscribe function. */
+  onAppend(listener: (record: WeaveRecord) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
-  }
-
-  /** Called for every newly accepted event of either version, and again for a content event when its missing body arrives. */
-  onRecord(listener: (record: WeaveRecord) => void): () => void {
-    this.#recordListeners.add(listener);
-    return () => this.#recordListeners.delete(listener);
   }
 
   /** Latest v1 seq per signer. */
@@ -73,6 +69,18 @@ export class Replica {
     const heads: Record<Did, number> = {};
     for (const signer of this.store.signers()) heads[signer] = this.store.head(signer)!.seq;
     return heads;
+  }
+
+  /** Every key with events here, of either version. */
+  signers(): Did[] {
+    return [...new Set([...this.store.signers(), ...this.store.signers2()])];
+  }
+
+  /** A key's valid events of both versions, by number (a re-signed v1 event only once, as v2). */
+  eventsBy(signer: Did): WeaveRecord[] {
+    const v2 = this.store.range2(signer).map((stored) => this.#recordOf(stored));
+    const v1 = this.store.range(signer, 1).filter((e) => !this.store.byNumber(signer, e.seq)).map((e) => recordOfV1(e));
+    return [...v1, ...v2].filter((r) => this.authority.check(r).ok).sort((a, b) => a.seq - b.seq);
   }
 
   /** A key's highest number, v1 seq and v2 n alike: its next event is this plus one. */
@@ -92,6 +100,20 @@ export class Replica {
     return event;
   }
 
+  /**
+   * Create, sign and store a local identity's next event the way v0.4 writes:
+   * v2, except what root keys sign (identity, rotation, delegating devices),
+   * which stays v1, the identity foundation. A root key signs rarely, from
+   * recovery words, often on a device that may not hold all its history: its
+   * v1 chain makes that show as a gap instead of a second event numbered alike.
+   */
+  write(identity: SigningIdentity, fields: EventFields): WeaveRecord {
+    const root = !this.authority.grant(identity.did);
+    if (this.writeVersion === 1 || root || fields.kind === KIND_IDENTITY || fields.kind === KIND_ROTATE) return recordOfV1(this.append(identity, fields));
+    const { scope, ...rest } = fields;
+    return this.append2(identity, { ...rest, space: scope ?? 'public' });
+  }
+
   /** Create, sign and store the next v2 event from a local identity: numbered after the key's last, chained if control. */
   append2(identity: SigningIdentity, fields: Omit<EventFieldsV2, 'n'>): WeaveRecord {
     const space = fields.space ?? 'public';
@@ -109,33 +131,23 @@ export class Replica {
     return result;
   }
 
-  /** All valid v1 events, oldest first by claimed time. Events from revoked keys past their cutoff are left out. */
-  events(filter: (event: WeaveEvent) => boolean = () => true): WeaveEvent[] {
-    const all: WeaveEvent[] = [];
-    for (const signer of this.store.signers()) {
-      for (const event of this.store.range(signer, 1)) if (this.authority.check(event).ok && filter(event)) all.push(event);
-    }
-    return all.sort((a, b) => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq);
-  }
-
   /**
    * All valid events of both versions as records, oldest first by claimed time
-   * (then signer, then number). A v1 event that a v2 event re-signs is left out:
-   * the v2 one stands for it, under the same id.
+   * (then signer, then number). Events from revoked keys past their cutoff are
+   * left out, and so is a v1 event that a v2 event re-signs: the v2 one stands
+   * for it, under the same id.
    */
-  records(filter: (record: WeaveRecord) => boolean = () => true): WeaveRecord[] {
+  events(filter: (record: WeaveRecord) => boolean = () => true): WeaveRecord[] {
     const all: WeaveRecord[] = [];
-    const resigned = new Set<string>();
     for (const stored of this.store.all2()) {
-      if (stored.event.was) resigned.add(stored.event.was);
       const record = this.#recordOf(stored);
       if (this.authority.check(record).ok && filter(record)) all.push(record);
     }
     for (const signer of this.store.signers()) {
       for (const event of this.store.range(signer, 1)) {
-        const id = eventId(event);
-        if (resigned.has(id) || !this.authority.check(event).ok) continue;
-        const record = recordOfV1(event, id);
+        // A v2 event with the same number can only be its re-signing (anything else is refused as a fork).
+        if (this.store.byNumber(signer, event.seq) || !this.authority.check(event).ok) continue;
+        const record = recordOfV1(event);
         if (filter(record)) all.push(record);
       }
     }
@@ -148,8 +160,8 @@ export class Replica {
     return stored && this.#recordOf(stored);
   }
 
-  #recordOf({ id, event }: StoredV2): WeaveRecord {
-    return recordOfV2(id, event, event.class === 'content' ? this.store.body(event.body) : undefined);
+  #recordOf({ id, event, body }: StoredV2): WeaveRecord {
+    return recordOfV2(id, event, event.class === 'content' ? (body ?? this.store.body(event.body)) : undefined);
   }
 
   #ingestOne(input: unknown): IngestResult {
@@ -177,8 +189,7 @@ export class Replica {
     this.store.append(event);
     this.#pending.delete(pendingKey(event));
     if (KEY_KINDS.has(event.kind)) this.authority.apply(event);
-    for (const listener of this.#listeners) listener(event);
-    if (this.#recordListeners.size) this.#notify(recordOfV1(event));
+    if (this.#listeners.size) this.#notify(recordOfV1(event));
     return { status: 'accepted' };
   }
 
@@ -230,7 +241,7 @@ export class Replica {
   }
 
   #notify(record: WeaveRecord): void {
-    for (const listener of this.#recordListeners) listener(record);
+    for (const listener of this.#listeners) listener(record);
   }
 
   #fork(signer: Did): IngestResult {

@@ -1,6 +1,6 @@
 import { TEXT_LIMITS } from './limits.ts';
 import type { Json } from './bytes.ts';
-import type { WeaveEvent } from './events.ts';
+import type { EventView } from './records.ts';
 import type { Did } from './keys.ts';
 
 /*
@@ -41,7 +41,7 @@ export type Choice = (typeof CHOICES)[number];
 /** A readable event: its id, the signed event and its (decrypted) kind and body. */
 export interface Entry {
   id: string;
-  event: WeaveEvent;
+  event: EventView;
   kind: string;
   body: Json;
 }

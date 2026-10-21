@@ -1,6 +1,7 @@
 import type { Json } from './bytes.ts';
 import { boxTo, openBox, type Box } from './crypto.ts';
-import type { EventFields, WeaveEvent } from './events.ts';
+import type { EventFields } from './events.ts';
+import type { EventView } from './records.ts';
 import { isDid, type Did, type KeyPair } from './keys.ts';
 
 /*
@@ -84,7 +85,7 @@ export interface Tier {
 const str = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
 
 /** A creator's tiers from their public tier events, the latest per tier winning; withdrawn ones (open: false and hidden) are dropped. */
-export function tiersOf(events: WeaveEvent[]): Tier[] {
+export function tiersOf(events: EventView[]): Tier[] {
   const latest = new Map<string, Tier & { hidden: boolean }>();
   for (const event of events) {
     if (event.kind !== KIND_TIER) continue;
@@ -131,7 +132,7 @@ export function membershipRequest(creatorEncryptionKey: Did, request: Membership
 }
 
 /** If a request event is addressed to `me`, what it asks for. */
-export function openMembershipRequest(event: WeaveEvent, me: { keys: KeyPair }): MembershipRequest | undefined {
+export function openMembershipRequest(event: EventView, me: { keys: KeyPair }): MembershipRequest | undefined {
   const box = (event.body as { box?: Box } | null)?.box;
   if (event.kind !== KIND_MEMBERSHIP_REQUEST || !box) return undefined;
   try {

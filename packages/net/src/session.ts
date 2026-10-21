@@ -1,5 +1,5 @@
 import type { Duplex } from 'node:stream';
-import type { Did, Replica, WeaveEvent } from '@weave/core';
+import { eventIdV2, isWireItemV2, type Did, type Replica, type WeaveEvent } from '@weave/core';
 
 /**
  * Wire messages, one JSON object per line:
@@ -7,11 +7,14 @@ import type { Did, Replica, WeaveEvent } from '@weave/core';
  * - `events`: events the other side is missing, in log order
  * - `want`: blobs (by hash) this side is looking for
  * - `blob`: one blob, base64url, sent to a peer that wants it
+ * - `items`: v2 events (`{e, b?}`): all of them on connect, then each new one.
+ *   A stand-in until the v2 session (docs/v2-stage1.md, step 4) replaces it.
  * Older peers ignore messages they don't know.
  */
 export type Message =
   | { t: 'heads'; heads: Record<string, number> }
   | { t: 'events'; events: unknown[] }
+  | { t: 'items'; items: unknown[] }
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
@@ -40,6 +43,8 @@ export class PeerSession {
   readonly stream: Duplex;
   /** What we know the peer holds, so we never send an event twice. */
   #peerHeads = new Map<string, number>();
+  /** v2 events the peer has (by their own id; `<id>+body` when with the body), from us or sent by it. */
+  #peerHas2 = new Set<string>();
   #buffer = '';
   #unsubscribe: () => void;
   #closed = false;
@@ -50,11 +55,15 @@ export class PeerSession {
     this.replica = replica;
     this.stream = stream;
     this.blobs = blobs;
-    this.#unsubscribe = replica.onAppend((event) => this.#offer(event));
+    this.#unsubscribe = replica.onAppend((record) => {
+      if (isWireItemV2(record.wire)) this.#offer2([record.wire]);
+      else this.#offer(record.wire);
+    });
     stream.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());
     this.#send({ t: 'heads', heads: replica.heads() });
+    this.#offer2(replica.events((r) => r.v === 2).map((r) => r.wire));
     const wanted = blobs?.wanted() ?? [];
     if (wanted.length) this.want(wanted);
   }
@@ -105,6 +114,11 @@ export class PeerSession {
         if (typeof e.signer === 'string' && Number.isSafeInteger(e.seq)) this.#notePeerHas(e.signer, e.seq!);
         this.replica.ingest(event);
       }
+    } else if (message.t === 'items' && Array.isArray(message.items)) {
+      for (const item of message.items) {
+        if (isWireItemV2(item)) this.#peerHas2.add('b' in item ? `${eventIdV2(item.e)}+body` : eventIdV2(item.e));
+        this.replica.ingest(item);
+      }
     } else if (message.t === 'want' && Array.isArray(message.hashes) && this.blobs) {
       for (const hash of message.hashes.slice(0, 256)) {
         const data = typeof hash === 'string' ? this.blobs.get(hash) : undefined;
@@ -127,6 +141,16 @@ export class PeerSession {
       for (let i = 0; i < missing.length; i += BATCH) this.#send({ t: 'events', events: missing.slice(i, i + BATCH) });
       this.#peerHeads.set(signer, seq);
     }
+  }
+
+  #offer2(wires: unknown[]): void {
+    const items = wires.filter(isWireItemV2).filter((item) => {
+      const id = eventIdV2(item.e);
+      if (this.#peerHas2.has(`${id}+body`) || (this.#peerHas2.has(id) && !('b' in item))) return false;
+      this.#peerHas2.add('b' in item ? `${id}+body` : id);
+      return true;
+    });
+    for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'items', items: items.slice(i, i + BATCH) });
   }
 
   #offer(event: WeaveEvent): void {

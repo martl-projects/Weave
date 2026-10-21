@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS events2 (
   seq    INTEGER,
   time   TEXT NOT NULL,
   kind   TEXT NOT NULL,
+  body   TEXT,
   json   TEXT NOT NULL,
   UNIQUE (signer, n)
 );
@@ -83,7 +84,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'body' | 'putBody', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'body' | 'putBody', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -107,11 +108,12 @@ export class SqliteStore implements LogStore {
       this.#heads.set(event.signer, event);
     }
     this.#v2 = {
-      insert: this.#db.prepare('INSERT INTO events2 (id, v2id, class, author, signer, space, n, seq, time, kind, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+      insert: this.#db.prepare('INSERT INTO events2 (id, v2id, class, author, signer, space, n, seq, time, kind, body, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
       byId: this.#db.prepare('SELECT id, json FROM events2 WHERE id = ?'),
       byNumber: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? AND n = ?'),
       chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
-      all: this.#db.prepare('SELECT id, json FROM events2'),
+      all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
+      bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
       body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
       putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) VALUES (?, ?)'),
     };
@@ -155,7 +157,7 @@ export class SqliteStore implements LogStore {
     const chainHead = this.#chainHeads.get(chainKey)?.seq ?? 0;
     if (event.class === 'control' && event.seq !== chainHead + 1) throw new Error(`out-of-order control event: seq ${event.seq} after ${chainHead}`);
     const seq = event.class === 'control' ? event.seq : null;
-    this.#v2.insert.run(id, eventIdV2(event), event.class, event.author, event.signer, event.space, event.n, seq, event.time, event.kind, JSON.stringify(event));
+    this.#v2.insert.run(id, eventIdV2(event), event.class, event.author, event.signer, event.space, event.n, seq, event.time, event.kind, event.class === 'content' ? event.body : null, JSON.stringify(event));
     this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
     if (event.class === 'control') this.#chainHeads.set(chainKey, event);
   }
@@ -182,7 +184,15 @@ export class SqliteStore implements LogStore {
   }
 
   all2(): StoredV2[] {
-    return (this.#v2.all.all() as Array<{ id: string; json: string }>).map((row) => stored(row)!);
+    return (this.#v2.all.all() as Array<{ id: string; json: string; body: string | null }>).map((row) => (row.body === null ? stored(row)! : { ...stored(row)!, body: JSON.parse(row.body) as Json }));
+  }
+
+  signers2(): Did[] {
+    return [...this.#numbers.keys()];
+  }
+
+  range2(signer: Did): StoredV2[] {
+    return (this.#v2.bySigner.all(signer) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }
 
   body(hash: string): Json | undefined {

@@ -1,8 +1,10 @@
+import { classOf } from './eventsV2.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { KIND_SEALED } from './authority.ts';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
-import type { EventFields, SigningIdentity, WeaveEvent } from './events.ts';
+import type { EventFields, SigningIdentity } from './events.ts';
+import type { EventView } from './records.ts';
 import { isDid, type Did, type KeyPair } from './keys.ts';
 import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 
@@ -129,11 +131,11 @@ const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave
 export function sealFor(space: SpaceKeys, inner: Inner): EventFields {
   const epoch = currentEpoch(space);
   const key = b64u.decode(space.keys[String(epoch)]);
-  return { kind: KIND_SEALED, scope: spaceScope(space), body: { epoch, ...seal(key, inner as unknown as Json, context(space, epoch)) } };
+  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), body: { epoch, ...seal(key, inner as unknown as Json, context(space, epoch)) } };
 }
 
 /** Decrypt a sealed event of a space, or undefined if we lack the key or it doesn't decrypt. */
-export function openIn(space: SpaceKeys, event: WeaveEvent): Inner | undefined {
+export function openIn(space: SpaceKeys, event: EventView): Inner | undefined {
   if (event.kind !== KIND_SEALED || event.scope !== spaceScope(space)) return undefined;
   const body = event.body as (Sealed & { epoch?: unknown }) | null;
   if (!body || !Number.isSafeInteger(body.epoch)) return undefined;
@@ -170,7 +172,7 @@ export function rekey(space: SpaceKeys, members: Did[], encryptionKeyOf: Encrypt
 }
 
 /** If a rekey event carries a key for `me`, return it. */
-export function openRekey(event: WeaveEvent, me: Recipient): { epoch: number; key: string } | undefined {
+export function openRekey(event: EventView, me: Recipient): { epoch: number; key: string } | undefined {
   const body = event.body as { epoch?: unknown; boxes?: Record<string, Box> } | null;
   const box = body?.boxes?.[me.author];
   if (canonicalKind(event.kind) !== KIND_REKEY || !box) return undefined;
@@ -184,8 +186,9 @@ export function openRekey(event: WeaveEvent, me: Recipient): { epoch: number; ke
 }
 
 /**
- * Hand a space's keys to newly admitted people. Posted in a scope they already
- * follow (the group they came through), boxed so only they can open it.
+ * Hand a space's keys to newly admitted people. Posted in a space they already
+ * share with the giver (the group they came through, or their direct chat),
+ * boxed so only they can open it.
  */
 export function gift(space: SpaceKeys, recipients: Did[], scope: string, entry: Invite['entry'], encryptionKeyOf: EncryptionKeyOf = sameKey): EventFields {
   const boxes: Record<string, Box> = {};
@@ -194,7 +197,7 @@ export function gift(space: SpaceKeys, recipients: Did[], scope: string, entry: 
 }
 
 /** If a gift event carries a space for `me`, return it. */
-export function openGift(event: WeaveEvent, me: Recipient): { space: SpaceKeys; entry: Invite['entry'] } | undefined {
+export function openGift(event: EventView, me: Recipient): { space: SpaceKeys; entry: Invite['entry'] } | undefined {
   const body = event.body as { boxes?: Record<string, Box> } | null;
   const box = body?.boxes?.[me.author];
   if (event.kind !== KIND_GIFT || !box) return undefined;
@@ -291,7 +294,7 @@ export interface SpaceState {
   closed?: { by: Did; time: string };
 }
 
-const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
+const byTime = (a: { event: EventView }, b: { event: EventView }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
 
 /**
  * Membership from a space's decrypted events, applied in time order. The rules
@@ -300,7 +303,7 @@ const byTime = (a: { event: WeaveEvent }, b: { event: WeaveEvent }) => a.event.t
  * maintainers do both, invite whole groups, and set rules that let group
  * newcomers in automatically.
  */
-export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: WeaveEvent; inner: Inner }>): SpaceState {
+export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: EventView; inner: Inner }>): SpaceState {
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map(), left: new Set() };
   const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
   const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === state.founder : state.members.has(author));
@@ -407,7 +410,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
 }
 
 /** Should an event by this author be shown? Members yes; removed members only for what they wrote before removal. */
-export function visibleIn(state: SpaceState, event: WeaveEvent, inner: Inner): boolean {
+export function visibleIn(state: SpaceState, event: EventView, inner: Inner): boolean {
   const kind = canonicalKind(inner.kind);
   if (kind === KIND_JOIN || kind === KIND_SPACE_CREATE) return true;
   if (state.members.has(event.author)) return true;

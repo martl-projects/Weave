@@ -24,7 +24,7 @@ function person() {
 }
 
 /** Hand over everything `from` holds, as records (bodies included where held). */
-const pass = (from: Replica, to: Replica) => from.records().forEach((r) => to.ingest(r));
+const pass = (from: Replica, to: Replica) => from.events().forEach((r) => to.ingest(r));
 
 const kinds = (records: WeaveRecord[]) => records.map((r) => r.kind);
 
@@ -39,7 +39,7 @@ describe('v2 events in the replica', () => {
     expect(replica.number(laptop.did)).toBe(3);
     expect(replica.store.chainHead(laptop.did, 'project:abc')?.seq).toBe(1);
 
-    const records = replica.records((r) => r.author === root.did && r.signer === laptop.did);
+    const records = replica.events((r) => r.author === root.did && r.signer === laptop.did);
     expect(records.map((r) => [r.v, r.kind, r.body])).toEqual([
       [1, 'weave.post', { title: 'v1 post' }],
       [2, 'weave.space.create', { name: 'Weave' }],
@@ -49,9 +49,9 @@ describe('v2 events in the replica', () => {
 
     // Another replica takes them all, in any order.
     const other = new Replica();
-    for (const r of replica.records().reverse()) other.ingest(r);
+    for (const r of replica.events().reverse()) other.ingest(r);
     pass(replica, other);
-    expect(other.records().map((r) => r.id)).toEqual(replica.records().map((r) => r.id));
+    expect(other.events().map((r) => r.id)).toEqual(replica.events().map((r) => r.id));
   });
 
   it('keeps a content event without its body, and takes the body when it comes', () => {
@@ -60,16 +60,16 @@ describe('v2 events in the replica', () => {
     pass(replica, other);
     const { event, body } = signContentEventV2(laptop, { n: 1, kind: 'weave.msg', space: 'group:g', body: { text: 'hi' } });
     const seen: WeaveRecord[] = [];
-    other.onRecord((r) => seen.push(r));
+    other.onAppend((r) => seen.push(r));
 
     // A wrong body is dropped; the event stands without it.
     expect(other.ingest({ e: event, b: { text: 'forged' } }).status).toBe('accepted');
-    expect(other.records((r) => r.kind === 'weave.msg')[0]).toMatchObject({ missing: true, body: null });
+    expect(other.events((r) => r.kind === 'weave.msg')[0]).toMatchObject({ missing: true, body: null });
     expect(other.ingest({ e: event }).status).toBe('duplicate');
 
     expect(other.ingest({ e: event, b: body }).status).toBe('accepted');
-    expect(other.records((r) => r.kind === 'weave.msg')[0]).toMatchObject({ body: { text: 'hi' } });
-    expect(other.records((r) => r.kind === 'weave.msg')[0].missing).toBeUndefined();
+    expect(other.events((r) => r.kind === 'weave.msg')[0]).toMatchObject({ body: { text: 'hi' } });
+    expect(other.events((r) => r.kind === 'weave.msg')[0].missing).toBeUndefined();
     expect(seen.map((r) => r.missing ?? false)).toEqual([true, false]);
     expect(other.ingest({ e: event, b: body }).status).toBe('duplicate');
   });
@@ -82,7 +82,7 @@ describe('v2 events in the replica', () => {
     const second = signControlEventV2(laptop, first, { n: 2, kind: 'weave.board', space: 'project:p', body: { name: 'work' } });
     expect(other.ingest({ e: second })).toEqual({ status: 'pending', reason: 'gap in chain' });
     expect(other.ingest({ e: first }).status).toBe('accepted');
-    expect(kinds(other.records((r) => r.scope === 'project:p'))).toEqual(['weave.space.create', 'weave.board']);
+    expect(kinds(other.events((r) => r.scope === 'project:p'))).toEqual(['weave.space.create', 'weave.board']);
     expect(other.pendingCount).toBe(0);
     // Chained to something else.
     const stray = signControlEventV2(laptop, undefined, { n: 3, kind: 'weave.board', space: 'project:p', body: {} });
@@ -110,18 +110,18 @@ describe('v2 events in the replica', () => {
     const v1 = replica.append(laptop, { kind: 'weave.post', body: { title: 'old' } });
     const resigned = signContentEventV2(laptop, { n: v1.seq, kind: 'weave.post', space: 'public', body: { title: 'old' }, time: v1.time, was: eventId(v1) });
     expect(replica.ingest({ e: resigned.event, b: resigned.body }).status).toBe('accepted');
-    const posts = replica.records((r) => r.kind === 'weave.post');
+    const posts = replica.events((r) => r.kind === 'weave.post');
     expect(posts.map((r) => [r.v, r.id])).toEqual([[2, eventId(v1)]]);
     expect(replica.forks.size).toBe(0);
     // And in the other order: the v2 one first, then the v1 event it re-signs.
     const { laptop: l2, replica: r2 } = person();
     const early = r2.append(l2, { kind: 'weave.post', body: { title: 'x' } });
     const fresh = new Replica();
-    for (const r of r2.records((r) => r.kind !== 'weave.post')) fresh.ingest(r);
+    for (const r of r2.events((r) => r.kind !== 'weave.post')) fresh.ingest(r);
     const again = signContentEventV2(l2, { n: early.seq, kind: 'weave.post', space: 'public', body: { title: 'x' }, was: eventId(early) });
     expect(fresh.ingest({ e: again.event, b: again.body }).status).toBe('accepted');
     expect(fresh.ingest(early).status).toBe('accepted');
-    expect(fresh.records((r) => r.kind === 'weave.post').map((r) => r.v)).toEqual([2]);
+    expect(fresh.events((r) => r.kind === 'weave.post').map((r) => r.v)).toEqual([2]);
     // A `was` that names an id another event already holds.
     const thief = signContentEventV2(l2, { n: 9, kind: 'weave.post', space: 'public', body: {}, was: eventId(early) });
     expect(fresh.ingest({ e: thief.event, b: thief.body })).toEqual({ status: 'rejected', reason: 'id already taken' });
@@ -131,7 +131,7 @@ describe('v2 events in the replica', () => {
     const { root, laptop, replica } = person();
     for (let i = 1; i <= 4; i++) replica.append2(laptop, { kind: 'weave.msg', space: 'group:g', body: { text: `m${i}` } });
     replica.append(root, revocation(laptop.did, 2));
-    expect(replica.records((r) => r.kind === 'weave.msg').map((r) => r.body)).toEqual([{ text: 'm1' }, { text: 'm2' }]);
+    expect(replica.events((r) => r.kind === 'weave.msg').map((r) => r.body)).toEqual([{ text: 'm1' }, { text: 'm2' }]);
     // A thief can't backdate: a later number is void whatever time it claims.
     const backdated = signContentEventV2(laptop, { n: 5, kind: 'weave.msg', space: 'group:g', body: { text: 'forged' }, time: '2020-01-01T00:00:00.000Z' });
     expect(replica.ingest({ e: backdated.event, b: backdated.body })).toEqual({ status: 'rejected', reason: 'signer revoked' });
@@ -143,12 +143,12 @@ describe('v2 events in the replica', () => {
     expect(replica.ingest({ e: signContentEventV2(agent, { n: 1, kind: 'weave.post', space: 'public', body: {} }).event }).status).toBe('pending');
     replica.append2(laptop, { kind: 'weave.delegate', body: { subject: agent.did, role: 'agent', permissions: ['weave.post'], name: 'helper' } });
     expect(replica.pendingCount).toBe(0);
-    expect(replica.records((r) => r.signer === agent.did)).toHaveLength(1);
+    expect(replica.events((r) => r.signer === agent.did)).toHaveLength(1);
     expect(replica.ingest({ e: signContentEventV2(agent, { n: 2, kind: 'weave.msg', space: 'public', body: {} }).event })).toMatchObject({ status: 'rejected' });
 
     const restarted = new Replica(replica.store);
     expect(restarted.authority.grant(agent.did)?.name).toBe('helper');
-    expect(restarted.records((r) => r.signer === agent.did)).toHaveLength(1);
+    expect(restarted.events((r) => r.signer === agent.did)).toHaveLength(1);
   });
 
   it('refuses identity and rotation as v2, and malformed items', () => {

@@ -86,6 +86,14 @@ export class FileStore implements LogStore {
     return this.#memory.all2();
   }
 
+  signers2(): Did[] {
+    return this.#memory.signers2();
+  }
+
+  range2(signer: Did): StoredV2[] {
+    return this.#memory.range2(signer);
+  }
+
   body(hash: string): Json | undefined {
     return this.#memory.body(hash);
   }

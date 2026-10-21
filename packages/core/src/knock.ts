@@ -1,6 +1,7 @@
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, openBox, type Box } from './crypto.ts';
-import type { EventFields, WeaveEvent } from './events.ts';
+import type { EventFields } from './events.ts';
+import type { EventView } from './records.ts';
 import { isDid, type Did } from './keys.ts';
 import type { Recipient, SpaceKind } from './spaces.ts';
 
@@ -59,7 +60,7 @@ export function knockFor(link: KnockLink, note: string, entry: KnockLink['entry'
 }
 
 /** A knock addressed to `me`, opened. */
-export function openKnock(event: WeaveEvent, me: Recipient): { space: string; invite: string; note: string; entry: KnockLink['entry'] } | undefined {
+export function openKnock(event: EventView, me: Recipient): { space: string; invite: string; note: string; entry: KnockLink['entry'] } | undefined {
   const body = event.body as { box?: Box } | null;
   if (event.kind !== KIND_KNOCK || !body?.box) return undefined;
   try {

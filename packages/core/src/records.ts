@@ -67,4 +67,7 @@ export function recordOfV2(id: string, event: EventV2, body?: Json): WeaveRecord
 /** The order events are read in: claimed time, then signer, then number. */
 export const recordOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
+/** What reading code needs of an event: a v1 event and a record of either version both have it. */
+export type EventView = Pick<WeaveRecord, 'author' | 'signer' | 'seq' | 'kind' | 'scope' | 'body' | 'time'>;
+
 export const isRecord = (value: unknown): value is WeaveRecord => !!value && typeof value === 'object' && 'wire' in value && 'id' in value;

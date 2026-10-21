@@ -1,3 +1,4 @@
+import type { EventClass } from './eventsV2.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { didFromPublicKey, generateKeyPair, isDid, publicKeyFromDid, sign, verify, type Did, type KeyPair } from './keys.ts';
@@ -34,6 +35,8 @@ export interface EventFields {
   scope?: string;
   body?: Json;
   time?: string;
+  /** Signing as v2: the class to sign as (a sealed event's inner kind's class). v1 ignores it. */
+  class?: EventClass;
 }
 
 /** A fresh root identity: a person. */

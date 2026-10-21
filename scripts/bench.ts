@@ -1,31 +1,33 @@
 // Measures how Weave copes with a busy home (see docs/v2-stage0.md).
 //
-//   node scripts/bench.ts seed <dir> <events>   build a home of three people (run with v2 or later)
-//   node scripts/bench.ts run <dir>             open a copy of it and time the usual reads and a write
+//   node scripts/bench.ts seed <dir> <events> [v1]   build a home of three people (run with v2 or later)
+//   node scripts/bench.ts run <dir>                  open a copy of it and time the usual reads and a write
 //
-// seed leaves <dir>/home: the busy person's home with its logs as JSON lines
-// (the format every version reads), so older versions can be measured on the
-// same history: copy the script there and run `run` on the same <dir>.
+// seed leaves <dir>/home: the busy person's home as v0.4 writes it, or with
+// `v1` as v0.3 wrote it, its logs as JSON lines (the format every version
+// reads), so older versions can be measured on the same history: copy the
+// script there and run `run` on the same <dir>.
 import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WeaveNode } from '../packages/node/src/index.ts';
 
-const [mode, dir, count] = process.argv.slice(2);
+const [mode, dir, count, format] = process.argv.slice(2);
 
 if (mode === 'seed') {
   const n = Number(count ?? 1000);
   rmSync(dir, { recursive: true, force: true });
   const homes = ['martin', 'lena', 'kofi'].map((name) => join(dir, 'build', name));
-  const [martin, lena, kofi] = homes.map((home, i) => WeaveNode.init(['Martin', 'Lena', 'Kofi'][i], home));
+  const writeVersion = format === 'v1' ? 1 : 2;
+  const [martin, lena, kofi] = homes.map((home, i) => WeaveNode.init(['Martin', 'Lena', 'Kofi'][i], home, { writeVersion }));
   const project = await martin.createProject({ name: 'Bench' });
   await lena.joinSpace(await martin.invite('Bench'));
   await kofi.joinSpace(await martin.invite('Bench'));
   const all = [martin, lena, kofi];
-  // Each event reaches the others once (the history is written first, then handed over).
+  // The history is written first, then handed over.
   const sync = () => {
-    for (const from of all) for (const to of all) if (from !== to) for (const signer of from.replica.store.signers()) for (const e of from.replica.store.range(signer, (to.replica.store.head(signer)?.seq ?? 0) + 1)) to.replica.ingest(e);
+    for (const from of all) for (const to of all) if (from !== to) for (const e of from.replica.events()) to.replica.ingest(e);
   };
   sync();
   // Deterministic, so every run builds the same history.
@@ -45,15 +47,19 @@ if (mode === 'seed') {
     }
   }
   sync();
+  const total = (await martin.status()).events;
   for (const node of all) await node.close();
-  // Martin's home, with its logs as JSON lines.
+  // Martin's home; for v1, with its logs as JSON lines.
   const home = join(dir, 'home');
   cpSync(homes[0], home, { recursive: true });
-  for (const f of readdirSync(home).filter((f) => f.startsWith('weave.db'))) rmSync(join(home, f));
-  const { SqliteStore } = await import('../packages/node/src/index.ts');
-  const store = new SqliteStore(join(homes[0], 'weave.db'), { readOnly: true });
-  const { events } = store.exportJsonl(join(home, 'logs'));
-  store.close();
+  let events = total;
+  if (writeVersion === 1) {
+    for (const f of readdirSync(home).filter((f) => f.startsWith('weave.db'))) rmSync(join(home, f));
+    const { SqliteStore } = await import('../packages/node/src/index.ts');
+    const store = new SqliteStore(join(homes[0], 'weave.db'), { readOnly: true });
+    events = store.exportJsonl(join(home, 'logs')).events;
+    store.close();
+  }
   rmSync(join(dir, 'build'), { recursive: true, force: true });
   console.log(`seeded ${dir}/home: ${events} events, ${posts.length} posts`);
 } else if (mode === 'run') {

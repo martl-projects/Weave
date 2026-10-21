@@ -32,7 +32,7 @@ export {
   type Role,
 } from './authority.ts';
 export { MemoryStore, MemoryV2, type LogStore, type StoredV2 } from './store.ts';
-export { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
+export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {
