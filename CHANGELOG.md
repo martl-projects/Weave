@@ -2,6 +2,12 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.3.2 · 2026-10-21
+
+- Make weave decline <tier> <who> reachable again
+- Show issues and proposals in the board they were filed on
+- Build installers on release tags again: tell electron-builder 27 we publish ourselves
+
 ## v0.3.1 · 2026-10-21
 
 - Ask to update when a newer Weave is out
