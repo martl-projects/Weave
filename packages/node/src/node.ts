@@ -198,7 +198,13 @@ import {
   type SpaceState,
   type Tier,
   type Thread,
+  type WeaveEvent,
   type WeaveRecord,
+  eventId,
+  recordOfV1,
+  signEventV2,
+  KIND_IDENTITY,
+  KIND_ROTATE,
   type LogStore,
   checkTextFields,
   KEY_KINDS,
@@ -280,7 +286,7 @@ import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
@@ -472,7 +478,9 @@ export class WeaveNode implements Backend {
     const home = resolveHome(dir);
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
-    return new WeaveNode(home, identity);
+    const node = new WeaveNode(home, identity);
+    node.#migrate();
+    return node;
   }
 
   /** The key this node signs with: this device's (for old homes, the root key). */
@@ -2591,6 +2599,87 @@ export class WeaveNode implements Backend {
     return this.keys();
   }
 
+  // ---------------------------------------------------------------- moving to v0.4
+
+  /**
+   * The first start of v0.4 on a home from before (docs/v2-stage1.md,
+   * "Migration"): copy the home aside, re-sign the history of the keys on this
+   * computer as v2 (original times, old ids, same numbers), and tell the
+   * groups and projects shared with others that this person moved, for those
+   * still on v0.3. A home with no history of its own is new: just marked.
+   * Re-signing is one transaction; if it fails, nothing of it stays and the
+   * next start tries again.
+   */
+  #migrate(): void {
+    if (this.#migrated()) return;
+    const keys = [this.#identity, ...this.#agents].filter((key) => this.replica.authority.grant(key.did));
+    const own = (key: SigningIdentity) => this.replica.store.range(key.did, 1).filter((e) => this.replica.authority.check(e).ok);
+    if (!keys.some((key) => own(key).length)) return this.#markMigrated();
+    const backup = this.#backup();
+    let resigned = 0;
+    try {
+      const resign = () => {
+        for (const key of keys) for (const event of own(key)) if (this.#resign(key, event)) resigned++;
+      };
+      if (this.#sqlite) this.#sqlite.transaction(resign);
+      else resign();
+    } catch (error) {
+      console.error(`weave: moving to v0.4 failed, will try again at the next start (your home is copied to ${backup}): ${(error as Error).message}`);
+      return;
+    }
+    this.#markMigrated();
+    this.#decoded = undefined;
+    this.#personEvents.clear();
+    this.#farewell();
+    console.error(`weave: moved to v0.4: ${resigned} events signed again; your home from before is in ${backup}`);
+  }
+
+  #migrated(): boolean {
+    return this.#sqlite ? !!this.#sqlite.meta('migrated') : existsSync(joinPath(this.home.dir, 'migrated-v0.4'));
+  }
+
+  #markMigrated(): void {
+    const at = new Date().toISOString();
+    if (this.#sqlite) this.#sqlite.setMeta('migrated', at);
+    else writeFileSync(joinPath(this.home.dir, 'migrated-v0.4'), at + '\n');
+  }
+
+  /** Copy the home next to it (`<home>-backup-v0.3`, or the next free name), the database through SQLite so the copy is whole. */
+  #backup(): string {
+    let target = `${this.home.dir}-backup-v0.3`;
+    for (let i = 2; existsSync(target); i++) target = `${this.home.dir}-backup-v0.3-${i}`;
+    cpSync(this.home.dir, target, { recursive: true, filter: (src: string) => !/[\\/](weave\.db(-wal|-shm)?|node\.lock)$/.test(src) });
+    this.#sqlite?.backupTo(joinPath(target, 'weave.db'));
+    return target;
+  }
+
+  /** One v1 event of a key on this computer, signed again as v2: same time, number and body; its old id as `was`. */
+  #resign(key: SigningIdentity, event: WeaveEvent): boolean {
+    if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE || this.replica.store.byNumber(key.did, event.seq)) return false;
+    let cls = classOf(event.kind);
+    if (event.kind === KIND_SEALED) {
+      const inner = this.#decodeInner(recordOfV1(event))?.inner.kind;
+      cls = inner ? classOf(canonicalKind(inner)) : 'content';
+    }
+    // Scopes v2 doesn't know (gifts of v0.3 had their own) go to public, where v0.3 had them anyway.
+    const space = /^(public|self|[a-z]+:[A-Za-z0-9_-]{1,64})$/.test(event.scope) ? event.scope : 'public';
+    const head = cls === 'control' ? this.replica.store.chainHead(key.did, space) : undefined;
+    const signed = signEventV2(key, head, { kind: event.kind, space, body: event.body, time: event.time, n: event.seq, was: eventId(event), class: cls });
+    const result = this.replica.ingest({ e: signed.event, ...(signed.body !== undefined ? { b: signed.body } : {}) });
+    if (result.status === 'rejected' && result.reason === 'conflicting event (fork)') throw new Error(`event ${event.seq} of ${key.did} clashes with one already signed`);
+    return result.status === 'accepted';
+  }
+
+  /** For those still on v0.3: a message in each group and project shared with others, the last thing they get from this node. */
+  #farewell(): void {
+    const text = `I've moved to Weave 0.4, which v0.3 can't talk to. Please update: ${RELEASES_URL}`;
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group' && space.kind !== 'project') continue;
+      if (this.#state(space).members.size < 2) continue;
+      this.replica.append(this.#identity, sealFor(space, { kind: KIND_MSG, body: { text, moved: '0.4' } }));
+    }
+  }
+
   async rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo> {
     const words = normalizeWords(input.words);
     const me = this.identity.author;
@@ -3905,6 +3994,8 @@ export class WeaveNode implements Backend {
       const grant = this.replica.authority.grant(event.signer);
       if (!grant || !permits(grant.permissions, decoded.inner.kind)) return undefined;
     }
+    // The farewell a node leaves for v0.3 peers when it moves to v0.4: not for v0.4 eyes.
+    if (decoded.inner.kind === KIND_MSG && (decoded.inner.body as { moved?: unknown } | null)?.moved !== undefined) return undefined;
     return decoded;
   }
 
@@ -4306,6 +4397,8 @@ const FREE_TIER_MONTHS = 1200;
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
 const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
+/** Where the farewell to v0.3 peers sends them. */
+const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 
 /** A promise that gives up after `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

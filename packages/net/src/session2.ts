@@ -293,7 +293,7 @@ export class PeerSession2 {
 
   /** Keys whose v1 logs travel: those that never wrote v2 (frozen history), and root keys (the identity foundation). */
   #sendsV1(signer: Did): boolean {
-    return this.replica.store.number2(signer) === 0 || !this.replica.authority.grant(signer);
+    return this.#peerVersion === 1 || this.replica.store.number2(signer) === 0 || !this.replica.authority.grant(signer);
   }
 
   #v1Heads(): Record<string, number> {

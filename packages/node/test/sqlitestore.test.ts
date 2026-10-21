@@ -8,7 +8,8 @@ import { closeOpenStores, FileStore, openStore, readJsonlLogs, resolveHome, Sqli
 const dirs: string[] = [];
 afterAll(() => {
   closeOpenStores();
-  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+  // Homes moved to v0.4 leave a backup next to them.
+  dirs.forEach((dir) => [dir, `${dir}-backup-v0.3`].forEach((path) => rmSync(path, { recursive: true, force: true })));
 });
 const temp = () => {
   const dir = mkdtempSync(join(tmpdir(), 'weave-sqlite-'));

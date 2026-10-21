@@ -247,6 +247,34 @@ export class SqliteStore implements LogStore {
     }
   }
 
+  /**
+   * Run `fn` in one transaction: all its writes or none. The cached heads
+   * follow a rollback.
+   */
+  transaction<T>(fn: () => T): T {
+    const heads = new Map(this.#heads);
+    const numbers = new Map(this.#numbers);
+    const chainHeads = new Map(this.#chainHeads);
+    this.#db.exec('BEGIN');
+    try {
+      const result = fn();
+      this.#db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      for (const [map, saved] of [[this.#heads, heads], [this.#numbers, numbers], [this.#chainHeads, chainHeads]] as Array<[Map<unknown, unknown>, Map<unknown, unknown>]>) {
+        map.clear();
+        for (const [k, v] of saved) map.set(k, v);
+      }
+      throw error;
+    }
+  }
+
+  /** A consistent copy of the database, while it's open. */
+  backupTo(path: string): void {
+    this.#db.prepare('VACUUM INTO ?').run(path);
+  }
+
   /** Write every log out as JSON lines, one file per signer, like homes before SQLite kept them. */
   exportJsonl(dir: string): { files: number; events: number } {
     mkdirSync(dir, { recursive: true });
