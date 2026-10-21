@@ -198,6 +198,7 @@ import {
   type SpaceState,
   type Tier,
   type Thread,
+  type KeyPair,
   type WeaveEvent,
   type WeaveRecord,
   eventId,
@@ -468,6 +469,8 @@ export class WeaveNode implements Backend {
     this.replica.onAppend((event) => {
       if (isKeys(event)) this.#takeKeys(event);
       this.#decodedAdd(event);
+      // A new encryption key (mine or a peer's) adds an epoch to direct chats.
+      if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
       else this.#personEventsAdd(event);
@@ -2717,6 +2720,20 @@ export class WeaveNode implements Backend {
     saveEncryptionKeys(this.home, keys);
     this.#encryption = keys;
     this.#decoded = undefined;
+    this.#forgetDirects();
+  }
+
+  /** My encryption key pairs in the order I named them (each one others encrypted to), for direct chats' epochs. */
+  #myEncryptionPairs(): KeyPair[] {
+    const pairs = this.replica.authority.encryptionKeys(this.identity.author).flatMap((did) => this.#encryption.find((k) => k.did === did)?.keys ?? []);
+    return pairs.length ? pairs : [this.#recipient().keys];
+  }
+
+  /** Direct chats are derived again (with their new epoch) after an encryption key changed, mine or a peer's. */
+  #forgetDirects(): void {
+    this.#directs.clear();
+    this.#directByPeer.clear();
+    this.#decoded = undefined;
   }
 
   /** Where to encrypt to when writing to someone: their published encryption key. */
@@ -3680,7 +3697,7 @@ export class WeaveNode implements Backend {
   #direct(peer: Did): StoredSpace {
     let space = this.#directByPeer.get(peer);
     if (!space) {
-      space = { ...directSpace(this.#recipient(), peer, this.#encryptionKeyOf(peer)), entry: { topics: [peer], bootstrap: [] } };
+      space = { ...directSpace({ author: this.identity.author, keys: this.#myEncryptionPairs() }, peer, this.replica.authority.encryptionKeys(peer)), entry: { topics: [peer], bootstrap: [] } };
       this.#directByPeer.set(peer, space);
       this.#directs.set(space.id, { space, peer });
       this.#announceSoon();

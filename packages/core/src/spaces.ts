@@ -126,13 +126,29 @@ export function newSpace(kind: SpaceKind, name: string, founder: Did): SpaceKeys
 
 /**
  * The direct chat between `me` and `peer`. Both of them derive the same space
- * (id, topic secret and key) on their own; nobody else can.
+ * (id, topic secret and keys) on their own; nobody else can.
+ *
+ * Each pair of the two people's encryption keys (oldest first) is an epoch:
+ * `1000·i + j`, `i` counting the keys of the one whose identifier sorts first,
+ * `j` the other's. The newest pair is the highest epoch, so new messages are
+ * sealed with it, and older ones stay readable when either rotates their
+ * encryption key. The id and topic come from the first pair: the chat stays
+ * the same space.
  */
-export function directSpace(me: Recipient, peer: Did, peerEncryptionKey: Did = peer): SpaceKeys {
-  const key = pairKey(me.keys.secretKey, me.keys.publicKey, peerEncryptionKey);
-  const derive = (label: string) => b64u.encode(sha256(new Uint8Array([...utf8(`weave/direct/${label}/v1`), ...key])));
-  const [first] = [me.author, peer].sort();
-  return { kind: 'direct', id: derive('id').slice(0, 22), name: '', founder: first, secret: derive('topic'), keys: { '0': b64u.encode(key) } };
+export function directSpace(me: { author: Did; keys: KeyPair | KeyPair[] }, peer: Did, peerKeys: Did | Did[] = peer): SpaceKeys {
+  const mine = Array.isArray(me.keys) ? me.keys : [me.keys];
+  const theirs = Array.isArray(peerKeys) ? peerKeys : [peerKeys];
+  const meFirst = [me.author, peer].sort()[0] === me.author;
+  const keys: Record<string, string> = {};
+  mine.forEach((pair, a) =>
+    theirs.forEach((peerKey, b) => {
+      const [i, j] = meFirst ? [a, b] : [b, a];
+      keys[String(1000 * i + j)] = b64u.encode(pairKey(pair.secretKey, pair.publicKey, peerKey));
+    }),
+  );
+  const first = b64u.decode(keys['0']);
+  const derive = (label: string) => b64u.encode(sha256(new Uint8Array([...utf8(`weave/direct/${label}/v1`), ...first])));
+  return { kind: 'direct', id: derive('id').slice(0, 22), name: '', founder: meFirst ? me.author : peer, secret: derive('topic'), keys };
 }
 
 export const currentEpoch = (space: SpaceKeys): number => Math.max(...Object.keys(space.keys).map(Number));

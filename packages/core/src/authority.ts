@@ -60,6 +60,8 @@ export interface KeyState {
   next?: string;
   /** The key others encrypt to; the identifier itself if none was named. */
   enc: Did;
+  /** Every encryption key named so far, oldest first (enc is the last). */
+  encs: Did[];
 }
 
 export type Check = { ok: true } | { ok: false; reason: string; retry: boolean };
@@ -116,12 +118,17 @@ export class Authority {
 
   /** A person's key state; people who never published identity events have their identifier as root and encryption key. */
   keys(person: Did): KeyState {
-    return this.#people.get(person) ?? { root: person, retired: new Map(), enc: person };
+    return this.#people.get(person) ?? { root: person, retired: new Map(), enc: person, encs: [person] };
   }
 
   /** The person a key acts for: itself for a person's identifier, the author for devices, agents and later roots. */
   personOf(key: Did): Did {
     return this.#rootOf.get(key) ?? this.#grants.get(key)?.author ?? key;
+  }
+
+  /** Every encryption key a person named, oldest first. */
+  encryptionKeys(person: Did): Did[] {
+    return this.keys(person).encs;
   }
 
   /** The key to encrypt to when writing to this person. */
@@ -158,7 +165,7 @@ export class Authority {
     if (event.kind === KIND_IDENTITY) {
       // Once per person, by the original root, before any rotation.
       if (event.signer !== event.author || this.#people.has(event.author) || typeof b.next !== 'string' || !isDid(b.enc)) return;
-      this.#people.set(event.author, { root: event.author, retired: new Map(), next: b.next, enc: b.enc });
+      this.#people.set(event.author, { root: event.author, retired: new Map(), next: b.next, enc: b.enc, encs: [b.enc] });
       return;
     }
     if (event.kind === KIND_ROTATE) {
@@ -167,7 +174,10 @@ export class Authority {
       state.retired.set(state.root, Math.min(state.retired.get(state.root) ?? Infinity, b.retire as number));
       state.root = event.signer;
       state.next = b.next;
-      if (isDid(b.enc)) state.enc = b.enc;
+      if (isDid(b.enc) && b.enc !== state.enc) {
+        state.enc = b.enc;
+        state.encs.push(b.enc);
+      }
       this.#rootOf.set(event.signer, event.author);
       return;
     }

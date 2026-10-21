@@ -83,6 +83,34 @@ describe('identities with a recovery kit', () => {
     expect((await node.social()).muted).toHaveLength(1);
   });
 
+  it('keeps a direct chat, its history and its id when either side rotates the encryption key', async () => {
+    const { node: martin, words } = WeaveNode.create('Martin', tempDir());
+    const lena = WeaveNode.init('Lena', tempDir());
+    sync(martin, lena);
+    sync(lena, martin);
+    await martin.setEdge({ edge: 'follow', who: 'Lena', on: true });
+    await lena.setEdge({ edge: 'follow', who: 'Martin', on: true });
+    sync(martin, lena);
+    sync(lena, martin);
+    const chat = await martin.openChat('Lena');
+    await martin.say({ space: chat.id, text: 'before' });
+    sync(martin, lena);
+
+    await martin.rotateRoot({ words, encryption: true });
+    sync(martin, lena);
+    // The same chat on both sides, sealed with the new pair of keys from now on.
+    expect((await martin.openChat('Lena')).id).toBe(chat.id);
+    expect((await lena.openChat('Martin')).id).toBe(chat.id);
+    await lena.say({ space: chat.id, text: 'after, from Lena' });
+    await martin.say({ space: chat.id, text: 'after, from Martin' });
+    sync(lena, martin);
+    sync(martin, lena);
+    const texts = async (node: WeaveNode) => (await node.feed({ space: chat.id, kinds: ['weave.msg'] })).map((i) => (i.body as { text: string }).text).sort();
+    expect(await texts(martin)).toEqual(['after, from Lena', 'after, from Martin', 'before']);
+    expect(await texts(lena)).toEqual(['after, from Lena', 'after, from Martin', 'before']);
+    expect((await martin.chats()).length).toBe(1);
+  });
+
   it('revokes agents from the device, devices with the words, and gives a revoked own device a fresh key', async () => {
     const { node, words } = WeaveNode.create('Martin', tempDir());
     await node.addAgent('forge', ['weave.msg']);
