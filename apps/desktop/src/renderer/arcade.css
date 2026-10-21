@@ -1,8 +1,8 @@
 /* The Arcade look: an 80s cabinet running a falling-blocks game. A black CRT
-   with scanlines and a soft glow that follows the mouse, neon panels in the
-   seven tetromino colors, buttons and headers as lit blocks, pixel titles
-   over a readable terminal font. Little blocks fall from the cursor
-   (arcade.tsx). Scoped to [data-skin='arcade'] over 98.css, like the Cozy look. */
+   with faint scanlines, neon panels in the seven tetromino colors, buttons
+   and headers as lit blocks, pixel titles over a readable terminal font, and
+   a rippling well of pieces in the side panels (arcade.tsx). Scoped to
+   [data-skin='arcade'] over 98.css, like the Cozy look. */
 @import '@fontsource/press-start-2p/latin-400.css';
 @import '@fontsource/vt323/latin-400.css';
 
@@ -37,7 +37,7 @@
   color-scheme: dark;
 }
 
-/* ---------- the screen: scanlines and a glow under the mouse, over everything, never in the way */
+/* ---------- the screen: scanlines over everything, never in the way */
 :root[data-skin='arcade'] body {
   color: var(--ar-text);
   font: 18px var(--content-font);
@@ -49,12 +49,6 @@
     repeating-linear-gradient(0deg, #00000014 0 1px, transparent 1px 4px),
     radial-gradient(ellipse at 50% 50%, transparent 70%, #00000040 100%);
 }
-:root[data-skin='arcade'] body::before {
-  content: ''; position: fixed; inset: 0; z-index: 9997; pointer-events: none;
-  background: radial-gradient(260px circle at var(--mx, -500px) var(--my, -500px), #00e5ff1f, #b65cff10 45%, transparent 70%);
-  mix-blend-mode: screen;
-}
-:root[data-skin='arcade'] .arcade-blocks { position: fixed; inset: 0; z-index: 9998; pointer-events: none; }
 /* The well of tetrominoes behind the side panels (arcade.tsx): under the panel's content, never in the way. */
 :root[data-skin='arcade'] :is(.places, .members) { position: relative; }
 :root[data-skin='arcade'] .arcade-well { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
@@ -416,6 +410,3 @@
 :root[data-skin='arcade'] .image-picker-frame { background: #000; }
 :root[data-skin='arcade'] .blob-loading { background: var(--ar-panel-2); border-color: var(--ar-line); }
 
-@media (prefers-reduced-motion: reduce) {
-  :root[data-skin='arcade'] body::before { display: none; }
-}

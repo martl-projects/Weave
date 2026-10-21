@@ -2,15 +2,12 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { CELL, STEPS_PER_SECOND, Surface } from './well.ts';
 
 /*
- * The Arcade look's live effects:
- * - a glow that follows the mouse (the --mx/--my variables arcade.css paints with)
- *   and little tetromino-colored blocks that drop from the cursor and fade out;
- * - a well of tetrominoes at the bottom of the side panels, nearly black at rest,
- *   where moving the mouse sends ripples of color through the pieces.
- * Only while the Arcade look is on; no falling blocks or waves when the system asks for less motion.
+ * The Arcade look's live effect: a well of tetrominoes at the bottom of the
+ * side panels, nearly black at rest, where moving the mouse sends ripples of
+ * color through the pieces. Only while the Arcade look is on; no ripples when
+ * the system asks for less motion.
  */
 
-const COLORS = ['#00e5ff', '#ffd400', '#b65cff', '#39ff6a', '#ff3b5c', '#2b55e6', '#ff9a1a'];
 const quiet = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** Whether the Arcade look is on, following the View menu. */
@@ -20,19 +17,6 @@ function subscribeSkin(listener: () => void): () => void {
   return () => observer.disconnect();
 }
 export const useArcade = () => useSyncExternalStore(subscribeSkin, () => document.documentElement.dataset.skin === 'arcade');
-
-// ---------------------------------------------------------------- glow and falling blocks under the mouse
-
-const SIZE = 8;
-const MAX = 90;
-
-interface Falling {
-  x: number;
-  y: number;
-  vy: number;
-  life: number;
-  color: string;
-}
 
 /** Draw a block like the game's: its color, lit top-left, shaded bottom-right. */
 function block(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string, edge = 2): void {
@@ -44,70 +28,6 @@ function block(ctx: CanvasRenderingContext2D, x: number, y: number, size: number
   ctx.fillStyle = '#00000080';
   ctx.fillRect(x, y + size - edge, size, edge);
   ctx.fillRect(x + size - edge, y, edge, size);
-}
-
-export function startArcadeEffects(): void {
-  const root = document.documentElement;
-  let canvas: HTMLCanvasElement | undefined;
-  let blocks: Falling[] = [];
-  let frame = 0;
-  let last = 0;
-
-  const draw = () => {
-    frame = 0;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    blocks = blocks.filter((b) => b.life > 0 && b.y < canvas!.height);
-    for (const b of blocks) {
-      b.vy += 0.35;
-      b.y += b.vy;
-      b.life -= 1;
-      ctx.globalAlpha = Math.min(1, b.life / 30);
-      block(ctx, Math.round(b.x / SIZE) * SIZE, Math.round(b.y / SIZE) * SIZE, SIZE, b.color);
-    }
-    ctx.globalAlpha = 1;
-    if (blocks.length) frame = requestAnimationFrame(draw);
-  };
-
-  const resize = () => {
-    if (!canvas) return;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  };
-
-  const onMove = (e: PointerEvent) => {
-    root.style.setProperty('--mx', `${e.clientX}px`);
-    root.style.setProperty('--my', `${e.clientY}px`);
-    if (!canvas || quiet() || e.timeStamp - last < 45) return;
-    last = e.timeStamp;
-    if (blocks.length < MAX) blocks.push({ x: e.clientX - SIZE / 2, y: e.clientY + 6, vy: Math.random() * 1.5, life: 45 + Math.random() * 25, color: COLORS[Math.floor(Math.random() * COLORS.length)] });
-    if (!frame) frame = requestAnimationFrame(draw);
-  };
-
-  const sync = () => {
-    const on = root.dataset.skin === 'arcade';
-    if (on && !canvas) {
-      canvas = document.createElement('canvas');
-      canvas.className = 'arcade-blocks';
-      canvas.setAttribute('aria-hidden', 'true');
-      document.body.append(canvas);
-      resize();
-      window.addEventListener('pointermove', onMove, { passive: true });
-      window.addEventListener('resize', resize);
-    } else if (!on && canvas) {
-      canvas.remove();
-      canvas = undefined;
-      blocks = [];
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('resize', resize);
-      root.style.removeProperty('--mx');
-      root.style.removeProperty('--my');
-    }
-  };
-
-  subscribeSkin(sync);
-  sync();
 }
 
 // ---------------------------------------------------------------- the well in the side panels

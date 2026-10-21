@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
-import { ArcadeWell, startArcadeEffects, useArcade } from './arcade.tsx';
+import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
@@ -575,7 +575,6 @@ function App() {
 }
 
 applySkin(loadSkin());
-startArcadeEffects();
 startNotifications();
 startAppOpens();
 createRoot(document.getElementById('root')!).render(<App />);
