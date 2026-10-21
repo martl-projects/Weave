@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bodyHash,
   bodyMatches,
+  canonicalIdV2,
   classOf,
   createIdentity,
   createSubKey,
@@ -20,22 +21,22 @@ const at = '2026-10-21T12:00:00.000Z';
 describe('v2 events', () => {
   it('chains control events per signer and space', () => {
     const me = createIdentity();
-    const first = signControlEventV2(me, undefined, { kind: 'weave.space.create', space: 'project:abc', body: { name: 'Weave' }, time: at });
-    const second = signControlEventV2(me, first, { kind: 'weave.project.maintainer', space: 'project:abc', body: { member: me.author }, time: at });
+    const first = signControlEventV2(me, undefined, { n: 1, kind: 'weave.space.create', space: 'project:abc', body: { name: 'Weave' }, time: at });
+    const second = signControlEventV2(me, first, { n: 2, kind: 'weave.project.maintainer', space: 'project:abc', body: { member: me.author }, time: at });
     expect(first).toMatchObject({ v: 2, class: 'control', seq: 1, prev: null, space: 'project:abc' });
-    expect(second).toMatchObject({ seq: 2, prev: eventIdV2(first) });
+    expect(second).toMatchObject({ seq: 2, prev: eventIdV2(first), n: 2 });
     for (const e of [first, second]) {
       expect(isWellFormedV2(e)).toBe(true);
       expect(verifyEventV2(e)).toBe(true);
     }
     // A chain belongs to one signer in one space.
-    expect(() => signControlEventV2(me, first, { kind: 'weave.board', space: 'project:other' })).toThrow(/this signer/);
+    expect(() => signControlEventV2(me, first, { n: 1, kind: 'weave.board', space: 'project:other' })).toThrow(/this signer/);
   });
 
   it('keeps content standalone, signed over the hash of a body that travels apart', () => {
     const me = createIdentity();
     const device = createSubKey(me.author);
-    const { event, body } = signContentEventV2(device, { kind: 'weave.post', space: 'project:abc', body: { title: 'Hello', text: 'x' }, time: at });
+    const { event, body } = signContentEventV2(device, { n: 1, kind: 'weave.post', space: 'project:abc', body: { title: 'Hello', text: 'x' }, time: at });
     expect(event).toMatchObject({ v: 2, class: 'content', author: me.author, signer: device.did, body: bodyHash({ title: 'Hello', text: 'x' }) });
     expect('seq' in event || 'prev' in event).toBe(false);
     expect(isWellFormedV2(event)).toBe(true);
@@ -54,12 +55,12 @@ describe('v2 events', () => {
     expect(classOf('weave.post')).toBe('content');
     expect(classOf('weave.project.page')).toBe('content');
     const me = createIdentity();
-    const control = signEventV2(me, undefined, { kind: 'weave.project.rule', space: 'project:abc', body: { group: 'g', auto: true } });
+    const control = signEventV2(me, undefined, { n: 1, kind: 'weave.project.rule', space: 'project:abc', body: { group: 'g', auto: true } });
     expect(control.event.class).toBe('control');
     expect(control.body).toBeUndefined();
-    const content = signEventV2(me, undefined, { kind: 'weave.msg', space: 'group:abc', body: { text: 'hi' } });
+    const content = signEventV2(me, undefined, { n: 1, kind: 'weave.msg', space: 'group:abc', body: { text: 'hi' } });
     expect(content.event.class).toBe('content');
-    const sealedRekey = signEventV2(me, undefined, { kind: 'weave.sealed', class: 'control', space: 'group:abc', body: { epoch: 1, nonce: 'n', ct: 'c' } });
+    const sealedRekey = signEventV2(me, undefined, { n: 1, kind: 'weave.sealed', class: 'control', space: 'group:abc', body: { epoch: 1, nonce: 'n', ct: 'c' } });
     expect(sealedRekey.event).toMatchObject({ class: 'control', kind: 'weave.sealed', seq: 1 });
     expect(isWellFormedV2(sealedRekey.event)).toBe(true);
   });
@@ -67,17 +68,24 @@ describe('v2 events', () => {
   it('carries the v1 id it re-signs', () => {
     const me = createIdentity();
     const was = bodyHash('the old event');
-    const { event } = signContentEventV2(me, { kind: 'weave.post', space: 'project:abc', body: { title: 't' }, was });
+    const { event } = signContentEventV2(me, { n: 1, kind: 'weave.post', space: 'project:abc', body: { title: 't' }, was });
     expect(event.was).toBe(was);
     expect(isWellFormedV2(event)).toBe(true);
+    expect(canonicalIdV2(event)).toBe(was);
+    // A control event can be a re-signing too (a project's create event is also its post).
+    const control = signControlEventV2(me, undefined, { n: 2, kind: 'weave.space.create', space: 'project:abc', body: { name: 'W' }, was });
+    expect(isWellFormedV2(control)).toBe(true);
+    expect(canonicalIdV2(control)).toBe(was);
+    const fresh = signContentEventV2(me, { n: 3, kind: 'weave.post', space: 'project:abc', body: { title: 't' } }).event;
+    expect(canonicalIdV2(fresh)).toBe(eventIdV2(fresh));
   });
 
   it('refuses tampering and malformed events', () => {
     const me = createIdentity();
-    const { event } = signContentEventV2(me, { kind: 'weave.post', space: 'project:abc', body: { title: 't' }, time: at });
+    const { event } = signContentEventV2(me, { n: 1, kind: 'weave.post', space: 'project:abc', body: { title: 't' }, time: at });
     expect(verifyEventV2({ ...event, time: '2026-10-21T12:00:01.000Z' })).toBe(false);
     expect(verifyEventV2({ ...event, body: bodyHash({ title: 'u' }) })).toBe(false);
-    const control = signControlEventV2(me, undefined, { kind: 'weave.board', space: 'project:abc', body: { name: 'work' } });
+    const control = signControlEventV2(me, undefined, { n: 1, kind: 'weave.board', space: 'project:abc', body: { name: 'work' } });
 
     const bad: unknown[] = [
       { ...event, v: 1 },
@@ -88,6 +96,10 @@ describe('v2 events', () => {
       { ...event, seq: 1 },
       { ...control, seq: 2, prev: null },
       { ...control, space: 'not a space' },
+      { ...event, n: 0 },
+      { ...control, n: 1.5 },
+      { ...event, n: undefined },
+      { ...control, was: 'short' },
       { ...event, extra: 1 },
       null,
       'event',

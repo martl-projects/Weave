@@ -31,7 +31,8 @@ export {
   type KeyState,
   type Role,
 } from './authority.ts';
-export { MemoryStore, type LogStore } from './store.ts';
+export { MemoryStore, MemoryV2, type LogStore, type StoredV2 } from './store.ts';
+export { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {
@@ -182,10 +183,12 @@ export { compareVersions, formatVersion, parseVersion, type Version } from './ve
 export {
   bodyHash,
   bodyMatches,
+  canonicalIdV2,
   classOf,
   CONTROL_KINDS,
   eventIdV2,
   isWellFormedV2,
+  isWireItemV2,
   signContentEventV2,
   signControlEventV2,
   signEventV2,
@@ -195,6 +198,7 @@ export {
   type EventClass,
   type EventFieldsV2,
   type EventV2,
+  type WireItemV2,
 } from './eventsV2.ts';
 export { KIND_APP, KIND_ROOM, checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppInstall, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';

@@ -1,10 +1,12 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MemoryStore, type Did, type LogStore, type WeaveEvent } from '@weave/core';
+import { MemoryStore, type ControlEventV2, type Did, type Json, type LogStore, type StoredV2, type WeaveEvent } from '@weave/core';
 
 /**
- * LogStore backed by one JSON-lines file per signing key. Everything is kept
- * in memory as well; files are only appended to, never rewritten.
+ * LogStore backed by one JSON-lines file per signing key, plus v2.jsonl and
+ * bodies.jsonl for v2 events and their bodies. Everything is kept in memory as
+ * well; files are only appended to, never rewritten. The fallback when SQLite
+ * can't be opened.
  */
 export class FileStore implements LogStore {
   readonly dir: string;
@@ -13,7 +15,7 @@ export class FileStore implements LogStore {
   constructor(dir: string) {
     this.dir = dir;
     mkdirSync(dir, { recursive: true });
-    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl'))) {
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl') && f !== V2_FILE && f !== BODIES_FILE)) {
       const lines = readFileSync(join(dir, file), 'utf8').split('\n');
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -24,6 +26,14 @@ export class FileStore implements LogStore {
         }
       }
     }
+    for (const item of readLines(join(dir, V2_FILE)) as StoredV2[]) {
+      try {
+        this.#memory.add2(item);
+      } catch {
+        break;
+      }
+    }
+    for (const { hash, body } of readLines(join(dir, BODIES_FILE)) as Array<{ hash: string; body: Json }>) this.#memory.putBody(hash, body);
   }
 
   head(signer: Did): WeaveEvent | undefined {
@@ -46,6 +56,63 @@ export class FileStore implements LogStore {
     this.#memory.append(event);
     appendFileSync(join(this.dir, fileName(event.signer)), JSON.stringify(event) + '\n');
   }
+
+  add2(item: StoredV2): void {
+    this.#memory.add2(item);
+    appendFileSync(join(this.dir, V2_FILE), JSON.stringify(item) + '\n');
+  }
+
+  get2(id: string): StoredV2 | undefined {
+    return this.#memory.get2(id);
+  }
+
+  byNumber(signer: Did, n: number): StoredV2 | undefined {
+    return this.#memory.byNumber(signer, n);
+  }
+
+  number2(signer: Did): number {
+    return this.#memory.number2(signer);
+  }
+
+  chainAt(signer: Did, space: string, seq: number): ControlEventV2 | undefined {
+    return this.#memory.chainAt(signer, space, seq);
+  }
+
+  chainHead(signer: Did, space: string): ControlEventV2 | undefined {
+    return this.#memory.chainHead(signer, space);
+  }
+
+  all2(): StoredV2[] {
+    return this.#memory.all2();
+  }
+
+  body(hash: string): Json | undefined {
+    return this.#memory.body(hash);
+  }
+
+  putBody(hash: string, body: Json): void {
+    if (this.#memory.body(hash) !== undefined) return;
+    this.#memory.putBody(hash, body);
+    appendFileSync(join(this.dir, BODIES_FILE), JSON.stringify({ hash, body }) + '\n');
+  }
+}
+
+const V2_FILE = 'v2.jsonl';
+const BODIES_FILE = 'bodies.jsonl';
+
+/** The lines of a JSON-lines file up to the first torn one; none if it doesn't exist. */
+function readLines(path: string): unknown[] {
+  if (!existsSync(path)) return [];
+  const out: unknown[] = [];
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      break;
+    }
+  }
+  return out;
 }
 
 /** `did:key:z6Mk…` → `z6Mk….jsonl` (colons are not allowed in Windows file names). */

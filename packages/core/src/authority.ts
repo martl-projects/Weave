@@ -3,6 +3,9 @@ import { b64u, utf8 } from './bytes.ts';
 import { isDid, publicKeyFromDid, type Did } from './keys.ts';
 import type { EventFields, WeaveEvent } from './events.ts';
 
+/** What authority reads of an event: a v1 event or a record of either version (seq is a v2 event's n). */
+export type Signed = Pick<WeaveEvent, 'author' | 'signer' | 'seq' | 'kind' | 'body'>;
+
 /*
  * Who may sign for whom. A person's identifier is the did:key of their first
  * root key and never changes; the keys behind it do.
@@ -89,7 +92,7 @@ export function permits(permissions: string[], kind: string): boolean {
   return permissions.some((p) => p === '*' || p === kind || (p.endsWith('.*') && (kind === p.slice(0, -2) || kind.startsWith(p.slice(0, -1)))));
 }
 
-const body = (event: WeaveEvent): Record<string, unknown> => (event.body && typeof event.body === 'object' && !Array.isArray(event.body) ? (event.body as Record<string, unknown>) : {});
+const body = (event: Signed): Record<string, unknown> => (event.body && typeof event.body === 'object' && !Array.isArray(event.body) ? (event.body as Record<string, unknown>) : {});
 
 /**
  * Tracks which keys may sign for which people, built from identity, rotate,
@@ -144,13 +147,13 @@ export class Authority {
   }
 
   /** May this device delegate (or revoke) agents? */
-  #isDelegatingDevice(event: WeaveEvent): boolean {
+  #isDelegatingDevice(event: Signed): boolean {
     const device = this.#grants.get(event.signer);
     return !!device && device.author === event.author && device.role === 'device' && device.permissions.includes('*') && this.check(event).ok;
   }
 
   /** Feed an accepted event; only identity, rotate, delegate and revoke events have an effect. */
-  apply(event: WeaveEvent): void {
+  apply(event: Signed): void {
     const b = body(event);
     if (event.kind === KIND_IDENTITY) {
       // Once per person, by the original root, before any rotation.
@@ -197,7 +200,7 @@ export class Authority {
   }
 
   /** May this event's signer sign it for its author? `retry` means a missing delegation or identity event may still arrive. */
-  check(event: WeaveEvent): Check {
+  check(event: Signed): Check {
     if (event.signer === event.author || this.#rootOf.get(event.signer) === event.author) {
       return this.#isRoot(event.author, event.signer, event.seq) ? { ok: true } : { ok: false, reason: 'root key retired', retry: false };
     }

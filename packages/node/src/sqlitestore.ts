@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
-import { eventId, MemoryStore, type Did, type LogStore, type WeaveEvent } from '@weave/core';
+import { eventId, eventIdV2, MemoryStore, type ControlEventV2, type Did, type EventV2, type Json, type LogStore, type StoredV2, type WeaveEvent } from '@weave/core';
 
 /*
  * The event store on SQLite (node:sqlite, built into Node 24 and Electron's
@@ -16,7 +16,7 @@ import { eventId, MemoryStore, type Did, type LogStore, type WeaveEvent } from '
  * logs.v1-imported/; on any doubt it leaves them as they are and says so.
  */
 
-const SCHEMA_VERSION = '1';
+const SCHEMA_VERSION = '2';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -35,6 +35,23 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_scope ON events (scope, time);
 CREATE INDEX IF NOT EXISTS events_time ON events (time, signer, seq);
 CREATE INDEX IF NOT EXISTS events_kind ON events (kind);
+CREATE TABLE IF NOT EXISTS events2 (
+  id     TEXT PRIMARY KEY,
+  v2id   TEXT UNIQUE NOT NULL,
+  class  TEXT NOT NULL,
+  author TEXT NOT NULL,
+  signer TEXT NOT NULL,
+  space  TEXT NOT NULL,
+  n      INTEGER NOT NULL,
+  seq    INTEGER,
+  time   TEXT NOT NULL,
+  kind   TEXT NOT NULL,
+  json   TEXT NOT NULL,
+  UNIQUE (signer, n)
+);
+CREATE INDEX IF NOT EXISTS events2_space ON events2 (space, time);
+CREATE UNIQUE INDEX IF NOT EXISTS events2_chain ON events2 (signer, space, seq) WHERE seq IS NOT NULL;
+CREATE TABLE IF NOT EXISTS bodies (hash TEXT PRIMARY KEY, json TEXT NOT NULL);
 `;
 
 /** node:sqlite, without the "experimental" warning Node 24 prints for it (and only that one). */
@@ -66,6 +83,10 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'body' | 'putBody', StatementSync>;
+  /** Each key's highest v2 n, and its latest control event per space. */
+  readonly #numbers = new Map<Did, number>();
+  readonly #chainHeads = new Map<string, ControlEventV2>();
 
   constructor(path: string, options: { readOnly?: boolean } = {}) {
     this.path = path;
@@ -84,6 +105,21 @@ export class SqliteStore implements LogStore {
     for (const row of heads) {
       const event = JSON.parse(row.json) as WeaveEvent;
       this.#heads.set(event.signer, event);
+    }
+    this.#v2 = {
+      insert: this.#db.prepare('INSERT INTO events2 (id, v2id, class, author, signer, space, n, seq, time, kind, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+      byId: this.#db.prepare('SELECT id, json FROM events2 WHERE id = ?'),
+      byNumber: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? AND n = ?'),
+      chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
+      all: this.#db.prepare('SELECT id, json FROM events2'),
+      body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
+      putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) VALUES (?, ?)'),
+    };
+    for (const row of this.#db.prepare('SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer').all() as Array<{ signer: Did; n: number }>) this.#numbers.set(row.signer, row.n);
+    const chainHeads = this.#db.prepare('SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq').all() as Array<{ json: string }>;
+    for (const row of chainHeads) {
+      const event = JSON.parse(row.json) as ControlEventV2;
+      this.#chainHeads.set(`${event.signer} ${event.space}`, event);
     }
     open.add(this);
   }
@@ -112,6 +148,50 @@ export class SqliteStore implements LogStore {
 
   signers(): Did[] {
     return [...this.#heads.keys()];
+  }
+
+  add2({ id, event }: StoredV2): void {
+    const chainKey = `${event.signer} ${event.space}`;
+    const chainHead = this.#chainHeads.get(chainKey)?.seq ?? 0;
+    if (event.class === 'control' && event.seq !== chainHead + 1) throw new Error(`out-of-order control event: seq ${event.seq} after ${chainHead}`);
+    const seq = event.class === 'control' ? event.seq : null;
+    this.#v2.insert.run(id, eventIdV2(event), event.class, event.author, event.signer, event.space, event.n, seq, event.time, event.kind, JSON.stringify(event));
+    this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
+    if (event.class === 'control') this.#chainHeads.set(chainKey, event);
+  }
+
+  get2(id: string): StoredV2 | undefined {
+    return stored(this.#v2.byId.get(id));
+  }
+
+  byNumber(signer: Did, n: number): StoredV2 | undefined {
+    return stored(this.#v2.byNumber.get(signer, n));
+  }
+
+  number2(signer: Did): number {
+    return this.#numbers.get(signer) ?? 0;
+  }
+
+  chainAt(signer: Did, space: string, seq: number): ControlEventV2 | undefined {
+    const row = this.#v2.chainAt.get(signer, space, seq) as { json: string } | undefined;
+    return row ? (JSON.parse(row.json) as ControlEventV2) : undefined;
+  }
+
+  chainHead(signer: Did, space: string): ControlEventV2 | undefined {
+    return this.#chainHeads.get(`${signer} ${space}`);
+  }
+
+  all2(): StoredV2[] {
+    return (this.#v2.all.all() as Array<{ id: string; json: string }>).map((row) => stored(row)!);
+  }
+
+  body(hash: string): Json | undefined {
+    const row = this.#v2.body.get(hash) as { json: string } | undefined;
+    return row ? (JSON.parse(row.json) as Json) : undefined;
+  }
+
+  putBody(hash: string, body: Json): void {
+    this.#v2.putBody.run(hash, JSON.stringify(body));
   }
 
   /** How many events each signer has, from the table itself (for checking an import). */
@@ -169,6 +249,11 @@ export class SqliteStore implements LogStore {
     if (this.#db.isOpen) this.#db.close();
   }
 }
+
+const stored = (row: unknown): StoredV2 | undefined => {
+  const r = row as { id: string; json: string } | undefined;
+  return r && { id: r.id, event: JSON.parse(r.json) as EventV2 };
+};
 
 /** `did:key:z6Mk…` → `z6Mk….jsonl` (colons are not allowed in Windows file names). */
 export const jsonlName = (signer: Did): string => `${signer.slice('did:key:'.length)}.jsonl`;

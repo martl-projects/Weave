@@ -22,6 +22,11 @@ import type { SigningIdentity } from './events.ts';
  *
  * A sealed event shows its class but not its inner kind; a reader checks after
  * decrypting that the inner kind belongs to the class the event claims.
+ *
+ * Every event of both classes carries `n`: a counter per signing key across all
+ * spaces, going on from the key's v1 seq. Content has no chain, so `n` is what
+ * revocation ("void this key's events after n") and equivocation (two events of
+ * one key with the same n) rest on. See docs/v2-stage1.md.
  */
 
 /** Kinds that decide who may do what: chained, complete, never forgotten. */
@@ -72,8 +77,12 @@ interface HeaderV2 {
   signer: Did;
   /** 'public', 'self', or '<space kind>:<space id>'. */
   space: string;
+  /** This signing key's counter, from 1, shared with its v1 seq: one number per event of the key. */
+  n: number;
   time: string;
   kind: string;
+  /** The v1 event this one re-signs (stage 1 migration), so references to the old id keep working. */
+  was?: string;
 }
 
 export interface UnsignedControlEventV2 extends HeaderV2 {
@@ -89,8 +98,6 @@ export interface UnsignedContentEventV2 extends HeaderV2 {
   class: 'content';
   /** Hash of the body (see bodyHash); the body itself travels apart. */
   body: string;
-  /** The v1 event this one re-signs (stage 1 migration), so references to the old id keep working. */
-  was?: string;
 }
 
 export type ControlEventV2 = UnsignedControlEventV2 & { sig: string };
@@ -99,6 +106,8 @@ export type EventV2 = ControlEventV2 | ContentEventV2;
 
 export interface EventFieldsV2 {
   kind: string;
+  /** The signing key's next number (see `n`). */
+  n: number;
   space?: string;
   body?: Json;
   time?: string;
@@ -127,11 +136,13 @@ export function signControlEventV2(identity: SigningIdentity, head: ControlEvent
     author: identity.author,
     signer: identity.did,
     space,
+    n: fields.n,
     seq: head ? head.seq + 1 : 1,
     prev: head ? eventIdV2(head) : null,
     time: fields.time ?? new Date().toISOString(),
     kind: fields.kind,
     body: fields.body ?? null,
+    ...(fields.was ? { was: fields.was } : {}),
   };
   return { ...unsigned, sig: b64u.encode(sign(signingBytes(unsigned), identity.keys.secretKey)) };
 }
@@ -145,6 +156,7 @@ export function signContentEventV2(identity: SigningIdentity, fields: EventField
     author: identity.author,
     signer: identity.did,
     space: fields.space ?? 'public',
+    n: fields.n,
     time: fields.time ?? new Date().toISOString(),
     kind: fields.kind,
     body: bodyHash(body),
@@ -183,6 +195,8 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
     isDid(e.author) &&
     isDid(e.signer) &&
     typeof e.space === 'string' && SPACE_PATTERN.test(e.space) &&
+    Number.isSafeInteger(e.n) && (e.n as number) >= 1 &&
+    (e.was === undefined || (typeof e.was === 'string' && HASH_PATTERN.test(e.was))) &&
     typeof e.time === 'string' && !Number.isNaN(Date.parse(e.time)) &&
     typeof e.kind === 'string' && KIND_PATTERN.test(e.kind) &&
     typeof e.sig === 'string';
@@ -190,7 +204,7 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
   // A sealed event hides its inner kind, so only an open kind must match its class.
   const sealed = e.kind === 'weave.sealed';
   if (e.class === 'control') {
-    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'seq', 'prev', 'time', 'kind', 'body', 'sig']);
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'seq', 'prev', 'time', 'kind', 'body', 'was', 'sig']);
     return (
       Object.keys(e).every((k) => allowed.has(k)) &&
       (sealed || CONTROL_KINDS.has(e.kind as string)) &&
@@ -200,13 +214,23 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
     );
   }
   if (e.class === 'content') {
-    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'time', 'kind', 'body', 'was', 'sig']);
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'time', 'kind', 'body', 'was', 'sig']);
     return (
       Object.keys(e).every((k) => allowed.has(k)) &&
       (sealed || !CONTROL_KINDS.has(e.kind as string)) &&
-      typeof e.body === 'string' && HASH_PATTERN.test(e.body) &&
-      (e.was === undefined || (typeof e.was === 'string' && HASH_PATTERN.test(e.was)))
+      typeof e.body === 'string' && HASH_PATTERN.test(e.body)
     );
   }
   return false;
 }
+
+/** The id other events use for this one: the v1 id it re-signs, else its own. */
+export const canonicalIdV2 = (event: EventV2): string => event.was ?? eventIdV2(event);
+
+/** What travels: the event, and a content event's body when the sender has it. */
+export interface WireItemV2 {
+  e: EventV2;
+  b?: Json;
+}
+
+export const isWireItemV2 = (value: unknown): value is WireItemV2 => !!value && typeof value === 'object' && (value as { e?: { v?: unknown } }).e?.v === 2;

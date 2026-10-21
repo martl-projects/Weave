@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createIdentity, createSubKey, MemoryStore, signEvent, type LogStore, type SigningIdentity, type WeaveEvent } from '@weave/core';
+import { createIdentity, createSubKey, eventIdV2, MemoryStore, signContentEventV2, signControlEventV2, signEvent, type LogStore, type SigningIdentity, type WeaveEvent } from '@weave/core';
 import { closeOpenStores, FileStore, openStore, readJsonlLogs, resolveHome, SqliteStore, WeaveNode } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -57,6 +57,50 @@ describe('SqliteStore', () => {
     const reopened = new SqliteStore(path);
     sameAnswers(memory, reopened, signers);
     reopened.close();
+  });
+
+  it('keeps v2 events, chains and bodies like the in-memory store, after reopening too (and FileStore alike)', () => {
+    const random = rng(7);
+    const person = createIdentity();
+    const keys = [createSubKey(person.did), createSubKey(person.did)];
+    const dir = temp();
+    const stores: LogStore[] = [new MemoryStore(), new SqliteStore(join(dir, 'weave.db')), new FileStore(join(dir, 'logs'))];
+    const spaces = ['public', 'group:a', 'project:b'];
+    const numbers = new Map<string, number>();
+    for (let i = 0; i < 120; i++) {
+      const key = keys[Math.floor(random() * keys.length)];
+      const space = spaces[Math.floor(random() * spaces.length)];
+      const n = (numbers.get(key.did) ?? 0) + 1;
+      numbers.set(key.did, n);
+      const control = random() < 0.3;
+      const fields = { n, kind: control ? 'weave.board' : 'weave.msg', space, body: { i } };
+      const head = stores[0].chainHead(key.did, space);
+      const { event, body } = control ? { event: signControlEventV2(key, head, fields), body: undefined } : signContentEventV2(key, fields);
+      const id = random() < 0.1 ? `old-${i}` : eventIdV2(event);
+      // Some bodies never come.
+      const withBody = body !== undefined && random() < 0.8;
+      for (const store of stores) {
+        store.add2({ id, event });
+        if (withBody) store.putBody(event.body as string, body);
+      }
+    }
+    const answers = (store: LogStore) => ({
+      all: store.all2().sort((a, b) => a.id.localeCompare(b.id)),
+      numbers: keys.map((k) => store.number2(k.did)),
+      heads: keys.flatMap((k) => spaces.map((s) => store.chainHead(k.did, s))),
+      chains: keys.flatMap((k) => spaces.flatMap((s) => [1, 2, 3, 99].map((seq) => store.chainAt(k.did, s, seq)))),
+      byNumber: keys.flatMap((k) => [1, 10, 40, 999].map((n) => store.byNumber(k.did, n))),
+      bodies: store.all2().map(({ event }) => (event.class === 'content' ? (store.body(event.body) ?? 'missing') : 'inline')),
+    });
+    const expected = answers(stores[0]);
+    expect(expected.bodies).toContain('missing');
+    for (const store of stores.slice(1)) expect(answers(store)).toEqual(expected);
+    // Out-of-order chains and taken numbers are refused by every store.
+    const anyEvent = expected.all.find(({ event }) => event.class === 'control')!;
+    for (const store of stores) expect(() => store.add2({ id: 'again', event: anyEvent.event })).toThrow();
+    (stores[1] as SqliteStore).close();
+    expect(answers(new SqliteStore(join(dir, 'weave.db')))).toEqual(expected);
+    expect(answers(new FileStore(join(dir, 'logs')))).toEqual(expected);
   });
 
   it('takes over the JSON-lines logs of an older home once, keeps them, and can write them out again', () => {
