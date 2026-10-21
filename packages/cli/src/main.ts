@@ -655,6 +655,8 @@ async function main(): Promise<void> {
           `  ${s.online ? `online, ${s.peers} peer${s.peers === 1 ? '' : 's'}` : 'offline (no daemon running)'}`,
           `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.communities} communit${s.communities === 1 ? 'y' : 'ies'}`,
           `  ${s.events} events in ${s.logs} logs${s.pending ? `, ${s.pending} pending` : ''}`,
+          `  keys protected by ${{ dpapi: 'Windows (DPAPI)', keychain: 'the macOS Keychain', 'secret-service': 'the Secret Service', file: 'nothing' }[s.keystore]}`,
+          ...(s.keystoreWarning ? [`  warning: ${s.keystoreWarning}`] : []),
         ].join('\n'),
       );
     }

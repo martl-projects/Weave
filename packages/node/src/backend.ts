@@ -122,6 +122,10 @@ export interface Status {
   logs: number;
   events: number;
   pending: number;
+  /** Where this home's keys are protected: the OS keystore (dpapi, keychain, secret-service) or nowhere (file). */
+  keystore: 'dpapi' | 'keychain' | 'secret-service' | 'file';
+  /** Said when the keys aren't protected by the operating system. */
+  keystoreWarning?: string;
 }
 
 export interface PublishInput {

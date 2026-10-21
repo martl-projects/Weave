@@ -3,7 +3,8 @@ import { b64u, canonicalJson, utf8, type Json } from '@weave/core';
 import { readLine, roomKeyPair, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
 import { RPC_METHODS, type FeedItem, type RpcMethod } from './backend.ts';
-import { readJson, writeJson, type Home } from './home.ts';
+import type { Home } from './home.ts';
+import { readSecretJson, writeSecretJson } from './vault.ts';
 
 /*
  * Remote access for paired phones: the companion app on a phone uses this
@@ -140,15 +141,15 @@ export class RemoteAccess {
   }
 
   #load(): RemoteFile {
-    const stored = readJson<RemoteFile>(this.#file);
+    const stored = readSecretJson<RemoteFile>(this.#host.home(), this.#file);
     if (stored?.seed) return { seed: stored.seed, phones: stored.phones ?? [] };
     const fresh = { seed: b64u.encode(randomBytes(32)), phones: [] };
-    writeJson(this.#file, fresh);
+    writeSecretJson(this.#host.home(), this.#file, fresh);
     return fresh;
   }
 
   #save(file: RemoteFile): void {
-    writeJson(this.#file, file);
+    writeSecretJson(this.#host.home(), this.#file, file);
   }
 
   #keyPair() {

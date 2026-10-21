@@ -291,6 +291,7 @@ import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
+import { readSecretJson, vaultOf, writeSecretJson } from './vault.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
@@ -474,6 +475,8 @@ export class WeaveNode implements Backend {
     this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
+    // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
+    for (const file of [this.#githubFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -744,6 +747,8 @@ export class WeaveNode implements Backend {
       logs: signers.length,
       events: signers.reduce((sum, signer) => sum + this.replica.number(signer), 0),
       pending: this.replica.pendingCount,
+      keystore: vaultOf(this.home).keystore,
+      ...(vaultOf(this.home).warning ? { keystoreWarning: vaultOf(this.home).warning } : {}),
     };
   }
 
@@ -1715,7 +1720,7 @@ export class WeaveNode implements Backend {
 
   /** The GitHub sign-in on this device (kept in the home, never in a log). */
   #githubAuth(): { token: string; login: string } | undefined {
-    const saved = readJson<{ token?: string; login?: string }>(this.#githubFile);
+    const saved = readSecretJson<{ token?: string; login?: string }>(this.home, this.#githubFile);
     return saved?.token && saved.login ? { token: saved.token, login: saved.login } : undefined;
   }
 
@@ -1761,7 +1766,7 @@ export class WeaveNode implements Backend {
     void finishDeviceFlow(clientId, code, fetchImpl, cancel.signal, sleep)
       .then(async (token) => {
         const user = await new GitHub(token, fetchImpl).user();
-        writeJson(this.#githubFile, { token, login: user.login, id: user.id, connected: new Date(this.clock()).toISOString() });
+        writeSecretJson(this.home, this.#githubFile, { token, login: user.login, id: user.id, connected: new Date(this.clock()).toISOString() });
         this.#githubSynced.clear();
         if (this.#githubLogin === login) this.#githubLogin = undefined;
       })
@@ -2222,7 +2227,7 @@ export class WeaveNode implements Backend {
 
   /** Values hosts typed for their apps' settings: project id → variable → value. This computer only. */
   #appSettings(): Record<string, Record<string, string>> {
-    return readJson<Record<string, Record<string, string>>>(this.#appSettingsFile) ?? {};
+    return readSecretJson<Record<string, Record<string, string>>>(this.home, this.#appSettingsFile) ?? {};
   }
 
   async setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo> {
@@ -2238,7 +2243,7 @@ export class WeaveNode implements Backend {
     else delete mine[setting.name];
     if (Object.keys(mine).length) all[project.id] = mine;
     else delete all[project.id];
-    writeJson(this.#appSettingsFile, all);
+    writeSecretJson(this.home, this.#appSettingsFile, all);
     this.#emitLive();
     return this.appLaunch(project.id);
   }

@@ -56,3 +56,11 @@ Every file that holds a secret key is sealed with a **home key**: identity (devi
 3. History setting: kind, state, `setHistory` (node, CLI, MCP), keys handed over by it, rotation for `joining` and `30d`; tests.
 4. Keys at rest: the vault, sealed key files, migration of clear files; tests (file keystore everywhere, the real one once).
 5. Release v0.5 with a release post.
+
+## As built
+
+- **Newcomers who don't get earlier keys get a carry.** Membership, roles, boards and rules are control events sealed under the space's earlier epochs; without them a newcomer under `joining` or `30d` couldn't even tell who the owner is. So whoever hands keys over also writes `weave.space.carry`: the space's earlier control events and its latest state (page, app, channels, curation, theme) restated under the current key, with their original ids, authors and times. A newcomer takes a carry only from the person who handed them the keys (`via`, kept with the space), whom they trust for the keys anyway. It's the carry-forward of stage 3 in its first use.
+- **Only managers rotate.** In groups any member may invite, but only the owner's new keys count for the others; a member inviting into a `joining` or `30d` group hands over what the setting allows without a new key.
+- **The node announces at once when a key changes.** Before, it announced on the next tick, and what it wrote right after a removal (the rekey, the next post) still went to the removed member. Now a removed member doesn't even receive it sealed (the daemon test checks).
+- **A space's sync restarts when its key changes**, and new rekeys also go to peers that are behind.
+- **Keys at rest:** opening a home costs one call to the keystore per process (about 0.7 s with DPAPI through PowerShell). Secrets read only now and then (GitHub token, app settings, phone pairing) are sealed when the node starts, not when first used. A home copied to another computer or user is refused with a message pointing to `weave restore`.

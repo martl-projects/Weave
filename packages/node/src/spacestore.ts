@@ -1,7 +1,8 @@
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Did, Invite, SpaceKeys } from '@weave/core';
-import { readJson, writeJson, type Home } from './home.ts';
+import type { Home } from './home.ts';
+import { readSecretJson, writeSecretJson } from './vault.ts';
 
 /** A group's or project's keys plus where we first found its members. */
 export interface StoredSpace extends SpaceKeys {
@@ -20,14 +21,14 @@ export function loadSpaces(home: Home): StoredSpace[] {
     return [];
   }
   return files.map((file) => {
-    const space = readJson<StoredSpace>(join(home.groups, file))!;
+    const space = readSecretJson<StoredSpace>(home, join(home.groups, file))!;
     // Spaces from before groups and projects were told apart were encrypted as groups; read them as such.
     return { ...space, kind: space.kind ?? 'group' };
   });
 }
 
 export function saveSpace(home: Home, space: StoredSpace): void {
-  writeJson(join(home.groups, `${space.id}.json`), space);
+  writeSecretJson(home, join(home.groups, `${space.id}.json`), space);
 }
 
 /** Forget a space's keys on this computer. */
