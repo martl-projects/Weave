@@ -302,7 +302,9 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     } else if (kind === 'project' && (e.kind === KIND_ISSUE || e.kind === KIND_PROPOSAL) && str(e.body, 'title')) {
       const issue = e.kind === KIND_ISSUE;
-      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board: issue ? 'issues' : 'proposals', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
+      // In the board they name (a project can have several issue or proposal boards), else the default one.
+      const board = boardName(field(e.body, 'board')) ?? (issue ? 'issues' : 'proposals');
+      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board, title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     }
   }
   return reviseAll(posts, entries, maintainers);

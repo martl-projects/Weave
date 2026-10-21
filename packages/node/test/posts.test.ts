@@ -183,6 +183,13 @@ describe('posts, boards and communities', () => {
     expect(proposal.proposal?.eligible).toBe(1);
     await expect(node.submit({ space: 'Weave', board: 'nope', title: 'x' })).rejects.toThrow(/no board "nope"/);
 
+    // A second issue board keeps its own items.
+    await node.setBoard({ project: 'Weave', name: 'work', title: 'Work', type: 'issues' });
+    const item = await node.submit({ space: 'Weave', board: 'work', title: 'v2 stage 0' });
+    expect(item).toMatchObject({ type: 'issue', board: 'work' });
+    expect((await node.posts({ space: 'Weave', board: 'work' })).map((p) => p.title)).toEqual(['v2 stage 0']);
+    expect((await node.posts({ space: 'Weave', board: 'issues' })).map((p) => p.title)).toEqual(['Encrypt keys at rest']);
+
     const [project] = await node.posts();
     expect(project).toMatchObject({ type: 'project', title: 'Weave', text: 'A p2p makers hub', project: { member: true, participants: 1 } });
     await node.upvote({ target: project.short, value: 1 });
