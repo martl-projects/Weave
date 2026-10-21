@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS events2 (
 CREATE INDEX IF NOT EXISTS events2_space ON events2 (space, time);
 CREATE UNIQUE INDEX IF NOT EXISTS events2_chain ON events2 (signer, space, seq) WHERE seq IS NOT NULL;
 CREATE TABLE IF NOT EXISTS bodies (hash TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS forgotten (hash TEXT PRIMARY KEY, time TEXT NOT NULL);
 `;
 
 /** node:sqlite, without the "experimental" warning Node 24 prints for it (and only that one). */
@@ -84,7 +85,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -116,7 +117,10 @@ export class SqliteStore implements LogStore {
       bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
       inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? ORDER BY time'),
       body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
-      putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) VALUES (?, ?)'),
+      putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)'),
+      drop: this.#db.prepare('DELETE FROM bodies WHERE hash = ?'),
+      forget: this.#db.prepare('INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)'),
+      forgotten: this.#db.prepare('SELECT 1 AS yes FROM forgotten WHERE hash = ?'),
     };
     for (const row of this.#db.prepare('SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer').all() as Array<{ signer: Did; n: number }>) this.#numbers.set(row.signer, row.n);
     const chainHeads = this.#db.prepare('SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq').all() as Array<{ json: string }>;
@@ -207,6 +211,15 @@ export class SqliteStore implements LogStore {
 
   putBody(hash: string, body: Json): void {
     this.#v2.putBody.run(hash, JSON.stringify(body));
+  }
+
+  dropBody(hash: string): void {
+    this.#v2.forget.run(hash, new Date().toISOString());
+    this.#v2.drop.run(hash);
+  }
+
+  forgotten(hash: string): boolean {
+    return !!this.#v2.forgotten.get(hash);
   }
 
   /** How many events each signer has, from the table itself (for checking an import). */

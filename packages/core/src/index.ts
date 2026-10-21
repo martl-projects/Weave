@@ -32,6 +32,20 @@ export {
   type Role,
 } from './authority.ts';
 export { MemoryStore, MemoryV2, type LogStore, type StoredV2 } from './store.ts';
+export {
+  boardRulesOf,
+  GRACE_DAYS,
+  isDue,
+  isFading,
+  KIND_BOARD_RULE,
+  KIND_POST_KEEP,
+  lifetimeOf,
+  overBudget,
+  WARN_DAYS,
+  type BoardRule,
+  type Lifetime,
+  type LifetimeInput,
+} from './forgetting.ts';
 export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';

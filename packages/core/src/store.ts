@@ -49,8 +49,11 @@ export interface LogStore {
   /** A key's v2 events, by n. */
   range2(signer: Did): StoredV2[];
   body(hash: string): Json | undefined;
-  /** Keep a body; the caller checked it against its event's hash. */
+  /** Keep a body; the caller checked it against its event's hash. Forgotten ones aren't kept again. */
   putBody(hash: string, body: Json): void;
+  /** Forget a body: drop it, and remember that it was forgotten so it isn't fetched again. */
+  dropBody(hash: string): void;
+  forgotten(hash: string): boolean;
 }
 
 /** The v2 part of a store, in memory: for MemoryStore, and for FileStore to keep beside its files. */
@@ -60,6 +63,7 @@ export class MemoryV2 {
   #numbers = new Map<Did, number>();
   #chains = new Map<string, ControlEventV2[]>();
   #bodies = new Map<string, Json>();
+  #forgotten = new Set<string>();
 
   add2(item: StoredV2): void {
     const { id, event } = item;
@@ -121,7 +125,16 @@ export class MemoryV2 {
   }
 
   putBody(hash: string, body: Json): void {
-    this.#bodies.set(hash, body);
+    if (!this.#forgotten.has(hash)) this.#bodies.set(hash, body);
+  }
+
+  dropBody(hash: string): void {
+    this.#bodies.delete(hash);
+    this.#forgotten.add(hash);
+  }
+
+  forgotten(hash: string): boolean {
+    return this.#forgotten.has(hash);
   }
 }
 

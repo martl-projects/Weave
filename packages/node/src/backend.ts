@@ -1,5 +1,5 @@
 import type { GumroadLink } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -284,6 +284,8 @@ export interface BoardInfo {
   access: { read?: GranteeInfo[]; write?: GranteeInfo[] };
   /** You may post, vote and chat here. */
   canWrite: boolean;
+  /** How long posts stay here, and who set that when; absent: they stay for good. */
+  rule?: { keepDays: number | null; maxMB: number | null; by: Actor; time: string };
   /** Projects: you follow this board, so its posts come to your Home and notify you (releases and showcase by default). */
   following?: boolean;
 }
@@ -350,6 +352,11 @@ export interface PostInfo {
   chat: number;
   /** Pinned in its board by the maintainers or moderators. */
   pinned: boolean;
+  /**
+   * How long it stays (the board's rule, stretched by upvotes), or why it
+   * stays for good. Your own posts stay on your devices regardless (yours).
+   */
+  lifetime?: Lifetime & { yours?: true };
   /** You saved it, or pinned it to the top of your home. */
   saved?: SaveMode;
   /** For projects and shared projects. */
@@ -807,6 +814,12 @@ export interface Backend {
   handOver(input: { space: string; to: string }): Promise<SpaceInfo>;
   /** Owner (groups) or maintainers: close a space (kept, read-only) or open it again. */
   closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo>;
+  /** Maintainers or moderators: how long a board's posts stay after their last activity (keepDays), and how much it may hold (maxMB); null for no limit. */
+  setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
+  /** "Keep this": counts as activity on the post, so its time starts again (its author, or those who manage the space). */
+  keepPost(target: string): Promise<PostInfo>;
+  /** Your posts that others will forget within the next 14 days. */
+  fading(): Promise<PostInfo[]>;
   /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
   setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
@@ -1035,7 +1048,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

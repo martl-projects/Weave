@@ -197,7 +197,8 @@ export class PeerSession2 {
           const lacking = message.ids.filter((id): id is string => typeof id === 'string').filter((id) => {
             this.#peerHas.add(id);
             const held = this.replica.store.get2(id);
-            return !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined);
+            // Held without its body: fetch it, unless this node forgot it on purpose.
+            return !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined && !this.replica.store.forgotten(held.event.body));
           });
           for (let i = 0; i < lacking.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: lacking.slice(i, i + MAX_IDS) });
         }

@@ -199,7 +199,7 @@ export class Replica {
     if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE) return { status: 'rejected', reason: `${event.kind} stays v1` };
     if (!verifyEventV2(event)) return { status: 'rejected', reason: 'bad signature' };
     // A body that doesn't match is dropped; the event stands without it.
-    const goodBody = event.class === 'content' && body !== undefined && bodyMatches(event, body) ? body : undefined;
+    const goodBody = event.class === 'content' && body !== undefined && !this.store.forgotten(event.body) && bodyMatches(event, body) ? body : undefined;
     const ownId = eventIdV2(event);
 
     // Numbers: one event per (key, n), across both versions.

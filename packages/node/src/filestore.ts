@@ -15,7 +15,7 @@ export class FileStore implements LogStore {
   constructor(dir: string) {
     this.dir = dir;
     mkdirSync(dir, { recursive: true });
-    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl') && f !== V2_FILE && f !== BODIES_FILE)) {
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl') && f !== V2_FILE && f !== BODIES_FILE && f !== FORGOTTEN_FILE)) {
       const lines = readFileSync(join(dir, file), 'utf8').split('\n');
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -33,6 +33,7 @@ export class FileStore implements LogStore {
         break;
       }
     }
+    for (const { hash } of readLines(join(dir, FORGOTTEN_FILE)) as Array<{ hash: string }>) this.#memory.dropBody(hash);
     for (const { hash, body } of readLines(join(dir, BODIES_FILE)) as Array<{ hash: string; body: Json }>) this.#memory.putBody(hash, body);
   }
 
@@ -103,13 +104,25 @@ export class FileStore implements LogStore {
   }
 
   putBody(hash: string, body: Json): void {
-    if (this.#memory.body(hash) !== undefined) return;
+    if (this.#memory.body(hash) !== undefined || this.#memory.forgotten(hash)) return;
     this.#memory.putBody(hash, body);
     appendFileSync(join(this.dir, BODIES_FILE), JSON.stringify({ hash, body }) + '\n');
+  }
+
+  /** The body stays in bodies.jsonl (only appended to) but is never read again: forgotten.jsonl says so. */
+  dropBody(hash: string): void {
+    if (this.#memory.forgotten(hash)) return;
+    this.#memory.dropBody(hash);
+    appendFileSync(join(this.dir, FORGOTTEN_FILE), JSON.stringify({ hash }) + '\n');
+  }
+
+  forgotten(hash: string): boolean {
+    return this.#memory.forgotten(hash);
   }
 }
 
 const V2_FILE = 'v2.jsonl';
+const FORGOTTEN_FILE = 'forgotten.jsonl';
 const BODIES_FILE = 'bodies.jsonl';
 
 /** The lines of a JSON-lines file up to the first torn one; none if it doesn't exist. */

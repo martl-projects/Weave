@@ -30,6 +30,15 @@ import {
   KIND_KNOCK_PENDING,
   KIND_CLOSE,
   KIND_HISTORY,
+  boardRulesOf,
+  isDue,
+  isFading,
+  KIND_BOARD_RULE,
+  KIND_POST_KEEP,
+  lifetimeOf,
+  overBudget,
+  type BoardRule,
+  type Lifetime,
   KIND_CARRY,
   HISTORIES,
   epochsToShare,
@@ -210,6 +219,7 @@ import {
   recordOfV1,
   recordOfV2,
   canonicalIdV2,
+  isWireItemV2,
   type WireItemV2,
   signEventV2,
   KIND_IDENTITY,
@@ -1449,6 +1459,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
     const me = this.identity.author;
+    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state));
     return boards
       .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
       .map((b) => {
@@ -1463,6 +1474,7 @@ export class WeaveNode implements Backend {
           access: { ...(rules?.read ? { read: info(rules.read) } : {}), ...(rules?.write ? { write: info(rules.write) } : {}) },
           canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
           ...(space.kind === 'project' ? { following: this.#follows(space.id, b.name) } : {}),
+          ...(forgetting.get(b.name) ? { rule: this.#ruleInfo(forgetting.get(b.name)!) } : {}),
         };
       });
   }
@@ -1691,6 +1703,7 @@ export class WeaveNode implements Backend {
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
+    changed += this.#forget();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -3896,18 +3909,120 @@ export class WeaveNode implements Backend {
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
+    const rules = boardRulesOf(entries, this.#managers(state));
+    const around = this.#aroundPosts(entries);
     const posts = postsOf(space.kind, entries, state.maintainers)
       .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
       .map((p) => {
         const info = this.#postInfo(p, space, ctx);
         if (pinned.has(p.id)) info.pinned = true;
+        const near = around.get(p.id);
+        const active = near && near.last > info.active ? near.last : info.active;
+        const permanent = p.type !== 'post' || (space.kind === 'project' && p.board === 'releases');
+        info.lifetime = lifetimeOf({ active, upvotes: ctx.scores.get(p.id)?.up ?? 0, rule: rules.get(p.board), pinned: info.pinned, permanent });
+        if (p.author === this.identity.author || state.founder === this.identity.author) info.lifetime.yours = true;
         const issue = issues.get(p.id);
         if (issue) info.issue = { status: issue.status, labels: issue.labels, ...(issue.assignee ? { assignee: this.#actor(issue.assignee.author, issue.assignee.signer) } : {}) };
         const proposal = proposals.get(p.id);
         if (proposal) info.proposal = this.#proposalInfo(proposal);
         return info;
       });
+    // A board over its size: the posts that would go soonest go now.
+    for (const [board, rule] of rules) {
+      const inBoard = posts.filter((p) => p.board === board).map((p) => ({ id: p.id, lifetime: p.lifetime!, bytes: (around.get(p.id)?.bytes ?? 0) + JSON.stringify(p.text).length + p.title.length }));
+      const full = overBudget(inBoard, rule, this.clock());
+      for (const post of posts) if (full.has(post.id)) post.lifetime = { until: new Date(this.clock()).toISOString(), upvotes: 0, addedDays: 0, full: true, ...(post.lifetime?.yours ? { yours: true as const } : {}) };
+    }
     return { posts, boards };
+  }
+
+  #ruleInfo(rule: BoardRule): NonNullable<BoardInfo['rule']> {
+    return { keepDays: rule.keepDays, maxMB: rule.maxMB, by: this.#actor(rule.by, rule.by), time: rule.time };
+  }
+
+  /** Who manages a space's rules: its maintainers or moderators, and its owner. */
+  #managers(state: SpaceState): Set<Did> {
+    return new Set([...state.maintainers, state.founder]);
+  }
+
+  /** Per post, what goes with it: its last activity (edits, chat, upvotes, keep), its size, and the events to forget with it. */
+  #aroundPosts(entries: Entry[]): Map<string, { last: string; bytes: number; ids: Array<{ id: string; author: Did }> }> {
+    const out = new Map<string, { last: string; bytes: number; ids: Array<{ id: string; author: Did }> }>();
+    for (const e of entries) {
+      const body = e.body as { post?: unknown; target?: unknown } | null;
+      const post = typeof body?.post === 'string' ? body.post : typeof body?.target === 'string' ? body.target : undefined;
+      if (!post) continue;
+      const near = out.get(post) ?? { last: '', bytes: 0, ids: [] };
+      if (e.event.time > near.last) near.last = e.event.time;
+      near.bytes += JSON.stringify(e.body).length;
+      near.ids.push({ id: e.id, author: e.event.author });
+      out.set(post, near);
+    }
+    return out;
+  }
+
+  /**
+   * Forget what the rules say is due: drop the bodies of those posts and of
+   * what goes with them (edits, chat, upvotes), and remember that, so they
+   * aren't fetched again. Never what we wrote, never in spaces we own.
+   */
+  #forget(): number {
+    const me = this.identity.author;
+    let dropped = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      const state = this.#state(space);
+      if (state.founder === me) continue;
+      const due = this.#spacePosts(space).posts.filter((p) => p.lifetime && isDue(p.lifetime, this.clock()) && p.by.did !== me);
+      if (!due.length) continue;
+      const around = this.#aroundPosts(this.#entries(space));
+      for (const post of due) {
+        for (const { id, author } of [{ id: post.id, author: post.by.did as Did }, ...(around.get(post.id)?.ids ?? [])]) {
+          if (author === me) continue;
+          const record = this.replica.record2(id);
+          if (!record || record.class !== 'content' || record.missing || !isWireItemV2(record.wire)) continue;
+          this.replica.store.dropBody(record.wire.e.body as string);
+          dropped++;
+        }
+      }
+    }
+    if (dropped) this.#decoded = undefined;
+    return dropped;
+  }
+
+  async setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]> {
+    const space = this.#space(input.space);
+    if (space.kind !== 'project' && space.kind !== 'community') throw new Error('rules for forgetting are for the boards of projects and communities');
+    const state = this.#state(space);
+    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only the ${space.kind === 'project' ? 'maintainers' : 'moderators'} of ${space.name} set how long posts stay`);
+    const board = this.#board(space, this.#spacePosts(space).boards, input.board);
+    const valid = (v: number | null | undefined, max: number, what: string) => {
+      if (v === undefined || v === null) return null;
+      if (!Number.isFinite(v) || v <= 0 || v > max) throw new Error(`${what} is a number above 0, at most ${max}`);
+      return v;
+    };
+    const keepDays = valid(input.keepDays, 36_500, 'days to keep');
+    const maxMB = valid(input.maxMB, 1_000_000, 'the size limit in MB');
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_BOARD_RULE, body: { board: board.name, keepDays, maxMB } }));
+    return this.boards(space.id);
+  }
+
+  async keepPost(target: string): Promise<PostInfo> {
+    const post = await this.post(target);
+    const space = post.space && this.#spaces.get(post.space.id);
+    if (!space) throw new Error('only posts of projects and communities are forgotten');
+    if (post.by.did !== this.identity.author && !this.#managers(this.#state(space)).has(this.identity.author)) throw new Error('its author keeps a post, or those who manage the space');
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_POST_KEEP, body: { target: post.id } }));
+    return this.post(post.id);
+  }
+
+  async fading(): Promise<PostInfo[]> {
+    const me = this.identity.author;
+    return [...this.#spaces.values()]
+      .filter((s) => s.kind === 'project' || s.kind === 'community')
+      .flatMap((s) => this.#spacePosts(s).posts)
+      .filter((p) => p.by.did === me && p.lifetime && isFading(p.lifetime, this.clock()))
+      .sort((a, b) => ((a.lifetime as { until: string }).until).localeCompare((b.lifetime as { until: string }).until));
   }
 
   /** A project shown as a post: its id is the event that created it. */

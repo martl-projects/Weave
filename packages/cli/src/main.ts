@@ -101,6 +101,8 @@ projects — something being built; participants chat, discuss, vote and work on
   hand-over <space> <who>                make someone else the owner (needed before the owner leaves)
   close <space> / reopen <space>         close a space (kept, read-only) or open it again (owner, maintainers)
   history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
+  rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
+  keep <post> / fading                   start a post's time again / your posts others will forget soon
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
   let-in <id> / turn-away <id>           answer someone who asked
@@ -1103,6 +1105,30 @@ ${postLine(p)}`);
       if (!args[0]) throw new Error(`usage: weave ${command} <space>`);
       const s = await (await backend()).closeSpace({ space: args[0], closed: command === 'close' });
       return out(s, () => (s.closed ? `closed ${s.name}: kept as it is, read-only (weave reopen to undo)` : `${s.name} is open again`));
+    }
+
+    case 'rule': {
+      const [space, board, keep, mb] = args;
+      if (!space || !board || !keep) throw new Error('usage: weave rule <space> <board> <days | off> [max MB]');
+      const days = keep === 'off' ? null : Number(keep);
+      const boards = await (await backend()).setBoardRule({ space, board, keepDays: days, maxMB: mb ? Number(mb) : null });
+      const b = boards.find((x) => x.name === board || x.title === board)!;
+      return out(b, () =>
+        b.rule
+          ? `posts in ${b.title} stay ${b.rule.keepDays ? `${b.rule.keepDays} days after their last activity, longer with upvotes` : 'for good'}${b.rule.maxMB ? `, up to ${b.rule.maxMB} MB in all` : ''} (from 14 days after now at the earliest)`
+          : `posts in ${b.title} stay for good`,
+      );
+    }
+
+    case 'keep': {
+      if (!args[0]) throw new Error('usage: weave keep <post>');
+      const p = await (await backend()).keepPost(args[0]);
+      return out(p, () => `kept ${p.title}${p.lifetime && 'until' in p.lifetime ? `: it stays until ${p.lifetime.until.slice(0, 10)}` : ''}`);
+    }
+
+    case 'fading': {
+      const posts = await (await backend()).fading();
+      return out(posts, () => (posts.length ? posts.map((p) => `${p.short}  ${p.title}  (${p.space?.name}, forgotten ${(p.lifetime as { until: string }).until.slice(0, 10)}: weave keep ${p.short})`).join('\n') : 'nothing of yours is going to be forgotten soon'));
     }
 
     case 'history': {
