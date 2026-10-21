@@ -118,5 +118,7 @@ const config: Configuration = {
   // weave:post:… links open the app at that post (see src/main.ts).
   protocols: [{ name: 'Weave link', schemes: ['weave'] }],
 };
-await build({ config, dir: process.argv.includes('--dir') });
+// We publish ourselves (the release workflow attaches the installers): electron-builder 27 wants that said
+// explicitly, and on a CI tag it crashes without it.
+await build({ config, publish: 'never', dir: process.argv.includes('--dir') });
 console.log('installers in apps/desktop/release/');
