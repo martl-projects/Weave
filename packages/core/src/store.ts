@@ -44,6 +44,8 @@ export interface LogStore {
   all2(): StoredV2[];
   /** Keys with v2 events. */
   signers2(): Did[];
+  /** The v2 events of a space, by claimed time; from `since` on if given. */
+  inSpace2(space: string, since?: string): StoredV2[];
   /** A key's v2 events, by n. */
   range2(signer: Did): StoredV2[];
   body(hash: string): Json | undefined;
@@ -104,6 +106,10 @@ export class MemoryV2 {
 
   signers2(): Did[] {
     return [...this.#numbers.keys()];
+  }
+
+  inSpace2(space: string, since = ''): StoredV2[] {
+    return [...this.#byId.values()].filter(({ event }) => event.space === space && event.time >= since).sort((a, b) => a.event.time.localeCompare(b.event.time));
   }
 
   range2(signer: Did): StoredV2[] {

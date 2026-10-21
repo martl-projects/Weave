@@ -166,8 +166,10 @@ describe('projects, groups and the social graph between daemons', () => {
     expect((await alice.node.social()).blocked[0].name).toBe('Mallory');
     expect(texts(await alice.node.feed({ kinds: ['weave.post'] }))).not.toContain('spam');
 
-    // The block is private: Mallory receives the event but can't read it.
-    await until(async () => (await mallory.node.status()).events >= (await alice.node.status()).events);
+    // The block is private: it stays in Alice's own space, which Mallory never gets.
+    const alicePublic = () => mallory.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'public').length;
+    await until(() => alicePublic() === alice.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'public').length);
+    expect(mallory.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'self')).toHaveLength(0);
     expect((await mallory.node.feed({ kinds: ['weave.block'] })).length).toBe(0);
     expect((await mallory.node.social()).followers).toHaveLength(0);
   });

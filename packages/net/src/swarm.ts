@@ -1,7 +1,8 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import Hyperswarm, { type Discovery, type HyperswarmOptions } from 'hyperswarm';
 import { utf8, type Replica } from '@weave/core';
-import { PeerSession, type BlobSource } from './session.ts';
+import type { BlobSource } from './session.ts';
+import { PeerSession2, type SpaceAccess } from './session2.ts';
 
 /** 32-byte DHT topic for a name. Hashed, so the DHT never sees the name itself. */
 export function topicFor(name: string): Buffer {
@@ -11,20 +12,20 @@ export function topicFor(name: string): Buffer {
 /**
  * Connects a Replica to peers over Hyperswarm: DHT discovery, hole punching
  * and Noise-encrypted connections come from Hyperswarm; every connection runs
- * a PeerSession.
+ * a PeerSession2, which shares a space only with peers that hold it.
  */
 export class SwarmNode {
   readonly replica: Replica;
   readonly swarm: Hyperswarm;
-  readonly sessions = new Set<PeerSession>();
+  readonly sessions = new Set<PeerSession2>();
   #discoveries = new Set<Discovery>();
   #timers: Array<ReturnType<typeof setTimeout>> = [];
 
-  constructor(replica: Replica, options: HyperswarmOptions = {}, blobs?: BlobSource) {
+  constructor(replica: Replica, options: HyperswarmOptions = {}, blobs?: BlobSource, access: SpaceAccess = { spaces: () => [] }) {
     this.replica = replica;
     this.swarm = new Hyperswarm(options);
     this.swarm.on('connection', (socket) => {
-      const session = new PeerSession(replica, socket, blobs);
+      const session = new PeerSession2(replica, socket, { access, blobs });
       this.sessions.add(session);
       socket.on('close', () => this.sessions.delete(session));
     });
@@ -51,6 +52,11 @@ export class SwarmNode {
   /** Stop announcing on and looking up a topic. */
   async leave(name: string): Promise<void> {
     await this.swarm.leave(topicFor(name));
+  }
+
+  /** Tell every connected peer again which spaces this node holds (after joining, leaving or a new key). */
+  announce(): void {
+    for (const session of this.sessions) session.announce();
   }
 
   /** Ask every connected peer for these blobs (new peers are asked when they connect). */

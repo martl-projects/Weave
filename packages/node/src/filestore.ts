@@ -94,6 +94,10 @@ export class FileStore implements LogStore {
     return this.#memory.range2(signer);
   }
 
+  inSpace2(space: string, since?: string): StoredV2[] {
+    return this.#memory.inSpace2(space, since);
+  }
+
   body(hash: string): Json | undefined {
     return this.#memory.body(hash);
   }

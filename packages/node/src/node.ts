@@ -208,7 +208,7 @@ import {
   TEXT_LIMITS,
   tooLong,
 } from '@weave/core';
-import { roomKeyPair, SwarmNode } from '@weave/net';
+import { roomKeyPair, SwarmNode, type HeldSpace } from '@weave/net';
 import {
   HOME_SOURCES,
   PROJECT_STATUSES,
@@ -566,7 +566,7 @@ export class WeaveNode implements Backend {
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
-    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs);
+    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces() });
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
@@ -911,6 +911,7 @@ export class WeaveNode implements Backend {
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
     removeSpace(this.home, space.id);
+    this.#announceSoon();
     for (const topic of [spaceTopic(space)]) await this.#swarm?.leave(topic).catch(() => {});
   }
 
@@ -3385,6 +3386,38 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
     this.#spaces.set(space.id, space);
     saveSpace(this.home, space);
+    this.#announceSoon();
+  }
+
+  /**
+   * The spaces this node holds, with the keys that prove it to peers (the
+   * current epoch's and the one before, so a member who hasn't got a new key
+   * yet still meets the others): its spaces, its direct chats, and its own
+   * private space, which only its other devices hold.
+   */
+  #heldSpaces(): HeldSpace[] {
+    this.#ensureDirects();
+    const held = (space: SpaceKeys): HeldSpace => ({
+      space: spaceScope(space),
+      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
+    });
+    return [
+      ...[...this.#spaces.values()].map(held),
+      ...[...this.#directs.values()].map(({ space }) => held(space)),
+      { space: SELF_SCOPE, keys: [selfKey(this.#selfSecret())] },
+    ];
+  }
+
+  #announcing = false;
+
+  /** Tell peers which spaces this node holds, once the current change is done. */
+  #announceSoon(): void {
+    if (!this.#swarm || this.#announcing) return;
+    this.#announcing = true;
+    setImmediate(() => {
+      this.#announcing = false;
+      this.#swarm?.announce();
+    });
   }
 
   #entryPoint(): Invite['entry'] {
@@ -3550,6 +3583,7 @@ export class WeaveNode implements Backend {
       space = { ...directSpace(this.#recipient(), peer, this.#encryptionKeyOf(peer)), entry: { topics: [peer], bootstrap: [] } };
       this.#directByPeer.set(peer, space);
       this.#directs.set(space.id, { space, peer });
+      this.#announceSoon();
     }
     return space;
   }

@@ -84,7 +84,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'body' | 'putBody', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -114,6 +114,7 @@ export class SqliteStore implements LogStore {
       chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
       all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
       bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
+      inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? ORDER BY time'),
       body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
       putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) VALUES (?, ?)'),
     };
@@ -189,6 +190,10 @@ export class SqliteStore implements LogStore {
 
   signers2(): Did[] {
     return [...this.#numbers.keys()];
+  }
+
+  inSpace2(space: string, since = ''): StoredV2[] {
+    return (this.#v2.inSpace.all(space, since) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }
 
   range2(signer: Did): StoredV2[] {
