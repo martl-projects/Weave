@@ -886,8 +886,43 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
         ))}
       </fieldset>
       <RepoSettings space={project} />
+      <NewcomerHistory space={project} canSet={info.maintainer} />
       <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />
     </Page>
+  );
+}
+
+// ---------------------------------------------------------------- what newcomers read
+
+const HISTORY_CHOICES: Array<{ value: SpaceInfo['history']; label: string; detail: string }> = [
+  { value: 'all', label: 'Everything', detail: 'Newcomers read all of its history, as everyone before them.' },
+  { value: '30d', label: 'The last 30 days', detail: 'Newcomers read about the last month. Its key changes every month for that.' },
+  { value: 'joining', label: 'From their invite on', detail: 'Each invite comes with a new key: newcomers read only what is written after it.' },
+];
+
+/** What newcomers get to read; whoever manages the space decides, everyone sees it. */
+export function NewcomerHistory({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
+  const word = KIND_WORD[space.kind];
+  const set = (history: SpaceInfo['history']) =>
+    attempt(() => api('setHistory', { space: space.id, history }).then(bump), `Newcomers to ${space.name} read ${HISTORY_CHOICES.find((c) => c.value === history)!.label.toLowerCase()}`);
+  return (
+    <fieldset>
+      <legend>What newcomers read</legend>
+      {HISTORY_CHOICES.map((c) => (
+        <label key={c.value} className="radio-row">
+          <input type="radio" name={`history-${space.id}`} checked={space.history === c.value} disabled={!canSet} onChange={() => void set(c.value)} />
+          <span>
+            <b>{c.label}</b>
+            <span className="small"> · {c.detail}</span>
+          </span>
+        </label>
+      ))}
+      <p className="small">
+        {canSet
+          ? `Either way they see who is in this ${word}, its roles${space.kind === 'project' ? ', boards and page' : ''}. Members who are in already keep everything.`
+          : `Set by the ${space.kind === 'project' ? 'maintainers' : space.kind === 'community' ? 'moderators' : 'owner'}.`}
+      </p>
+    </fieldset>
   );
 }
 
@@ -969,6 +1004,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
       <RepoSettings space={group} />
+      <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
   );
@@ -1059,6 +1095,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
         })}
       </fieldset>
       <RepoSettings space={community} />
+      <NewcomerHistory space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
   );

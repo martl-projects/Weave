@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { IdentityInfo, KeyInfo } from '@weave/node/client';
+import type { IdentityInfo, KeyInfo, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
@@ -236,9 +236,12 @@ function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: s
   );
 }
 
+const KEYSTORE_NAME: Record<Status['keystore'], string> = { dpapi: 'Windows (DPAPI)', keychain: 'the macOS Keychain', 'secret-service': 'your desktop’s Secret Service', file: 'nothing' };
+
 export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
+  const { data: status } = useApi(() => api<Status>('status'), []);
   const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
   if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
   return (
@@ -248,6 +251,22 @@ export function KeysView() {
           <Icon name="lock" /> A key of yours was seen signing in two places at once: it may be stolen, or your Weave folder was copied to another computer. Revoke it from the time you
           last trusted it.
         </div>
+      )}
+      {status && (
+        <fieldset>
+          <legend>On this computer</legend>
+          {status.keystoreWarning ? (
+            <p className="notice alarm">
+              <Icon name="lock" /> Your keys are not protected by the operating system here: anyone who copies your Weave folder can use them. Weave found no keystore it can use
+              {/\((.*)\)$/.exec(status.keystoreWarning)?.[1] ? ` (${/\((.*)\)$/.exec(status.keystoreWarning)![1]})` : ' on this system'}.
+            </p>
+          ) : (
+            <p className="small">
+              Your keys are sealed, and the key to them is kept by {KEYSTORE_NAME[status.keystore]}: a copy of your Weave folder can't be opened on another computer or by another user. To use
+              Weave on another computer, set it up from your recovery words.
+            </p>
+          )}
+        </fieldset>
       )}
       <fieldset>
         <legend>Your identity</legend>

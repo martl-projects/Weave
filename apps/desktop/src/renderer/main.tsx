@@ -451,7 +451,18 @@ function Shell() {
     else if (route[0] === 'saved')
       center = <PostList title={<>Saved</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty="Save posts to find them here again. Only you can see what you save." />;
     else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
-    body = <div className="center">{center}</div>;
+    // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
+    const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
+      <a className="notice alarm" href="#/keys">
+        <Icon name="lock" /> Your keys aren't protected by this computer's keystore. See Keys &amp; devices.
+      </a>
+    );
+    body = (
+      <div className="center">
+        {unprotected}
+        {center}
+      </div>
+    );
   }
 
   return (
