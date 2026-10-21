@@ -2,6 +2,14 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.5.0 · 2026-10-21
+
+- v2 stage 2.4: keys at rest
+- v2 stage 2.3: what newcomers read, set per space
+- v2 stage 2.2: close the grace key
+- v2 stage 2.1: direct chats keep their id and history when an encryption key rotates
+- v2 stage 2: design
+
 ## v0.4.0 · 2026-10-21
 
 - v2 stage 1.7: end to end over a testnet, and notes on what was built
