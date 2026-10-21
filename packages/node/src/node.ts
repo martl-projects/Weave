@@ -201,6 +201,7 @@ import {
   type WeaveEvent,
   type LogStore,
   checkTextFields,
+  KEY_KINDS,
   compareVersions,
   formatVersion,
   parseVersion,
@@ -323,12 +324,17 @@ interface GitHubLogin {
 /** An event as this node can read it, before names are resolved. */
 interface Decoded {
   event: WeaveEvent;
+  /** eventId(event), computed once. */
+  id: string;
   inner: Inner;
   space?: StoredSpace;
   /** For events of a read-limited board: which board (they were sealed with its key). */
   board?: string;
   private?: true;
 }
+
+/** The order replica.events() returns: claimed time, then signer, then seq. */
+const replicaOrder = (a: WeaveEvent, b: WeaveEvent): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -412,10 +418,12 @@ export class WeaveNode implements Backend {
   #appTokens = new Map<string, string>();
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
+  /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
+  #decodedRevision = 0;
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
   #directs = new Map<string, { space: StoredSpace; peer: Did }>();
   #directByPeer = new Map<Did, StoredSpace>();
-  #contactCache?: { from: Decoded[]; map: Map<Did, string | undefined> };
+  #contactCache?: { from: number; map: Map<Did, string | undefined> };
   /** Board-key events already looked at, so each box is tried once. */
   #boardKeysSeen = new Set<string>();
 
@@ -436,8 +444,8 @@ export class WeaveNode implements Backend {
     const isKeys = (e: WeaveEvent) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.onAppend((event) => {
-      this.#decoded = undefined;
       if (isKeys(event)) this.#takeKeys(event);
+      this.#decodedAdd(event);
     });
   }
 
@@ -3174,13 +3182,13 @@ export class WeaveNode implements Backend {
   /** Your address book: people added by contact link, with the name their link gave. */
   #contacts(): Map<Did, string | undefined> {
     const decoded = this.#decodeAll();
-    if (this.#contactCache?.from !== decoded) {
+    if (this.#contactCache?.from !== this.#decodedRevision) {
       const map = new Map<Did, string | undefined>();
       for (const d of decoded) {
         const body = d.inner.body as { did?: unknown; name?: unknown } | null;
         if (d.private && d.inner.kind === KIND_CONTACT && isDid(body?.did)) map.set(body.did, typeof body.name === 'string' ? body.name : undefined);
       }
-      this.#contactCache = { from: decoded, map };
+      this.#contactCache = { from: this.#decodedRevision, map };
     }
     return this.#contactCache.map;
   }
@@ -3500,10 +3508,12 @@ export class WeaveNode implements Backend {
 
   /** Derive the direct chats with everyone whose log we hold (people, not their agents' keys). */
   #ensureDirects(): void {
-    for (const signer of Object.keys(this.replica.heads()) as Did[]) {
-      const person = this.replica.authority.personOf(signer);
-      if (person !== this.identity.author && !this.#directByPeer.has(person) && !this.replica.authority.grant(person)) this.#direct(person);
-    }
+    for (const signer of Object.keys(this.replica.heads()) as Did[]) this.#ensureDirectFor(signer);
+  }
+
+  #ensureDirectFor(signer: Did): void {
+    const person = this.replica.authority.personOf(signer);
+    if (person !== this.identity.author && !this.#directByPeer.has(person) && !this.replica.authority.grant(person)) this.#direct(person);
   }
 
   // ---------------------------------------------------------------- internals: posts
@@ -3759,10 +3769,15 @@ export class WeaveNode implements Backend {
   }
 
   #decode(event: WeaveEvent): Decoded | undefined {
+    const decoded = this.#decodeInner(event);
+    return decoded && { ...decoded, id: eventId(event) };
+  }
+
+  #decodeInner(event: WeaveEvent): Omit<Decoded, 'id'> | undefined {
     if (canonicalKind(event.kind) === KIND_REKEY || event.kind === KIND_GIFT) return undefined; // key plumbing, not content
     if (event.kind !== KIND_SEALED) return { event, inner: { kind: event.kind, body: event.body } };
 
-    let decoded: Decoded | undefined;
+    let decoded: Omit<Decoded, 'id'> | undefined;
     if (event.scope === SELF_SCOPE) {
       if (event.author !== this.identity.author) return undefined;
       try {
@@ -3801,14 +3816,53 @@ export class WeaveNode implements Backend {
   #decodeAll(): Decoded[] {
     // Board keys arrive inside the project: taking one makes more events readable, so decode again.
     for (let round = 0; round < 4; round++) {
-      if (!this.#decoded) this.#ensureDirects();
-      this.#decoded ??= this.replica.events().flatMap((event) => {
-        const decoded = this.#decode(event);
-        return decoded ? [decoded] : [];
-      });
+      if (!this.#decoded) {
+        this.#ensureDirects();
+        this.#decoded = this.replica.events().flatMap((event) => {
+          const decoded = this.#decode(event);
+          return decoded ? [decoded] : [];
+        });
+        this.#decodedRevision++;
+      }
       if (!this.#takeBoardKeys(this.#decoded)) break;
     }
     return this.#decoded!;
+  }
+
+  /**
+   * A new event: decode just it and put it in its place (replica order: time,
+   * signer, seq). Events that change keys or rights make everything decode
+   * again instead, the next time it's needed (they are rare): key events change
+   * which signers count, and new space or board keys (taken before this runs)
+   * have already dropped the decoded events.
+   */
+  #decodedAdd(event: WeaveEvent): void {
+    const decoded = this.#decoded;
+    if (!decoded) return;
+    if (KEY_KINDS.has(event.kind)) {
+      this.#decoded = undefined;
+      return;
+    }
+    this.#ensureDirectFor(event.signer);
+    const d = this.#decode(event);
+    if (!d) return;
+    let lo = 0;
+    let hi = decoded.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (replicaOrder(decoded[mid].event, event) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    decoded.splice(lo, 0, d);
+    this.#decodedRevision++;
+    // A board key for us makes more events readable: that drops the decoded events (see #takeBoardKeys).
+    if (d.inner.kind === KIND_BOARD_KEY) this.#takeBoardKeys([d]);
+  }
+
+  /** For tests: the ids of the decoded events, as kept up to date or (rebuild) decoded from scratch. */
+  _decodedIds(rebuild = false): string[] {
+    if (rebuild) this.#decoded = undefined;
+    return this.#decodeAll().map((d) => d.id);
   }
 
   /** Keep board keys boxed to us; true if any was new (then everything is decoded again). */
@@ -3816,7 +3870,7 @@ export class WeaveNode implements Backend {
     const changed = new Set<StoredSpace>();
     for (const d of decoded) {
       if (d.inner.kind !== KIND_BOARD_KEY || d.space?.kind !== 'project') continue;
-      const id = eventId(d.event);
+      const id = d.id;
       if (this.#boardKeysSeen.has(id)) continue;
       this.#boardKeysSeen.add(id);
       const opened = this.#tryOpen((me) => openBoardKey(d.space!, d.inner, me));
