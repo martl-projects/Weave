@@ -199,6 +199,7 @@ import {
   type Tier,
   type Thread,
   type WeaveEvent,
+  type LogStore,
   checkTextFields,
   compareVersions,
   formatVersion,
@@ -272,6 +273,7 @@ import {
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
+import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
@@ -351,6 +353,8 @@ export class WeaveNode implements Backend {
   /** Blob hashes already asked for ahead of time, so each is requested once per run. */
   #prefetched = new Set<string>();
   #releaseLock: () => void;
+  /** The event store, when it is weave.db (closed with the node). */
+  #sqlite?: SqliteStore;
   #live = new LiveRooms({
     dht: () => this.#swarm?.swarm.dht,
     signer: () => this.identity,
@@ -422,7 +426,7 @@ export class WeaveNode implements Backend {
     const stored = loadEncryptionKeys(home);
     this.#encryption = stored.length ? stored : [{ did: identity.did, keys: identity.keys }];
     this.#releaseLock = acquireLock(home);
-    this.replica = new Replica(new FileStore(home.logs));
+    this.replica = new Replica(this.#openStore(home));
     this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
@@ -555,7 +559,22 @@ export class WeaveNode implements Backend {
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
     await this.goOffline();
+    this.#sqlite?.close();
     this.#releaseLock();
+  }
+
+  /** weave.db, taking over an older home's JSON-lines logs once; those logs as they are if that fails. */
+  #openStore(home: Home): LogStore {
+    try {
+      const { store, imported, warning } = openStore(home);
+      if (imported) console.error(`weave: moved ${imported} events from logs/ into weave.db (logs/ kept as logs.v1-imported)`);
+      if (warning) console.error(`weave: ${warning}`);
+      this.#sqlite = store;
+      return store;
+    } catch (error) {
+      console.error(`weave: couldn't open weave.db, using logs/ as before: ${(error as Error).message}`);
+      return new FileStore(home.logs);
+    }
   }
 
   async whoami(): Promise<Whoami> {

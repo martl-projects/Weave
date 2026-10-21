@@ -38,6 +38,7 @@ import {
   type ThreadInfo,
   type TierInfo,
   type RoomInfo,
+  SqliteStore,
 } from '@weave/node';
 
 /** Set when this file is bundled into the desktop app (see apps/desktop/package.ts). */
@@ -57,6 +58,7 @@ usage: weave <command> [options]
   daemon                     run your node: connect to peers, serve the local API
   status                     node status: peers, groups, projects, communities
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
+  export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
@@ -617,6 +619,21 @@ async function main(): Promise<void> {
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
       return new Promise(() => {}); // run until stopped
+    }
+
+    case 'export': {
+      const target = args[0];
+      if (!target) throw new Error('usage: weave export <dir>');
+      const db = join(home.dir, 'weave.db');
+      if (!existsSync(db)) throw new Error(`${home.dir} has no weave.db yet: its logs are already JSON lines, in ${home.logs}`);
+      // Read-only: works while the daemon is running.
+      const store = new SqliteStore(db, { readOnly: true });
+      try {
+        const done = store.exportJsonl(resolvePath(process.env.INIT_CWD ?? process.cwd(), target));
+        return out(done, () => `wrote ${done.events} events in ${done.files} logs to ${target}`);
+      } finally {
+        store.close();
+      }
     }
 
     case 'update': {

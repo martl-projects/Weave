@@ -63,6 +63,7 @@ export { ApiClient, connectDaemon, followDaemon, type DaemonInfo } from './clien
 export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';
 export { startDaemon, type Daemon } from './daemon.ts';
 export { FileStore } from './filestore.ts';
+export { closeOpenStores, openStore, readJsonlLogs, SqliteStore } from './sqlitestore.ts';
 export { loadSpaces, type StoredSpace } from './spacestore.ts';
 export { resolveHome, type Home } from './home.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT, WeaveNode, type Bundle } from './node.ts';

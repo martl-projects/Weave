@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { recoveryRoot, signEvent } from '@weave/core';
-import { WeaveNode } from '../src/index.ts';
+import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), 'weave-keys-'));
   dirs.push(dir);

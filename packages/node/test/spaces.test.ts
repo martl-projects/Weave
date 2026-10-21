@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { loadConfig, resolveHome, saveConfig, startDaemon, WeaveNode, type Daemon, type FeedItem } from '../src/index.ts';
+import { loadConfig, resolveHome, saveConfig, startDaemon, WeaveNode, type Daemon, type FeedItem, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 function tempHome(): string {
@@ -11,7 +11,10 @@ function tempHome(): string {
   dirs.push(dir);
   return dir;
 }
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 async function until(condition: () => Promise<boolean> | boolean, timeoutMs = 20_000): Promise<void> {
   const start = Date.now();
@@ -76,7 +79,9 @@ describe('projects, groups and the social graph between daemons', () => {
     expect(members.find((m) => m.name === 'Bob')?.invitedByName).toBe('Alice');
 
     // Relays only ever see sealed events.
-    const onDisk = readdirSync(resolveHome(carolDir).logs).map((f) => readFileSync(join(resolveHome(carolDir).logs, f), 'utf8')).join('');
+    const home = resolveHome(carolDir).dir;
+    const onDisk = readdirSync(home).filter((f) => f.startsWith('weave.db')).map((f) => readFileSync(join(home, f), 'latin1')).join('');
+    expect(onDisk.length).toBeGreaterThan(0);
     expect(onDisk).not.toContain('welcome to the synth group');
 
     // Alice removes Bob; the key rotates; Bob can't read what comes next, Carol can.
