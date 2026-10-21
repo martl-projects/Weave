@@ -370,7 +370,7 @@ export function applyAppTheme(theme?: Theme): void {
  * The app's own skin (its window chrome) is a local preference, unlike a
  * person's public hub theme: it changes how Weave looks to you, not to others.
  */
-export const SKINS = { win95: 'Windows 95', cozy: 'Cozy', arcade: 'Arcade' } as const;
+export const SKINS = { win95: 'Windows 95', cozy: 'Cozy', arcade: 'Arcade', clean: 'Clean' } as const;
 export type Skin = keyof typeof SKINS;
 const SKIN_KEY = 'weave.skin';
 
