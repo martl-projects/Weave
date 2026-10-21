@@ -324,6 +324,8 @@
 :root[data-skin='arcade'] .banner-side .votes { padding: 4px 6px; background: #000; color: var(--ar-text); border: 2px solid var(--ar-line); }
 :root[data-skin='arcade'] .board-strip { padding: 8px; gap: 6px; border-bottom: 2px dotted var(--ar-line); }
 :root[data-skin='arcade'] .project-page { margin: 0; background: var(--ar-panel); color: var(--ar-text); }
+:root[data-skin='arcade'] .app-boxes .space-box { padding: 10px 12px; background: var(--ar-panel); color: var(--ar-text); border: 2px solid var(--t-t); box-shadow: 0 0 10px #b65cff66; }
+:root[data-skin='arcade'] .app-boxes .space-box h3 { margin: -10px -12px 10px; padding: 6px 10px; background: var(--t-t); color: #000; box-shadow: var(--ar-block); font: 10px var(--ar-pixel); }
 :root[data-skin='arcade'] :is(.md, .msg-text) img { border: 2px solid var(--ar-line); }
 
 /* ---------- editor */

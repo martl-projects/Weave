@@ -217,7 +217,7 @@ export function MembershipsView({ meDid, meName }: { meDid: string; meName?: str
   return (
     <Page title={<><Icon name="star" /> Memberships</>}>
       <p className="small">Patreon-style: creators offer tiers, supporters ask to join. A tier is a group with its own chat, and creators can open projects to it. Memberships give access, never votes.</p>
-      <div className="space">
+      <div className="space app-boxes">
         <SupportBox did={meDid} name={meName ?? 'you'} me />
         <section className="space-box">
           <h3>Supporting</h3>
