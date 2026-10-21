@@ -218,6 +218,11 @@ import {
   type WeaveRecord,
   eventId,
   recordOfV1,
+  keepStreamId,
+  keepTag,
+  keepWrapKey,
+  unwrapFromKeeper,
+  wrapForKeeper,
   recordOfV2,
   canonicalIdV2,
   isWireItemV2,
@@ -234,7 +239,7 @@ import {
   TEXT_LIMITS,
   tooLong,
 } from '@weave/core';
-import { roomKeyPair, SwarmNode, type HeldSpace } from '@weave/net';
+import { roomKeyPair, SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
   HOME_SOURCES,
   PROJECT_STATUSES,
@@ -267,6 +272,7 @@ import {
   type HomeSource,
   type GranteeInfo,
   type InviteOptions,
+  type KeepersInfo,
   type KnockInfo,
   type InProject,
   type InSpace,
@@ -374,6 +380,21 @@ interface KeptState {
 }
 const KEEP_READ_MS = 30 * 24 * 3600 * 1000;
 const SHARE_HOLDERS = 3;
+
+/** Stage 5: how many keep each small space, up to which size a space is kept, when a keeper counts as gone, and what we keep for others. */
+const KEEPERS = 3;
+const KEPT_UP_TO = 3;
+const KEEPER_GONE_MS = 14 * 24 * 3600 * 1000;
+const KEEP_QUOTA = 500 * 1024 * 1024;
+const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
+/** Our kept spaces and their keys, in our own space, for recovery. */
+const KIND_KEEP_INDEX = 'weave.keep.index';
+interface KeepState {
+  spaces: Record<string, Did[]>;
+  seen: Record<string, string>;
+  /** Hash of the last keep index written. */
+  index: string;
+}
 
 /** An event as a carry restates it: its id, who wrote it when, and what it said. */
 const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
@@ -626,7 +647,7 @@ export class WeaveNode implements Backend {
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
-    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id) });
+    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
@@ -1763,6 +1784,9 @@ export class WeaveNode implements Backend {
     changed += this.#applyShreds();
     changed += this.#forget();
     changed += this.#release();
+    // Bookkeeping for keepers, not a change to anyone's spaces.
+    this.#writeKeepIndex();
+    this.#recoverSpaces();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -3722,6 +3746,151 @@ export class WeaveNode implements Backend {
 
   #announcing = false;
   #listingSpaces = false;
+
+  /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
+  sessionAccess(): SpaceAccess {
+    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess };
+  }
+
+  // ---------------------------------------------------------------- keepers (stage 5)
+
+  #keepState?: KeepState;
+
+  /** Who keeps which of our spaces, and when we last saw each keeper (sealed at rest). */
+  get #keeping(): KeepState {
+    if (!this.#keepState) {
+      const stored = readSecretJson<KeepState>(this.home, joinPath(this.home.dir, 'keepers.json'));
+      this.#keepState = { spaces: stored?.spaces ?? {}, seen: stored?.seen ?? {}, index: stored?.index ?? '' };
+    }
+    return this.#keepState;
+  }
+
+  #saveKeeping(): void {
+    writeSecretJson(this.home, joinPath(this.home.dir, 'keepers.json'), this.#keeping);
+  }
+
+  /** The spaces keepers keep for us: our own space, direct chats, and groups and projects of 3 people or fewer. */
+  #keptSpaces(): Array<{ scope: string; space?: StoredSpace; peer?: Did }> {
+    this.#ensureDirects();
+    return [
+      { scope: SELF_SCOPE },
+      ...[...this.#directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer })),
+      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO).map((space) => ({ scope: spaceScope(space), space })),
+    ];
+  }
+
+  /** Which friend is at the other end of a connection: the one whose direct chat it shares. */
+  #friendOn(shared: ReadonlySet<string>): Did | undefined {
+    for (const scope of shared) {
+      if (!scope.startsWith('direct:')) continue;
+      const peer = this.#directs.get(scope.slice('direct:'.length))?.peer;
+      if (peer && this.#friends().includes(peer)) return peer;
+    }
+    return undefined;
+  }
+
+  /** The keepers of a kept space: chosen at random among friends (never the other one of a direct chat), replaced when not seen for 14 days. */
+  #keepersOf(scope: string, peer?: Did): Did[] {
+    const state = this.#keeping;
+    const now = this.clock();
+    const stale = (did: Did) => now - Date.parse(state.seen[did] ?? new Date(now).toISOString()) > KEEPER_GONE_MS;
+    const friends = this.#friends().filter((f) => f !== peer);
+    let keepers = (state.spaces[scope] ?? []).filter((k) => friends.includes(k) && !stale(k));
+    const candidates = friends.filter((f) => !keepers.includes(f) && !stale(f));
+    while (keepers.length < KEEPERS && candidates.length) keepers.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
+    if (JSON.stringify(keepers) !== JSON.stringify(state.spaces[scope] ?? [])) {
+      for (const k of keepers) state.seen[k] ??= new Date(now).toISOString();
+      state.spaces[scope] = keepers;
+      this.#saveKeeping();
+    }
+    return keepers;
+  }
+
+  /** A space's events as keepers get them, by tag. */
+  #keepItems(scope: string): Map<string, WeaveRecord> {
+    const key = keepWrapKey(this.#selfSecret(), scope);
+    return new Map(this.replica.events((r) => r.scope === scope).map((r) => [keepTag(key, r.id), r]));
+  }
+
+  #keepAccess: KeepAccess = {
+    streams: (shared) => {
+      const friend = this.#friendOn(shared);
+      if (!friend) return [];
+      this.#keeping.seen[friend] = new Date(this.clock()).toISOString();
+      return this.#keptSpaces().map(({ scope, peer }) => ({
+        id: keepStreamId(this.#selfSecret(), scope, friend),
+        tags: [...this.#keepItems(scope).keys()],
+        keeper: this.#keepersOf(scope, peer).includes(friend),
+      }));
+    },
+    wrapped: (id, tags) => {
+      const found = this.#streamScope(id);
+      if (!found) return [];
+      const key = keepWrapKey(this.#selfSecret(), found);
+      const items = this.#keepItems(found);
+      return tags.flatMap((tag) => {
+        const record = items.get(tag);
+        return record ? [{ tag, data: wrapForKeeper(key, record.wire as unknown as Json) }] : [];
+      });
+    },
+    take: (id, items) => {
+      const found = this.#streamScope(id);
+      if (!found) return;
+      const key = keepWrapKey(this.#selfSecret(), found);
+      for (const { data } of items) {
+        const wire = unwrapFromKeeper(key, data);
+        if (wire !== undefined) this.replica.ingest(wire);
+      }
+      // What came back may be our keep index: take the spaces it lists.
+      this.#decoded = undefined;
+      this.#recoverSpaces();
+    },
+    accepts: (shared, id, bytes) => !!this.#friendOn(shared) && this.replica.store.keepBytes() + bytes <= KEEP_QUOTA && this.replica.store.keepBytes(id) + bytes <= KEEP_STREAM_QUOTA,
+  };
+
+  /** The kept space a stream of ours is, whichever friend keeps it. */
+  #streamScope(id: string): string | undefined {
+    const friends = this.#friends();
+    for (const { scope } of this.#keptSpaces()) for (const friend of friends) if (keepStreamId(this.#selfSecret(), scope, friend) === id) return scope;
+    return undefined;
+  }
+
+  /**
+   * Our keep index, in our own space: the kept spaces and their keys, so that
+   * after losing everything, our self stream brings them back. Written when it
+   * changes.
+   */
+  #writeKeepIndex(): number {
+    const spaces = this.#keptSpaces().flatMap(({ space }) => (space && !this.#directs.has(space.id) ? [space] : []));
+    const body = { spaces: spaces.map((s) => ({ ...this.#keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) })) };
+    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    if (hash === this.#keeping.index) return 0;
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KEEP_INDEX, body: body as unknown as Json }));
+    this.#keeping.index = hash;
+    this.#saveKeeping();
+    return 1;
+  }
+
+  /** Spaces our latest keep index lists that this node doesn't have (after restoring from the recovery words). */
+  #recoverSpaces(): void {
+    const index = this.#selfBodies(KIND_KEEP_INDEX).at(-1) as { spaces?: unknown } | undefined;
+    if (!Array.isArray(index?.spaces)) return;
+    for (const space of index.spaces as StoredSpace[]) {
+      if (!space || typeof space.id !== 'string' || this.#spaces.has(space.id)) continue;
+      void this.#addSpace({ ...space, entry: { topics: [this.identity.author], bootstrap: [] } });
+    }
+  }
+
+  async keepers(): Promise<KeepersInfo> {
+    return {
+      spaces: this.#keptSpaces().map(({ scope, space, peer }) => ({
+        space: space ? { id: space.id, kind: space.kind, name: this.#spaceName(space) } : { id: SELF_SCOPE, kind: 'group' as const, name: 'your own space' },
+        keepers: this.#keepersOf(scope, peer).map((k) => this.#actor(k, k)),
+      })),
+      forOthers: this.replica.store.keepBytes(),
+      quota: KEEP_QUOTA,
+    };
+  }
 
   // ---------------------------------------------------------------- who holds what (stage 4)
 

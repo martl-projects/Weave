@@ -15,7 +15,7 @@ export class FileStore implements LogStore {
   constructor(dir: string) {
     this.dir = dir;
     mkdirSync(dir, { recursive: true });
-    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl') && f !== V2_FILE && f !== BODIES_FILE && f !== FORGOTTEN_FILE)) {
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl') && f !== V2_FILE && f !== BODIES_FILE && f !== FORGOTTEN_FILE && f !== KEEP_FILE)) {
       const lines = readFileSync(join(dir, file), 'utf8').split('\n');
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -34,6 +34,7 @@ export class FileStore implements LogStore {
       }
     }
     for (const { hash } of readLines(join(dir, FORGOTTEN_FILE)) as Array<{ hash: string }>) this.#memory.dropBody(hash);
+    for (const { stream, tag, data } of readLines(join(dir, KEEP_FILE)) as Array<{ stream: string; tag: string; data: string }>) this.#memory.keepPut(stream, tag, data);
     for (const { hash, body } of readLines(join(dir, BODIES_FILE)) as Array<{ hash: string; body: Json }>) this.#memory.putBody(hash, body);
   }
 
@@ -124,10 +125,28 @@ export class FileStore implements LogStore {
   forgotten(hash: string): boolean {
     return this.#memory.forgotten(hash);
   }
+
+  keepPut(stream: string, tag: string, data: string): void {
+    this.#memory.keepPut(stream, tag, data);
+    appendFileSync(join(this.dir, KEEP_FILE), JSON.stringify({ stream, tag, data }) + '\n');
+  }
+
+  keepTags(stream: string): string[] {
+    return this.#memory.keepTags(stream);
+  }
+
+  keepItems(stream: string): Array<{ tag: string; data: string }> {
+    return this.#memory.keepItems(stream);
+  }
+
+  keepBytes(stream?: string): number {
+    return this.#memory.keepBytes(stream);
+  }
 }
 
 const V2_FILE = 'v2.jsonl';
 const FORGOTTEN_FILE = 'forgotten.jsonl';
+const KEEP_FILE = 'keep.jsonl';
 const BODIES_FILE = 'bodies.jsonl';
 
 /** The lines of a JSON-lines file up to the first torn one; none if it doesn't exist. */

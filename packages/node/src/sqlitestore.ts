@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS events2_space ON events2 (space, time);
 CREATE UNIQUE INDEX IF NOT EXISTS events2_chain ON events2 (signer, space, seq) WHERE seq IS NOT NULL;
 CREATE TABLE IF NOT EXISTS bodies (hash TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS forgotten (hash TEXT PRIMARY KEY, time TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS keep (stream TEXT NOT NULL, tag TEXT NOT NULL, data TEXT NOT NULL, time TEXT NOT NULL, PRIMARY KEY (stream, tag));
 `;
 
 /** node:sqlite, without the "experimental" warning Node 24 prints for it (and only that one). */
@@ -85,7 +86,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -121,6 +122,11 @@ export class SqliteStore implements LogStore {
       drop: this.#db.prepare('DELETE FROM bodies WHERE hash = ?'),
       forget: this.#db.prepare('INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)'),
       forgotten: this.#db.prepare('SELECT 1 AS yes FROM forgotten WHERE hash = ?'),
+      keepPut: this.#db.prepare('INSERT OR REPLACE INTO keep (stream, tag, data, time) VALUES (?, ?, ?, ?)'),
+      keepTags: this.#db.prepare('SELECT tag FROM keep WHERE stream = ?'),
+      keepItems: this.#db.prepare('SELECT tag, data FROM keep WHERE stream = ?'),
+      keepBytes: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep WHERE stream = ?'),
+      keepAll: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep'),
     };
     for (const row of this.#db.prepare('SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer').all() as Array<{ signer: Did; n: number }>) this.#numbers.set(row.signer, row.n);
     const chainHeads = this.#db.prepare('SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq').all() as Array<{ json: string }>;
@@ -224,6 +230,23 @@ export class SqliteStore implements LogStore {
 
   forgotten(hash: string): boolean {
     return !!this.#v2.forgotten.get(hash);
+  }
+
+  keepPut(stream: string, tag: string, data: string): void {
+    this.#v2.keepPut.run(stream, tag, data, new Date().toISOString());
+  }
+
+  keepTags(stream: string): string[] {
+    return (this.#v2.keepTags.all(stream) as Array<{ tag: string }>).map((r) => r.tag);
+  }
+
+  keepItems(stream: string): Array<{ tag: string; data: string }> {
+    return this.#v2.keepItems.all(stream) as Array<{ tag: string; data: string }>;
+  }
+
+  keepBytes(stream?: string): number {
+    const row = (stream ? this.#v2.keepBytes.get(stream) : this.#v2.keepAll.get()) as { n: number };
+    return Number(row.n);
   }
 
   /** How many events each signer has, from the table itself (for checking an import). */

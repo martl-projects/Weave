@@ -46,6 +46,7 @@ export {
   type Lifetime,
   type LifetimeInput,
 } from './forgetting.ts';
+export { keepStreamId, keepTag, keepWrapKey, padded, unwrapFromKeeper, wrapForKeeper } from './keep.ts';
 export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';

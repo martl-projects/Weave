@@ -103,6 +103,7 @@ projects — something being built; participants chat, discuss, vote and work on
   history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
   rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
   keep <post> / fading                   start a post's time again / your posts others will forget soon
+  keepers                                your small spaces and the friends who keep them for you
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
   older <space> [before]                 ask the members of a big space for the month before (what they hold)
   admissions [project]                   people the maintainers are asked about
@@ -1133,6 +1134,16 @@ ${postLine(p)}`);
       if (!args[0]) throw new Error('usage: weave older <space> [before]');
       const r = await (await backend()).fetchOlder({ space: args[0], ...(args[1] ? { before: args[1] } : {}) });
       return out(r, () => `asked the members of ${args[0]} for ${r.since.slice(0, 10)} to ${r.until.slice(0, 10)}: what they hold comes in while you're online`);
+    }
+
+    case 'keepers': {
+      const k = await (await backend()).keepers();
+      return out(k, () =>
+        [
+          ...k.spaces.map((s) => `${s.space.name.padEnd(24)} kept by ${s.keepers.length ? s.keepers.map((a) => a.name ?? a.did.slice(8, 16)).join(', ') : 'nobody yet (make friends: people you follow who follow you back)'}`),
+          `you keep ${(k.forOthers / 1048576).toFixed(1)} MB for friends (at most ${Math.round(k.quota / 1048576)} MB)`,
+        ].join('\n'),
+      );
     }
 
     case 'keep': {

@@ -29,6 +29,10 @@ import type { BlobSource } from './session.ts';
  * - `heads` / `events`: v1 logs, whole, as v0.3 sends them; only of keys that
  *   never wrote v2 (frozen history) and root keys (the identity foundation).
  * - `want` / `blob`: blobs by hash, as before.
+ * - `keeping? {ids}` → `keeping {streams: {id: tags}}`, `keep {id, items}`,
+ *   `kept? {id}` → `kept {id, items}`: keepers (stage 5). A friend keeps
+ *   wrapped, padded items of our small spaces under ids only we can make;
+ *   the node decides who keeps what (`access.keep`).
  *
  * `public` is shared with everyone. A peer whose first message is `heads` is
  * v0.3: it gets the v1 logs (ending in a farewell, where this node wrote one)
@@ -44,6 +48,11 @@ export type Message2 =
   | { t: 'keys'; space: string; items: unknown[] }
   | { t: 'heads'; heads: Record<string, number> }
   | { t: 'events'; events: unknown[] }
+  | { t: 'keeping?'; ids: string[] }
+  | { t: 'keeping'; streams: Record<string, string[]> }
+  | { t: 'keep'; id: string; items: Array<{ tag: string; data: string }> }
+  | { t: 'kept?'; id: string }
+  | { t: 'kept'; id: string; items: Array<{ tag: string; data: string }> }
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
@@ -62,6 +71,19 @@ export interface SpaceAccess {
   offerKeys?(items: WireItemV2[]): void;
   /** In a pulled space: does the node keep this event's body (its share, or something it keeps)? */
   wantsBody?(space: string, id: string): boolean;
+  /** Keepers (stage 5), decided by the node from the spaces this connection shares (a direct chat says which friend it is). */
+  keep?: KeepAccess;
+}
+
+export interface KeepAccess {
+  /** Our streams this peer may hold (to recover them), with the tags of the items we have; `keeper`: it's one we chose to keep them. */
+  streams(shared: ReadonlySet<string>): Array<{ id: string; tags: string[]; keeper: boolean }>;
+  /** Our items of a stream with these tags, wrapped for the keeper. */
+  wrapped(id: string, tags: string[]): Array<{ tag: string; data: string }>;
+  /** Items a keeper gave back: unwrap and take them. */
+  take(id: string, items: Array<{ tag: string; data: string }>): void;
+  /** As a keeper: will we keep (more of) this stream for this peer? */
+  accepts(shared: ReadonlySet<string>, id: string, bytes: number): boolean;
 }
 
 const MAX_FRAME = 4 * 1024 * 1024;
@@ -90,6 +112,8 @@ export class PeerSession2 {
   #started = new Map<string, string>();
   /** The tags of the peer's last hello. */
   #peerTags?: unknown[];
+  /** Asking a keeper again is due (after new events in a kept space). */
+  #keepSoon?: ReturnType<typeof setTimeout>;
   /** What the peer is known to hold: v1 heads, and v2 events by canonical id (`<id>+body` with the body). */
   #peerHeads = new Map<string, number>();
   #peerHas = new Set<string>();
@@ -110,6 +134,7 @@ export class PeerSession2 {
     this.#unsubscribe = replica.onAppend((record) => {
       if (isWireItemV2(record.wire)) this.#offer([record.wire]);
       else this.#offerV1(record.wire);
+      if (record.scope !== 'public') this.#askKeepingSoon();
     });
     stream.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
@@ -140,6 +165,7 @@ export class PeerSession2 {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    if (this.#keepSoon) clearTimeout(this.#keepSoon);
     this.#unsubscribe();
     this.stream.destroy();
   }
@@ -245,6 +271,53 @@ export class PeerSession2 {
           }
         }
         break;
+      case 'keeping?':
+        if (v2 && Array.isArray(message.ids) && this.#access.keep) {
+          const streams: Record<string, string[]> = {};
+          for (const id of message.ids.filter((x): x is string => typeof x === 'string').slice(0, 256)) {
+            const tags = this.replica.store.keepTags(id);
+            if (tags.length || this.#access.keep.accepts(this.#shared, id, 0)) streams[id] = tags;
+          }
+          this.#send({ t: 'keeping', streams });
+        }
+        break;
+      case 'keeping':
+        if (v2 && message.streams && typeof message.streams === 'object' && this.#access.keep) {
+          const mine = new Map(this.#access.keep.streams(this.#shared).map((s) => [s.id, s]));
+          for (const [id, tags] of Object.entries(message.streams)) {
+            const stream = mine.get(id);
+            if (!stream || !Array.isArray(tags)) continue;
+            const ours = new Set(stream.tags);
+            const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
+            const missing = stream.keeper ? [...ours].filter((t) => !theirs.has(t)) : [];
+            if (missing.length) {
+              const items = this.#access.keep.wrapped(id, missing);
+              for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'keep', id, items: items.slice(i, i + BATCH) });
+            }
+            // It holds what we don't: we lost it, it's ours to take back.
+            if ([...theirs].some((t) => !ours.has(t))) this.#send({ t: 'kept?', id });
+          }
+        }
+        break;
+      case 'keep':
+        if (v2 && typeof message.id === 'string' && Array.isArray(message.items) && this.#access.keep) {
+          const items = message.items.filter((i) => i && typeof i.tag === 'string' && typeof i.data === 'string' && i.data.length < MAX_FRAME);
+          const bytes = items.reduce((sum, i) => sum + i.data.length, 0);
+          if (!this.#access.keep.accepts(this.#shared, message.id, bytes)) break;
+          for (const item of items) this.replica.store.keepPut(message.id, item.tag, item.data);
+        }
+        break;
+      case 'kept?':
+        if (v2 && typeof message.id === 'string') {
+          const items = this.replica.store.keepItems(message.id);
+          for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'kept', id: message.id, items: items.slice(i, i + BATCH) });
+        }
+        break;
+      case 'kept':
+        if (v2 && typeof message.id === 'string' && Array.isArray(message.items) && this.#access.keep) {
+          this.#access.keep.take(message.id, message.items.filter((i) => i && typeof i.tag === 'string' && typeof i.data === 'string'));
+        }
+        break;
       case 'want':
         if (Array.isArray(message.hashes) && this.blobs) {
           for (const hash of message.hashes.slice(0, 256)) {
@@ -283,6 +356,22 @@ export class PeerSession2 {
     }
     // A space the peer left starts again if it comes back.
     for (const space of this.#started.keys()) if (!shared.has(space)) this.#started.delete(space);
+    this.#askKeeping();
+  }
+
+  /** Ask the peer what it keeps of our streams (it answers only for those it keeps, or would). */
+  #askKeeping(): void {
+    const streams = this.#access.keep?.streams(this.#shared) ?? [];
+    if (streams.length) this.#send({ t: 'keeping?', ids: streams.map((s) => s.id) });
+  }
+
+  #askKeepingSoon(): void {
+    if (this.#keepSoon || this.#peerVersion !== 2 || !this.#access.keep) return;
+    this.#keepSoon = setTimeout(() => {
+      this.#keepSoon = undefined;
+      this.#askKeeping();
+    }, 500);
+    this.#keepSoon.unref?.();
   }
 
   #startSpace(space: string): void {

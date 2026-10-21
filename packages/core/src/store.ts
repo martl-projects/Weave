@@ -56,6 +56,14 @@ export interface LogStore {
   /** Forget a body: drop it, and remember that it was forgotten so it isn't fetched again. */
   dropBody(hash: string): void;
   forgotten(hash: string): boolean;
+
+  /** Keeping for others (stage 5): store an item of a stream (wrapped, opaque); the node decides quotas. */
+  keepPut(stream: string, tag: string, data: string): void;
+  /** The tags of a stream's items held here. */
+  keepTags(stream: string): string[];
+  keepItems(stream: string): Array<{ tag: string; data: string }>;
+  /** Bytes kept for others: of one stream, or in all. */
+  keepBytes(stream?: string): number;
 }
 
 /** The v2 part of a store, in memory: for MemoryStore, and for FileStore to keep beside its files. */
@@ -66,6 +74,7 @@ export class MemoryV2 {
   #chains = new Map<string, ControlEventV2[]>();
   #bodies = new Map<string, Json>();
   #forgotten = new Set<string>();
+  #kept = new Map<string, Map<string, string>>();
 
   add2(item: StoredV2): void {
     const { id, event } = item;
@@ -141,6 +150,25 @@ export class MemoryV2 {
 
   forgotten(hash: string): boolean {
     return this.#forgotten.has(hash);
+  }
+
+  keepPut(stream: string, tag: string, data: string): void {
+    const items = this.#kept.get(stream) ?? new Map<string, string>();
+    items.set(tag, data);
+    this.#kept.set(stream, items);
+  }
+
+  keepTags(stream: string): string[] {
+    return [...(this.#kept.get(stream)?.keys() ?? [])];
+  }
+
+  keepItems(stream: string): Array<{ tag: string; data: string }> {
+    return [...(this.#kept.get(stream) ?? new Map<string, string>())].map(([tag, data]) => ({ tag, data }));
+  }
+
+  keepBytes(stream?: string): number {
+    const streams = stream ? [this.#kept.get(stream) ?? new Map<string, string>()] : [...this.#kept.values()];
+    return streams.reduce((sum, items) => sum + [...items.values()].reduce((s, d) => s + d.length, 0), 0);
   }
 }
 

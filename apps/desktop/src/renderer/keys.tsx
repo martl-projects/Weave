@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { IdentityInfo, KeyInfo, Status } from '@weave/node/client';
+import type { IdentityInfo, KeepersInfo, KeyInfo, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
@@ -242,6 +242,7 @@ export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
+  const { data: keeping } = useApi(() => api<KeepersInfo>('keepers'), []);
   const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
   if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
   return (
@@ -266,6 +267,24 @@ export function KeysView() {
               Weave on another computer, set it up from your recovery words.
             </p>
           )}
+        </fieldset>
+      )}
+      {keeping && (
+        <fieldset>
+          <legend>Keepers</legend>
+          <p className="small">
+            Friends keep a sealed copy of your own space, your direct chats and your small groups, so that you can get them back with your recovery words even if every device is
+            lost. They can't read it or tell what it is.
+          </p>
+          {keeping.spaces.map((s) => (
+            <div className="field-row" key={s.space.id}>
+              <span className="grow">{s.space.name}</span>
+              <span className="small muted">{s.keepers.length ? `kept by ${s.keepers.map((k) => k.name ?? shortDid(k.did)).join(', ')}` : 'no keeper yet: you need friends (people you follow who follow you back)'}</span>
+            </div>
+          ))}
+          <p className="small muted">
+            You keep {(keeping.forOthers / 1048576).toFixed(1)} MB for friends (at most {Math.round(keeping.quota / 1048576)} MB).
+          </p>
         </fieldset>
       )}
       <fieldset>

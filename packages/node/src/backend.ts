@@ -267,6 +267,14 @@ export interface CommunityInfo extends SpaceInfo {
 }
 
 /** A board of posts inside a project (or the one board of a community). */
+/** Keepers (stage 5): friends who keep a wrapped copy of your small spaces, and what you keep for friends. */
+export interface KeepersInfo {
+  spaces: Array<{ space: SpaceRef; keepers: Actor[] }>;
+  /** Bytes you keep for others, and the most you would. */
+  forOthers: number;
+  quota: number;
+}
+
 export interface BoardInfo {
   name: string;
   title: string;
@@ -829,6 +837,8 @@ export interface Backend {
   keepPost(target: string): Promise<PostInfo>;
   /** Your posts that others will forget within the next 14 days. */
   fading(): Promise<PostInfo[]>;
+  /** Your small spaces and who keeps them (stage 5), and what you keep for others. */
+  keepers(): Promise<KeepersInfo>;
   /** A space whose members hold its content between them: ask them for the 30 days before `before` (default: before the oldest post held). */
   fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }>;
   /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
@@ -1059,7 +1069,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

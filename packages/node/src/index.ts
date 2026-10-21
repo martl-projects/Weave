@@ -18,6 +18,7 @@ export type {
   Edge,
   IdentityInfo,
   KeyInfo,
+  KeepersInfo,
   EdgeInput,
   FeedItem,
   FeedQuery,
