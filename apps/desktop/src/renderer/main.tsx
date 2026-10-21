@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
+import { ArcadeWell, startArcadeEffects, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
@@ -103,6 +104,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
   };
   return (
     <aside className="places">
+      <ArcadeWellIfOn />
       <header className="pane-head">
         <b>Places</b>
       </header>
@@ -183,6 +185,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
   };
   return (
     <aside className="members">
+      <ArcadeWellIfOn />
       <header className="pane-head">
         <b>
           {space.kind === 'project' ? 'Participants' : 'Members'} — {members.length}
@@ -382,6 +385,11 @@ function WindowButtons() {
   );
 }
 
+/** The Arcade look's well of tetrominoes behind a side panel. */
+function ArcadeWellIfOn() {
+  return useArcade() ? <ArcadeWell /> : null;
+}
+
 function ToolButton({ icon, label, onClick, href, on, className = '' }: { icon: IconName; label: string; onClick?(): void; href?: string; on?: boolean; className?: string }) {
   const inner = (
     <>
@@ -567,6 +575,7 @@ function App() {
 }
 
 applySkin(loadSkin());
+startArcadeEffects();
 startNotifications();
 startAppOpens();
 createRoot(document.getElementById('root')!).render(<App />);
