@@ -1105,7 +1105,12 @@ ${postLine(p)}`);
     case 'admit':
     case 'decline': {
       const [project, person, group] = args;
-      if (!project || !person || !group) throw new Error(`usage: weave ${command} <project> <who> <group>`);
+      // decline <tier> <who>: turn a membership request down (no group named).
+      if (command === 'decline' && project && person && !group) {
+        await (await backend()).declineMembership({ tier: project, who: person });
+        return out({ declined: person }, () => `turned down ${person}`);
+      }
+      if (!project || !person || !group) throw new Error(`usage: weave ${command} <project> <who> <group>${command === 'decline' ? ', or weave decline <tier> <who>' : ''}`);
       const b = await backend();
       if (command === 'admit') await b.admit({ project, who: person, group, always: values.always });
       else await b.decline({ project, who: person, group });
@@ -1177,17 +1182,11 @@ ${postLine(p)}`);
       return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}${license(r)}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
     }
 
-    case 'grant':
-    case 'decline': {
+    case 'grant': {
       const [tier, person] = args;
-      if (!tier || !person) throw new Error(`usage: weave ${command} <tier> <who>${command === 'grant' ? ' [--months 1]' : ''}`);
-      const b = await backend();
-      if (command === 'grant') {
-        const t = await b.grantMembership({ tier, who: person, months: values.months ? Number(values.months) : 1 });
-        return out(t, () => `${person} is in ${t.name} (${t.members} member${t.members === 1 ? '' : 's'})`);
-      }
-      await b.declineMembership({ tier, who: person });
-      return out({ declined: person }, () => `turned down ${person}`);
+      if (!tier || !person) throw new Error(`usage: weave ${command} <tier> <who> [--months 1]`);
+      const t = await (await backend()).grantMembership({ tier, who: person, months: values.months ? Number(values.months) : 1 });
+      return out(t, () => `${person} is in ${t.name} (${t.members} member${t.members === 1 ? '' : 's'})`);
     }
 
     case 'memberships': {
