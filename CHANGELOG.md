@@ -2,6 +2,22 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.4.0 · 2026-10-21
+
+- v2 stage 1.7: end to end over a testnet, and notes on what was built
+- v2 stage 1.6: moving a home to v0.4
+- v2 stage 1.5: meeting points move with a space's key
+- v2 stage 1.4: members-only sync (PeerSession2)
+- v2 stage 1.3: the node writes v2 and reads records of both versions
+- v2 stage 1.1-1.2: v2 events in the store and replica, records of both versions
+- v2 stage 1: design
+- v2 stage 0.6: benchmark, and two fixes it found
+- v2 stage 0.5: keep each person's own events instead of scanning every log
+- v2 stage 0.4: cache each space's state and entries, and whole-scan results
+- v2 stage 0.3: decode each new event once instead of everything again
+- v2 stage 0.2: keep events in SQLite (node:sqlite), with import and export
+- v2 stage 0.1: the v2 event format in core, with its design
+
 ## v0.3.2 · 2026-10-21
 
 - Make weave decline <tier> <who> reachable again
