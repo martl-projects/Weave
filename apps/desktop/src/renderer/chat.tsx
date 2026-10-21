@@ -3,6 +3,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
+import { TEXT_LIMITS } from '@weave/core/limits';
+import { CharCount } from './editor.tsx';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { attempt, Avatar, loadEmbeds } from './ui.tsx';
@@ -247,6 +249,7 @@ function Composer({
           <Icon name="emoji" />
         </button>
       </div>
+      <CharCount length={text.length} max={TEXT_LIMITS.text} onlyNear />
       {picking && (
         <EmojiPicker
           onPick={(emoji) => {

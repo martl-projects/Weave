@@ -1,3 +1,4 @@
+import { TEXT_LIMITS } from './limits.ts';
 import { parseBlobRef } from './blobs.ts';
 import type { Json } from './bytes.ts';
 import { KIND_ISSUE, KIND_PROPOSAL, KIND_THREAD, type Entry } from './collab.ts';
@@ -75,7 +76,7 @@ const DEFAULT_BOARDS: Record<SpaceKind, Array<Omit<Board, 'pinned'>>> = {
 };
 
 const field = (body: Json, key: string): unknown => (body && typeof body === 'object' && !Array.isArray(body) ? body[key] : undefined);
-const str = (body: Json, key: string, max = 10_000): string => {
+const str = (body: Json, key: string, max: number = TEXT_LIMITS.text): string => {
   const value = field(body, key);
   return typeof value === 'string' ? value.slice(0, max) : '';
 };

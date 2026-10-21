@@ -199,6 +199,9 @@ import {
   type Tier,
   type Thread,
   type WeaveEvent,
+  checkTextFields,
+  TEXT_LIMITS,
+  tooLong,
 } from '@weave/core';
 import { roomKeyPair, SwarmNode } from '@weave/net';
 import {
@@ -559,6 +562,8 @@ export class WeaveNode implements Backend {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
     if (!signer) throw new Error(noAgent(input.as!, this.#agents.map((a) => a.name)));
     if (input.as) this.#agentMay(input.as, input.kind);
+    // Readers would cut anything longer: refuse instead, so nothing is shortened without the author knowing.
+    checkTextFields(input.body);
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
@@ -981,7 +986,7 @@ export class WeaveNode implements Backend {
   async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
-    if (title.length > 200) throw new Error('titles are at most 200 characters');
+    if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
     const link = input.link?.trim();
     if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
     const image = input.image?.trim();
@@ -1184,7 +1189,7 @@ export class WeaveNode implements Backend {
     if (input.title !== undefined) {
       const title = input.title.trim();
       if (!title) throw new Error('a post needs a title');
-      if (title.length > 200) throw new Error('titles are at most 200 characters');
+      if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
       body.title = title;
     }
     if (input.text !== undefined) body.text = input.text;
@@ -1367,14 +1372,18 @@ export class WeaveNode implements Backend {
     const before = this.#page(project, state);
     // Older callers set only the description: that is the body.
     const pageBody = input.body ?? (input.description !== undefined && input.subtitle === undefined ? input.description : before.body);
-    const subtitle = (input.subtitle ?? before.subtitle).trim().slice(0, 300);
+    const subtitle = (input.subtitle ?? before.subtitle).trim();
+    const pageTitle = (input.title ?? before.title).trim();
+    if (pageBody.length > TEXT_LIMITS.page) throw tooLong('The page', pageBody.length, TEXT_LIMITS.page);
+    if (subtitle.length > TEXT_LIMITS.pageSubtitle) throw tooLong('The subtitle', subtitle.length, TEXT_LIMITS.pageSubtitle);
+    if (pageTitle.length > TEXT_LIMITS.pageTitle) throw tooLong('The title', pageTitle.length, TEXT_LIMITS.pageTitle);
     // An empty string removes an image; undefined keeps it.
     const icon = input.icon === undefined ? before.icon : input.icon || undefined;
     const banner = input.banner === undefined ? before.banner : input.banner || undefined;
     const page: ProjectPage = {
-      title: (input.title ?? before.title).trim().slice(0, 100),
+      title: pageTitle,
       subtitle,
-      body: pageBody.slice(0, 100_000),
+      body: pageBody,
       ...(icon ? { icon } : {}),
       ...(banner ? { banner } : {}),
       description: subtitle || summary(pageBody),

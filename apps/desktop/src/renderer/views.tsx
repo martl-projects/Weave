@@ -3,6 +3,7 @@ import type { MembershipRequestInfo, PermissionRequest } from '@weave/node/clien
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
+import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { MyProjects } from './hubprojects.tsx';
 import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
@@ -586,7 +587,7 @@ function PageEditor({ info }: { info: ProjectInfo }) {
       <label>Banner</label>
       <ImagePicker label="Banner" wide value={draft.banner} onChange={(banner) => set({ banner })} />
       <label>Page</label>
-      <RichEditor value={draft.body} onChange={(body) => set({ body })} placeholder="What is this project? What will it become? Images welcome." minHeight={220} />
+      <RichEditor value={draft.body} onChange={(body) => set({ body })} placeholder="What is this project? What will it become? Images welcome." minHeight={220} max={TEXT_LIMITS.page} />
       <div className="field-row">
         <label htmlFor="status">Status</label>
         <select id="status" value={info.page.status} onChange={(e) => save({ status: e.target.value as ProjectStatus })}>

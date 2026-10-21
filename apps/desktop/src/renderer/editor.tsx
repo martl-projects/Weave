@@ -107,12 +107,15 @@ export function RichEditor({
   placeholder,
   minHeight = 160,
   autoFocus,
+  max,
 }: {
   value: string;
   onChange(markdown: string): void;
   placeholder?: string;
   minHeight?: number;
   autoFocus?: boolean;
+  /** The most characters Weave keeps (Markdown, as stored): shows a counter. */
+  max?: number;
 }) {
   // Text with HTML opens in the source view, so nothing is lost by accident.
   const [source, setSource] = useState(() => hasHtml(value));
@@ -173,6 +176,20 @@ export function RichEditor({
           e.target.value = '';
         }}
       />
+      {max !== undefined && <CharCount length={value.length} max={max} />}
+    </div>
+  );
+}
+
+/** "1,234 / 10,000", warning near the limit and saying what to do past it. */
+export function CharCount({ length, max, onlyNear }: { length: number; max: number; onlyNear?: boolean }) {
+  const near = length > max * 0.9;
+  if (onlyNear && !near) return null;
+  const n = (x: number) => x.toLocaleString('en');
+  const over = length > max;
+  return (
+    <div className={`char-count${over ? ' over' : near ? ' near' : ''}`} aria-live="polite">
+      {over ? `${n(length - max)} characters too many: ${n(length)} / ${n(max)}. Shorten it or split it.` : `${n(length)} / ${n(max)}`}
     </div>
   );
 }

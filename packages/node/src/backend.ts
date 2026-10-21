@@ -3,6 +3,7 @@ import type { AppManifest, AppSetting, BoardType, Choice, Did, IssueStatus, Json
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
+export { TEXT_LIMITS } from '@weave/core/limits';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
 export interface FeedItem {

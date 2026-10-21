@@ -4,6 +4,7 @@ import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bump, navigate, plain, postLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast } from './ui.tsx';
+import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 
 // ---------------------------------------------------------------- names and links
@@ -554,14 +555,16 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
           ) : null}
           <div className="field-row-stacked">
             <label>Text (optional)</label>
-            <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
+            <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
           </div>
           {target && (!chosenBoard || chosenBoard.type === 'posts') && <CoauthorPicker space={target.id} value={coauthors} onChange={setCoauthors} />}
           <div className="buttons">
             <button type="button" onClick={onClose}>
               Cancel
             </button>
-            <button className="default">Submit</button>
+            <button className="default" disabled={text.length > TEXT_LIMITS.text}>
+              Submit
+            </button>
           </div>
         </form>
       )}
@@ -658,7 +661,7 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
         </div>
         <div className="field-row-stacked">
           <label>Text (optional)</label>
-          <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} />
+          <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
         </div>
         {post.space && me && <CoauthorPicker space={post.space.id} value={coauthors ?? named} onChange={setCoauthors} />}
         <p className="small">Everyone sees the new version, marked as edited. Earlier versions stay in the logs.</p>
@@ -666,7 +669,9 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default">Save</button>
+          <button className="default" disabled={text.length > TEXT_LIMITS.text}>
+            Save
+          </button>
         </div>
       </form>
     </Modal>

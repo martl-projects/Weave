@@ -252,6 +252,9 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 
 /* ---------- rich editor */
 .rich-editor { display: flex; flex-direction: column; min-width: 0; background: #fff; }
+.char-count { align-self: flex-end; padding: 1px 4px; font-size: 11px; color: #606060; text-align: right; }
+.char-count.near { color: #a05a00; }
+.char-count.over { color: #c00000; font-weight: bold; }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 2px; background: var(--face); border-bottom: 1px solid #808080; }
 .editor-toolbar .tool { min-width: 24px; min-height: 22px; padding: 0 3px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
 .editor-toolbar .tool.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; background: #dfdfdf; }
