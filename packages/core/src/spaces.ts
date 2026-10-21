@@ -58,6 +58,35 @@ export const KIND_DECLINE = 'weave.project.decline';
 export const KIND_LEAVE = 'weave.space.leave';
 export const KIND_HANDOVER = 'weave.space.handover';
 export const KIND_CLOSE = 'weave.space.close';
+/** What newcomers get to read: `all` (the default), `30d` or `joining` (from their invite on). */
+export const KIND_HISTORY = 'weave.space.history';
+
+export type HistorySetting = 'all' | '30d' | 'joining';
+/**
+ * A space's earlier control events (and its latest state: page, app, channels),
+ * restated under a new key for newcomers who don't get the keys they were
+ * sealed with. Written by whoever hands the keys over; newcomers take it from
+ * that person only.
+ */
+export const KIND_CARRY = 'weave.space.carry';
+export const HISTORIES: readonly HistorySetting[] = ['all', '30d', 'joining'];
+const DAY = 24 * 3600 * 1000;
+
+/**
+ * The epochs a newcomer gets, by the space's history setting. `starts` is when
+ * each epoch began (its rekey); epochs without a known start are the oldest.
+ * `30d`: those that began within 30 days, and the one current 30 days ago.
+ * `joining`: the current one only (the key rotates first, see the node).
+ */
+export function epochsToShare(space: Pick<SpaceKeys, 'keys'>, history: HistorySetting, starts: Map<number, string>, now = Date.now()): number[] {
+  const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
+  if (history === 'all') return epochs;
+  if (history === 'joining') return epochs.slice(-1);
+  const since = new Date(now - 30 * DAY).toISOString();
+  const recent = epochs.filter((e) => (starts.get(e) ?? '') >= since);
+  const before = epochs.filter((e) => (starts.get(e) ?? '') < since).at(-1);
+  return before === undefined ? recent : [before, ...recent];
+}
 
 export const SPACE_KINDS = ['group', 'project', 'community', 'direct'] as const;
 export type SpaceKind = (typeof SPACE_KINDS)[number];
@@ -320,6 +349,8 @@ export interface SpaceState {
   left: Set<Did>;
   /** Closed by its owner or maintainers: kept, but read-only. */
   closed?: { by: Did; time: string };
+  /** What newcomers get to read, and who set it when (absent: everything). */
+  history?: { value: HistorySetting; by: Did; time: string };
 }
 
 const byTime = (a: { event: EventView }, b: { event: EventView }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -426,6 +457,9 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         break;
       case KIND_CLOSE:
         if (canManage(state, author)) state.closed = body.closed === false ? undefined : { by: author, time: event.time };
+        break;
+      case KIND_HISTORY:
+        if (kind !== 'direct' && canManage(state, author) && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: event.time };
         break;
       case KIND_DECLINE:
         if (kind === 'project' && state.maintainers.has(author) && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {

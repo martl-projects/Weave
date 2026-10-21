@@ -1,5 +1,5 @@
 import type { GumroadLink } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -156,6 +156,8 @@ export interface SpaceInfo extends SpaceRef {
   waiting?: true;
   /** Closed by its owner or maintainers: kept, read-only. */
   closed?: true;
+  /** What newcomers get to read: everything (all), the last 30 days (30d), or from their invite on (joining). */
+  history: HistorySetting;
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
 }
@@ -801,6 +803,8 @@ export interface Backend {
   handOver(input: { space: string; to: string }): Promise<SpaceInfo>;
   /** Owner (groups) or maintainers: close a space (kept, read-only) or open it again. */
   closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo>;
+  /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
+  setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
 
@@ -1027,7 +1031,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

@@ -1,6 +1,6 @@
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Invite, SpaceKeys } from '@weave/core';
+import type { Did, Invite, SpaceKeys } from '@weave/core';
 import { readJson, writeJson, type Home } from './home.ts';
 
 /** A group's or project's keys plus where we first found its members. */
@@ -8,6 +8,8 @@ export interface StoredSpace extends SpaceKeys {
   entry: Invite['entry'];
   /** Keys of the read-limited boards we may read: board → epoch → key. */
   boards?: Record<string, Record<string, string>>;
+  /** Who handed us the keys (inviter or giver): the one whose carry of earlier history we take. */
+  via?: Did;
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {

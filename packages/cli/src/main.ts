@@ -100,6 +100,7 @@ projects — something being built; participants chat, discuss, vote and work on
   leave <space>                          leave a group, project or community (its key rotates without you)
   hand-over <space> <who>                make someone else the owner (needed before the owner leaves)
   close <space> / reopen <space>         close a space (kept, read-only) or open it again (owner, maintainers)
+  history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
   let-in <id> / turn-away <id>           answer someone who asked
@@ -1100,6 +1101,15 @@ ${postLine(p)}`);
       if (!args[0]) throw new Error(`usage: weave ${command} <space>`);
       const s = await (await backend()).closeSpace({ space: args[0], closed: command === 'close' });
       return out(s, () => (s.closed ? `closed ${s.name}: kept as it is, read-only (weave reopen to undo)` : `${s.name} is open again`));
+    }
+
+    case 'history': {
+      if (!args[0]) throw new Error('usage: weave history <space> [all | 30d | joining]');
+      const b = await backend();
+      const s = args[1] ? await b.setHistory({ space: args[0], history: args[1] as SpaceInfo['history'] }) : (await b.spaces()).find((x) => x.name === args[0] || x.id === args[0]);
+      if (!s) throw new Error(`no space ${args[0]}`);
+      const says: Record<SpaceInfo['history'], string> = { all: 'everything', '30d': 'the last 30 days', joining: 'only what comes after their invite' };
+      return out(s, () => `newcomers to ${s.name} read ${says[s.history]}`);
     }
 
     case 'knocks': {

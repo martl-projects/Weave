@@ -29,6 +29,11 @@ import {
   KIND_KNOCK_HANDLED,
   KIND_KNOCK_PENDING,
   KIND_CLOSE,
+  KIND_HISTORY,
+  KIND_CARRY,
+  HISTORIES,
+  epochsToShare,
+  type HistorySetting,
   KIND_HANDOVER,
   KIND_LEAVE,
   KIND_ROSTER,
@@ -334,6 +339,8 @@ interface GitHubLogin {
 /** An event as this node can read it, before names are resolved. */
 interface Decoded {
   event: WeaveRecord;
+  /** Restated in a carry, not decoded from the event itself (see #expandCarry). */
+  carried?: true;
   /** The event's id (a re-signed event's old v1 id), as stored. */
   id: string;
   inner: Inner;
@@ -345,6 +352,9 @@ interface Decoded {
 
 /** The order replica.events() returns: claimed time, then signer, then seq. */
 const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
+
+/** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
+const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -806,7 +816,7 @@ export class WeaveNode implements Backend {
       });
     }
     const boardKeys = this.#boardKeysFor(space, access);
-    return encodeInvite({ v: 2, space: this.#keysOnly(space), invite, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
   }
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
@@ -814,7 +824,7 @@ export class WeaveNode implements Backend {
     const invite = decodeInvite(text);
     if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
     this.#adoptBootstrap(invite.entry);
-    const space: StoredSpace = { ...invite.space, entry: invite.entry, ...(invite.boards ? { boards: invite.boards } : {}) };
+    const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
     await this.#addSpace(space);
     this.replica.write(this.identity, sealFor(space, { kind: KIND_JOIN, body: { invite: invite.invite } }));
     return this.#spaceInfo(space);
@@ -829,7 +839,7 @@ export class WeaveNode implements Backend {
     for (const topic of new Set([link.inviter, ...link.entry.topics])) await this.join(topic);
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter } }));
     this.replica.write(this.identity, knockFor(link, note.trim(), this.#entryPoint()));
-    return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, waiting: true };
+    return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, history: 'all', waiting: true };
   }
 
   async knocks(): Promise<KnockInfo[]> {
@@ -852,7 +862,7 @@ export class WeaveNode implements Backend {
       const member = event.author;
       this.replica.write(this.identity, sealFor(space, { kind: KIND_ADMIT, body: { member, invite } }));
       const boardKeys = this.#boardKeysFor(space, rights);
-      this.replica.write(this.identity, gift({ ...this.#keysOnly(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
+      this.replica.write(this.identity, gift({ ...this.#keysForNewcomers(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
     }
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_HANDLED, body: { knock: id } }));
   }
@@ -879,8 +889,95 @@ export class WeaveNode implements Backend {
 
   /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
   #keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, ...keys } = space;
+    const { entry: _entry, boards: _boards, via: _via, ...keys } = space;
     return keys;
+  }
+
+  /**
+   * A space's keys for newcomers, as its history setting allows: every epoch,
+   * those of the last 30 days, or (joining) a fresh one made for them. A `30d`
+   * space whose key is older than 30 days gets a new one first, so what
+   * newcomers read stays near 30 days. Rotating is for those who manage the
+   * space (only their new keys count).
+   */
+  #keysForNewcomers(space: StoredSpace): SpaceKeys {
+    const state = this.#state(space);
+    const history = state.history?.value ?? 'all';
+    const starts = this.#epochStarts(space);
+    const current = currentEpoch(space);
+    const old = (starts.get(current) ?? '') < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    // Only a manager's new key counts for the others; a group member inviting hands over what the setting allows without one.
+    if (canManage(state, this.identity.author) && (history === 'joining' || (history === '30d' && old))) {
+      this.#rotateKey(space);
+      starts.set(currentEpoch(space), new Date().toISOString());
+    }
+    const keys = this.#keysOnly(space);
+    const share = new Set(epochsToShare(space, history, starts).map(String));
+    if (share.size < Object.keys(keys.keys).length) this.#carry(space, share);
+    return { ...keys, keys: Object.fromEntries(Object.entries(keys.keys).filter(([epoch]) => share.has(epoch))) };
+  }
+
+  /**
+   * Restate under the current key what newcomers need of the epochs they don't
+   * get: the space's control events (members, roles, boards, rules, keys of
+   * boards) and its latest state (page, app, channels, curation, theme), with
+   * their original ids, authors and times.
+   */
+  #carry(space: StoredSpace, shared: Set<string>): void {
+    const events = this.#decodedIn(space.id)
+      .filter((d) => (classOf(canonicalKind(d.inner.kind)) === 'control' || CARRIED_STATE.has(d.inner.kind)) && d.inner.kind !== KIND_CARRY && !d.board)
+      .filter((d) => !shared.has(String((d.event.body as { epoch?: unknown } | null)?.epoch ?? '')))
+      .map((d) => ({ id: d.id, author: d.event.author, signer: d.event.signer, seq: d.event.seq, time: d.event.time, kind: d.inner.kind, body: d.inner.body }));
+    if (events.length) this.replica.write(this.identity, sealFor(space, { kind: KIND_CARRY, body: { events: events as unknown as Json } }));
+  }
+
+  /**
+   * A carry becomes the events it restates, if it comes from whoever handed us
+   * this space's keys (we trust them for the keys already). Our own carries
+   * restate what we hold anyway.
+   */
+  #expandCarry(d: Decoded): Decoded[] {
+    if (d.inner.kind !== KIND_CARRY) return [d];
+    const space = d.space as StoredSpace | undefined;
+    if (!space?.via || d.event.author !== space.via) return [];
+    const items = (d.inner.body as { events?: unknown } | null)?.events;
+    if (!Array.isArray(items)) return [];
+    const out: Decoded[] = [];
+    for (const item of items as Array<Record<string, unknown>>) {
+      if (typeof item?.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || typeof item.kind !== 'string' || !Number.isSafeInteger(item.seq)) continue;
+      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, time: item.time, body: null };
+      out.push({ id: item.id, event, inner: { kind: item.kind, body: (item.body ?? null) as Json }, space: d.space, carried: true });
+    }
+    return out;
+  }
+
+  /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
+  #epochStarts(space: StoredSpace): Map<number, string> {
+    const scope = spaceScope(space);
+    const starts = new Map<number, string>();
+    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+      const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
+      if (Number.isSafeInteger(epoch) && !starts.has(epoch as number)) starts.set(epoch as number, e.time);
+    }
+    return starts;
+  }
+
+  /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
+  #rotateMonthly(space: StoredSpace): number {
+    const state = this.#state(space);
+    if (space.kind === 'direct' || state.history?.value !== '30d' || !canManage(state, this.identity.author)) return 0;
+    const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
+    if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
+    this.#rotateKey(space);
+    return 1;
+  }
+
+  /** A new key for a space, boxed to everyone in it. */
+  #rotateKey(space: StoredSpace): void {
+    const { fields, epoch, key } = rekey(space, [...this.#state(space).members.keys()], this.#encryptionKeyOf);
+    space.keys[String(epoch)] = key;
+    this.#saveSpace(space);
+    this.replica.write(this.identity, fields);
   }
 
   /** Keys of the read-limited boards that these rights open, to hand over with an invite. */
@@ -940,6 +1037,16 @@ export class WeaveNode implements Backend {
     if (to === this.identity.author) throw new Error("that's you");
     if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
     this.replica.write(this.identity, sealFor(space, { kind: KIND_HANDOVER, body: { to } }));
+    return this.#spaceInfo(space);
+  }
+
+  async setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (space.kind === 'direct') throw new Error('a direct chat is between two people: there are no newcomers');
+    if (!HISTORIES.includes(input.history)) throw new Error('history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
+    if (!canManage(state, this.identity.author)) throw new Error(space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
+    if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(space, { kind: KIND_HISTORY, body: { history: input.history } }));
     return this.#spaceInfo(space);
   }
 
@@ -1578,6 +1685,7 @@ export class WeaveNode implements Backend {
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -2868,7 +2976,7 @@ export class WeaveNode implements Backend {
     this.replica.write(this.identity, sealFor(group, { kind: KIND_MEMBERSHIP, body: { member, until } }));
     // New (or returning) members get the tier's keys, posted where their node will look for them.
     if (!current) {
-      this.replica.write(this.identity, gift(this.#keysOnly(group), [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
+      this.replica.write(this.identity, gift(this.#keysForNewcomers(group), [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
     }
     await this.#answerRequests(group.id, member);
     return this.#tierInfo(this.#tierOffer(group.id));
@@ -3592,7 +3700,7 @@ export class WeaveNode implements Backend {
   #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
     if (!dids.length) return;
     for (const member of dids) this.replica.write(this.identity, sealFor(project, { kind: KIND_ADMIT, body: { member, via: group.id } }));
-    this.replica.write(this.identity, gift(this.#keysOnly(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
+    this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
 
   /** Joins to and departures from a project's invited groups that this node can see (it must be in the group). */
@@ -3648,7 +3756,7 @@ export class WeaveNode implements Backend {
       if (added) this.#saveSpace(known);
       return;
     }
-    void this.#addSpace({ ...opened.space, entry: opened.entry });
+    void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
   }
 
   #state(space: StoredSpace): SpaceState {
@@ -3705,6 +3813,7 @@ export class WeaveNode implements Backend {
       epoch: currentEpoch(space),
       ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
       ...(state.closed ? { closed: true as const } : {}),
+      history: state.history?.value ?? 'all',
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
   }
@@ -4049,10 +4158,13 @@ export class WeaveNode implements Backend {
     for (let round = 0; round < 4; round++) {
       if (!this.#decoded) {
         this.#ensureDirects();
-        this.#decoded = this.replica.events().flatMap((event) => {
-          const decoded = this.#decode(event);
-          return decoded ? [decoded] : [];
+        const decoded = this.replica.events().flatMap((event) => {
+          const d = this.#decode(event);
+          return d ? this.#expandCarry(d) : [];
         });
+        // What a carry restates and we can read ourselves counts once, as read.
+        const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
+        this.#decoded = decoded.filter((d) => !d.carried || !read.has(d.id)).sort((a, b) => replicaOrder(a.event, b.event));
         this.#decodedRevision++;
         this.#decodedGeneration++;
         this.#bySpace.clear();
@@ -4087,6 +4199,11 @@ export class WeaveNode implements Backend {
     this.#ensureDirectFor(event.signer);
     const d = this.#decode(event);
     if (!d) return;
+    // A carry restates many events at their own times: decode everything again (they are rare).
+    if (d.inner.kind === KIND_CARRY) {
+      this.#decoded = undefined;
+      return;
+    }
     let lo = 0;
     let hi = decoded.length;
     while (lo < hi) {

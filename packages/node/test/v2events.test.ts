@@ -90,4 +90,37 @@ describe('a node writing v2', () => {
     expect(kofi.topics).not.toEqual(expect.arrayContaining(moved));
     for (const node of all) await node.close();
   });
+
+  it('lets newcomers read only what the space’s history setting allows', async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
+    };
+    await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    syncAll();
+    await martin.submit({ space: 'Weave', title: 'Before Kofi' });
+    expect((await martin.spaces('project'))[0].history).toBe('all');
+    await expect(lena.setHistory({ space: 'Weave', history: 'joining' })).rejects.toThrow(/maintainers/);
+    expect((await martin.setHistory({ space: 'Weave', history: 'joining' })).history).toBe('joining');
+
+    // The invite comes with a key made for it: Kofi reads from here on, the others everything.
+    const epochBefore = (await martin.spaces('project'))[0].epoch;
+    const invite = await martin.invite('Weave');
+    expect((await martin.spaces('project'))[0].epoch).toBe(epochBefore + 1);
+    syncAll();
+    await kofi.joinSpace(invite);
+    syncAll();
+    await martin.submit({ space: 'Weave', title: 'After Kofi' });
+    syncAll();
+    const titles = async (node: WeaveNode) => (await node.posts({ space: 'Weave' })).map((p) => p.title).sort();
+    expect(await titles(kofi)).toEqual(['After Kofi']);
+    // The space itself he knows in full: members and roles came restated by Martin, who let him in.
+    expect((await kofi.members('Weave')).map((m) => m.name).sort()).toEqual(['Kofi', 'Lena', 'Martin']);
+    expect((await kofi.spaces('project'))[0].founder).toBe(martin.identity.author);
+    expect(await titles(lena)).toEqual(['After Kofi', 'Before Kofi']);
+    expect((await lena.spaces('project'))[0].history).toBe('joining');
+    for (const node of all) await node.close();
+  });
 });
