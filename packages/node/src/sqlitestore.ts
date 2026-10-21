@@ -115,7 +115,7 @@ export class SqliteStore implements LogStore {
       chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
       all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
       bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
-      inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? ORDER BY time'),
+      inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time'),
       body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
       putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)'),
       drop: this.#db.prepare('DELETE FROM bodies WHERE hash = ?'),
@@ -196,8 +196,8 @@ export class SqliteStore implements LogStore {
     return [...this.#numbers.keys()];
   }
 
-  inSpace2(space: string, since = ''): StoredV2[] {
-    return (this.#v2.inSpace.all(space, since) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
+  inSpace2(space: string, since = '', until = '\uffff'): StoredV2[] {
+    return (this.#v2.inSpace.all(space, since, until) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }
 
   range2(signer: Did): StoredV2[] {
@@ -211,6 +211,10 @@ export class SqliteStore implements LogStore {
 
   putBody(hash: string, body: Json): void {
     this.#v2.putBody.run(hash, JSON.stringify(body));
+  }
+
+  releaseBody(hash: string): void {
+    this.#v2.drop.run(hash);
   }
 
   dropBody(hash: string): void {

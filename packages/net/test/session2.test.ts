@@ -194,4 +194,25 @@ describe('PeerSession2: members-only sync', () => {
     await settle(a, behind);
     expect(texts(behind, 'group:r')).toEqual(['after the rekey', null]); // the rekey event has no text
   });
+
+  it('in a pulled space, takes envelopes of everything but bodies only for the recent window and what it keeps, and older on request', async () => {
+    const a = peer('group:a');
+    const day = 24 * 3600 * 1000;
+    const old = (d: number) => new Date(Date.now() - d * day).toISOString();
+    const kept = say(a, 'group:a', 'old but kept', old(60));
+    say(a, 'group:a', 'old one', old(50));
+    say(a, 'group:a', 'old two', old(40));
+    say(a, 'group:a', 'recent');
+    const b: Peer = { replica: new Replica(), me: createIdentity(), spaces: [{ space: 'group:a', keys: [KEYS['group:a']], pulled: { windowMs: 7 * day } }] };
+    const [sa, sb] = duplexPair();
+    new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces } });
+    const session = new PeerSession2(b.replica, sb, { access: { spaces: () => b.spaces, wantsBody: (_space, id) => id === kept.id } });
+    await settle(a, b);
+    expect(b.replica.events((r) => r.scope === 'group:a')).toHaveLength(4);
+    expect(texts(b, 'group:a')).toEqual([null, null, 'old but kept', 'recent']);
+    // "Load older": a stretch of time, with bodies.
+    session.fetchRange('group:a', old(55), old(45));
+    await settle(a, b);
+    expect(texts(b, 'group:a')).toEqual([null, 'old but kept', 'old one', 'recent']);
+  });
 });

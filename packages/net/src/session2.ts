@@ -15,9 +15,12 @@ import type { BlobSource } from './session.ts';
  *   and tells nobody else anything. Sent again when this node's spaces change.
  * - `chains {space, heads}`: per signer, the last seq of its control chain in
  *   the space; the other side sends what comes after.
- * - `sync {space, since}`: content from `since` on, please (the newest held
- *   minus a week; everything for a space new to this node). Answered with
- *   `have {space, ids}`, the ids held; the asker `fetch`es what it lacks.
+ * - `sync {space, since, until?, bare?}`: content from `since` on, please
+ *   (the newest held minus a week; everything for a space new to this node).
+ *   Answered with `have {space, ids, bare?}`, the ids held; the asker
+ *   `fetch`es what it lacks. In a pulled space (stage 4) bodies come only for
+ *   the recent window and what the node wants (`wantsBody`); for the rest
+ *   `bare` asks for the envelopes alone.
  * - `items {items}`: v2 events `{e, b?}`.
  * - `keys {space, items}`: a space's rekey events, for a peer that proved only
  *   the space's previous key: a member who is behind takes the new key from
@@ -34,9 +37,9 @@ import type { BlobSource } from './session.ts';
 export type Message2 =
   | { t: 'hello'; v: 2; tags: string[] }
   | { t: 'chains'; space: string; heads: Record<string, number> }
-  | { t: 'sync'; space: string; since: string }
-  | { t: 'have'; space: string; ids: string[] }
-  | { t: 'fetch'; space: string; ids: string[] }
+  | { t: 'sync'; space: string; since: string; until?: string; bare?: true }
+  | { t: 'have'; space: string; ids: string[]; bare?: true }
+  | { t: 'fetch'; space: string; ids: string[]; bare?: true }
   | { t: 'items'; items: unknown[] }
   | { t: 'keys'; space: string; items: unknown[] }
   | { t: 'heads'; heads: Record<string, number> }
@@ -48,6 +51,8 @@ export type Message2 =
 export interface HeldSpace {
   space: string;
   keys: Uint8Array[];
+  /** A pulled space (stage 4): bodies come for this recent window (ms) and what the node wants; envelopes for everything. */
+  pulled?: { windowMs: number };
 }
 
 /** What a session needs to know of the node: which spaces it holds, and where rekey events offered by peers go. */
@@ -55,6 +60,8 @@ export interface SpaceAccess {
   spaces(): HeldSpace[];
   /** Rekey events of a space from a peer that holds a newer key: the node takes a key from them if it may. */
   offerKeys?(items: WireItemV2[]): void;
+  /** In a pulled space: does the node keep this event's body (its share, or something it keeps)? */
+  wantsBody?(space: string, id: string): boolean;
 }
 
 const MAX_FRAME = 4 * 1024 * 1024;
@@ -188,19 +195,26 @@ export class PeerSession2 {
         break;
       case 'sync':
         if (v2 && this.#shared.has(message.space) && typeof message.since === 'string') {
-          const ids = this.replica.store.inSpace2(message.space, message.since).filter(({ event }) => event.class === 'content').map(({ id }) => id);
-          for (let i = 0; i < ids.length; i += MAX_IDS) this.#send({ t: 'have', space: message.space, ids: ids.slice(i, i + MAX_IDS) });
+          const until = typeof message.until === 'string' ? message.until : undefined;
+          const ids = this.replica.store.inSpace2(message.space, message.since, until).filter(({ event }) => event.class === 'content').map(({ id }) => id);
+          for (let i = 0; i < ids.length; i += MAX_IDS) this.#send({ t: 'have', space: message.space, ids: ids.slice(i, i + MAX_IDS), ...(message.bare ? { bare: true as const } : {}) });
         }
         break;
       case 'have':
         if (v2 && this.#shared.has(message.space) && Array.isArray(message.ids)) {
-          const lacking = message.ids.filter((id): id is string => typeof id === 'string').filter((id) => {
+          const full: string[] = [];
+          const bare: string[] = [];
+          for (const id of message.ids.filter((x): x is string => typeof x === 'string')) {
             this.#peerHas.add(id);
             const held = this.replica.store.get2(id);
-            // Held without its body: fetch it, unless this node forgot it on purpose.
-            return !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined && !this.replica.store.forgotten(held.event.body));
-          });
-          for (let i = 0; i < lacking.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: lacking.slice(i, i + MAX_IDS) });
+            // Held without its body: fetch it, unless this node forgot it on purpose (or, for envelopes only, doesn't keep it).
+            const bodyLacking = !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined && !this.replica.store.forgotten(held.event.body));
+            const wanted = !message.bare || this.#access.wantsBody?.(message.space, id) !== false;
+            if (bodyLacking && wanted) full.push(id);
+            else if (!held) bare.push(id);
+          }
+          for (let i = 0; i < full.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: full.slice(i, i + MAX_IDS) });
+          for (let i = 0; i < bare.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: bare.slice(i, i + MAX_IDS), bare: true });
         }
         break;
       case 'fetch':
@@ -209,7 +223,7 @@ export class PeerSession2 {
           for (const id of message.ids.slice(0, MAX_IDS)) {
             const record = typeof id === 'string' ? this.replica.record2(id) : undefined;
             // Only what belongs to the space asked about, which both hold.
-            if (record && record.scope === message.space && isWireItemV2(record.wire)) items.push(record.wire);
+            if (record && record.scope === message.space && isWireItemV2(record.wire)) items.push(message.bare ? { e: record.wire.e } : record.wire);
           }
           this.#sendItems(items);
         }
@@ -279,8 +293,20 @@ export class PeerSession2 {
       else if (event.time > newest) newest = event.time;
     }
     this.#send({ t: 'chains', space, heads });
+    const pulled = this.#access.spaces().find((h) => h.space === space)?.pulled;
+    if (pulled) {
+      // Bodies for the recent window; envelopes of the rest (with the bodies this node keeps).
+      this.#send({ t: 'sync', space, since: new Date(Date.now() - pulled.windowMs).toISOString() });
+      this.#send({ t: 'sync', space, since: '', bare: true });
+      return;
+    }
     const since = newest ? new Date(Date.parse(newest) - RECENT_MS).toISOString() : '';
     this.#send({ t: 'sync', space, since });
+  }
+
+  /** Ask the peer for a space's content between two times, bodies included ("load older"). */
+  fetchRange(space: string, since: string, until: string): void {
+    if (this.#shared.has(space)) this.#send({ t: 'sync', space, since, until });
   }
 
   /** A space's rekey events, for a peer that holds only its previous key. */

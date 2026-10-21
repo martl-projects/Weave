@@ -95,8 +95,8 @@ export class FileStore implements LogStore {
     return this.#memory.range2(signer);
   }
 
-  inSpace2(space: string, since?: string): StoredV2[] {
-    return this.#memory.inSpace2(space, since);
+  inSpace2(space: string, since?: string, until?: string): StoredV2[] {
+    return this.#memory.inSpace2(space, since, until);
   }
 
   body(hash: string): Json | undefined {
@@ -107,6 +107,11 @@ export class FileStore implements LogStore {
     if (this.#memory.body(hash) !== undefined || this.#memory.forgotten(hash)) return;
     this.#memory.putBody(hash, body);
     appendFileSync(join(this.dir, BODIES_FILE), JSON.stringify({ hash, body }) + '\n');
+  }
+
+  /** In memory only: bodies.jsonl is only appended to, so a released body is back after a restart (this store is the fallback). */
+  releaseBody(hash: string): void {
+    this.#memory.releaseBody(hash);
   }
 
   /** The body stays in bodies.jsonl (only appended to) but is never read again: forgotten.jsonl says so. */

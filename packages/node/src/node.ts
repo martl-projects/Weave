@@ -365,6 +365,16 @@ interface Decoded {
 /** The order replica.events() returns: claimed time, then signer, then seq. */
 const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
+/** Stage 4: how long everyone online holds a pulled space's content, how long what you open stays kept, and how many hold each event by share. */
+const RECENT_HOLD_MS = 14 * 24 * 3600 * 1000;
+/** What you opened (id → when) and the stretches of time you asked members for. */
+interface KeptState {
+  ids: Record<string, string>;
+  ranges: Array<{ space: string; since: string; until: string; at: string }>;
+}
+const KEEP_READ_MS = 30 * 24 * 3600 * 1000;
+const SHARE_HOLDERS = 3;
+
 /** An event as a carry restates it: its id, who wrote it when, and what it said. */
 const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
   id: d.id,
@@ -616,7 +626,7 @@ export class WeaveNode implements Backend {
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
-    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items) });
+    this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id) });
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
@@ -1211,6 +1221,12 @@ export class WeaveNode implements Backend {
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
     if (matches.length === 0) throw new Error(`no post found with id ${ref}`);
     if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
+    const space = matches[0].space && this.#spaces.get(matches[0].space.id);
+    if (space && this.#pulled(space)) {
+      // Opened: kept for 30 days, like anything you read.
+      this.#kept.ids[matches[0].id] = new Date(this.clock()).toISOString();
+      this.#saveKept();
+    }
     return matches[0];
   }
 
@@ -1746,6 +1762,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
     changed += this.#forget();
+    changed += this.#release();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -3685,6 +3702,7 @@ export class WeaveNode implements Backend {
     const held = (space: SpaceKeys): HeldSpace => ({
       space: spaceScope(space),
       keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
+      ...(this.#spaces.has(space.id) && this.#pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
     return [
       ...[...this.#spaces.values()].map(held),
@@ -3704,6 +3722,117 @@ export class WeaveNode implements Backend {
 
   #announcing = false;
   #listingSpaces = false;
+
+  // ---------------------------------------------------------------- who holds what (stage 4)
+
+  /** Above this many members, a community's or project's content is held by its members between them. */
+  pulledAbove = 12;
+
+  /** Is this space held by its members between them (and not ours: owners hold all of theirs)? */
+  #pulled(space: StoredSpace, state = this.#state(space)): boolean {
+    return (space.kind === 'community' || space.kind === 'project') && state.members.size > this.pulledAbove && state.founder !== this.identity.author;
+  }
+
+  /** The 3 members who hold an event by share: the lowest H(id ‖ member). Nobody coordinates, everyone computes the same. */
+  #share(id: string, members: Did[]): Did[] {
+    const rank = (did: Did) => createHash('sha256').update(`weave/share/v1:${id}:${did}`).digest('hex');
+    return [...members].sort((a, b) => rank(a).localeCompare(rank(b))).slice(0, SHARE_HOLDERS);
+  }
+
+  #keptState?: KeptState;
+
+  /** What this node keeps because its person opened or asked for it (sealed at rest: it says what they read). */
+  get #kept() {
+    if (!this.#keptState) {
+      const stored = readSecretJson<KeptState>(this.home, joinPath(this.home.dir, 'kept.json'));
+      this.#keptState = { ids: stored?.ids ?? {}, ranges: stored?.ranges ?? [] };
+    }
+    return this.#keptState;
+  }
+
+  #saveKept(): void {
+    const since = new Date(this.clock() - KEEP_READ_MS).toISOString();
+    const kept = this.#kept;
+    for (const [id, at] of Object.entries(kept.ids)) if (at < since) delete kept.ids[id];
+    kept.ranges = kept.ranges.filter((r) => r.at >= since);
+    writeSecretJson(this.home, joinPath(this.home.dir, 'kept.json'), kept);
+  }
+
+  /** Opened or asked for in the last 30 days. */
+  #isKept(space: StoredSpace, id: string, time: string): boolean {
+    const since = new Date(this.clock() - KEEP_READ_MS).toISOString();
+    const kept = this.#kept;
+    if ((kept.ids[id] ?? '') >= since) return true;
+    return kept.ranges.some((r) => r.space === space.id && r.at >= since && time >= r.since && time < r.until);
+  }
+
+  /** In a pulled space: do we keep this event's body? Our share, or something we keep. */
+  #wantsBody(scope: string, id: string): boolean {
+    const space = this.#spaces.get(parseScope(scope)?.id ?? '');
+    if (!space) return true;
+    const state = this.#state(space);
+    if (!this.#pulled(space, state)) return true;
+    return this.#share(id, [...state.members.keys()]).includes(this.identity.author) || (this.#kept.ids[id] ?? '') >= new Date(this.clock() - KEEP_READ_MS).toISOString();
+  }
+
+  async fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }> {
+    const space = this.#space(input.space);
+    const oldest = this.#decodedIn(space.id).reduce((a, d) => (d.event.time < a ? d.event.time : a), new Date(this.clock()).toISOString());
+    const until = input.before ?? oldest;
+    if (Number.isNaN(Date.parse(until))) throw new Error('before is a date, e.g. 2026-09-01');
+    const since = new Date(Date.parse(until) - KEEP_READ_MS).toISOString();
+    this.#kept.ranges.push({ space: space.id, since, until, at: new Date(this.clock()).toISOString() });
+    this.#saveKept();
+    this.#swarm?.fetchRange(spaceScope(space), since, until);
+    return { since, until };
+  }
+
+  /**
+   * In pulled spaces: let go of the bodies we don't hold (see docs/v2-stage4.md):
+   * not recent, not ours, not kept (upvoted, saved, opened, followed board),
+   * not core (pinned, issues, proposals, releases, the page), not our share.
+   * The envelopes stay, and the bodies can be fetched again.
+   */
+  #release(): number {
+    const me = this.identity.author;
+    const recent = new Date(this.clock() - RECENT_HOLD_MS).toISOString();
+    let released = 0;
+    for (const space of [...this.#spaces.values()]) {
+      const state = this.#state(space);
+      if (!this.#pulled(space, state)) continue;
+      const members = [...state.members.keys()];
+      const posts = new Map(this.#spacePosts(space).posts.map((p) => [p.id, p]));
+      const held = (p: PostInfo) =>
+        p.by.did === me ||
+        (!!p.lifetime && 'forever' in p.lifetime && p.lifetime.forever !== 'no-rule') ||
+        p.pinned ||
+        p.active >= recent ||
+        p.myVote === 1 ||
+        !!p.saved ||
+        (space.kind === 'project' && !!p.board && this.#follows(space.id, p.board)) ||
+        this.#isKept(space, p.id, p.time) ||
+        this.#share(p.id, members).includes(me);
+      for (const d of this.#decodedIn(space.id)) {
+        if (d.carried || d.event.author === me || d.event.class !== 'content' || CARRIED_STATE.has(d.inner.kind)) continue;
+        const body = d.inner.body as { post?: unknown; target?: unknown } | null;
+        const anchor = posts.get(d.id) ?? posts.get(String(body?.post ?? body?.target ?? ''));
+        const keep = anchor ? held(anchor) : d.event.time >= recent || this.#isKept(space, d.id, d.event.time);
+        if (keep || this.#share(d.id, members).includes(me)) continue;
+        if (!isWireItemV2(d.event.wire) || d.event.missing) continue;
+        this.replica.store.releaseBody(d.event.wire.e.body as string);
+        released++;
+      }
+    }
+    if (released) this.#decoded = undefined;
+    return released;
+  }
+
+  /** Roughly who holds a post of a pulled space: an estimate from what every node knows. */
+  #heldBy(p: PostInfo, members: Did[], recent: boolean): NonNullable<PostInfo['heldBy']> {
+    const share = this.#share(p.id, members).filter((d) => d !== p.by.did).length;
+    const upvoters = Math.max(0, p.score);
+    return { about: recent ? members.length : 1 + share + upvoters, author: true, share, upvoters, recent, here: true };
+  }
 
   /** Tell peers which spaces this node holds, right away (a key changed), and join the right meeting points soon. */
   #announceNow(): void {
@@ -3969,6 +4098,11 @@ export class WeaveNode implements Backend {
         if (proposal) info.proposal = this.#proposalInfo(proposal);
         return info;
       });
+    if (this.#pulled(space, state)) {
+      const members = [...state.members.keys()];
+      const recent = new Date(this.clock() - RECENT_HOLD_MS).toISOString();
+      for (const p of posts) p.heldBy = this.#heldBy(p, members, p.active >= recent);
+    }
     // A board over its size: the posts that would go soonest go now.
     for (const [board, rule] of rules) {
       const inBoard = posts.filter((p) => p.board === board).map((p) => ({ id: p.id, lifetime: p.lifetime!, bytes: (around.get(p.id)?.bytes ?? 0) + JSON.stringify(p.text).length + p.title.length }));

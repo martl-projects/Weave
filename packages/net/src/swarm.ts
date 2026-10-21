@@ -67,6 +67,11 @@ export class SwarmNode {
     for (const session of this.sessions) session.announce();
   }
 
+  /** Ask every peer that shares the space for its content between two times, bodies included. */
+  fetchRange(space: string, since: string, until: string): void {
+    for (const session of this.sessions) session.fetchRange(space, since, until);
+  }
+
   /** Ask every connected peer for these blobs (new peers are asked when they connect). */
   want(hashes: string[]): void {
     for (const session of this.sessions) session.want(hashes);

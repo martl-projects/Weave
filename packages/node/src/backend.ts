@@ -357,6 +357,13 @@ export interface PostInfo {
    * stays for good. Your own posts stay on your devices regardless (yours).
    */
   lifetime?: Lifetime & { yours?: true };
+  /**
+   * In a space big enough that members hold its content between them (more
+   * than 12 members): roughly who holds this post. An estimate from what every
+   * node knows: its author, 3 members by share, those who upvoted, everyone
+   * online while it's recent; and whether this node holds it.
+   */
+  heldBy?: { about: number; author: true; share: number; upvoters: number; recent: boolean; here: boolean };
   /** You saved it, or pinned it to the top of your home. */
   saved?: SaveMode;
   /** For projects and shared projects. */
@@ -822,6 +829,8 @@ export interface Backend {
   keepPost(target: string): Promise<PostInfo>;
   /** Your posts that others will forget within the next 14 days. */
   fading(): Promise<PostInfo[]>;
+  /** A space whose members hold its content between them: ask them for the 30 days before `before` (default: before the oldest post held). */
+  fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }>;
   /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
   setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
@@ -1050,7 +1059,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

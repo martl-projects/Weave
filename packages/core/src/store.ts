@@ -44,13 +44,15 @@ export interface LogStore {
   all2(): StoredV2[];
   /** Keys with v2 events. */
   signers2(): Did[];
-  /** The v2 events of a space, by claimed time; from `since` on if given. */
-  inSpace2(space: string, since?: string): StoredV2[];
+  /** The v2 events of a space, by claimed time; from `since` on if given (and before `until`). */
+  inSpace2(space: string, since?: string, until?: string): StoredV2[];
   /** A key's v2 events, by n. */
   range2(signer: Did): StoredV2[];
   body(hash: string): Json | undefined;
   /** Keep a body; the caller checked it against its event's hash. Forgotten ones aren't kept again. */
   putBody(hash: string, body: Json): void;
+  /** Let go of a body this node doesn't hold (stage 4): it may be fetched again later. */
+  releaseBody(hash: string): void;
   /** Forget a body: drop it, and remember that it was forgotten so it isn't fetched again. */
   dropBody(hash: string): void;
   forgotten(hash: string): boolean;
@@ -112,8 +114,8 @@ export class MemoryV2 {
     return [...this.#numbers.keys()];
   }
 
-  inSpace2(space: string, since = ''): StoredV2[] {
-    return [...this.#byId.values()].filter(({ event }) => event.space === space && event.time >= since).sort((a, b) => a.event.time.localeCompare(b.event.time));
+  inSpace2(space: string, since = '', until = '\uffff'): StoredV2[] {
+    return [...this.#byId.values()].filter(({ event }) => event.space === space && event.time >= since && event.time < until).sort((a, b) => a.event.time.localeCompare(b.event.time));
   }
 
   range2(signer: Did): StoredV2[] {
@@ -126,6 +128,10 @@ export class MemoryV2 {
 
   putBody(hash: string, body: Json): void {
     if (!this.#forgotten.has(hash)) this.#bodies.set(hash, body);
+  }
+
+  releaseBody(hash: string): void {
+    this.#bodies.delete(hash);
   }
 
   dropBody(hash: string): void {
