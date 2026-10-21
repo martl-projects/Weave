@@ -163,7 +163,7 @@ import {
   socialGraph,
   spaceScope,
   spaceState,
-  spaceTopic,
+  spaceTopics,
   threadsOf,
   tiersOf,
   visibleIn,
@@ -556,10 +556,10 @@ export class WeaveNode implements Backend {
   get topics(): string[] {
     const topics = new Set([this.identity.author, ...this.config.topics]);
     for (const space of this.#spaces.values()) {
-      topics.add(spaceTopic(space));
+      for (const topic of spaceTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
     }
-    for (const friend of this.#friends()) topics.add(spaceTopic(this.#direct(friend)));
+    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend))) topics.add(topic);
     return [...topics];
   }
 
@@ -912,7 +912,7 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
     removeSpace(this.home, space.id);
     this.#announceSoon();
-    for (const topic of [spaceTopic(space)]) await this.#swarm?.leave(topic).catch(() => {});
+    for (const topic of spaceTopics(space)) await this.#swarm?.leave(topic).catch(() => {});
   }
 
   async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
@@ -3060,7 +3060,7 @@ export class WeaveNode implements Backend {
     if (peer === this.identity.author) throw new Error('that is you');
     if (!this.#friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
     const space = this.#direct(peer);
-    await this.#swarm?.join(spaceTopic(space));
+    await Promise.all(spaceTopics(space).map((topic) => this.#swarm?.join(topic)));
     return this.#spaceInfo(space);
   }
 
@@ -3379,7 +3379,7 @@ export class WeaveNode implements Backend {
 
   async #addSpace(space: StoredSpace): Promise<void> {
     this.#saveSpace(space);
-    if (this.#swarm) await Promise.all([spaceTopic(space), ...space.entry.topics].map((t) => this.#swarm!.join(t)));
+    if (this.#swarm) await Promise.all([...spaceTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t)));
   }
 
   #saveSpace(space: StoredSpace): void {
@@ -3417,7 +3417,17 @@ export class WeaveNode implements Backend {
     setImmediate(() => {
       this.#announcing = false;
       this.#swarm?.announce();
+      this.#refreshTopics();
     });
+  }
+
+  /** Join the meeting points this node should be at now, and leave those it shouldn't (a space's key moved on, or it left). */
+  #refreshTopics(): void {
+    const swarm = this.#swarm;
+    if (!swarm) return;
+    const wanted = new Set(this.topics);
+    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic).catch(() => {});
+    for (const topic of swarm.joined) if (!wanted.has(topic)) swarm.leave(topic).catch(() => {});
   }
 
   #entryPoint(): Invite['entry'] {

@@ -64,4 +64,30 @@ describe('a node writing v2', () => {
     expect((await martin.post(post.id)).score).toBe(1);
     for (const node of [martin, lena]) await node.close();
   });
+
+  it('moves a space’s meeting point with its key, so removed members can’t find the rest', async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    await kofi.joinSpace(await martin.invite('Weave'));
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
+    };
+    syncAll();
+    const before = martin.topics.filter((t) => t.startsWith('space/'));
+    expect(kofi.topics).toEqual(expect.arrayContaining(before));
+
+    await martin.removeMember('Weave', 'Kofi');
+    syncAll();
+    await lena.reconcile();
+    const after = martin.topics.filter((t) => t.startsWith('space/'));
+    const moved = after.filter((t) => !before.includes(t));
+    expect(moved).toHaveLength(1);
+    // The previous one stays for a while, for members who haven't got the new key yet.
+    expect(after).toEqual(expect.arrayContaining(before));
+    expect(lena.topics).toEqual(expect.arrayContaining(moved));
+    expect(kofi.topics).not.toEqual(expect.arrayContaining(moved));
+    for (const node of all) await node.close();
+  });
 });

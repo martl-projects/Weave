@@ -68,6 +68,7 @@ export {
   spaceScope,
   spaceState,
   spaceTopic,
+  spaceTopics,
   visibleIn,
   type Inner,
   type EncryptionKeyOf,

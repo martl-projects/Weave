@@ -18,7 +18,8 @@ export class SwarmNode {
   readonly replica: Replica;
   readonly swarm: Hyperswarm;
   readonly sessions = new Set<PeerSession2>();
-  #discoveries = new Set<Discovery>();
+  /** Topics joined, by name. */
+  #discoveries = new Map<string, Discovery>();
   #timers: Array<ReturnType<typeof setTimeout>> = [];
 
   constructor(replica: Replica, options: HyperswarmOptions = {}, blobs?: BlobSource, access: SpaceAccess = { spaces: () => [] }) {
@@ -36,13 +37,14 @@ export class SwarmNode {
   }
 
   #refreshAll(): void {
-    for (const discovery of this.#discoveries) discovery.refresh({ client: true, server: true }).catch(() => {});
+    for (const discovery of this.#discoveries.values()) discovery.refresh({ client: true, server: true }).catch(() => {});
   }
 
   /** Announce on and look up a topic; resolves once the announcement is in the DHT. */
   async join(name: string): Promise<void> {
+    if (this.#discoveries.has(name)) return;
     const discovery = this.swarm.join(topicFor(name), { server: true, client: true });
-    this.#discoveries.add(discovery);
+    this.#discoveries.set(name, discovery);
     await discovery.flushed();
     // Two nodes joining at the same moment each look before the other has announced;
     // a second look a moment later finds them.
@@ -51,7 +53,13 @@ export class SwarmNode {
 
   /** Stop announcing on and looking up a topic. */
   async leave(name: string): Promise<void> {
+    if (!this.#discoveries.delete(name)) return;
     await this.swarm.leave(topicFor(name));
+  }
+
+  /** The topics joined. */
+  get joined(): string[] {
+    return [...this.#discoveries.keys()];
   }
 
   /** Tell every connected peer again which spaces this node holds (after joining, leaving or a new key). */
