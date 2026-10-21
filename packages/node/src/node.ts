@@ -426,6 +426,8 @@ export class WeaveNode implements Backend {
   #bySpace = new Map<string, Decoded[]>();
   /** Bumped when an event of that space is added. */
   #spaceRevision = new Map<string, number>();
+  /** Each person's own valid events (see #eventsOf), until they write again or keys change. */
+  #personEvents = new Map<Did, WeaveEvent[]>();
   /** Results computed from all decoded events, valid until the decoded events change. */
   #memos = new Map<string, { revision: number; value: unknown }>();
   /** State, entries and access of each space, valid while their key (generation and space revision) holds. */
@@ -456,6 +458,9 @@ export class WeaveNode implements Backend {
     this.replica.onAppend((event) => {
       if (isKeys(event)) this.#takeKeys(event);
       this.#decodedAdd(event);
+      // Key events change whose events count for whom; anything else, only its author's.
+      if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
+      else this.#personEvents.delete(event.author);
     });
   }
 
@@ -2646,13 +2651,17 @@ export class WeaveNode implements Backend {
    * devices; agents too), valid ones only, oldest first.
    */
   #eventsOf(person: Did): WeaveEvent[] {
+    const kept = this.#personEvents.get(person);
+    if (kept) return kept;
     const authority = this.replica.authority;
     const events: WeaveEvent[] = [];
     for (const signer of this.replica.store.signers()) {
       if (authority.personOf(signer) !== person) continue;
       for (const event of this.replica.store.range(signer, 1)) if (event.author === person && authority.check(event).ok) events.push(event);
     }
-    return events.sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
+    events.sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
+    this.#personEvents.set(person, events);
+    return events;
   }
 
   /** An agent's name, if this signer is one of the author's agents (devices sign as the person). */

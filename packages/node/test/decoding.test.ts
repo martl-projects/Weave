@@ -70,6 +70,14 @@ describe('decoding as events arrive', () => {
     syncAll(all);
     await same(all);
 
+    // A new name reaches everyone, through the kept person index too.
+    expect(martin.nameOf(lena.identity.author)).toBe('Lena');
+    await lena.setProfile({ name: 'Lena B.' });
+    syncAll(all);
+    expect(martin.nameOf(lena.identity.author)).toBe('Lena B.');
+    expect((await martin.members('Weave')).map((m) => m.name).sort()).toEqual(['Kofi', 'Lena B.', 'Martin']);
+    await same(all);
+
     // A read-limited board: its key reaches readers, which makes more events readable.
     await martin.setBoard({ project: 'Weave', name: 'core', title: 'Core', type: 'posts' });
     await martin.setBoardAccess({ project: 'Weave', board: 'core', read: ['Martin', 'Lena'] });
