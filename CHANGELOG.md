@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.5.1 · 2026-10-21
+
+- Desktop: what newcomers read, and where keys are kept
+
 ## v0.5.0 · 2026-10-21
 
 - v2 stage 2.4: keys at rest
