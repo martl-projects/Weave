@@ -589,7 +589,8 @@ export function KeysView() {
           {company ? `For another computer, ask ${company}; don't copy your Weave folder.` : 'To use Weave on another computer, choose “I already use Weave” there and type your words; don\'t copy your Weave folder.'}
         </p>
       </fieldset>
-      <PhonesBox />
+      {/* Pairing more phones is for the computer itself; a phone may not. */}
+      {!bridge.phone && <PhonesBox />}
       <AlwaysOnNodes keys={keys} />
       <AgentAppsBox />
       <LinkedAccountsBox />

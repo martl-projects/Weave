@@ -1,9 +1,10 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { b64u, canonicalJson, utf8, type Json } from '@weave/core';
+import { b64u } from '@weave/core';
 import { readLine, roomKeyPair, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
 import { RPC_METHODS, type FeedItem, type RpcMethod } from './backend.ts';
 import type { Home } from './home.ts';
+import { encodePhoneLink } from './phone-link.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 
 /*
@@ -46,39 +47,11 @@ export const PHONE_METHODS: readonly RpcMethod[] = RPC_METHODS.filter(
   (m) => !['addAgent', 'join', 'revokeKey', 'rotateRoot', 'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'pairPhone', 'phones', 'unpairPhone', 'connectHarness', 'requestPermission'].includes(m),
 );
 
-/** What a pairing link carries. */
-export interface PhoneLink {
-  v: 1;
-  /** The node's remote DHT key (hex). */
-  node: string;
-  secret: string;
-  expires: string;
-  /** Whose node it is, for the phone to show. */
-  name?: string;
-  /** DHT bootstrap nodes, when the node isn't on the public network (tests). */
-  bootstrap?: Array<{ host: string; port: number }>;
-}
+export { decodePhoneLink, encodePhoneLink, type PhoneLink } from './phone-link.ts';
 
-const PREFIX = 'weave:phone:';
 const PAIRING_MINUTES = 10;
 /** Room for one image (2 MB as base64) in a call. */
 const MAX_LINE = 4 * 1024 * 1024;
-
-export const encodePhoneLink = (link: PhoneLink): string => PREFIX + b64u.encode(utf8(canonicalJson(link as unknown as Json)));
-
-export function decodePhoneLink(text: string): PhoneLink {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith(PREFIX)) throw new Error('not a Weave pairing code');
-  let link: PhoneLink;
-  try {
-    link = JSON.parse(new TextDecoder().decode(b64u.decode(trimmed.slice(PREFIX.length))));
-  } catch {
-    throw new Error('the pairing code is damaged');
-  }
-  if (link?.v !== 1 || !/^[0-9a-f]{64}$/.test(link.node ?? '') || typeof link.secret !== 'string') throw new Error('the pairing code is damaged or from a newer Weave');
-  if (Date.parse(link.expires) < Date.now()) throw new Error('the pairing code has expired: show a new one on your computer');
-  return link;
-}
 
 /** What the remote side needs from its node. */
 export interface RemoteHost {

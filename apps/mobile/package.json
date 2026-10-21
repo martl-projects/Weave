@@ -1,0 +1,36 @@
+{
+  "name": "@weave/mobile",
+  "version": "0.3.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.ts",
+    "web": "node build.ts --web && node dev-web.ts",
+    "sync": "node build.ts && cap sync",
+    "android": "node build.ts && cap sync android && cap open android",
+    "ios": "node build.ts && cap sync ios && cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/barcode-scanner": "^3.1.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/device": "^8.0.3",
+    "@capacitor/ios": "^8.5.3",
+    "@weave/capacitor-worker": "file:./plugin",
+    "@weave/desktop": "*",
+    "@weave/node": "*",
+    "bare-buffer": "^3.7.1",
+    "bare-encoding": "^1.0.3",
+    "bare-fs": "^4.8.4",
+    "hyperdht": "^6.34.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "bare": "^1.36.0",
+    "bare-link": "^4.0.1",
+    "bare-pack": "^3.0.2",
+    "bare-tcp": "^2.6.1",
+    "esbuild": "^0.28.2"
+  }
+}

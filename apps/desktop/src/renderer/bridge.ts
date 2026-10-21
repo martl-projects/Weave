@@ -35,6 +35,15 @@ interface Bridge {
   onEvent(listener: (item: FeedItem) => void): void;
   /** A weave: link the app was opened with (clicked somewhere outside it). */
   onLink(listener: (link: string) => void): void;
+  /** In the phone app, which uses a computer's node: pairing with it takes the place of creating an identity. */
+  phone?: {
+    /** Pair with the computer whose pairing link (from its QR code) this is. */
+    pair(link: string): Promise<void>;
+    /** Scan a QR code with the camera; undefined if the person cancels. */
+    scan(): Promise<string | undefined>;
+    /** Forget the computer on this phone, to pair again. */
+    forget(): Promise<void>;
+  };
 }
 
 declare global {

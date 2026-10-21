@@ -24,6 +24,8 @@
     "packages/*/test",
     "scripts",
     "apps/*/src",
+    "apps/*/worklet",
+    "apps/*/test",
     "apps/*/*.ts"
   ]
 }

@@ -8,6 +8,7 @@ import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
+import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -598,10 +599,21 @@ function App() {
   };
   return (
     <>
-      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : (
+      {!state ? (
+        bridge.phone && <PhoneConnecting />
+      ) : bridge.phone && !state.hasIdentity ? (
+        <PhonePairing onDone={refresh} />
+      ) : bridge.phone && !state.connected ? (
+        <PhoneNotConnected name={state.home} onRetry={refresh} />
+      ) : !state.hasIdentity ? (
+        <Onboarding onDone={refresh} />
+      ) : !state.connected ? (
+        <NotConnected home={state.home} onRetry={refresh} />
+      ) : (
         <>
           <Shell />
-          <AgentsOffer />
+          {/* Connecting agents is about the computer they run on, not this phone. */}
+          {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
           <UpdatePrompt />
         </>
