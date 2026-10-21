@@ -169,6 +169,7 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app show -p <project>      the project's app: ports it shares, buttons
   app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
   app check [file]           check a weave.app.json (default: here), every problem at once
+  app env -p <project>       WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT for an app you start yourself (@weave/sdk reads them)
   app example                an annotated weave.app.json and its rules
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
@@ -1214,6 +1215,11 @@ ${postLine(p)}`);
         if (checked.problems.length) process.exitCode = 1;
         return;
       }
+      if (sub === 'env') {
+        const env = await b.appEnv(needProject());
+        const line = ([k, v]: [string, string]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
+        return out(env, () => [...Object.entries(env).map(line), '# set these where you start the app; they last until Weave restarts'].join('\n'));
+      }
       if (sub === 'example') {
         return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
       }
@@ -1240,7 +1246,7 @@ ${postLine(p)}`);
         const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
         return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
       }
-      throw new Error('usage: weave app publish|show|check|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|check|env|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
     }
 
     case 'rooms': {

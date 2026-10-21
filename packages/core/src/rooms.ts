@@ -164,7 +164,7 @@ export function checkManifest(input: unknown): ManifestCheck {
       };
       const host = side(open.host, 'Open', 'host');
       const joiner = side(open.joiner, 'Play', 'joiner');
-      if (protocol === 'http' && !host && !joiner) warnings.push(`${where}: no "open": rooms show no button to open the app (add open.host and open.joiner)`);
+      if (protocol === 'http' && !host && !joiner) warnings.push(`${where}: no "open": everyone opens "/" (add open.host and open.joiner for different pages, or tell host and players apart with @weave/sdk)`);
       return ok ? [{ id, port, protocol, ...(host || joiner ? { open: { ...(host ? { host } : {}), ...(joiner ? { joiner } : {}) } } : {}) }] : [];
     });
   }
@@ -235,12 +235,13 @@ export const MANIFEST_RULES = [
   'The file is weave.app.json at the top of the repository. A host runs the app on their computer; a room shares it with the project through an encrypted tunnel.',
   'app: a short id, lowercase letters, digits and dashes (it stays the same across versions). name: what people see.',
   'services: the ports the app listens on, at most 8. A room shares exactly these ports and nothing else on the host\'s computer. Each has a port, an optional id, and protocol "http" (default) or "tcp".',
-  'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label.',
+  'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label. Without open, everyone opens "/". Either way anyone can type any path: to tell host and players apart for real, ask Weave with @weave/sdk.',
   'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after the host approves it once.',
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.hint: one line for hosts who start it by hand.',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
+  "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
 ];
 
 /** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */

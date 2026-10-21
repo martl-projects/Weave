@@ -1,0 +1,22 @@
+{
+  "name": "@weave/sdk",
+  "version": "0.3.0",
+  "description": "Who is playing: for apps shared in Weave rooms",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "./src/index.cjs",
+  "types": "./src/index.d.cts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.cts",
+      "default": "./src/index.cjs"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

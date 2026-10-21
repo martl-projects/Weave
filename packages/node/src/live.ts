@@ -16,6 +16,10 @@ import type { HyperDHT } from 'hyperswarm';
  * port the room shares. Players connect only to the host, never to each other.
  * The host also tells players whether its app answers on that port, so they
  * wait for it instead of opening a window onto nothing.
+ *
+ * Each tunnel reaches the app from its own local port, so the host knows who
+ * is behind every connection the app sees (personOnPort): that's how apps
+ * learn who their players are, without anything added to their traffic.
  */
 
 export interface RoomMessage {
@@ -107,6 +111,8 @@ function onLines(socket: DhtSocket, rest: Buffer, handle: (message: Record<strin
 export class LiveRooms {
   #host: LiveHost;
   #hosting = new Map<string, Hosting>();
+  /** Host side: the local port of each tunnel into the app → who opened it, in which room. */
+  #tunnels = new Map<number, { person: Did; room: string; socket: Socket }>();
   #joined = new Map<string, Joined>();
 
   constructor(host: LiveHost) {
@@ -135,6 +141,12 @@ export class LiveRooms {
   appReady(roomId: string): boolean {
     const joined = this.#joined.get(roomId);
     return !!joined?.connected && joined.appReady !== false;
+  }
+
+  /** Host side: who is behind the app's connection from this local port, if it came through one of our rooms. */
+  personOnPort(port: number): { person: Did; room: string } | undefined {
+    const tunnel = this.#tunnels.get(port);
+    return tunnel && this.#hosting.has(tunnel.room) ? { person: tunnel.person, room: tunnel.room } : undefined;
   }
 
   localPort(roomId: string): number | undefined {
@@ -177,6 +189,15 @@ export class LiveRooms {
       if (!port) return void socket.destroy();
       const local = createConnection({ host: '127.0.0.1', port });
       local.on('error', () => socket.destroy());
+      // Registered before splice, so it runs before any bytes reach the app (and the app could ask who sent them).
+      local.once('connect', () => {
+        const at = local.localPort;
+        if (!at) return;
+        this.#tunnels.set(at, { person, room: hosting.room.id, socket: local });
+        local.once('close', () => {
+          if (this.#tunnels.get(at)?.socket === local) this.#tunnels.delete(at);
+        });
+      });
       splice(socket, local, rest);
       return;
     }

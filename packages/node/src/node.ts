@@ -207,7 +207,9 @@ import {
   type Actor,
   type Admission,
   type AgentInfo,
+  type AppEnv,
   type AppLaunchInfo,
+  type AppPerson,
   type Backend,
   type BoardInfo,
   type ChatInfo,
@@ -276,6 +278,7 @@ import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIden
 import { acquireLock } from './lock.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
+import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkGumroadLicense, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
@@ -393,6 +396,9 @@ export class WeaveNode implements Backend {
   });
   /** Apps this node started for the person, by project id. */
   #apps = new AppProcesses(() => this.#emitLive());
+  /** The app API (see appapi.ts), started when an app first needs it; its tokens, one per project, for this run. */
+  #appApi?: Promise<AppApiServer>;
+  #appTokens = new Map<string, string>();
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
@@ -529,6 +535,10 @@ export class WeaveNode implements Backend {
 
   async goOffline(): Promise<void> {
     this.#apps.stopAll();
+    const appApi = this.#appApi;
+    this.#appApi = undefined;
+    this.#appTokens.clear();
+    await (await appApi?.catch(() => undefined))?.close();
     await this.#remote.close();
     await this.#live.close();
     await this.#swarm?.destroy();
@@ -1974,8 +1984,86 @@ export class WeaveNode implements Backend {
       this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: fingerprint } };
       saveConfig(this.home, this.config);
     }
-    this.#apps.start(project.id, command, folder);
+    this.#apps.start(project.id, command, folder, { ...(await this.appEnv(project.id)) });
     return this.appLaunch(project.id);
+  }
+
+  // ---------------------------------------------------------------- app API
+
+  /** What a project's app needs to ask Weave who its players are: Weave passes it when it starts the app; `weave app env` prints it. */
+  async appEnv(ref: string): Promise<AppEnv> {
+    const project = this.#project(ref);
+    this.#appApi ??= startAppApi(
+      (token) => [...this.#appTokens].find(([, t]) => sameToken(t, token))?.[0],
+      (projectId, route, params) => this.#appAnswer(projectId, route, params),
+    );
+    const api = await this.#appApi;
+    let token = this.#appTokens.get(project.id);
+    if (!token) this.#appTokens.set(project.id, (token = b64u.encode(randomBytes(24))));
+    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: token, WEAVE_PROJECT: project.id };
+  }
+
+  #appAnswer(projectId: string, route: string, params: URLSearchParams): unknown {
+    const project = this.#spaces.get(projectId);
+    if (!project) throw new AppApiError(404, 'this project is no longer here');
+    const me = this.identity.author;
+    if (route === '/v1/me') return this.#appPerson(project, me);
+    if (route === '/v1/who') {
+      const port = Number(params.get('port'));
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('port: the remote port of the connection (a number)');
+      const found = this.#live.personOnPort(port);
+      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.project.id === projectId);
+      if (!found || !room) throw new AppApiError(404, 'not a connection through one of this project’s rooms');
+      return { ...this.#appPerson(project, found.person), room: { id: room.room.id, name: room.room.name } };
+    }
+    if (route === '/v1/project') {
+      const rooms = this.#allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.#live.isHosting(r.room.id));
+      return {
+        id: project.id,
+        name: project.name,
+        host: { did: me, name: this.nameOf(me) },
+        rooms: rooms.map(({ room }) => ({ id: room.id, name: room.name, people: this.#live.peers(room.id).map((did) => this.#appPerson(project, did)) })),
+        groups: this.#appGroups(project).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
+      };
+    }
+    if (route === '/v1/access') {
+      const did = params.get('did') ?? '';
+      if (!did.startsWith('did:')) throw new Error('did: whose access to look up');
+      const groups = this.#appGroups(project);
+      const group = params.get('group');
+      const asked = group ? groups.filter(({ space }) => space.id === group || space.name.toLowerCase() === group.toLowerCase()) : groups;
+      if (group && asked.length === 0) throw new AppApiError(404, `no group "${group}" here: only the project's groups and the host's own groups and tiers`);
+      return {
+        ...this.#appPerson(project, did as Did),
+        groups: asked.filter(({ state }) => state.members.has(did as Did)).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
+      };
+    }
+    throw new AppApiError(404, `no route ${route}`);
+  }
+
+  /** A person as an app sees them: who they are and their place in the project. */
+  #appPerson(project: StoredSpace, did: Did): AppPerson {
+    const state = this.#state(project);
+    const name = this.nameOf(did);
+    return {
+      did,
+      ...(name ? { name } : {}),
+      host: did === this.identity.author,
+      member: state.members.has(did) || did === this.identity.author,
+      maintainer: state.maintainers.has(did),
+    };
+  }
+
+  /** Groups an app may ask about: the ones invited into the project, and the host's own groups and tiers. Nothing else of the host's. */
+  #appGroups(project: StoredSpace): Array<{ space: StoredSpace; state: SpaceState }> {
+    const invited = new Set(this.#state(project).groups.keys());
+    const out: Array<{ space: StoredSpace; state: SpaceState }> = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group') continue;
+      const state = this.#state(space);
+      if (invited.has(space.id) || state.founder === this.identity.author) out.push({ space, state });
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- installing the app from its release

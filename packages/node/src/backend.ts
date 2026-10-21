@@ -446,6 +446,23 @@ export interface CoauthorRequest {
 }
 
 /** A live room in a project: a host shares the project's app, players use it through a tunnel. */
+/** How a project's app reaches the app API on the host's computer (see appapi.ts): set in its environment when Weave starts it. */
+export interface AppEnv {
+  WEAVE_API: string;
+  WEAVE_TOKEN: string;
+  WEAVE_PROJECT: string;
+}
+
+/** A person as the app API shows them to an app. */
+export interface AppPerson {
+  did: Did;
+  name?: string;
+  /** The host: whoever runs the app on this computer. */
+  host: boolean;
+  member: boolean;
+  maintainer: boolean;
+}
+
 /** Starting the project's app on this computer (see the manifest's start.command). */
 export interface AppLaunchInfo {
   /** The command from the manifest, if it has one. */
@@ -910,6 +927,8 @@ export interface Backend {
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
   launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
   stopApp(project: string): Promise<AppLaunchInfo>;
+  /** The app API's address and this project's token, for an app started by hand (Weave sets them itself when it starts the app). Valid until Weave restarts. */
+  appEnv(project: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
@@ -984,7 +1003,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

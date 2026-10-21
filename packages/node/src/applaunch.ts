@@ -44,13 +44,14 @@ export class AppProcesses {
     return !!run && !run.exit;
   }
 
-  start(key: string, command: string[], folder: string): void {
+  /** `extraEnv`: what the app gets on top of Weave's own environment (the app API, see appapi.ts). */
+  start(key: string, command: string[], folder: string, extraEnv: Record<string, string> = {}): void {
     if (this.running(key)) throw new Error('the app is running already');
     const [named, ...args] = command;
     // A program in the app's own folder ("band-ab.exe" or "./band-ab"): Windows wouldn't look there by itself.
     const program = !isAbsolute(named) && existsSync(join(folder, named)) ? join(folder, named) : named;
     // The daemon may run on Electron's Node; the app shouldn't inherit that.
-    const env = { ...process.env };
+    const env = { ...process.env, ...extraEnv };
     delete env.ELECTRON_RUN_AS_NODE;
     const batch = process.platform === 'win32' && /\.(bat|cmd)$/i.test(program);
     const child = batch
