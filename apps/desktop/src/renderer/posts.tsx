@@ -304,6 +304,11 @@ export function PostList({
         </span>
       </header>
       <div className="pane-scroll sunken">
+        {board?.rule && (
+          <p className="small rule-line">
+            <Icon name="clock" /> {ruleText(board.rule)}
+          </p>
+        )}
         {above}
         {(posts ?? []).map((p) => (
           <PostRow key={p.id} post={p} meDid={meDid} spaces={spaces} showWhere={!query.space} curate={curate} moderator={canCurate && !!query.space} />
@@ -312,6 +317,27 @@ export function PostList({
       </div>
     </section>
   );
+}
+
+// ---------------------------------------------------------------- how long things stay
+
+const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+
+/** Why a post stays for good, or until when and what stretched it. */
+export function lifetimeText(l: NonNullable<PostInfo['lifetime']>): string {
+  const yours = l.yours ? ' Your devices keep it regardless.' : '';
+  if ('forever' in l) return { pinned: 'Stays for good: it is pinned.', permanent: 'Stays for good: issues, proposals and releases always do.', 'no-rule': 'Stays for good: this board has no rule for forgetting.' }[l.forever];
+  if (l.full) return `Goes now: the board is over its size, and this post would go soonest.${yours}`;
+  const why = l.grace ? ', given 14 days after the rule was set' : l.upvotes ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days` : '';
+  const gone = Date.parse(l.until) <= Date.now();
+  return `${gone ? 'Forgotten since' : 'Stays until'} ${day(l.until)}${why}.${yours}`;
+}
+
+/** A board's rule, said in a line, with who set it when. */
+export function ruleText(rule: NonNullable<BoardInfo['rule']>): string {
+  const keep = rule.keepDays ? `Posts here stay ${rule.keepDays} days after their last activity, longer with upvotes` : 'Posts here stay';
+  const size = rule.maxMB ? `${rule.keepDays ? ', and' : ''} up to ${rule.maxMB} MB in all` : '';
+  return `${keep}${size}. Set by ${rule.by.name ?? shortDid(rule.by.did)} on ${day(rule.time)}.`;
 }
 
 // ---------------------------------------------------------------- one post
@@ -439,6 +465,11 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
             <Coauthors post={post} /> · {ago(post.time)}
             {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
           </div>
+          {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
+            <div className="small muted lifetime">
+              <Icon name="clock" /> {lifetimeText(post.lifetime)}
+            </div>
+          )}
           {post.link && (
             <a className="post-link big" href={post.link}>
               <Icon name="externalLink" /> {post.link}

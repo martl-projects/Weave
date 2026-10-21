@@ -9,7 +9,7 @@ import { MyProjects } from './hubprojects.tsx';
 import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
-import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
+import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
 
@@ -370,9 +370,13 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
+  const { data: fading } = useApi(() => api<PostInfo[]>('fading').catch(() => []), []);
   return (
     <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && fading?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {(fading ?? []).map((p) => (
+        <FadingCard key={p.id} post={p} />
+      ))}
       {(asks ?? []).map((r) => (
         <PermissionCard key={r.id} request={r} />
       ))}
@@ -389,6 +393,28 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
         <AdmissionCard key={`${a.project.id}-${a.did}-${a.group.id}-${a.change}`} admission={a} />
       ))}
     </Page>
+  );
+}
+
+/** A post of yours that others will forget soon, by the rule of its board. */
+export function FadingCard({ post }: { post: PostInfo }) {
+  return (
+    <div className="admission window">
+      <div className="window-body">
+        <Icon name="clock" />
+        <div className="grow">
+          <a href={`#/post/${post.id}`}>“{post.title}”</a>
+          {post.space && <span className="small muted"> in {post.space.name}</span>}
+          <div className="small muted">{post.lifetime ? lifetimeText(post.lifetime) : ''} Keep it, and its time starts again; maintainers and moderators can also pin it to keep it for good.</div>
+        </div>
+        <a className="button" href={`#/post/${post.id}`}>
+          Open
+        </a>
+        <AsyncButton className="default" onClick={() => attempt(() => api('keepPost', post.id).then(bump), `Kept “${post.title}”`)}>
+          Keep
+        </AsyncButton>
+      </div>
+    </div>
   );
 }
 
@@ -729,9 +755,64 @@ function BoardAccessDialog({ project, board, onClose }: { project: SpaceInfo; bo
   );
 }
 
+/** How long a board's posts stay: days after their last activity, and a size limit; empty for no limit. */
+export function BoardRuleDialog({ space, board, onClose }: { space: SpaceInfo; board: BoardInfo; onClose(): void }) {
+  const [days, setDays] = useState(board.rule?.keepDays ? String(board.rule.keepDays) : '');
+  const [mb, setMb] = useState(board.rule?.maxMB ? String(board.rule.maxMB) : '');
+  const save = async () => {
+    const value = (v: string) => (v.trim() ? Number(v) : null);
+    if (await attempt(() => api('setBoardRule', { space: space.id, board: board.name, keepDays: value(days), maxMB: value(mb) }).then(bump), 'Rule saved')) onClose();
+  };
+  return (
+    <Modal title={`How long posts stay in “${board.title}”`} onClose={onClose}>
+      <div className="field-row">
+        <label>
+          Days after their last activity <input type="number" min={1} value={days} placeholder="for good" onChange={(e) => setDays(e.target.value)} />
+        </label>
+      </div>
+      <div className="field-row">
+        <label>
+          At most, in all (MB) <input type="number" min={1} value={mb} placeholder="no limit" onChange={(e) => setMb(e.target.value)} />
+        </label>
+      </div>
+      <p className="small">
+        Each upvote stretches a post's time. Pinned posts, issues, proposals and releases always stay, and so does everything on the devices of whoever wrote it. A new rule
+        forgets nothing for its first 14 days, and authors are told two weeks ahead.
+      </p>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <AsyncButton className="default" onClick={save}>
+          Save
+        </AsyncButton>
+      </div>
+    </Modal>
+  );
+}
+
+/** A community's one board: how long its posts stay. */
+function CommunityRule({ community, canSet }: { community: SpaceInfo; canSet: boolean }) {
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', community.id), [community.id]);
+  const [open, setOpen] = useState(false);
+  const board = boards?.[0];
+  if (!board) return null;
+  return (
+    <fieldset>
+      <legend>How long posts stay</legend>
+      <p className="small">{board.rule ? ruleText(board.rule) : 'Posts stay for good: there is no rule for forgetting.'}</p>
+      {canSet && (
+        <div className="buttons">
+          <button onClick={() => setOpen(true)}>Change…</button>
+        </div>
+      )}
+      {open && <BoardRuleDialog space={community} board={board} onClose={() => setOpen(false)} />}
+    </fieldset>
+  );
+}
+
 function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
   const add = useForm({ name: '', type: 'posts' });
   const [editing, setEditing] = useState<BoardInfo>();
+  const [ruling, setRuling] = useState<BoardInfo>();
   const set = (name: string, patch: Record<string, unknown>) => attempt(() => api('setBoard', { project: project.id, name, ...patch }).then(bump));
   const move = (i: number, by: number) => {
     const other = boards[i + by];
@@ -755,6 +836,11 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
               <td>
                 <button className="small-btn access-btn" title="Who may read and write" onClick={() => setEditing(b)}>
                   {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
+                </button>
+              </td>
+              <td>
+                <button className="small-btn" title={b.rule ? ruleText(b.rule) : 'Posts stay for good'} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
+                  <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? 'for good' : b.rule?.keepDays ? `${b.rule.keepDays} days` : b.rule?.maxMB ? `${b.rule.maxMB} MB` : 'for good'}
                 </button>
               </td>
               <td>
@@ -795,6 +881,7 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
         <button>Add board</button>
       </form>
       {editing && <BoardAccessDialog project={project} board={editing} onClose={() => setEditing(undefined)} />}
+      {ruling && <BoardRuleDialog space={project} board={ruling} onClose={() => setRuling(undefined)} />}
     </fieldset>
   );
 }
@@ -1095,6 +1182,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
         })}
       </fieldset>
       <RepoSettings space={community} />
+      <CommunityRule community={community} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>

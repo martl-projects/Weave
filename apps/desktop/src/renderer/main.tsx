@@ -420,7 +420,8 @@ function Shell() {
   const { data: knocks } = useApi(() => api<KnockInfo[]>('knocks'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
-  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0);
+  const { data: fading } = useApi(() => api<PostInfo[]>('fading').catch(() => []), []);
+  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0) + (fading?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
   // On a phone the places tree is a screen of its own; picking something closes it.
