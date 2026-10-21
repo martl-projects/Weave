@@ -217,7 +217,7 @@ async function createWindow(): Promise<void> {
     height: 820,
     minWidth: 760,
     minHeight: 520,
-    backgroundColor: '#0d0e12',
+    backgroundColor: '#f4f5f7', // the Clean look's canvas, so the window doesn't flash dark while it loads
     title: 'Weave',
     show: !values.screenshot,
     autoHideMenuBar: true,
