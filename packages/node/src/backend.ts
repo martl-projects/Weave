@@ -447,6 +447,24 @@ export interface CoauthorRequest {
 }
 
 /** A live room in a project: a host shares the project's app, players use it through a tunnel. */
+/** The newest Weave version this node knows of, and whether it's newer than the one running. */
+export interface UpdateInfo {
+  current: string;
+  latest?: {
+    version: string;
+    /** Where to get it: the GitHub release page, or the release post in Weave. */
+    url?: string;
+    /** The release post, for opening it in Weave. */
+    post?: string;
+    /** What's new (Markdown). */
+    notes?: string;
+    published?: string;
+    /** weave: a release post signed by a maintainer of the Weave project; github: the repository's releases. */
+    source: 'weave' | 'github';
+  };
+  newer: boolean;
+}
+
 /** How a project's app reaches the app API on the host's computer (see appapi.ts): set in its environment when Weave starts it. */
 export interface AppEnv {
   WEAVE_API: string;
@@ -935,6 +953,11 @@ export interface Backend {
    * in app-settings.json, and handed to this app alone when Weave starts it; never synced, shown or given to agents.
    */
   setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo>;
+  /**
+   * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
+   * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
+   */
+  updateCheck(input: { current: string }): Promise<UpdateInfo>;
   /** The app API's address and this project's token, for an app started by hand (Weave sets them itself when it starts the app). Valid until Weave restarts. */
   appEnv(project: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
@@ -1011,7 +1034,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

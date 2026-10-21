@@ -178,6 +178,7 @@ export {
   type RecoveryWords,
 } from './recovery.ts';
 export { TEXT_LIMITS, tooLong, checkTextFields } from './limits.ts';
+export { compareVersions, formatVersion, parseVersion, type Version } from './version.ts';
 export { KIND_APP, KIND_ROOM, checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppInstall, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {

@@ -568,3 +568,7 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .release-list { width: 100%; border-collapse: collapse; background: transparent; }
 .release-list td { padding: 4px 2px; border-bottom: 1px solid #c0c0c0; }
 .release-list td:last-child { text-align: right; white-space: nowrap; }
+
+/* New Weave version (update.tsx) */
+.update-prompt { max-width: 520px; }
+.update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }

@@ -15,6 +15,8 @@ export interface Config {
   agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
   githubApp?: { clientId: string; slug: string; name: string; owner: string };
+  /** Where to look for new Weave versions, instead of the Weave project and its repository. */
+  updates?: { project?: string; repo?: string };
 }
 
 export function loadConfig(home: Home): Config {
@@ -27,6 +29,9 @@ export function loadConfig(home: Home): Config {
     approvedLaunches: stored.approvedLaunches ?? {},
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
+    ...(stored.updates && typeof stored.updates === 'object'
+      ? { updates: { ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}), ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}) } }
+      : {}),
   };
 }
 

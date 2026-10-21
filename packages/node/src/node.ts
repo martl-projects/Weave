@@ -200,6 +200,9 @@ import {
   type Thread,
   type WeaveEvent,
   checkTextFields,
+  compareVersions,
+  formatVersion,
+  parseVersion,
   TEXT_LIMITS,
   tooLong,
 } from '@weave/core';
@@ -213,6 +216,7 @@ import {
   type AppEnv,
   type AppLaunchInfo,
   type AppPerson,
+  type UpdateInfo,
   type Backend,
   type BoardInfo,
   type ChatInfo,
@@ -1956,6 +1960,41 @@ export class WeaveNode implements Backend {
     const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
     const repo = app.install?.github ?? (linked.length === 1 ? linked[0].repo : undefined);
     return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
+  }
+
+  // ---------------------------------------------------------------- updates
+
+  async updateCheck(input: { current: string }): Promise<UpdateInfo> {
+    const current = parseVersion(String(input?.current ?? ''));
+    if (!current) throw new Error(`"${input?.current}" isn't a version like 0.3.0`);
+    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
+    const found: NonNullable<UpdateInfo['latest']>[] = [];
+
+    // Release posts in the Weave project, signed by its maintainers: every member has them, no sign-in needed.
+    const project = this.#spaces.get(source.project);
+    if (project?.kind === 'project') {
+      const maintainers = this.#state(project).maintainers;
+      for (const post of await this.posts({ space: project.id, board: 'releases' })) {
+        const version = /^weave\b/i.test(post.title) ? parseVersion(post.title) : undefined;
+        if (!version || !maintainers.has(post.by.did)) continue;
+        found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
+      }
+    }
+    // The repository's releases, with your GitHub sign-in if you have one (the repository may be private).
+    try {
+      const auth = this.#githubAuth();
+      const releases = await withTimeout(new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(source.repo), 8000);
+      for (const r of releases) {
+        const version = parseVersion(r.tag);
+        if (version) found.push({ version: formatVersion(version), url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(r.tag)}`, ...(r.published ? { published: r.published } : {}), source: 'github' });
+      }
+    } catch {
+      // unreachable or private without access: the release posts are enough
+    }
+
+    // The newest version; for the same version, the release post (it has the notes) wins.
+    const latest = found.sort((a, b) => compareVersions(b.version, a.version) || (a.source === 'weave' ? -1 : 1))[0];
+    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
   }
 
   async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
@@ -4035,6 +4074,14 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 
 /** Automatic grants (free tiers) don't run out in practice. */
 const FREE_TIER_MONTHS = 1200;
+
+/** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
+const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
+
+/** A promise that gives up after `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms).unref())]);
+}
 
 /** Contacts and free tiers an app ships with for newcomers (see weave.bundle.json). */
 export interface Bundle {

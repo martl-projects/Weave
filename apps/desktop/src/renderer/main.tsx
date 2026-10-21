@@ -1,3 +1,4 @@
+import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
@@ -500,7 +501,13 @@ function Shell() {
             { label: 'Invite someone here…', disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
           ]}
         />
-        <Menu label="Help" items={[{ label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) }]} />
+        <Menu
+          label="Help"
+          items={[
+            { label: 'Check for updates…', onClick: checkForUpdates },
+            { label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) },
+          ]}
+        />
       </nav>
       <div className="toolbar">
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
@@ -567,6 +574,7 @@ function App() {
           <Shell />
           <AgentsOffer />
           <AgentAsks />
+          <UpdatePrompt />
         </>
       )}
       <Toasts />

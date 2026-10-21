@@ -56,6 +56,7 @@ usage: weave <command> [options]
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   status                     node status: peers, groups, projects, communities
+  update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
@@ -616,6 +617,16 @@ async function main(): Promise<void> {
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
       return new Promise(() => {}); // run until stopped
+    }
+
+    case 'update': {
+      const u = await (await backend()).updateCheck({ current: VERSION });
+      return out(u, () => {
+        const l = u.latest;
+        if (!l) return `Weave ${u.current}; no release found (are you in the Weave project?)`;
+        if (!u.newer) return `Weave ${u.current} is the newest version`;
+        return [`Weave ${l.version} is available (you have ${u.current})`, l.url ? `  get it: ${l.url}` : '', l.post ? `  release post: ${l.post}` : ''].filter(Boolean).join('\n');
+      });
     }
 
     case 'status': {
