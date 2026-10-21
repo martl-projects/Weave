@@ -2,6 +2,13 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.6.0 · 2026-10-21
+
+- v2 stage 3.4: shredding, with carry-forward
+- v2 stage 3.3: how long things stay, shown
+- v2 stage 3.1-3.2: board rules, lifetimes, and forgetting
+- v2 stage 3: design
+
 ## v0.5.1 · 2026-10-21
 
 - Desktop: what newcomers read, and where keys are kept
