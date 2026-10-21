@@ -41,3 +41,11 @@ Each post in a pulled space says roughly who holds it: "Held by about 7: its aut
 2. Sync: `bare` envelopes, `wantsBody`, the window for pulled spaces, `sync {until}`, `fetchOlder`.
 3. App: "held by" on posts, "Load older" at the end of a pulled board; PostInfo `heldBy`.
 4. Release v0.7 with a release post.
+
+## As built
+
+- **Owners hold everything** of their own spaces (no pulling for them), so a big space always has one full copy wherever its owner runs Weave.
+- **Opening a post keeps it** (30 days), as does asking for older content; the list of what you opened is sealed at rest (it says what you read).
+- **Held by** is an estimate: the author, the share holders other than the author, and the net upvotes; "everyone online" while recent. It doesn't count what others opened (that stays private).
+- **Envelopes always travel** in full, so every member knows what exists (and can compute shares and fetch on demand); only bodies are held partly. Large-community scale beyond that (helpers, indexers, Negentropy) is stages 5–7.
+- Shown in the app: "Held by …" on posts, "Load older" at the end of a big space's board (and `weave older <space>`).

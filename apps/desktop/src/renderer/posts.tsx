@@ -314,6 +314,12 @@ export function PostList({
           <PostRow key={p.id} post={p} meDid={meDid} spaces={spaces} showWhere={!query.space} curate={curate} moderator={canCurate && !!query.space} />
         ))}
         {posts?.length === 0 && <div className="empty">{empty}</div>}
+        {query.space && posts?.some((p) => p.heldBy) && (
+          <div className="buttons load-older">
+            <AsyncButton onClick={() => attempt(() => api('fetchOlder', { space: query.space! }).then(bump), 'Asked the members for the month before')}>Load older</AsyncButton>
+            <span className="small muted">Older posts are with the members who keep them.</span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -331,6 +337,13 @@ export function lifetimeText(l: NonNullable<PostInfo['lifetime']>): string {
   const why = l.grace ? ', given 14 days after the rule was set' : l.upvotes ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days` : '';
   const gone = Date.parse(l.until) <= Date.now();
   return `${gone ? 'Forgotten since' : 'Stays until'} ${day(l.until)}${why}.${yours}`;
+}
+
+/** Roughly who holds a post of a big space: an estimate, from what everyone knows. */
+export function heldByText(h: NonNullable<PostInfo['heldBy']>): string {
+  if (h.recent) return `Held by everyone online while it's recent (${h.about} members).`;
+  const parts = ['its author', `${h.share} member${h.share === 1 ? '' : 's'} by share`, ...(h.upvoters ? [`${h.upvoters} who upvoted`] : [])];
+  return `Held by about ${h.about}: ${parts.join(', ')}.`;
 }
 
 /** A board's rule, said in a line, with who set it when. */
@@ -470,6 +483,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
               <Icon name="clock" /> {lifetimeText(post.lifetime)}
             </div>
           )}
+          {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
           {post.link && (
             <a className="post-link big" href={post.link}>
               <Icon name="externalLink" /> {post.link}

@@ -104,6 +104,7 @@ projects — something being built; participants chat, discuss, vote and work on
   rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
   keep <post> / fading                   start a post's time again / your posts others will forget soon
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
+  older <space> [before]                 ask the members of a big space for the month before (what they hold)
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
   let-in <id> / turn-away <id>           answer someone who asked
@@ -1126,6 +1127,12 @@ ${postLine(p)}`);
       if (!space || !before) throw new Error('usage: weave shred <space> <date>   (the keys that ended before that date)');
       const r = await (await backend()).shred({ space, before });
       return out(r, () => `carried ${r.carried} events forward; everyone in ${space} deletes ${r.epochs.length === 1 ? 'one old key' : `${r.epochs.length} old keys`}, so every copy of what was sealed with ${r.epochs.length === 1 ? 'it' : 'them'} becomes unreadable`);
+    }
+
+    case 'older': {
+      if (!args[0]) throw new Error('usage: weave older <space> [before]');
+      const r = await (await backend()).fetchOlder({ space: args[0], ...(args[1] ? { before: args[1] } : {}) });
+      return out(r, () => `asked the members of ${args[0]} for ${r.since.slice(0, 10)} to ${r.until.slice(0, 10)}: what they hold comes in while you're online`);
     }
 
     case 'keep': {
