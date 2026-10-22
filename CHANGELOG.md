@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.10.0 · 2026-10-22
+
+- v2 stage 7: range-based set reconciliation (Negentropy-style)
+
 ## v0.9.0 · 2026-10-22
 
 - v2 stage 6.4: legal hold and archive nodes; company commands
