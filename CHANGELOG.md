@@ -2,6 +2,11 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.16.0 · 2026-10-22
+
+- Fixes from running the company flow end to end, and the demo that runs it
+- v2 stage 13: sign in with a company account in the app; Weave Server; Azure for the company node
+
 ## v0.15.1 · 2026-10-22
 
 - Fix the macOS pkg build; the app's own icons in the admin console
