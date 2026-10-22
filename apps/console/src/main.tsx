@@ -21,7 +21,7 @@ function Stat({ icon, tone, label, value, sub, alert }: { icon: IconName; tone: 
   return (
     <div className="card stat">
       <div className={`stat-icon strand-${tone}`}>
-        <Icon name={icon} size={20} />
+        <Icon name={icon} size={32} />
       </div>
       <div>
         <div className="k">{label}</div>
@@ -50,12 +50,12 @@ function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void 
   ];
   return (
     <>
-      <Header icon="grid" title={company.name} lead="Your company's Weave: its people, projects and groups, policy and audit." />
+      <Header icon="home" title={company.name} lead="Your company's Weave: its people, projects and groups, policy and audit." />
       <div className="cards">
-        <Stat icon="users" tone="navy" label="People vouched for" value={members.data ? vouched : '…'} sub={members.data ? `${members.data.length} in the company group` : ''} />
-        <Stat icon="briefcases" tone="teal" label="Projects and groups" value={company.spaces.length + 1} sub={`${company.maps.length} mapped from sign-in groups`} />
-        <Stat icon="database" tone="gold" label="Directory (SCIM)" value={scim.data ? (scim.data.on ? 'On' : 'Off') : '…'} sub={scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'} />
-        <Stat icon="plug" tone="red" label="Audit streams" value={streams.data?.length ?? '…'} sub={!streams.data?.length ? 'none yet' : troubled ? 'a destination has a problem' : 'all delivering'} alert={troubled} />
+        <Stat icon="people" tone="navy" label="People vouched for" value={members.data ? vouched : '…'} sub={members.data ? `${members.data.length} in the company group` : ''} />
+        <Stat icon="projects" tone="teal" label="Projects and groups" value={company.spaces.length + 1} sub={`${company.maps.length} mapped from sign-in groups`} />
+        <Stat icon="directory" tone="gold" label="Directory (SCIM)" value={scim.data ? (scim.data.on ? 'On' : 'Off') : '…'} sub={scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'} />
+        <Stat icon="tools" tone="red" label="Audit streams" value={streams.data?.length ?? '…'} sub={!streams.data?.length ? 'none yet' : troubled ? 'a destination has a problem' : 'all delivering'} alert={troubled} />
       </div>
       <div className="grid-2">
         <section className="panel">
@@ -79,7 +79,7 @@ function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void 
             <h2>Set up a new colleague</h2>
           </div>
           <p className="muted">An enrollment link sets up a company account with their company sign-in (weave enroll), or goes into your device management's settings.</p>
-          <Run kind="primary" icon="plus" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
+          <Run kind="primary" icon="new" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
             New enrollment link
           </Run>
           {link && <CopyText text={link} />}
@@ -138,13 +138,13 @@ function People({ company }: { company: CompanyInfo }) {
   const shown = (members.data ?? []).filter((m) => !filter || `${m.name} ${m.attested?.email ?? ''} ${m.attested?.groups.join(' ') ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <>
-      <Header icon="users" title="People" lead="Everyone in the company group, and what the company vouches for.">
+      <Header icon="people" title="People" lead="Everyone in the company group, and what the company vouches for.">
         <input className="search" placeholder="Search people or groups" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </Header>
       <Problem error={members.error} />
       {answer && (
         <div className="notice">
-          <Icon name="key" /> Recovery answer for {answer.name}'s new computer. Only that computer opens it (weave recover &lt;answer&gt; there):
+          <Icon name="info" size={20} /> Recovery answer for {answer.name}'s new computer. Only that computer opens it (weave recover &lt;answer&gt; there):
           <CopyText text={answer.answer} />
         </div>
       )}
@@ -227,7 +227,7 @@ function People({ company }: { company: CompanyInfo }) {
             })}
           </tbody>
         </table>
-        {members.data && !shown.length && <Empty icon="users">Nobody matches “{filter}”.</Empty>}
+        {members.data && !shown.length && <Empty icon="people">Nobody matches “{filter}”.</Empty>}
       </section>
     </>
   );
@@ -243,7 +243,7 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const kindOf = (id: string) => (id === company.group.id ? 'group' : company.spaces.find((s) => s.id === id)?.kind);
   return (
     <>
-      <Header icon="briefcases" title="Projects and groups" lead="The company's own projects and groups. Sign-in groups decide who is in them; click one to open it in Weave." />
+      <Header icon="projects" title="Projects and groups" lead="The company's own projects and groups. Sign-in groups decide who is in them; click one to open it in Weave." />
       <Problem error={spaces.error} />
       <section className="panel flush table-wrap">
         <table>
@@ -268,7 +268,7 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
                 <td>
                   <div className="who">
                     <span className={`space-icon ${s.kind}`}>
-                      <Icon name={s.id === company.group.id ? 'users' : s.kind === 'project' ? 'briefcases' : 'users'} />
+                      <Icon name={s.kind === 'project' ? 'projects' : 'people'} />
                     </span>
                     <div>
                       <div className="name">
@@ -417,7 +417,7 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const days = (v: string) => (v.trim() ? Number(v) : null);
   return (
     <>
-      <Header icon="shield" title="Policy" lead="What company accounts may do, and how long the company's projects and groups keep things. The policy is published, so every Weave app holds company accounts to it.">
+      <Header icon="policy" title="Policy" lead="What company accounts may do, and how long the company's projects and groups keep things. The policy is published, so every Weave app holds company accounts to it.">
         <Run
           kind="primary"
           icon="check"
@@ -497,7 +497,7 @@ function Directory() {
   const [token, setToken] = useState<string>();
   return (
     <>
-      <Header icon="database" title="Directory" lead="Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of all the company's projects and groups at once.">
+      <Header icon="directory" title="Directory" lead="Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of all the company's projects and groups at once.">
         {scim.data?.on ? (
           <>
             <Run icon="key" confirm="Make a new token? The old one stops working." run={async () => (setToken((await api<ScimInfo>('/scim', { method: 'POST', body: { on: true } })).token), scim.reload())}>
@@ -517,7 +517,7 @@ function Directory() {
       <div className="status-line">{scim.data && (scim.data.on ? <Badge tone="good">SCIM is on, port {scim.data.port}, endpoint /scim/v2</Badge> : <Badge tone="muted">SCIM is off: groups come from sign-in tokens</Badge>)}</div>
       {token && (
         <div className="notice">
-          <Icon name="key" /> Bearer token for your user management's provisioning settings (shown once):
+          <Icon name="info" size={20} /> Bearer token for your user management's provisioning settings (shown once):
           <CopyText text={token} />
         </div>
       )}
@@ -558,7 +558,7 @@ function Directory() {
             </tbody>
           </table>
         ) : (
-          <Empty icon="database">{scim.data?.on ? 'Nobody provisioned yet: start provisioning in your user management.' : 'Turn SCIM on, then point your user management at it.'}</Empty>
+          <Empty icon="directory">{scim.data?.on ? 'Nobody provisioned yet: start provisioning in your user management.' : 'Turn SCIM on, then point your user management at it.'}</Empty>
         )}
       </section>
     </>
@@ -597,7 +597,7 @@ function Audit({ company }: { company: CompanyInfo }) {
   };
   return (
     <>
-      <Header icon="clipboardNote" title="Audit" lead="Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.">
+      <Header icon="audit" title="Audit" lead="Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.">
         <select value={space} onChange={(e) => setSpace(e.target.value)}>
           <option value="">All projects and groups</option>
           {spaces.map((s) => (
@@ -608,7 +608,7 @@ function Audit({ company }: { company: CompanyInfo }) {
         </select>
         {space && (
           <a className="btn" href={`/api/export?space=${space}`}>
-            <Icon name="download" />
+            <Icon name="export" />
             <span>Export everything (legal search)</span>
           </a>
         )}
@@ -693,7 +693,7 @@ function Streams() {
   };
   return (
     <>
-      <Header icon="plug" title="Security tools" lead="The company's node sends every audit line, as it happens, to your security tools. What can't be delivered is sent later." />
+      <Header icon="tools" title="Security tools" lead="The company's node sends every audit line, as it happens, to your security tools. What can't be delivered is sent later." />
       <Problem error={streams.error} />
       <section className="panel flush table-wrap">
         {streams.data?.length ? (
@@ -732,7 +732,7 @@ function Streams() {
             </tbody>
           </table>
         ) : (
-          <Empty icon="plug">{streams.data ? 'No destinations yet: add one below.' : 'Loading…'}</Empty>
+          <Empty icon="tools">{streams.data ? 'No destinations yet: add one below.' : 'Loading…'}</Empty>
         )}
       </section>
       <section className="panel">
@@ -793,7 +793,7 @@ function Streams() {
 
 const PAGES = ['Overview', 'People', 'Projects and groups', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
 type Page = (typeof PAGES)[number];
-const PAGE_ICONS: Record<Page, IconName> = { Overview: 'grid', People: 'users', 'Projects and groups': 'briefcases', Policy: 'shield', Directory: 'database', Audit: 'clipboardNote', 'Security tools': 'plug' };
+const PAGE_ICONS: Record<Page, IconName> = { Overview: 'home', People: 'people', 'Projects and groups': 'projects', Policy: 'policy', Directory: 'directory', Audit: 'audit', 'Security tools': 'tools' };
 
 type Theme = 'light' | 'dark' | 'system';
 function useTheme(): [Theme, (t: Theme) => void] {

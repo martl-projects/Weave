@@ -27,11 +27,59 @@ import trash from 'pixelarticons/svg/trash.svg';
 import users from 'pixelarticons/svg/users.svg';
 import warning from 'pixelarticons/svg/warning-diamond.svg';
 
-const ICONS = { analytics, briefcases, check, clipboardNote, clock, copy, database, download, externalLink, grid, key, link, lock, login, logout, monitor, moon, plug, plus, reload, send, shield, sun, trash, users, warning };
-export type IconName = keyof typeof ICONS;
+// The app's own bitmaps: SerenityOS (BSD-2-Clause, see apps/desktop/src/renderer/serenity/LICENSE),
+// colorful 16×16 and 32×32 icons in a late-90s style, as in the Weave app's Clean look.
+import certificate16 from '../../desktop/src/renderer/serenity/16x16/certificate.png';
+import copy16 from '../../desktop/src/renderer/serenity/16x16/edit-copy.png';
+import export16 from '../../desktop/src/renderer/serenity/16x16/file-export.png';
+import text16 from '../../desktop/src/renderer/serenity/16x16/filetype-text.png';
+import home16 from '../../desktop/src/renderer/serenity/16x16/go-home.png';
+import projects16 from '../../desktop/src/renderer/serenity/16x16/app-hack-studio.png';
+import people16 from '../../desktop/src/renderer/serenity/16x16/app-user-settings.png';
+import internet16 from '../../desktop/src/renderer/serenity/16x16/internet.png';
+import mail16 from '../../desktop/src/renderer/serenity/16x16/app-mail.png';
+import new16 from '../../desktop/src/renderer/serenity/16x16/new.png';
+import settings16 from '../../desktop/src/renderer/serenity/16x16/settings.png';
+import userPlus16 from '../../desktop/src/renderer/serenity/16x16/user-plus.png';
+import mail32 from '../../desktop/src/renderer/serenity/32x32/app-mail.png';
+import settings32 from '../../desktop/src/renderer/serenity/32x32/app-settings.png';
+import people32 from '../../desktop/src/renderer/serenity/32x32/app-user-settings.png';
+import home32 from '../../desktop/src/renderer/serenity/32x32/home.png';
+import error32 from '../../desktop/src/renderer/serenity/32x32/msgbox-error.png';
+import info32 from '../../desktop/src/renderer/serenity/32x32/msgbox-information.png';
+import warning32 from '../../desktop/src/renderer/serenity/32x32/msgbox-warning.png';
+import userPlus32 from '../../desktop/src/renderer/serenity/32x32/user-plus.png';
+
+/** Bitmaps: a 16×16 and, where SerenityOS has one, a 32×32. */
+const BITMAPS = {
+  home: [home16, home32],
+  people: [people16, people32],
+  projects: [projects16],
+  policy: [certificate16],
+  directory: [userPlus16, userPlus32],
+  audit: [text16],
+  tools: [internet16],
+  settings: [settings16, settings32],
+  mail: [mail16, mail32],
+  copyDoc: [copy16],
+  export: [export16],
+  new: [new16],
+  info: [info32, info32],
+  caution: [warning32, warning32],
+  error: [error32, error32],
+} satisfies Record<string, [string, string?]>;
+
+/** Tintable SVGs (pixelarticons), for small signs SerenityOS doesn't cover. */
+const VECTORS = { analytics, briefcases, check, clipboardNote, clock, copy, database, download, externalLink, grid, key, link, lock, login, logout, monitor, moon, plug, plus, reload, send, shield, sun, trash, users, warning };
+
+export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 
 export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
-  return <span className={`icon ${className ?? ''}`} style={{ width: size, height: size }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: ICONS[name] }} />;
+  if (name in BITMAPS) {
+    const [small, big] = BITMAPS[name as keyof typeof BITMAPS] as [string, string?];
+    return <img className={`icon bitmap ${className ?? ''}`} src={size > 16 && big ? big : small} width={size} height={size} alt="" aria-hidden="true" />;
+  }
+  return <span className={`icon ${className ?? ''}`} style={{ width: size, height: size }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: VECTORS[name as keyof typeof VECTORS] }} />;
 }
 
 /**
@@ -159,7 +207,7 @@ export function Faces({ people, max = 7 }: { people: Array<{ did: string; name?:
 export function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
   return (
     <div className="empty">
-      <Icon name={icon} size={28} />
+      <Icon name={icon} size={32} />
       <div>{children}</div>
     </div>
   );
@@ -168,7 +216,7 @@ export function Empty({ icon, children }: { icon: IconName; children: ReactNode 
 export function Problem({ error }: { error?: string }) {
   return error ? (
     <div className="notice error">
-      <Icon name="warning" /> {error}
+      <Icon name="error" size={20} /> {error}
     </div>
   ) : null;
 }
@@ -212,7 +260,7 @@ export function Header({ icon, title, lead, children }: { icon: IconName; title:
   return (
     <header className="page-head">
       <div className="page-icon">
-        <Icon name={icon} size={20} />
+        <Icon name={icon} size={32} />
       </div>
       <div className="page-title">
         <h1>{title}</h1>

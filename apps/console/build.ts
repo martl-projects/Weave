@@ -21,7 +21,8 @@ await Promise.all([
     sourcemap: true,
     define: { 'process.env.NODE_ENV': '"production"' },
     // Icons (pixelarticons) as SVG text.
-    loader: { '.svg': 'text' },
+    // The app's SerenityOS bitmaps as data URLs.
+    loader: { '.svg': 'text', '.png': 'dataurl' },
   }),
   // Styles, with the Inter font inlined.
   build({ entryPoints: [join(here, 'src/styles.css')], outfile: join(dist, 'styles.css'), bundle: true, minify: true, loader: { '.woff': 'dataurl', '.woff2': 'dataurl' } }),

@@ -142,6 +142,51 @@ h2 {
   height: 100%;
   image-rendering: pixelated;
 }
+/* The app's bitmaps: crisp pixels. In the nav they're quiet, as in the app's
+   Clean look (the colorful bitmaps would be the loudest thing on screen),
+   and in color where something is chosen or stands for a page. */
+img.icon.bitmap {
+  image-rendering: pixelated;
+}
+.links .icon.bitmap,
+.empty .icon.bitmap {
+  filter: grayscale(1) contrast(1.1);
+  opacity: 0.7;
+}
+.links button.on .icon.bitmap,
+.links button:hover .icon.bitmap {
+  filter: none;
+  opacity: 1;
+}
+/* On dark, the bitmaps' black outlines vanish when gray: keep some color. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .links .icon.bitmap {
+    filter: saturate(0.35) brightness(1.25);
+    opacity: 0.8;
+  }
+}
+:root[data-theme='dark'] .links .icon.bitmap {
+  filter: saturate(0.35) brightness(1.25);
+  opacity: 0.8;
+}
+:root[data-theme='dark'] .links button.on .icon.bitmap,
+:root[data-theme='dark'] .links button:hover .icon.bitmap {
+  filter: none;
+  opacity: 1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .links button.on .icon.bitmap,
+  :root:not([data-theme='light']) .links button:hover .icon.bitmap {
+    filter: none;
+    opacity: 1;
+  }
+}
+/* Colorful bitmaps sit on a neutral tile; the strand colors stay for the plain signs. */
+.page-icon,
+.stat .stat-icon {
+  background: var(--subtle);
+  border: 1px solid var(--line);
+}
 .spin svg {
   animation: spin 0.9s linear infinite;
 }
