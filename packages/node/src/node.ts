@@ -48,6 +48,16 @@ import {
   KIND_AGENT_APPROVE,
   KIND_ESCROW,
   KIND_ESCROW_OPENED,
+  KIND_LINK,
+  KIND_ORG_DONE,
+  KIND_ORG_FREEZE,
+  KIND_ORG_MAP,
+  KIND_ORG_POLICY,
+  KIND_ORG_SETTINGS,
+  KIND_ORG_START,
+  KIND_ORG_REQUEST,
+  didFromPublicKey,
+  generateKeyPair,
   boxTo,
   openBox,
   type Box,
@@ -316,6 +326,9 @@ import {
   type ThreadInfo,
   type TierInfo,
   type Whoami,
+  type CompanyInfo,
+  type CreateCompanyInput,
+  type LinkInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -334,6 +347,20 @@ import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
+import {
+  decodeEnrollment,
+  decodeRecoveryAnswer,
+  decodeRecoveryRequest,
+  encodeEnrollment,
+  encodeRecoveryAnswer,
+  encodeRecoveryRequest,
+  nameFromToken,
+  orgState,
+  type CompanyAction,
+  type Enrolling,
+  type MapRole,
+  type OrgState,
+} from './company.ts';
 import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
@@ -601,6 +628,7 @@ export class WeaveNode implements Backend {
       if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
+      if (event.kind === KIND_ORG_FREEZE) this.#decoded = undefined;
       else this.#personEventsAdd(event);
     });
   }
@@ -632,7 +660,7 @@ export class WeaveNode implements Backend {
    * next root) and this device's key; after that, only the device key is on disk.
    * `writeVersion: 1` writes as v0.3 did, for tests that need an older home.
    */
-  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2 } = {}): { node: WeaveNode; words: string } {
+  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2; org?: Did } = {}): { node: WeaveNode; words: string } {
     const home = resolveHome(dir);
     if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
     const words = newRecoveryWords();
@@ -644,7 +672,7 @@ export class WeaveNode implements Backend {
     saveDevice(home, device);
     const node = WeaveNode.open(home.dir);
     if (options.writeVersion) node.replica.writeVersion = options.writeVersion;
-    node.replica.append(person, inception(recoveryRoot(words, 1).did, enc.did));
+    node.replica.append(person, inception(recoveryRoot(words, 1).did, enc.did, options.org));
     node.replica.append(person, delegation(device.did, 'device', ['*'], deviceName()));
     node.replica.write(node.identity, { kind: KIND_PROFILE, body: { name } });
     return { node, words };
@@ -687,6 +715,54 @@ export class WeaveNode implements Backend {
     node.replica.append({ author, did: root.did, keys: root }, delegation(device.did, 'device', ['*'], deviceName()));
     return node;
   }
+
+  /**
+   * Set up a company account from an enrollment link (stage 10): a new
+   * identity that names the company in its first record, in the company group,
+   * signed in with the person's company sign-in. The recovery words are never
+   * shown: they're kept sealed here until they're left with the company, then
+   * deleted (see #continueEnrollment). The app's bundle isn't applied; the
+   * company's starting setup is.
+   */
+  static async enroll(link: string, dir: string | undefined, options: { idToken: string; name?: string }): Promise<WeaveNode> {
+    const enrollment = decodeEnrollment(link);
+    const name = options.name?.trim() || nameFromToken(options.idToken) || 'New colleague';
+    const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company });
+    await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
+    // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
+    const { invite } = await node.#takeInvite(enrollment.invite);
+    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken: options.idToken } satisfies Enrolling);
+    await node.#continueEnrollment();
+    return node;
+  }
+
+  /** A new computer asks for a company-owned identity's recovery: a key here, kept sealed; the request names it. */
+  static recoveryRequest(dir?: string): string {
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const keys = generateKeyPair();
+    writeSecretJson(home, joinPath(home.dir, 'recover.json'), { secretKey: b64u.encode(keys.secretKey), publicKey: b64u.encode(keys.publicKey) });
+    return encodeRecoveryRequest(didFromPublicKey(keys.publicKey));
+  }
+
+  /** Set up this computer from the company's answer to its recovery request: the words open here and are never shown. */
+  static async recover(answer: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number } = {}): Promise<WeaveNode> {
+    const home = resolveHome(dir);
+    const file = joinPath(home.dir, 'recover.json');
+    const kept = readSecretJson<{ secretKey: string; publicKey: string }>(home, file);
+    if (!kept) throw new Error('no recovery request on this computer: run weave recover-request first');
+    const { box } = decodeRecoveryAnswer(answer);
+    let words: string;
+    try {
+      words = (openBox(b64u.decode(kept.secretKey), b64u.decode(kept.publicKey), box as unknown as Box) as { words: string }).words;
+    } catch {
+      throw new Error("this answer is for another computer's request");
+    }
+    const node = await WeaveNode.restore(words, dir, options);
+    rmSync(file, { force: true });
+    return node;
+  }
+
 
   get online(): boolean {
     return this.#swarm !== undefined;
@@ -747,7 +823,8 @@ export class WeaveNode implements Backend {
   }
 
   async whoami(): Promise<Whoami> {
-    return { did: this.identity.author, name: this.nameOf(this.identity.author), agents: this.#agents.map(agentInfo), signer: this.identity.did };
+    const org = this.replica.authority.keys(this.identity.author).org;
+    return { did: this.identity.author, name: this.nameOf(this.identity.author), ...(org ? { company: { did: org, name: this.nameOf(org) } } : {}), agents: this.#agents.map(agentInfo), signer: this.identity.did };
   }
 
   async publish(input: PublishInput): Promise<FeedItem> {
@@ -941,13 +1018,19 @@ export class WeaveNode implements Backend {
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
     if (isKnockLink(text)) return this.#knock(text, note ?? '');
+    const { space, invite } = await this.#takeInvite(text);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite } }));
+    return this.#spaceInfo(space);
+  }
+
+  /** An invite's space and keys, kept here; the join itself is written by the caller. */
+  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string }> {
     const invite = decodeInvite(text);
     if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
     this.#adoptBootstrap(invite.entry);
     const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
     await this.#addSpace(space);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite: invite.invite } }));
-    return this.#spaceInfo(space);
+    return { space, invite: invite.invite };
   }
 
   /** Ask to be let in with a link that needs the inviter's OK. */
@@ -1170,12 +1253,15 @@ export class WeaveNode implements Backend {
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, wrapped, nonce: sealed.nonce, ct: sealed.ct } }));
   }
 
-  async openEscrow(input: { space: string; person: string }): Promise<string> {
+  async openEscrow(input: { space: string; person: string; for?: string }): Promise<string> {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (!state.managed) throw new Error(`${space.name} isn't a company space`);
     if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} open an escrow`);
     const person = this.resolve(input.person);
+    const request = input.for ? decodeRecoveryRequest(input.for) : undefined;
+    if (!request && this.replica.authority.keys(person).org)
+      throw new Error(`${this.nameOf(person) ?? person}'s identity belongs to the company: its words go only to the new computer (there: weave recover-request; here: --for <request>)`);
     const escrow = this.#decodedIn(space.id)
       .filter((d) => d.inner.kind === KIND_ESCROW && d.event.author === person && (d.inner.body as { person?: unknown } | null)?.person === person)
       .at(-1)?.inner.body as { wrapped: string; nonce: string; ct: string } | undefined;
@@ -1183,8 +1269,8 @@ export class WeaveNode implements Backend {
     const context = this.#escrowContext(space, person);
     const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
     const words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person } }));
-    return words;
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person, ...(request ? { for: request } : {}) } }));
+    return request ? encodeRecoveryAnswer(person, boxTo(request, { words }) as unknown as Json) : words;
   }
 
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
@@ -1274,6 +1360,7 @@ export class WeaveNode implements Backend {
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
       ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
+      ...(this.replica.authority.keys(m.did).org ? { company: this.nameOf(this.replica.authority.keys(m.did).org!) ?? 'a company' } : {}),
     }));
   }
 
@@ -1969,6 +2056,8 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#unlock(space);
     changed += await this.#attest();
     changed += await this.#offboard();
+    changed += await this.#orgDuties();
+    changed += await this.#continueEnrollment();
     // Bookkeeping for keepers, not a change to anyone's spaces.
     this.#writeKeepIndex();
     this.#recoverSpaces();
@@ -2297,6 +2386,8 @@ export class WeaveNode implements Backend {
       contact: this.#contacts().has(did),
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
+      ...(this.replica.authority.keys(did).org ? { company: this.#companyOfPerson(did) } : {}),
+      links: this.#linksOf(did).filter((l) => l.state === 'linked'),
     };
   }
 
@@ -3985,7 +4076,7 @@ export class WeaveNode implements Backend {
     if (!inner || (inner.kind !== KIND_MANAGED && inner.kind !== KIND_KMS)) return;
     const b = inner.body as Record<string, unknown> | null;
     if (inner.kind === KIND_MANAGED && r.author === space.founder && b?.provider && Number(b.ttlMinutes) > 0 && Number(b.graceHours) >= 0 && (!into.setting || r.time >= into.setting.time))
-      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), by: r.author, time: r.time };
+      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), by: r.author, time: r.time };
     if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string' && !into.parts.has(b.epoch as number)) into.parts.set(b.epoch as number, b.wrapped);
   }
 
@@ -4093,6 +4184,371 @@ export class WeaveNode implements Backend {
       .catch((error: Error) => this.#managedProblems.set(space.id, `couldn't wrap the new key: ${error.message}`));
   }
 
+  // ---------------------------------------------------------------- company accounts (stage 10)
+
+  /** A company group's settings, if it is one: what the company that founded it signed there. */
+  #orgOf(group: StoredSpace): OrgState | undefined {
+    // Only a group managed as its own company group can be one; that's read without decoding it.
+    if (group.kind !== 'group' || this.#managedRaw(group).setting?.company !== group.id) return undefined;
+    return orgState(group.founder, this.#decodedIn(group.id));
+  }
+
+  /** The company groups this node runs: it founded them as the company. */
+  #companyGroups(): StoredSpace[] {
+    return [...this.#spaces.values()].filter((s) => s.kind === 'group' && s.founder === this.identity.author && this.#orgOf(s));
+  }
+
+  /** The company this node runs, else the one this person belongs to (their own company's, for a company-owned identity). */
+  #companyHere(): { group: StoredSpace; org: OrgState } | undefined {
+    const groups = [...this.#spaces.values()].filter((s) => s.kind === 'group');
+    const owner = this.replica.authority.keys(this.identity.author).org;
+    const order = [this.identity.author, ...(owner ? [owner] : [])];
+    for (const founder of [...order, undefined]) {
+      for (const group of groups) {
+        if (founder !== undefined ? group.founder !== founder : order.includes(group.founder)) continue;
+        const org = this.#orgOf(group);
+        if (org) return { group, org };
+      }
+    }
+    return undefined;
+  }
+
+  /** The company's spaces besides its group: founded by it, vouched for through the group. */
+  #companySpaces(group: StoredSpace): StoredSpace[] {
+    return [...this.#spaces.values()].filter((s) => s.id !== group.id && s.founder === group.founder && this.#managedRaw(s).setting?.company === group.id);
+  }
+
+  /** Who the company vouches for right now, with their sign-in groups. */
+  #vouched(group: StoredSpace): Map<Did, { groups: string[] }> {
+    const now = new Date(this.clock()).toISOString();
+    const out = new Map<Did, { groups: string[] }>();
+    for (const [did, a] of this.#attestations(group, group.founder)) if (a.until > now && !this.replica.authority.frozen(did)) out.set(did, { groups: a.groups });
+    return out;
+  }
+
+  #isOrgAdmin(group: StoredSpace, org: OrgState, did: Did): boolean {
+    return did === group.founder || (!!org.admins && !!this.#vouched(group).get(did)?.groups.includes(org.admins));
+  }
+
+  #companyOfPerson(did: Did): NonNullable<Profile['company']> {
+    const org = this.replica.authority.keys(did).org!;
+    return { did: org, name: this.nameOf(org), ...(this.replica.authority.frozen(did) ? { frozen: true as const } : {}) };
+  }
+
+  async createCompany(input: CreateCompanyInput): Promise<CompanyInfo> {
+    if (this.#companyGroups().length) throw new Error('this node already runs a company');
+    if (!input.admins?.trim()) throw new Error("name the sign-in group of the company's admins");
+    if (!input.issuer || !input.audience) throw new Error("the company's sign-in: its issuer and the audience its tokens name");
+    const group = await this.#createSpace('group', input.name);
+    this.config = { ...this.config, attestor: { issuer: input.issuer, audience: input.audience, ...(input.hours ? { hours: input.hours } : {}) } };
+    saveConfig(this.home, this.config);
+    await this.manageSpace({ space: group.id, provider: input.provider as ProviderSpec, ttlMinutes: input.ttlMinutes, graceHours: input.graceHours, attestor: this.identity.author, company: group.id });
+    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_SETTINGS, body: { admins: input.admins.trim(), links: true } }));
+    return (await this.company())!;
+  }
+
+  async company(): Promise<CompanyInfo | undefined> {
+    const here = this.#companyHere();
+    if (!here) return undefined;
+    const { group, org } = here;
+    const name = (id: string) => this.#spaces.get(id)?.name ?? id;
+    return {
+      did: group.founder,
+      name: this.nameOf(group.founder) ?? group.name,
+      group: { id: group.id, name: group.name },
+      runsHere: group.founder === this.identity.author,
+      admin: this.#isOrgAdmin(group, org, this.identity.author),
+      ...(org.admins ? { admins: org.admins } : {}),
+      links: org.links,
+      maps: org.maps.map((m) => ({ ...m, spaceName: name(m.space) })),
+      start: org.start?.contacts ?? [],
+      spaces: this.#companySpaces(group).map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
+      requests: org.requests.slice(-20).map((r) => {
+        const done = org.done.get(r.id);
+        return { id: r.id, by: r.by, byName: this.nameOf(r.by), time: r.time, action: r.action.action, done: !!done, ...(done?.error ? { error: done.error } : {}) };
+      }),
+    };
+  }
+
+  async companyAction(action: CompanyAction): Promise<CompanyInfo> {
+    const here = this.#companyHere();
+    if (!here) throw new Error("you're not in a company");
+    const { group, org } = here;
+    if (group.founder === this.identity.author) await this.#orgDo(group, action);
+    else {
+      if (!this.#isOrgAdmin(group, org, this.identity.author)) throw new Error(`only ${this.nameOf(group.founder) ?? group.name}'s admins ask the company for that`);
+      // Spaces and people as ids where this node knows them; the company resolves the rest.
+      const body: Record<string, Json> = { ...(action as unknown as Record<string, Json>) };
+      if (typeof body.space === 'string' && action.action !== 'space') body.space = this.#spaces.has(body.space) ? body.space : ([...this.#spaces.values()].find((s) => s.name === body.space)?.id ?? body.space);
+      if (typeof body.person === 'string') body.person = this.resolve(body.person);
+      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_REQUEST, body }));
+    }
+    return (await this.company())!;
+  }
+
+  async enrollLink(input: { days?: number } = {}): Promise<string> {
+    const here = this.#companyHere();
+    if (!here) throw new Error("you're not in a company: create it on the company's node first (weave company create)");
+    if (!this.#isOrgAdmin(here.group, here.org, this.identity.author)) throw new Error('only the company and its admins hand out enrollment links');
+    const invite = await this.invite(here.group.id, (input.days ?? 30) * 24);
+    const company = here.group.founder;
+    return encodeEnrollment({ v: 1, company, name: this.nameOf(company) ?? here.group.name, group: here.group.id, invite, entry: { topics: [company], bootstrap: this.config.bootstrap } });
+  }
+
+  /** What the company does, on its own node: for itself, or for an admin who asked. */
+  async #orgDo(group: StoredSpace, action: CompanyAction): Promise<void> {
+    const write = (kind: string, body: Json) => this.replica.write(this.identity, sealFor(this.#cipher(group), { kind, body }));
+    const companySpace = (ref: string) => {
+      const space = this.#space(ref);
+      if (space.id !== group.id && !this.#companySpaces(group).some((s) => s.id === space.id)) throw new Error(`${space.name} isn't one of the company's spaces`);
+      return space;
+    };
+    switch (action.action) {
+      case 'settings': {
+        const org = this.#orgOf(group)!;
+        const links = action.links ?? org.links;
+        write(KIND_ORG_SETTINGS, { admins: action.admins?.trim() || org.admins || null, links });
+        // Others count links of the company's identities only while it says they may.
+        if (links !== org.links) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { links } });
+        return;
+      }
+      case 'map': {
+        const space = companySpace(action.space);
+        if (space.id === group.id) throw new Error('everyone the company vouches for is in the company group already');
+        if (!action.group?.trim()) throw new Error('map a sign-in group');
+        write(KIND_ORG_MAP, { group: action.group.trim(), space: space.id, role: action.role === 'maintainer' ? 'maintainer' : 'member', on: action.on !== false });
+        return;
+      }
+      case 'start':
+        for (const contact of action.contacts) decodeContact(contact);
+        write(KIND_ORG_START, { contacts: action.contacts });
+        return;
+      case 'space': {
+        const space = await this.#createSpace(action.kind === 'group' ? 'group' : 'project', action.name);
+        const setting = this.#managedRaw(group).setting!;
+        await this.manageSpace({ space: space.id, provider: setting.provider as unknown as ProviderSpec, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, attestor: this.identity.author, company: group.id });
+        return;
+      }
+      case 'hold':
+        await this.setHold({ space: companySpace(action.space).id, until: action.until, ...(action.reason ? { reason: action.reason } : {}) });
+        return;
+      case 'destroy-key':
+        await this.destroyCompanyKey(companySpace(action.space).id);
+        return;
+      case 'freeze':
+        await this.#freeze(this.resolve(action.person));
+        return;
+    }
+  }
+
+  /**
+   * Freeze a company-owned identity: public, so every node ignores what its
+   * keys sign after the numbers seen here (and anything by keys not seen). It
+   * leaves the company's spaces; its history stays.
+   */
+  async #freeze(person: Did): Promise<void> {
+    const keys = this.replica.authority.keys(person);
+    if (keys.org !== this.identity.author) throw new Error(`${this.nameOf(person) ?? person} isn't an identity this company owns`);
+    const signers = new Set<Did>([person, keys.root, ...keys.retired.keys(), ...this.replica.authority.grantsOf(person).map((g) => g.subject)]);
+    const last: Record<string, number> = {};
+    for (const r of this.replica.events((e) => signers.has(e.signer))) last[r.signer] = Math.max(last[r.signer] ?? 0, r.seq);
+    for (const space of [...this.#spaces.values()]) {
+      const state = this.#state(space);
+      if (space.founder === this.identity.author && state.members.has(person) && canManage(state, this.identity.author)) await this.removeMember(space.id, person);
+    }
+    this.replica.write(this.identity, { kind: KIND_ORG_FREEZE, body: { person, keys: last } });
+  }
+
+  /**
+   * On the company's node: answer admins' requests, and keep the company's
+   * spaces in line with its sign-in groups: admit and gift keys to those a
+   * mapping (or being an admin) puts there, appoint maintainers, and remove
+   * those a mapping brought in that no longer belong.
+   */
+  async #orgDuties(): Promise<number> {
+    let changed = 0;
+    for (const group of this.#companyGroups()) {
+      let org = this.#orgOf(group)!;
+      for (const request of org.requests) {
+        if (org.done.has(request.id)) continue;
+        let error: string | undefined;
+        if (!this.#isOrgAdmin(group, org, request.by)) error = "only the company's admins ask for that";
+        else {
+          try {
+            await this.#orgDo(group, request.action);
+          } catch (e) {
+            error = (e as Error).message;
+          }
+        }
+        this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_DONE, body: { request: request.id, ...(error ? { error } : {}) } }));
+        changed++;
+      }
+      org = this.#orgOf(group)!;
+      const vouched = this.#vouched(group);
+      for (const space of this.#companySpaces(group)) {
+        let state = this.#state(space);
+        if (state.closed) continue;
+        const want = new Map<Did, MapRole>();
+        for (const [did, a] of vouched) {
+          if (org.admins && a.groups.includes(org.admins) && space.kind === 'project') want.set(did, 'maintainer');
+          for (const m of org.maps) if (m.space === space.id && a.groups.includes(m.group) && want.get(did) !== 'maintainer') want.set(did, m.role);
+        }
+        const newcomers = [...want.keys()].filter((did) => !state.members.has(did));
+        if (newcomers.length) {
+          for (const member of newcomers) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ADMIT, body: { member, via: group.id } }));
+          this.replica.write(this.identity, gift(this.#keysForNewcomers(space), newcomers, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
+          changed += newcomers.length;
+          state = this.#state(space);
+        }
+        if (space.kind === 'project') {
+          for (const [did, role] of want) {
+            if (role !== 'maintainer' || !state.members.has(did) || state.maintainers.has(did)) continue;
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: true } }));
+            changed++;
+          }
+          for (const did of state.maintainers) {
+            if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false } }));
+            changed++;
+          }
+          state = this.#state(space);
+        }
+        for (const member of [...state.members.values()]) {
+          if (member.via !== group.id || member.did === this.identity.author || want.has(member.did)) continue;
+          await this.removeMember(space.id, member.did);
+          changed++;
+        }
+      }
+    }
+    return changed;
+  }
+
+  get #enrollFile(): string {
+    return joinPath(this.home.dir, 'enroll.json');
+  }
+
+  /**
+   * A new company account's remaining steps, once the company group's events
+   * are here: unlock it with the person's sign-in, join, sign in with the
+   * attestor, leave the words with the company, the starting setup.
+   */
+  async #continueEnrollment(): Promise<number> {
+    const pending = readSecretJson<Enrolling>(this.home, this.#enrollFile);
+    if (!pending) return 0;
+    const group = this.#spaces.get(pending.group);
+    if (!group || !this.#managedRaw(group).setting?.attestor) return 0;
+    let changed = 0;
+    if (pending.idToken) writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), { idToken: pending.idToken });
+    await this.#unlock(group);
+    if (this.#managedProblems.has(group.id)) return 0;
+    if (!pending.joined) {
+      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite } }));
+      pending.joined = true;
+      changed++;
+    }
+    if (pending.idToken) {
+      await this.signIn({ space: group.id, idToken: pending.idToken });
+      delete pending.idToken;
+      changed++;
+    }
+    if (pending.words) {
+      await this.escrowRecovery({ space: group.id, words: pending.words });
+      delete pending.words;
+      changed++;
+    }
+    const org = this.#orgOf(group);
+    if (!pending.started && org) {
+      for (const contact of org.start?.contacts ?? []) {
+        try {
+          await this.addContact(contact);
+        } catch {
+          // Our own link, or a damaged one: nothing to add.
+        }
+      }
+      pending.started = true;
+      changed++;
+    }
+    if (pending.words || !pending.started) writeSecretJson(this.home, this.#enrollFile, pending);
+    else rmSync(this.#enrollFile, { force: true });
+    return changed;
+  }
+
+  async link(input: { who: string; space?: string; on?: boolean }): Promise<LinkInfo[]> {
+    const to = input.who.includes('weave:contact:') ? (await this.addContact(input.who)).did : this.resolve(input.who);
+    if (to === this.identity.author) throw new Error("that's this identity");
+    const on = input.on !== false;
+    if (on && this.replica.authority.keys(this.identity.author).org) {
+      const here = this.#companyHere();
+      if (here && !here.org.links) throw new Error(`${this.nameOf(here.group.founder) ?? here.group.name} doesn't let its accounts link to others`);
+    }
+    const fields = { kind: KIND_LINK, body: { to, on } };
+    if (input.space) this.replica.write(this.identity, sealFor(this.#cipher(this.#space(input.space)), fields));
+    else this.replica.write(this.identity, fields);
+    return this.#linksOf(this.identity.author);
+  }
+
+  async links(who?: string): Promise<LinkInfo[]> {
+    return this.#linksOf(who ? this.resolve(who) : this.identity.author);
+  }
+
+  /**
+   * Every link statement this node can read (public, or sealed into its
+   * spaces), the latest per direction; companies' public word on links; and
+   * when companies froze their identities. Built once per change of what's
+   * decoded: profiles ask for it person by person.
+   */
+  #linkIndex(): { said: Map<string, { on: boolean; time: string; space?: string }>; others: Map<Did, Set<Did>>; policy: Map<Did, boolean>; frozenAt: Map<Did, string> } {
+    return this.#memo('links', () => {
+      const said = new Map<string, { on: boolean; time: string; space?: string }>();
+      const others = new Map<Did, Set<Did>>();
+      const policy = new Map<Did, boolean>();
+      const frozenAt = new Map<Did, string>();
+      for (const d of this.#decodeAll()) {
+        const b = d.inner.body as Record<string, unknown> | null;
+        if (d.inner.kind === KIND_LINK && isDid(b?.to) && b.to !== d.event.author) {
+          const [from, to] = [d.event.author, b.to];
+          const before = said.get(`${from} ${to}`);
+          if (!before || before.time <= d.event.time) said.set(`${from} ${to}`, { on: b.on !== false, time: d.event.time, ...(d.space ? { space: d.space.id } : {}) });
+          for (const [x, y] of [[from, to], [to, from]] as const) {
+            const set = others.get(x) ?? new Set<Did>();
+            others.set(x, set.add(y));
+          }
+        } else if (d.inner.kind === KIND_ORG_POLICY && !d.space && typeof b?.links === 'boolean') policy.set(d.event.author, b.links);
+        else if (d.inner.kind === KIND_ORG_FREEZE && isDid(b?.person) && !frozenAt.has(b.person) && this.replica.authority.keys(b.person).org === d.event.author) frozenAt.set(b.person, d.event.time);
+      }
+      return { said, others, policy, frozenAt };
+    });
+  }
+
+  /** A person's links, where either side says so (see #linkIndex). */
+  #linksOf(did: Did): LinkInfo[] {
+    const { said, others, policy, frozenAt } = this.#linkIndex();
+    const out: LinkInfo[] = [];
+    for (const other of others.get(did) ?? []) {
+      const mine = said.get(`${did} ${other}`);
+      const theirs = said.get(`${other} ${did}`);
+      if (!mine?.on && !theirs?.on) continue;
+      // A company that said no: its identities' links don't count (it does allow them unless it said so).
+      const refused = [did, other].some((x) => {
+        const org = this.replica.authority.keys(x).org;
+        return !!org && policy.get(org) === false;
+      });
+      const until = [did, other].map((x) => (this.replica.authority.frozen(x) ? frozenAt.get(x) : undefined)).filter((t): t is string => !!t).sort()[0];
+      const org = this.replica.authority.keys(other).org;
+      const space = mine?.space ?? theirs?.space;
+      out.push({
+        did: other,
+        name: this.nameOf(other),
+        state: refused ? 'refused' : mine?.on && theirs?.on ? 'linked' : mine?.on ? 'waiting' : 'asked',
+        since: [mine?.on ? mine.time : '', theirs?.on ? theirs.time : ''].sort().at(-1)!,
+        ...(until ? { until } : {}),
+        ...(org ? { company: { did: org, name: this.nameOf(org) } } : {}),
+        ...(space ? { space: this.#spaces.get(space)?.name ?? space } : {}),
+      });
+    }
+    return out.sort((a, b) => a.since.localeCompare(b.since));
+  }
+
   // ---------------------------------------------------------------- budgets (stage 8)
 
   #heldBack = 0;
@@ -4176,7 +4632,9 @@ export class WeaveNode implements Backend {
   /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
   #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string }> {
     const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string }>();
-    for (const d of this.#decodedIn(space.id)) {
+    // A company space's people are vouched for in the company group (stage 10).
+    const company = this.#managedRaw(space).setting?.company;
+    for (const d of this.#decodedIn(company && this.#spaces.has(company) ? company : space.id)) {
       if (d.inner.kind !== KIND_ATTEST || d.event.author !== attestor) continue;
       const b = d.inner.body as { did?: unknown; subject?: unknown; email?: unknown; groups?: unknown; until?: unknown } | null;
       if (!isDid(b?.did) || typeof b?.subject !== 'string' || typeof b?.until !== 'string') continue;
@@ -4234,7 +4692,7 @@ export class WeaveNode implements Backend {
     return removed;
   }
 
-  async manageSpace(input: { space: string; provider: ProviderSpec; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo> {
+  async manageSpace(input: { space: string; provider: ProviderSpec; ttlMinutes?: number; graceHours?: number; attestor?: string; company?: string }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new Error('a direct chat belongs to two people, not a company');
@@ -4245,7 +4703,7 @@ export class WeaveNode implements Backend {
     const back = await this.#provider(setting).unwrap(await this.#provider(setting).wrap(probe, { space: spaceScope(space), epoch: -1 }), { space: spaceScope(space), epoch: -1 });
     if (b64u.encode(back) !== b64u.encode(probe)) throw new Error('the key service gave back something else');
     const attestor = input.attestor ? this.resolve(input.attestor) : undefined;
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}) } }));
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}) } }));
     // From the next key on, half of it is the company's.
     this.#rotateKey(space);
     return this.#spaceInfo(space);

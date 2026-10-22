@@ -1,4 +1,4 @@
-import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
+import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_ORG_FREEZE, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
 import type { Json } from './bytes.ts';
 import { eventId, isWellFormedEvent, signEvent, verifyEventSignature, type EventFields, type SigningIdentity, type WeaveEvent } from './events.ts';
 import { bodyMatches, canonicalIdV2, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
@@ -15,7 +15,7 @@ export type IngestResult =
 const MAX_PENDING = 10_000;
 
 /** v2 key events that change who may sign; identity and rotation stay v1, signed by root keys that aren't on disk. */
-const isKeyEventV2 = (event: EventV2): boolean => event.class === 'control' && event.space === 'public' && (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE);
+const isKeyEventV2 = (event: EventV2): boolean => event.class === 'control' && event.space === 'public' && (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE || event.kind === KIND_ORG_FREEZE);
 
 /**
  * A node's local copy of the events it knows. Every event — local or from a

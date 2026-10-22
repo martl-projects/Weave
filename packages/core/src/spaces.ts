@@ -87,6 +87,20 @@ export const KIND_AGENT_APPROVE = 'weave.space.agent';
 export const KIND_ESCROW = 'weave.org.escrow';
 /** `{person}`: someone who manages the space opened that person's escrow (for the audit). */
 export const KIND_ESCROW_OPENED = 'weave.org.escrow.opened';
+/** Stage 10, in the company group, signed by the company: `{admins, links}`: who manages the company (a sign-in group), whether its identities may link. */
+export const KIND_ORG_SETTINGS = 'weave.org.settings';
+/** `{group, space, role, on}`: everyone the company vouches for in that sign-in group belongs in that company space. */
+export const KIND_ORG_MAP = 'weave.org.map';
+/** `{contacts}`: what a new company account starts with, instead of the app's bundle. */
+export const KIND_ORG_START = 'weave.org.start';
+/** `{action, …}`: an admin asks the company to do what only the owner may. */
+export const KIND_ORG_REQUEST = 'weave.org.request';
+/** `{request, error?}`: the company's answer. */
+export const KIND_ORG_DONE = 'weave.org.done';
+/** `{links}`, public, by the company: whether links of its identities count. */
+export const KIND_ORG_POLICY = 'weave.org.policy';
+/** `{to, on}`: this identity is also that one (both have to say so). Public, or sealed into a space. */
+export const KIND_LINK = 'weave.link';
 
 /** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
 export interface ManagedSetting {
@@ -95,6 +109,8 @@ export interface ManagedSetting {
   graceHours: number;
   /** The company's attestor: only people it vouches for count as members (SSO). */
   attestor?: Did;
+  /** A company space's company group (stage 10): where the attestor vouches for people. */
+  company?: string;
   by: Did;
   time: string;
 }
@@ -464,7 +480,9 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         }
         const via = typeof body.via === 'string' ? body.via : undefined;
         const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.has(author);
-        if (kind === 'project' && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {
+        // In groups (not tiers), their owner admits directly: a company putting its people in (stage 10).
+        const admits = kind === 'project' || (kind === 'group' && !state.tier && author === state.founder);
+        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {
           admit(body.member, event.time, author, via);
         }
         break;
@@ -497,7 +515,7 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
         const ttl = Number(body.ttlMinutes);
         const grace = Number(body.graceHours);
         if (kind !== 'direct' && author === state.founder && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
-          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), by: author, time: event.time };
+          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), by: author, time: event.time };
         break;
       }
       case KIND_AGENT_APPROVE:

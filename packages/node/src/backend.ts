@@ -1,3 +1,4 @@
+import type { CompanyAction } from './company.ts';
 import type { GumroadLink } from '@weave/core';
 import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
@@ -73,6 +74,8 @@ export interface Whoami {
   /** The person: your identifier, which stays the same when keys change. */
   did: Did;
   name?: string;
+  /** A company-owned identity: the company that holds it. */
+  company?: { did: Did; name?: string };
   agents: AgentInfo[];
   /** The key this node signs with: this device's key (for old identities, the identifier itself). */
   signer: Did;
@@ -641,6 +644,8 @@ export interface MemberInfo {
   agents: string[];
   /** In a space with a company attestor: who the company says they are, until when. */
   attested?: { subject: string; email?: string; groups: string[]; until: string };
+  /** A company-owned identity: its company's name. */
+  company?: string;
 }
 
 export interface Person {
@@ -668,6 +673,56 @@ export interface Profile {
   projects: PublicProject[];
   /** The GitHub account they show on their hub. */
   github?: HubGitHub;
+  /** A company-owned identity: the company that holds it. */
+  company?: { did: Did; name?: string; frozen?: true };
+  /** Their other identities, where both sides say so. */
+  links: LinkInfo[];
+}
+
+/** One identity's link to another (stage 10). */
+export interface LinkInfo {
+  did: Did;
+  name?: string;
+  /** linked: both say so · waiting: only this side so far · asked: only the other side · refused: a company doesn't allow it. */
+  state: 'linked' | 'waiting' | 'asked' | 'refused';
+  since: string;
+  /** When it stopped counting going forward: the company froze one side (it stays as history). */
+  until?: string;
+  /** The other side is company-owned. */
+  company?: { did: Did; name?: string };
+  /** Sealed into this space rather than public. */
+  space?: string;
+}
+
+export interface CreateCompanyInput {
+  name: string;
+  provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+  /** The company's sign-in (OIDC): the issuer, and the audience its tokens name. */
+  issuer: string;
+  audience: string;
+  /** The sign-in group whose members administer the company. */
+  admins: string;
+  hours?: number;
+  ttlMinutes?: number;
+  graceHours?: number;
+}
+
+export interface CompanyInfo {
+  did: Did;
+  name: string;
+  /** The company group: everyone the company vouches for. */
+  group: { id: string; name: string };
+  /** This node is the company's own. */
+  runsHere: boolean;
+  /** You administer it (or are it). */
+  admin: boolean;
+  admins?: string;
+  links: boolean;
+  maps: Array<{ group: string; space: string; spaceName: string; role: 'member' | 'maintainer' }>;
+  /** Contacts a new account starts with. */
+  start: string[];
+  spaces: Array<{ id: string; kind: SpaceKind; name: string }>;
+  requests: Array<{ id: string; by: Did; byName?: string; time: string; action: string; done: boolean; error?: string }>;
 }
 
 export interface HubGitHub {
@@ -859,13 +914,31 @@ export interface Backend {
     ttlMinutes?: number;
     graceHours?: number;
     attestor?: string;
+    /** A company space: the company group whose attestations count here (stage 10). */
+    company?: string;
   }): Promise<SpaceInfo>;
   /** A space's governance, oldest first: who joined, left or was removed, keys, settings, attestations, shreds, escrows opened. No content, no secrets. */
   audit(input: { space: string; since?: string }): Promise<AuditLine[]>;
   /** An employee: leave your recovery words with the company (sealed; only its key service opens them). */
   escrowRecovery(input: { space: string; words: string }): Promise<void>;
-  /** Those who manage a company space: open an employee's escrowed words (through the key service; it's in the audit). */
-  openEscrow(input: { space: string; person: string }): Promise<string>;
+  /**
+   * Those who manage a company space: open an employee's escrowed words (through the key service; it's in the audit).
+   * With `for` (a new computer's recovery request), the words are boxed to it and only it opens them: a recovery
+   * answer. For a company-owned identity that's the only way.
+   */
+  openEscrow(input: { space: string; person: string; for?: string }): Promise<string>;
+  /** On the company's own node: create the company (its group, under its key service, vouching through its sign-in). */
+  createCompany(input: CreateCompanyInput): Promise<CompanyInfo>;
+  /** The company this node runs, or the one you belong to. */
+  company(): Promise<CompanyInfo | undefined>;
+  /** The company does it; an admin asks the company to (it's carried out by the company's node, and in the audit). */
+  companyAction(action: CompanyAction): Promise<CompanyInfo>;
+  /** The company or an admin: a link that sets up a new company account (default: valid 30 days). */
+  enrollLink(input?: { days?: number }): Promise<string>;
+  /** Say this identity is also that one (a person, or a contact link); both have to. Public, or sealed into a space. `on: false` ends it. */
+  link(input: { who: string; space?: string; on?: boolean }): Promise<LinkInfo[]>;
+  /** A person's links to other identities (yours by default), as this node can see them. */
+  links(who?: string): Promise<LinkInfo[]>;
   /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
   approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
@@ -1116,7 +1189,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

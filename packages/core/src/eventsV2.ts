@@ -53,6 +53,15 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.space.agent',
   'weave.org.escrow',
   'weave.org.escrow.opened',
+  // the company itself (stage 10)
+  'weave.org.freeze',
+  'weave.org.settings',
+  'weave.org.map',
+  'weave.org.start',
+  'weave.org.request',
+  'weave.org.done',
+  'weave.org.policy',
+  'weave.link',
   'weave.space.rekey',
   'weave.space.gift',
   'weave.group.create', // older names of the space events above

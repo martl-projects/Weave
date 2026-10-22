@@ -38,6 +38,7 @@ import {
   type ThreadInfo,
   type TierInfo,
   type RoomInfo,
+  type LinkInfo,
   SqliteStore,
 } from '@weave/node';
 
@@ -53,6 +54,9 @@ usage: weave <command> [options]
 
   init <name>                create your identity; shows your 24 recovery words once, and applies
                              weave.bundle.json (contacts and free tiers the app ships with) unless --bare
+  enroll <link> --id-token <token> [--name <name>]
+                             set up a company account: the company holds it and its recovery (no words shown)
+  recover-request / recover <answer>   a company account on a new computer: ask, then set up from the company's answer
   restore                    set up this computer as another device of your identity, from your recovery words
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
@@ -110,7 +114,14 @@ projects — something being built; participants chat, discuss, vote and work on
   hold <space> <until> [reason]          legal hold: nothing shredded or forgotten until then (owner)
   destroy-company-key <space>            shred everything under the company key (owner)
   approve-agent <space> <person/agent> [off]  let an agent act in a company space (managers)
-  escrow <space> <words> / escrow-open <space> <person>  leave recovery words with the company / open them (managers)
+  escrow <space> <words> / escrow-open <space> <person> [--for <request>]  leave recovery words with the company / open them (managers)
+  company                                your company: settings, mappings, spaces, requests
+  company create <name> vault|azure ... --issuer <url> --audience <id> --admins <sign-in group>   on the company's own node
+  company link [--days n]                an enrollment link for new company accounts (the company, admins)
+  company map <sign-in group> <space> [maintainer] [--off]   everyone in that sign-in group belongs in that company space
+  company space project|group <name> / company start <contact links…> / company admins <group> / company links on|off
+  company hold <space> <until> / company destroy-key <space> / company freeze <person>   (admins ask; the company's node does it)
+  link <person or contact link> [--in <space>] [--off] / links [person]   this identity is also that one (both say so)
   audit <space> [since]                  the space's governance as JSON lines: who changed what, when
   (company nodes: "attestor": {"issuer", "audience"} or "archive": true in config.json)
   older <space> [before]                 ask the members of a big space for the month before (what they hold)
@@ -304,6 +315,13 @@ const { values, positionals } = parseArgs({
     license: { type: 'string' },
     months: { type: 'string' },
     name: { type: 'string' },
+    'id-token': { type: 'string' },
+    issuer: { type: 'string' },
+    audience: { type: 'string' },
+    admins: { type: 'string' },
+    for: { type: 'string' },
+    days: { type: 'string' },
+    in: { type: 'string' },
     status: { type: 'string' },
     label: { type: 'string' },
     quorum: { type: 'string' },
@@ -435,9 +453,20 @@ async function uploadImage(b: Backend, path: string): Promise<string> {
   return b.putBlob({ data: readFileSync(path).toString('base64'), type });
 }
 
-/** The contacts and free tiers this copy of Weave ships with: weave.bundle.json next to the packaged program, or at the repository root. */
+/**
+ * The contacts and free tiers a new identity starts with: a company's own, placed
+ * on the machine by its IT (WEAVE_BUNDLE, or weave.bundle.json in the machine's
+ * Weave folder, which updates don't touch), else the one this copy of Weave
+ * ships with (next to the packaged program, or at the repository root).
+ */
 function readBundle(): Bundle | undefined {
-  const file = [join(import.meta.dirname, 'weave.bundle.json'), join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json')].find(existsSync);
+  const machine =
+    process.platform === 'win32'
+      ? join(process.env.ProgramData ?? 'C:\\ProgramData', 'Weave', 'weave.bundle.json')
+      : process.platform === 'darwin'
+        ? '/Library/Application Support/Weave/weave.bundle.json'
+        : '/etc/weave/weave.bundle.json';
+  const file = [process.env.WEAVE_BUNDLE, machine, join(import.meta.dirname, 'weave.bundle.json'), join(import.meta.dirname, '..', '..', '..', 'weave.bundle.json')].find((f): f is string => !!f && existsSync(f));
   return file ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
 }
 
@@ -446,6 +475,16 @@ const roomLine = (r: RoomInfo) => {
   const state = r.joined ? (r.connected ? `${r.peers.length} in it` : 'connecting…') : r.mayJoin ? 'join with: weave room join ' + r.id.slice(0, 8) : 'not invited';
   return `${r.id.slice(0, 8)}  ${r.name}  · p/${r.project.name} · ${who} · ${state}${r.url ? `\n          ${r.service?.label ?? 'open'}: ${r.url}` : ''}`;
 };
+
+const linkLines = (links: LinkInfo[]) =>
+  links.length
+    ? links
+        .map((l) => {
+          const state = { linked: 'linked', waiting: 'waiting for them', asked: 'they say so; link back to confirm', refused: "a company doesn't allow it" }[l.state];
+          return `${(l.name ?? l.did).padEnd(24)} ${state}${l.company ? ` · ${l.company.name ?? 'company'} account` : ''}${l.space ? ` · in ${l.space}` : ''} · since ${l.since.slice(0, 10)}${l.until ? ` until ${l.until.slice(0, 10)}` : ''}`;
+        })
+        .join('\n')
+    : 'no links';
 
 /** The recovery words, numbered in four columns, for writing down. */
 const numbered = (words: string) => {
@@ -1177,9 +1216,118 @@ ${postLine(p)}`);
 
     case 'escrow-open': {
       const [space, person] = args;
-      if (!space || !person) throw new Error('usage: weave escrow-open <space> <person>   (those who manage it; it is in the audit)');
-      const words = await (await backend()).openEscrow({ space, person });
+      if (!space || !person) throw new Error('usage: weave escrow-open <space> <person> [--for <recovery request>]   (those who manage it; it is in the audit)');
+      const words = await (await backend()).openEscrow({ space, person, ...(values.for ? { for: values.for } : {}) });
+      if (values.for) return out({ answer: words }, () => `the answer for ${person}'s new computer (only it opens it; there: weave recover <answer>):\n${words}`);
       return out({ words }, () => `${person}'s recovery words (hand them over safely; set up with weave restore):\n${words}`);
+    }
+
+    case 'enroll': {
+      const link = args[0];
+      const idToken = values['id-token'] ?? process.env.WEAVE_ID_TOKEN;
+      if (!link || !idToken) throw new Error('usage: weave enroll <enrollment link> --id-token <your company sign-in token> [--name <name>]');
+      const node = await WeaveNode.enroll(link, home.dir, { idToken, ...(values.name ? { name: values.name } : {}) });
+      const me = await node.whoami();
+      await node.close();
+      return out(me, () =>
+        [
+          `created a company account for ${me.name} at ${me.company?.name ?? 'the company'}`,
+          `  ${me.did}`,
+          `  in ${home.dir}`,
+          '',
+          'The company holds this identity and its recovery: there are no words to write down.',
+          'Start the daemon (weave daemon) to finish joining once the company is reachable.',
+        ].join('\n'),
+      );
+    }
+
+    case 'recover-request': {
+      const request = WeaveNode.recoveryRequest(home.dir);
+      return out({ request }, () => `give this to your company's admin (they answer with: weave escrow-open <company> <you> --for <request>):\n${request}`);
+    }
+
+    case 'recover': {
+      if (!args[0]) throw new Error('usage: weave recover <answer from your company>');
+      console.error('looking for your identity on the network (keep another device or the company online)…');
+      const node = await WeaveNode.recover(args[0], home.dir, { online: true });
+      const me = await node.whoami();
+      await node.close();
+      return out(me, () => `this computer is now a device of ${me.name ?? me.did}\n  ${me.did}\n  device key ${me.signer}`);
+    }
+
+    case 'company': {
+      const [sub, ...rest] = args;
+      const b = await backend();
+      const show = (c: Awaited<ReturnType<typeof b.company>>) =>
+        out(c ?? null, () => {
+          if (!c) return "you're not in a company";
+          return [
+            `${c.name}${c.runsHere ? ' (this is its node)' : c.admin ? ' (you administer it)' : ''}  · group ${c.group.name}`,
+            `  admins: sign-in group ${c.admins ?? '(none)'} · linking accounts: ${c.links ? 'allowed' : 'off'}`,
+            ...(c.spaces.length ? [`  spaces: ${c.spaces.map((s) => `${s.name} (${s.kind})`).join(', ')}`] : []),
+            ...c.maps.map((m) => `  ${m.group} → ${m.spaceName}${m.role === 'maintainer' ? ' as maintainers' : ''}`),
+            ...(c.start.length ? [`  new accounts start with ${c.start.length} contact${c.start.length === 1 ? '' : 's'}`] : []),
+            ...c.requests.map((r) => `  ${r.time.slice(0, 16)} ${r.byName ?? r.by} asked: ${r.action} — ${r.done ? (r.error ? `refused: ${r.error}` : 'done') : 'waiting'}`),
+          ].join('\n');
+        });
+      switch (sub) {
+        case undefined:
+        case 'show':
+          return show(await b.company());
+        case 'create': {
+          const [name, kind, address, key, a, c] = rest;
+          if (!name || (kind !== 'vault' && kind !== 'azure') || !address || !key || !values.issuer || !values.audience || !values.admins)
+            throw new Error('usage: weave company create <name> vault <address> <transit key> [jwt role] --issuer <url> --audience <id> --admins <sign-in group>\n       weave company create <name> azure <key vault url> <key> <tenant> <client id> --issuer … --audience … --admins …');
+          const provider = kind === 'vault' ? { kind: 'vault' as const, address, key, ...(a ? { jwt: { role: a } } : {}) } : { kind: 'azure' as const, vault: address, key, ...(a ? { tenant: a } : {}), ...(c ? { clientId: c } : {}) };
+          return show(await b.createCompany({ name, provider, issuer: values.issuer, audience: values.audience, admins: values.admins }));
+        }
+        case 'link': {
+          const link = await b.enrollLink(values.days ? { days: Number(values.days) } : {});
+          return out({ link }, () => `for a new colleague (weave enroll <link> --id-token <their sign-in>):\n${link}`);
+        }
+        case 'map': {
+          const [group, space, role] = rest;
+          if (!group || !space) throw new Error('usage: weave company map <sign-in group> <company space> [maintainer] [--off]');
+          return show(await b.companyAction({ action: 'map', group, space, role: role === 'maintainer' ? 'maintainer' : 'member', on: !values.off }));
+        }
+        case 'space': {
+          const [kind, ...name] = rest;
+          if ((kind !== 'project' && kind !== 'group') || !name.length) throw new Error('usage: weave company space project|group <name>');
+          return show(await b.companyAction({ action: 'space', kind, name: name.join(' ') }));
+        }
+        case 'start':
+          return show(await b.companyAction({ action: 'start', contacts: rest }));
+        case 'admins':
+          if (!rest[0]) throw new Error('usage: weave company admins <sign-in group>');
+          return show(await b.companyAction({ action: 'settings', admins: rest[0] }));
+        case 'links':
+          if (rest[0] !== 'on' && rest[0] !== 'off') throw new Error('usage: weave company links on|off');
+          return show(await b.companyAction({ action: 'settings', links: rest[0] === 'on' }));
+        case 'hold': {
+          const [space, until, ...reason] = rest;
+          if (!space || !until) throw new Error('usage: weave company hold <space> <until date> [reason]');
+          return show(await b.companyAction({ action: 'hold', space, until, ...(reason.length ? { reason: reason.join(' ') } : {}) }));
+        }
+        case 'destroy-key':
+          if (!rest[0]) throw new Error('usage: weave company destroy-key <space>');
+          return show(await b.companyAction({ action: 'destroy-key', space: rest[0] }));
+        case 'freeze':
+          if (!rest[0]) throw new Error('usage: weave company freeze <person>   (what their account signs from now on counts nowhere)');
+          return show(await b.companyAction({ action: 'freeze', person: rest[0] }));
+        default:
+          throw new Error(`unknown: weave company ${sub} (see weave --help)`);
+      }
+    }
+
+    case 'link': {
+      if (!args[0]) throw new Error('usage: weave link <person or contact link> [--in <space>] [--off]');
+      const links = await (await backend()).link({ who: args.join(' '), ...(values.in ? { space: values.in } : {}), on: !values.off });
+      return out(links, () => linkLines(links));
+    }
+
+    case 'links': {
+      const links = await (await backend()).links(args[0]);
+      return out(links, () => linkLines(links));
     }
 
     case 'approve-agent': {
