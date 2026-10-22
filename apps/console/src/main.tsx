@@ -1,6 +1,7 @@
-import { StrictMode, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { AuditLine, AuditSinkInput, AuditStreamInfo, CompanyAction, CompanyInfo, MemberInfo, ScimInfo, SpaceInfo } from '@weave/node/client';
+import { api, Avatar, Badge, CopyText, Empty, Faces, Header, Icon, Logo, Open, Problem, Run, useLoad, when, type IconName } from './ui.tsx';
 
 /*
  * The admin console for a company's Weave (stage 12): served by the company's
@@ -12,147 +13,90 @@ type Me = { subject: string; email?: string; name?: string };
 type SpaceRow = SpaceInfo & { members: Array<{ did: string; name?: string; maintainer: boolean }> };
 type Line = AuditLine & { space: { id: string; name: string } };
 
-class Unauthorized extends Error {}
-
-async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method: init?.method ?? 'GET',
-    headers: init?.body !== undefined || init?.method ? { 'content-type': 'application/json', 'x-weave-console': '1' } : {},
-    ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-  });
-  if (res.status === 401) throw new Unauthorized();
-  const body = (await res.json()) as T & { error?: string };
-  if (!res.ok) throw new Error(body.error ?? `${res.status}`);
-  return body;
-}
-
 const act = (action: CompanyAction) => api<CompanyInfo>('/action', { method: 'POST', body: action });
 
-/** Opens it in the Weave app (weave:project:…, weave:group:…). */
-function Open({ kind, id, children }: { kind?: string; id: string; children: ReactNode }) {
-  return kind ? (
-    <a href={`weave:${kind}:${id}`} title="Open in Weave">
-      {children}
-    </a>
-  ) : (
-    <>{children}</>
-  );
-}
+// ------------------------------------------------------------------ overview
 
-const when = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
-
-/** Load something, with a way to load it again. */
-function useLoad<T>(load: () => Promise<T>, deps: unknown[] = []): { data?: T; error?: string; reload(): void } {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState<string>();
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let live = true;
-    load()
-      .then((d) => live && (setData(d), setError(undefined)))
-      .catch((e: Error) => live && setError(e instanceof Unauthorized ? 'signed out' : e.message));
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, ...deps]);
-  return { data, error, reload: useCallback(() => setTick((t) => t + 1), []) };
-}
-
-/** A button that runs something, shows it's busy and reports what went wrong. */
-function Run({ children, run, kind, confirm: ask, disabled }: { children: ReactNode; run: () => Promise<unknown>; kind?: 'primary' | 'danger'; confirm?: string; disabled?: boolean }) {
-  const [busy, setBusy] = useState(false);
+function Stat({ icon, tone, label, value, sub, alert }: { icon: IconName; tone: string; label: string; value: ReactNode; sub: ReactNode; alert?: boolean }) {
   return (
-    <button
-      className={`btn ${kind ?? ''}`}
-      disabled={busy || disabled}
-      onClick={async () => {
-        if (ask && !window.confirm(ask)) return;
-        setBusy(true);
-        try {
-          await run();
-        } catch (e) {
-          window.alert((e as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      {busy ? '…' : children}
-    </button>
+    <div className="card stat">
+      <div className={`stat-icon strand-${tone}`}>
+        <Icon name={icon} size={20} />
+      </div>
+      <div>
+        <div className="k">{label}</div>
+        <div className="v">{value}</div>
+        <div className={`s ${alert ? 'bad' : ''}`}>{sub}</div>
+      </div>
+    </div>
   );
 }
 
-function Problem({ error }: { error?: string }) {
-  return error ? <div className="notice error">{error}</div> : null;
-}
-
-// ------------------------------------------------------------------ pages
-
-function Overview({ company, reload }: { company: CompanyInfo; reload(): void }) {
+function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void }) {
   const members = useLoad(() => api<MemberInfo[]>('/members'));
   const scim = useLoad(() => api<ScimInfo>('/scim'));
   const streams = useLoad(() => api<AuditStreamInfo[]>('/streams'));
   const [link, setLink] = useState<string>();
   const vouched = (members.data ?? []).filter((m) => m.attested && Date.parse(m.attested.until) > Date.now()).length;
+  const troubled = streams.data?.some((s) => s.problem);
   const p = company.policy;
+  const rules: Array<[IconName, string, boolean]> = [
+    ['briefcases', p.outside ? 'Outside projects and groups allowed' : 'Company projects and groups only', !p.outside],
+    ['send', `Direct chats: ${{ all: 'with anyone', company: 'colleagues only', off: 'none' }[p.directs]}`, p.directs !== 'all'],
+    ['lock', p.public ? 'Public posting allowed' : 'No public posting', !p.public],
+    ['users', p.chats ? 'Colleagues chat in company chats' : 'Colleagues chat directly', p.chats],
+    ['link', p.links ? 'Linking private accounts allowed' : 'No linking', !p.links],
+    ['clock', `Kept ${company.retention.minDays ? `at least ${company.retention.minDays} days` : 'without a minimum'}${company.retention.maxDays ? `, at most ${company.retention.maxDays} days` : ''}`, !!(company.retention.minDays || company.retention.maxDays)],
+  ];
   return (
     <>
-      <h1>{company.name}</h1>
-      <p className="lead">Your company's Weave: its people, projects and groups, policy and audit.</p>
+      <Header icon="grid" title={company.name} lead="Your company's Weave: its people, projects and groups, policy and audit." />
       <div className="cards">
-        <div className="card">
-          <div className="k">People vouched for</div>
-          <div className="v">{members.data ? vouched : '…'}</div>
-          <div className="s">{members.data ? `${members.data.length} in the company group` : ''}</div>
-        </div>
-        <div className="card">
-          <div className="k">Projects and groups</div>
-          <div className="v">{company.spaces.length + 1}</div>
-          <div className="s">{company.maps.length} mapped from sign-in groups</div>
-        </div>
-        <div className="card">
-          <div className="k">Directory (SCIM)</div>
-          <div className={`v ${scim.data?.on ? 'good' : 'muted'}`}>{scim.data ? (scim.data.on ? 'On' : 'Off') : '…'}</div>
-          <div className="s">{scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'}</div>
-        </div>
-        <div className="card">
-          <div className="k">Audit streams</div>
-          <div className="v">{streams.data?.length ?? '…'}</div>
-          <div className={`s ${streams.data?.some((s) => s.problem) ? 'bad' : ''}`}>{streams.data?.some((s) => s.problem) ? 'a destination has a problem' : 'all delivering'}</div>
-        </div>
+        <Stat icon="users" tone="navy" label="People vouched for" value={members.data ? vouched : '…'} sub={members.data ? `${members.data.length} in the company group` : ''} />
+        <Stat icon="briefcases" tone="teal" label="Projects and groups" value={company.spaces.length + 1} sub={`${company.maps.length} mapped from sign-in groups`} />
+        <Stat icon="database" tone="gold" label="Directory (SCIM)" value={scim.data ? (scim.data.on ? 'On' : 'Off') : '…'} sub={scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'} />
+        <Stat icon="plug" tone="red" label="Audit streams" value={streams.data?.length ?? '…'} sub={!streams.data?.length ? 'none yet' : troubled ? 'a destination has a problem' : 'all delivering'} alert={troubled} />
       </div>
-      <div className="panel">
-        <h2>Policy in effect</h2>
-        <div className="row">
-          <span className="chip">{p.outside ? 'Outside projects and groups allowed' : "Company projects and groups only"}</span>
-          <span className="chip">Direct chats: {{ all: 'anyone', company: 'colleagues', off: 'none' }[p.directs]}</span>
-          <span className="chip">{p.public ? 'Public posting allowed' : 'No public posting'}</span>
-          <span className="chip">{p.chats ? 'Colleagues chat in company chats' : 'Direct chats between colleagues'}</span>
-          <span className="chip">{p.links ? 'Linking accounts allowed' : 'No linking'}</span>
-          <span className="chip">Retention: {company.retention.minDays ? `≥ ${company.retention.minDays} d` : 'no minimum'}, {company.retention.maxDays ? `≤ ${company.retention.maxDays} d` : 'no maximum'}</span>
-        </div>
-      </div>
-      <div className="panel">
-        <h2>Set up a new colleague</h2>
-        <p className="muted">An enrollment link sets up a company account with their company sign-in (weave enroll), or goes into your device management's settings.</p>
-        <div className="row">
-          <Run kind="primary" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
+      <div className="grid-2">
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Policy in effect</h2>
+            <button className="btn small ghost" onClick={() => go('Policy')}>
+              Change
+            </button>
+          </div>
+          <ul className="rules">
+            {rules.map(([icon, text, strict]) => (
+              <li key={text} className={strict ? 'strict' : ''}>
+                <Icon name={icon} />
+                {text}
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Set up a new colleague</h2>
+          </div>
+          <p className="muted">An enrollment link sets up a company account with their company sign-in (weave enroll), or goes into your device management's settings.</p>
+          <Run kind="primary" icon="plus" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
             New enrollment link
           </Run>
-        </div>
-        {link && <p className="mono">{link}</p>}
+          {link && <CopyText text={link} />}
+        </section>
       </div>
-      <Requests company={company} reload={reload} />
+      <Requests company={company} />
     </>
   );
 }
 
-function Requests({ company }: { company: CompanyInfo; reload(): void }) {
+function Requests({ company }: { company: CompanyInfo }) {
   if (!company.requests.length) return null;
   return (
-    <div className="panel">
-      <h2>Requests from admins in Weave</h2>
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Requests from admins in Weave</h2>
+      </div>
       <div className="table-wrap">
         <table>
           <thead>
@@ -166,42 +110,51 @@ function Requests({ company }: { company: CompanyInfo; reload(): void }) {
           <tbody>
             {[...company.requests].reverse().map((r) => (
               <tr key={r.id}>
-                <td>{when(r.time)}</td>
-                <td>{r.byName ?? r.by.slice(0, 16)}</td>
+                <td className="nowrap">{when(r.time)}</td>
+                <td>
+                  <div className="who">
+                    <Avatar name={r.byName} id={r.by} />
+                    {r.byName ?? r.by.slice(0, 16)}
+                  </div>
+                </td>
                 <td>{r.action}</td>
-                <td className={r.error ? 'bad' : r.done ? 'good' : 'warn'}>{r.error ?? (r.done ? 'done' : 'waiting')}</td>
+                <td>{r.error ? <Badge tone="bad">{r.error}</Badge> : r.done ? <Badge tone="good">done</Badge> : <Badge tone="warn">waiting</Badge>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   );
 }
+
+// ------------------------------------------------------------------ people
 
 function People({ company }: { company: CompanyInfo }) {
   const members = useLoad(() => api<MemberInfo[]>('/members'));
   const [answer, setAnswer] = useState<{ name: string; answer: string }>();
+  const [filter, setFilter] = useState('');
   const now = Date.now();
+  const shown = (members.data ?? []).filter((m) => !filter || `${m.name} ${m.attested?.email ?? ''} ${m.attested?.groups.join(' ') ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <>
-      <h1>People</h1>
-      <p className="lead">Everyone in the company group, and what the company vouches for.</p>
+      <Header icon="users" title="People" lead="Everyone in the company group, and what the company vouches for.">
+        <input className="search" placeholder="Search people or groups" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      </Header>
       <Problem error={members.error} />
       {answer && (
         <div className="notice">
-          Recovery answer for {answer.name}'s new computer (only that computer opens it: <span className="mono">weave recover &lt;answer&gt;</span>):
-          <div className="mono">{answer.answer}</div>
+          <Icon name="key" /> Recovery answer for {answer.name}'s new computer. Only that computer opens it (weave recover &lt;answer&gt; there):
+          <CopyText text={answer.answer} />
         </div>
       )}
-      <div className="panel table-wrap">
+      <section className="panel flush table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Sign-in</th>
+              <th>Person</th>
               <th>Groups</th>
-              <th>Vouched until</th>
+              <th>Vouched for</th>
               <th>Computer</th>
               <th />
             </tr>
@@ -209,90 +162,139 @@ function People({ company }: { company: CompanyInfo }) {
           <tbody>
             {!members.data && (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={5} className="muted">
                   Loading…
                 </td>
               </tr>
             )}
-            {(members.data ?? []).map((m) => {
+            {shown.map((m) => {
+              const isCompany = m.did === company.did;
               const live = m.attested && Date.parse(m.attested.until) > now;
               return (
                 <tr key={m.did}>
                   <td>
-                    <div>{m.name ?? m.did.slice(0, 20)}</div>
-                    <div className="muted">{m.did === company.did ? 'the company' : m.company ? 'company account' : 'own account'}</div>
+                    <div className="who">
+                      {isCompany ? (
+                        <span className="avatar logo-avatar">
+                          <Logo size={18} />
+                        </span>
+                      ) : (
+                        <Avatar name={m.name} id={m.did} />
+                      )}
+                      <div>
+                        <div className="name">{m.name ?? m.did.slice(0, 20)}</div>
+                        <div className="muted small">{isCompany ? 'the company' : (m.attested?.email ?? (m.company ? 'company account' : 'own account'))}</div>
+                      </div>
+                    </div>
                   </td>
-                  <td>{m.attested?.email ?? m.attested?.subject ?? <span className="muted">{m.did === company.did ? '' : 'not signed in'}</span>}</td>
-                  <td>{m.attested?.groups.map((g) => <span key={g} className="chip">{g}</span>)}</td>
-                  <td className={live || m.did === company.did ? '' : 'warn'}>{m.attested ? (live ? when(m.attested.until) : 'lapsed') : m.did === company.did ? '' : '—'}</td>
-                  <td className="muted">{m.attested?.device?.subject ?? '—'}</td>
                   <td>
-                    <div className="row">
-                      {m.company && (
+                    {m.attested?.groups.map((g) => (
+                      <span key={g} className="chip">
+                        {g}
+                      </span>
+                    ))}
+                  </td>
+                  <td className="nowrap">{isCompany ? '' : !m.attested ? <Badge tone="muted">not signed in</Badge> : live ? <Badge tone="good">until {when(m.attested.until)}</Badge> : <Badge tone="warn">lapsed</Badge>}</td>
+                  <td className="muted small">
+                    {m.attested?.device ? (
+                      <span className="device">
+                        <Icon name="monitor" />
+                        {m.attested.device.subject.replace(/^CN=/, '')}
+                      </span>
+                    ) : (
+                      ''
+                    )}
+                  </td>
+                  <td>
+                    {m.company && (
+                      <div className="row end">
                         <Run
+                          small
+                          kind="ghost"
+                          icon="key"
+                          title="Set up a new computer (recovery)"
                           run={async () => {
                             const request = window.prompt(`The recovery request from ${m.name}'s new computer (weave recover-request there):`);
                             if (request) setAnswer({ name: m.name ?? 'them', answer: (await api<{ answer: string }>('/recovery', { method: 'POST', body: { person: m.did, request } })).answer });
                           }}
-                        >
-                          New computer
-                        </Run>
-                      )}
-                      {m.company && (
-                        <Run kind="danger" confirm={`Freeze ${m.name}'s company account? Nothing it signs from now on counts anywhere. Its history stays.`} run={async () => (await act({ action: 'freeze', person: m.did }), members.reload())}>
-                          Freeze
-                        </Run>
-                      )}
-                    </div>
+                        />
+                        <Run small kind="ghost" icon="lock" title="Freeze this company account" confirm={`Freeze ${m.name}'s company account? Nothing it signs from now on counts anywhere. Its history stays.`} run={async () => (await act({ action: 'freeze', person: m.did }), members.reload())} />
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      </div>
+        {members.data && !shown.length && <Empty icon="users">Nobody matches “{filter}”.</Empty>}
+      </section>
     </>
   );
 }
+
+// ------------------------------------------------------------------ projects and groups
 
 function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const spaces = useLoad(() => api<SpaceRow[]>('/spaces'), [company]);
   const [kind, setKind] = useState<'project' | 'group'>('project');
   const [name, setName] = useState('');
   const [map, setMap] = useState({ group: '', space: '', role: 'member' as 'member' | 'maintainer' });
+  const kindOf = (id: string) => (id === company.group.id ? 'group' : company.spaces.find((s) => s.id === id)?.kind);
   return (
     <>
-      <h1>Projects and groups</h1>
-      <p className="lead">The company's own projects and groups. Sign-in groups decide who is in them. Click one to open it in Weave.</p>
+      <Header icon="briefcases" title="Projects and groups" lead="The company's own projects and groups. Sign-in groups decide who is in them; click one to open it in Weave." />
       <Problem error={spaces.error} />
-      <div className="panel table-wrap">
+      <section className="panel flush table-wrap">
         <table>
           <thead>
             <tr>
               <th>Project or group</th>
               <th>Members</th>
               <th>Keys</th>
-              <th>Hold</th>
+              <th>Legal hold</th>
             </tr>
           </thead>
           <tbody>
+            {!spaces.data && (
+              <tr>
+                <td colSpan={4} className="muted">
+                  Loading…
+                </td>
+              </tr>
+            )}
             {(spaces.data ?? []).map((s) => (
               <tr key={s.id}>
                 <td>
-                  <div>
-                    <Open kind={s.kind} id={s.id}>
-                      {s.name}
-                    </Open>
+                  <div className="who">
+                    <span className={`space-icon ${s.kind}`}>
+                      <Icon name={s.id === company.group.id ? 'users' : s.kind === 'project' ? 'briefcases' : 'users'} />
+                    </span>
+                    <div>
+                      <div className="name">
+                        <Open kind={s.kind} id={s.id}>
+                          {s.name}
+                        </Open>
+                      </div>
+                      <div className="muted small">{s.id === company.group.id ? 'company group: everyone' : s.kind}</div>
+                    </div>
                   </div>
-                  <div className="muted">{s.id === company.group.id ? 'company group (everyone)' : s.kind}</div>
                 </td>
-                <td>{s.members.map((m) => <span key={m.did} className="chip">{m.name ?? m.did.slice(8, 16)}{m.maintainer ? ' ★' : ''}</span>)}</td>
-                <td className={s.managed?.problem ? 'bad' : 'muted'}>{s.managed?.problem ?? `epoch ${s.epoch}`}</td>
+                <td>
+                  <Faces people={s.members} />
+                </td>
+                <td>{s.managed?.problem ? <Badge tone="bad">{s.managed.problem}</Badge> : <span title="Under the company's key service">
+                      <Badge tone="good">key {s.epoch}</Badge>
+                    </span>}</td>
                 <td>
                   {s.hold ? (
-                    <span className="warn">until {s.hold.until.slice(0, 10)}</span>
+                    <Badge tone="warn">until {s.hold.until.slice(0, 10)}</Badge>
                   ) : (
                     <Run
+                      small
+                      kind="ghost"
+                      icon="lock"
+                      title="Put on legal hold"
                       run={async () => {
                         const until = window.prompt(`Legal hold on ${s.name} until (YYYY-MM-DD):`);
                         if (until) await act({ action: 'hold', space: s.id, until, reason: window.prompt('Reason (for the audit):') ?? '' });
@@ -307,74 +309,102 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
             ))}
           </tbody>
         </table>
-      </div>
-      <div className="panel">
-        <h2>New project or group</h2>
-        <div className="row">
-          <select value={kind} onChange={(e) => setKind(e.target.value as 'project' | 'group')}>
-            <option value="project">Project</option>
-            <option value="group">Group</option>
-          </select>
-          <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Run kind="primary" disabled={!name.trim()} run={async () => (await act({ action: 'space', kind, name: name.trim() }), setName(''), reload())}>
-            Create
-          </Run>
-        </div>
-      </div>
-      <div className="panel">
-        <h2>Sign-in groups → projects and groups</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Sign-in group</th>
-                <th>Project or group</th>
-                <th>As</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {company.maps.map((m) => (
-                <tr key={`${m.group} ${m.space}`}>
-                  <td>
-                    <span className="chip">{m.group}</span>
-                  </td>
-                  <td>
-                    <Open kind={company.spaces.find((s) => s.id === m.space)?.kind} id={m.space}>
-                      {m.spaceName}
-                    </Open>
-                  </td>
-                  <td>{m.role === 'maintainer' ? 'maintainers' : 'members'}</td>
-                  <td>
-                    <Run kind="danger" run={async () => (await act({ action: 'map', group: m.group, space: m.space, on: false }), reload())}>
-                      Remove
-                    </Run>
-                  </td>
-                </tr>
+      </section>
+      <div className="grid-2">
+        <section className="panel">
+          <div className="panel-head">
+            <h2>New project or group</h2>
+          </div>
+          <div className="row">
+            <select value={kind} onChange={(e) => setKind(e.target.value as 'project' | 'group')}>
+              <option value="project">Project</option>
+              <option value="group">Group</option>
+            </select>
+            <input className="grow" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Run kind="primary" icon="plus" disabled={!name.trim()} run={async () => (await act({ action: 'space', kind, name: name.trim() }), setName(''), reload())}>
+              Create
+            </Run>
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Add a mapping</h2>
+          </div>
+          <div className="row">
+            <input className="grow" placeholder="Sign-in group, e.g. engineering" value={map.group} onChange={(e) => setMap({ ...map, group: e.target.value })} />
+            <select value={map.space} onChange={(e) => setMap({ ...map, space: e.target.value })}>
+              <option value="">Project or group…</option>
+              {company.spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
               ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="row" style={{ marginTop: 12 }}>
-          <input placeholder="Sign-in group, e.g. engineering" value={map.group} onChange={(e) => setMap({ ...map, group: e.target.value })} />
-          <select value={map.space} onChange={(e) => setMap({ ...map, space: e.target.value })}>
-            <option value="">Project or group…</option>
-            {company.spaces.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select value={map.role} onChange={(e) => setMap({ ...map, role: e.target.value as 'member' | 'maintainer' })}>
-            <option value="member">as members</option>
-            <option value="maintainer">as maintainers</option>
-          </select>
-          <Run kind="primary" disabled={!map.group.trim() || !map.space} run={async () => (await act({ action: 'map', group: map.group.trim(), space: map.space, role: map.role }), setMap({ group: '', space: '', role: 'member' }), reload())}>
-            Add
-          </Run>
-        </div>
+            </select>
+            <select value={map.role} onChange={(e) => setMap({ ...map, role: e.target.value as 'member' | 'maintainer' })}>
+              <option value="member">as members</option>
+              <option value="maintainer">as maintainers</option>
+            </select>
+            <Run kind="primary" icon="plus" disabled={!map.group.trim() || !map.space} run={async () => (await act({ action: 'map', group: map.group.trim(), space: map.space, role: map.role }), setMap({ group: '', space: '', role: 'member' }), reload())}>
+              Add
+            </Run>
+          </div>
+        </section>
       </div>
+      <section className="panel flush">
+        <div className="panel-head padded">
+          <h2>Sign-in groups → projects and groups</h2>
+        </div>
+        {company.maps.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sign-in group</th>
+                  <th>Project or group</th>
+                  <th>As</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {company.maps.map((m) => (
+                  <tr key={`${m.group} ${m.space}`}>
+                    <td>
+                      <span className="chip">{m.group}</span>
+                    </td>
+                    <td>
+                      <Open kind={kindOf(m.space)} id={m.space}>
+                        {m.spaceName}
+                      </Open>
+                    </td>
+                    <td>{m.role === 'maintainer' ? 'maintainers' : 'members'}</td>
+                    <td className="end">
+                      <Run small kind="ghost" icon="trash" title="Remove this mapping" confirm={`Stop mapping ${m.group} to ${m.spaceName}? People it brought in leave.`} run={async () => (await act({ action: 'map', group: m.group, space: m.space, on: false }), reload())} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty icon="link">No mappings yet: add one above, and everyone in that sign-in group joins.</Empty>
+        )}
+      </section>
     </>
+  );
+}
+
+// ------------------------------------------------------------------ policy
+
+function Toggle({ value, onChange, on, off }: { value: boolean; onChange(v: boolean): void; on: string; off: string }) {
+  return (
+    <div className="segmented">
+      <button className={value ? 'on' : ''} onClick={() => onChange(true)}>
+        {on}
+      </button>
+      <button className={!value ? 'on' : ''} onClick={() => onChange(false)}>
+        {off}
+      </button>
+    </div>
   );
 }
 
@@ -387,131 +417,167 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const days = (v: string) => (v.trim() ? Number(v) : null);
   return (
     <>
-      <h1>Policy</h1>
-      <p className="lead">What company accounts may do, and how long the company's projects and groups keep things. The policy is published, so every Weave app holds company accounts to it.</p>
-      <div className="panel">
-        <h2>Company accounts</h2>
+      <Header icon="shield" title="Policy" lead="What company accounts may do, and how long the company's projects and groups keep things. The policy is published, so every Weave app holds company accounts to it.">
+        <Run
+          kind="primary"
+          icon="check"
+          run={async () => {
+            await act({ action: 'settings', ...p, admins, retention: { minDays: days(min), maxDays: days(max) }, ...(ca.trim() ? { deviceCA: ca.trim() } : {}) });
+            setCa('');
+            reload();
+          }}
+        >
+          Save policy
+        </Run>
+      </Header>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>
+            <Icon name="users" /> Company accounts
+          </h2>
+        </div>
         <div className="form">
           <label>Projects and groups outside the company</label>
-          <select value={String(p.outside)} onChange={(e) => setP({ ...p, outside: e.target.value === 'true' })}>
-            <option value="true">Allowed</option>
-            <option value="false">Not allowed</option>
-          </select>
+          <Toggle value={p.outside} onChange={(outside) => setP({ ...p, outside })} on="Allowed" off="Not allowed" />
           <label>Direct chats</label>
-          <select value={p.directs} onChange={(e) => setP({ ...p, directs: e.target.value as 'all' | 'company' | 'off' })}>
-            <option value="all">With anyone</option>
-            <option value="company">Only with colleagues</option>
-            <option value="off">None</option>
-          </select>
+          <div className="segmented">
+            {(['all', 'company', 'off'] as const).map((d) => (
+              <button key={d} className={p.directs === d ? 'on' : ''} onClick={() => setP({ ...p, directs: d })}>
+                {{ all: 'With anyone', company: 'Colleagues only', off: 'None' }[d]}
+              </button>
+            ))}
+          </div>
           <label>Chats between colleagues</label>
-          <select value={String(p.chats)} onChange={(e) => setP({ ...p, chats: e.target.value === 'true' })}>
-            <option value="false">Direct chats</option>
-            <option value="true">Company chats (kept and audited by the company)</option>
-          </select>
+          <Toggle value={p.chats} onChange={(chats) => setP({ ...p, chats })} on="Company chats" off="Direct chats" />
           <label>Public posting</label>
-          <select value={String(p.public)} onChange={(e) => setP({ ...p, public: e.target.value === 'true' })}>
-            <option value="true">Allowed</option>
-            <option value="false">Not allowed</option>
-          </select>
+          <Toggle value={p.public} onChange={(pub) => setP({ ...p, public: pub })} on="Allowed" off="Not allowed" />
           <label>Linking private accounts</label>
-          <select value={String(p.links)} onChange={(e) => setP({ ...p, links: e.target.value === 'true' })}>
-            <option value="true">Allowed</option>
-            <option value="false">Not allowed</option>
-          </select>
+          <Toggle value={p.links} onChange={(links) => setP({ ...p, links })} on="Allowed" off="Not allowed" />
           <label>Admins (sign-in group)</label>
           <input value={admins} onChange={(e) => setAdmins(e.target.value)} />
         </div>
-      </div>
-      <div className="panel">
-        <h2>Retention in the company's projects and groups</h2>
-        <div className="form">
-          <label>Keep at least (days)</label>
-          <input type="number" min={1} placeholder="no minimum" value={min} onChange={(e) => setMin(e.target.value)} />
-          <label>Keep at most (days)</label>
-          <input type="number" min={1} placeholder="no maximum" value={max} onChange={(e) => setMax(e.target.value)} />
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>
+            <Icon name="clock" /> Retention
+          </h2>
         </div>
-        <p className="muted">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each project's page stay. A legal hold stops it.</p>
-      </div>
-      <div className="panel">
-        <h2>Company computers</h2>
-        <p className="muted">{company.policy && ca ? '' : 'Only sign-ins from computers with a certificate from this authority are vouched for. Leave empty to keep the current setting.'}</p>
+        <div className="form">
+          <label>Keep at least</label>
+          <div className="unit">
+            <input type="number" min={1} placeholder="no minimum" value={min} onChange={(e) => setMin(e.target.value)} />
+            <span>days</span>
+          </div>
+          <label>Keep at most</label>
+          <div className="unit">
+            <input type="number" min={1} placeholder="no maximum" value={max} onChange={(e) => setMax(e.target.value)} />
+            <span>days</span>
+          </div>
+        </div>
+        <p className="muted small">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each project's page stay. A legal hold stops it.</p>
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>
+            <Icon name="monitor" /> Company computers
+          </h2>
+        </div>
+        <p className="muted small">Only sign-ins from computers with a certificate from this authority are vouched for. Leave it empty to keep the current setting.</p>
         <textarea placeholder="-----BEGIN CERTIFICATE----- (your device certificate authority)" value={ca} onChange={(e) => setCa(e.target.value)} />
-      </div>
-      <Run
-        kind="primary"
-        run={async () => {
-          await act({ action: 'settings', ...p, admins, retention: { minDays: days(min), maxDays: days(max) }, ...(ca.trim() ? { deviceCA: ca.trim() } : {}) });
-          setCa('');
-          reload();
-        }}
-      >
-        Save policy
-      </Run>
+      </section>
     </>
   );
 }
+
+// ------------------------------------------------------------------ directory
 
 function Directory() {
   const scim = useLoad(() => api<ScimInfo>('/scim'));
   const [token, setToken] = useState<string>();
   return (
     <>
-      <h1>Directory</h1>
-      <p className="lead">Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of all the company's projects and groups at once.</p>
-      <Problem error={scim.error} />
-      <div className="panel">
-        <div className="row">
-          <span className={scim.data?.on ? 'good' : 'muted'}>{scim.data?.on ? `SCIM is on (port ${scim.data.port})` : 'SCIM is off'}</span>
-          {scim.data?.on ? (
+      <Header icon="database" title="Directory" lead="Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of all the company's projects and groups at once.">
+        {scim.data?.on ? (
+          <>
+            <Run icon="key" confirm="Make a new token? The old one stops working." run={async () => (setToken((await api<ScimInfo>('/scim', { method: 'POST', body: { on: true } })).token), scim.reload())}>
+              New token
+            </Run>
             <Run kind="danger" confirm="Turn SCIM off? Groups come from sign-in tokens again." run={async () => (await api('/scim', { method: 'POST', body: { on: false } }), scim.reload())}>
               Turn off
             </Run>
-          ) : (
-            <Run kind="primary" run={async () => (setToken((await api<ScimInfo>('/scim', { method: 'POST', body: { on: true } })).token), scim.reload())}>
-              Turn on
-            </Run>
-          )}
-          {scim.data?.on && (
-            <Run confirm="Make a new token? The old one stops working." run={async () => (setToken((await api<ScimInfo>('/scim', { method: 'POST', body: { on: true } })).token), scim.reload())}>
-              New token
-            </Run>
-          )}
-        </div>
-        {token && (
-          <div className="notice">
-            Bearer token for your user management's provisioning settings (shown once):
-            <div className="mono">{token}</div>
-          </div>
+          </>
+        ) : (
+          <Run kind="primary" icon="plug" run={async () => (setToken((await api<ScimInfo>('/scim', { method: 'POST', body: { on: true } })).token), scim.reload())}>
+            Turn on SCIM
+          </Run>
         )}
-      </div>
-      <div className="panel table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Status</th>
-              <th>Groups</th>
-              <th>In Weave</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(scim.data?.users ?? []).map((u) => (
-              <tr key={u.userName}>
-                <td>
-                  <div>{u.displayName ?? u.userName}</div>
-                  <div className="muted">{u.userName}</div>
-                </td>
-                <td className={u.active ? 'good' : 'bad'}>{u.active ? 'active' : 'deactivated'}</td>
-                <td>{u.groups.map((g) => <span key={g} className="chip">{g}</span>)}</td>
-                <td>{u.name ?? <span className="muted">not yet</span>}</td>
+      </Header>
+      <Problem error={scim.error} />
+      <div className="status-line">{scim.data && (scim.data.on ? <Badge tone="good">SCIM is on, port {scim.data.port}, endpoint /scim/v2</Badge> : <Badge tone="muted">SCIM is off: groups come from sign-in tokens</Badge>)}</div>
+      {token && (
+        <div className="notice">
+          <Icon name="key" /> Bearer token for your user management's provisioning settings (shown once):
+          <CopyText text={token} />
+        </div>
+      )}
+      <section className="panel flush table-wrap">
+        {scim.data?.users.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Status</th>
+                <th>Groups</th>
+                <th>In Weave</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {scim.data.users.map((u) => (
+                <tr key={u.userName}>
+                  <td>
+                    <div className="who">
+                      <Avatar name={u.displayName ?? u.userName} id={u.userName} />
+                      <div>
+                        <div className="name">{u.displayName ?? u.userName}</div>
+                        <div className="muted small">{u.userName}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{u.active ? <Badge tone="good">active</Badge> : <Badge tone="bad">deactivated</Badge>}</td>
+                  <td>
+                    {u.groups.map((g) => (
+                      <span key={g} className="chip">
+                        {g}
+                      </span>
+                    ))}
+                  </td>
+                  <td>{u.name ?? <span className="muted">not yet</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty icon="database">{scim.data?.on ? 'Nobody provisioned yet: start provisioning in your user management.' : 'Turn SCIM on, then point your user management at it.'}</Empty>
+        )}
+      </section>
     </>
   );
 }
+
+// ------------------------------------------------------------------ audit
+
+const KIND_ICONS: Array<[RegExp, IconName]> = [
+  [/console/, 'grid'],
+  [/attest|signin/, 'login'],
+  [/escrow|freeze/, 'key'],
+  [/rekey|kms|managed|shred/, 'lock'],
+  [/hold/, 'clock'],
+  [/admit|join|remove|leave|maintainer/, 'users'],
+  [/settings|policy|map|start/, 'shield'],
+  [/delete/, 'trash'],
+];
+const kindIcon = (kind: string): IconName => KIND_ICONS.find(([re]) => re.test(kind))?.[1] ?? 'clipboardNote';
 
 function Audit({ company }: { company: CompanyInfo }) {
   const [space, setSpace] = useState('');
@@ -519,6 +585,7 @@ function Audit({ company }: { company: CompanyInfo }) {
   const names = audit.data?.names ?? {};
   const named = (v: unknown) => (typeof v === 'string' ? (names[v] ?? (v.startsWith('did:key:') ? `${v.slice(8, 16)}…` : v)) : String(v));
   const spaces = [company.group, ...company.spaces];
+  const kindOf = (id: string) => (id === company.group.id ? 'group' : company.spaces.find((s) => s.id === id)?.kind);
   const summary = (l: Line) => {
     const d = (l.detail ?? {}) as Record<string, unknown>;
     if (l.kind === 'weave.org.console') return `${d.email ?? d.subject} in the console: ${d.action}${d.space ? ` (${named(d.space)})` : ''}${d.person ? ` (${named(d.person)})` : ''}`;
@@ -530,9 +597,7 @@ function Audit({ company }: { company: CompanyInfo }) {
   };
   return (
     <>
-      <h1>Audit</h1>
-      <p className="lead">Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.</p>
-      <div className="row" style={{ marginBottom: 14 }}>
+      <Header icon="clipboardNote" title="Audit" lead="Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.">
         <select value={space} onChange={(e) => setSpace(e.target.value)}>
           <option value="">All projects and groups</option>
           {spaces.map((s) => (
@@ -543,12 +608,13 @@ function Audit({ company }: { company: CompanyInfo }) {
         </select>
         {space && (
           <a className="btn" href={`/api/export?space=${space}`}>
-            Export everything in it (legal search)
+            <Icon name="download" />
+            <span>Export everything (legal search)</span>
           </a>
         )}
-      </div>
+      </Header>
       <Problem error={audit.error} />
-      <div className="panel table-wrap">
+      <section className="panel flush table-wrap">
         <table>
           <thead>
             <tr>
@@ -569,28 +635,45 @@ function Audit({ company }: { company: CompanyInfo }) {
             )}
             {(audit.data?.lines ?? []).slice(0, 500).map((l) => (
               <tr key={`${l.space.id} ${l.id ?? l.time + l.kind}`}>
-                <td style={{ whiteSpace: 'nowrap' }}>{when(l.time)}</td>
+                <td className="nowrap muted">{when(l.time)}</td>
                 <td>
-                  <Open kind={l.space.id === company.group.id ? 'group' : company.spaces.find((s) => s.id === l.space.id)?.kind} id={l.space.id}>
+                  <Open kind={kindOf(l.space.id)} id={l.space.id}>
                     {l.space.name}
                   </Open>
                 </td>
                 <td>
-                  <span className="chip">{l.kind.replace(/^weave\./, '')}</span>
+                  <span className="event">
+                    <Icon name={kindIcon(l.kind)} />
+                    {l.kind.replace(/^weave\./, '')}
+                  </span>
                 </td>
                 <td>
-                  {l.byName ?? l.by.slice(8, 20)}
-                  {l.agent ? <span className="muted"> · {l.agent}</span> : null}
+                  <div className="who">
+                    <Avatar name={l.byName} id={l.by} />
+                    <span>
+                      {l.byName ?? l.by.slice(8, 20)}
+                      {l.agent ? <span className="muted"> · {l.agent}</span> : null}
+                    </span>
+                  </div>
                 </td>
                 <td className="muted detail">{summary(l)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+      </section>
     </>
   );
 }
+
+// ------------------------------------------------------------------ security tools
+
+const SINKS: Record<AuditSinkInput['kind'], { name: string; tone: string }> = {
+  splunk: { name: 'Splunk', tone: 'gold' },
+  sentinel: { name: 'Microsoft Sentinel', tone: 'navy' },
+  syslog: { name: 'Syslog', tone: 'teal' },
+  webhook: { name: 'Webhook', tone: 'red' },
+};
 
 function Streams() {
   const streams = useLoad(() => api<AuditStreamInfo[]>('/streams'));
@@ -610,50 +693,63 @@ function Streams() {
   };
   return (
     <>
-      <h1>Security tools</h1>
-      <p className="lead">The company's node sends every audit line, as it happens, to your security tools. What can't be delivered is sent later.</p>
+      <Header icon="plug" title="Security tools" lead="The company's node sends every audit line, as it happens, to your security tools. What can't be delivered is sent later." />
       <Problem error={streams.error} />
-      <div className="panel table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Destination</th>
-              <th>Sent</th>
-              <th>Last</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {(streams.data ?? []).map((s) => (
-              <tr key={s.id}>
-                <td>
-                  <div>{{ webhook: 'Webhook', splunk: 'Splunk', syslog: 'Syslog', sentinel: 'Microsoft Sentinel' }[s.kind]}</div>
-                  <div className="muted mono">{s.target}</div>
-                </td>
-                <td>{s.sent}</td>
-                <td>{when(s.lastSent)}</td>
-                <td className={s.problem ? 'bad' : 'good'}>{s.problem ?? 'delivering'}</td>
-                <td>
-                  <Run kind="danger" confirm="Stop sending the audit there?" run={async () => (await api('/streams', { method: 'DELETE', body: { id: s.id } }), streams.reload())}>
-                    Remove
-                  </Run>
-                </td>
+      <section className="panel flush table-wrap">
+        {streams.data?.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Destination</th>
+                <th>Sent</th>
+                <th>Last</th>
+                <th>Status</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="panel">
-        <h2>Add a destination</h2>
+            </thead>
+            <tbody>
+              {streams.data.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <div className="who">
+                      <span className={`stat-icon small strand-${SINKS[s.kind].tone}`}>
+                        <Icon name="send" />
+                      </span>
+                      <div>
+                        <div className="name">{SINKS[s.kind].name}</div>
+                        <div className="muted small mono">{s.target}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{s.sent}</td>
+                  <td className="nowrap muted">{when(s.lastSent)}</td>
+                  <td>{s.problem ? <Badge tone="bad">{s.problem}</Badge> : <Badge tone="good">delivering</Badge>}</td>
+                  <td className="end">
+                    <Run small kind="ghost" icon="trash" title="Remove this destination" confirm="Stop sending the audit there?" run={async () => (await api('/streams', { method: 'DELETE', body: { id: s.id } }), streams.reload())} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty icon="plug">{streams.data ? 'No destinations yet: add one below.' : 'Loading…'}</Empty>
+        )}
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Add a destination</h2>
+        </div>
+        <div className="sink-picker">
+          {(Object.keys(SINKS) as Array<AuditSinkInput['kind']>).map((k) => (
+            <button key={k} className={`sink ${kind === k ? 'on' : ''}`} onClick={() => (setKind(k), setF({}))}>
+              <span className={`stat-icon small strand-${SINKS[k].tone}`}>
+                <Icon name="send" />
+              </span>
+              {SINKS[k].name}
+            </button>
+          ))}
+        </div>
         <div className="form">
-          <label>Kind</label>
-          <select value={kind} onChange={(e) => (setKind(e.target.value as AuditSinkInput['kind']), setF({}))}>
-            <option value="splunk">Splunk (HTTP Event Collector)</option>
-            <option value="sentinel">Microsoft Sentinel (Logs Ingestion API)</option>
-            <option value="syslog">Syslog (RFC 5424 over TCP)</option>
-            <option value="webhook">Webhook (JSON)</option>
-          </select>
           {kind === 'webhook' && (
             <>
               {field('url', 'URL')}
@@ -662,14 +758,14 @@ function Streams() {
           )}
           {kind === 'splunk' && (
             <>
-              {field('url', 'Collector URL')}
+              {field('url', 'HTTP Event Collector URL')}
               {field('token', 'HEC token', 'password')}
             </>
           )}
           {kind === 'syslog' && (
             <>
               {field('host', 'Host')}
-              {field('port', 'Port', 'number')}
+              {field('port', 'Port (TCP)', 'number')}
             </>
           )}
           {kind === 'sentinel' && (
@@ -683,12 +779,12 @@ function Streams() {
             </>
           )}
         </div>
-        <div style={{ marginTop: 14 }}>
-          <Run kind="primary" run={async () => (await api('/streams', { method: 'POST', body: input() }), setF({}), streams.reload())}>
+        <div className="form-actions">
+          <Run kind="primary" icon="send" run={async () => (await api('/streams', { method: 'POST', body: input() }), setF({}), streams.reload())}>
             Add and send
           </Run>
         </div>
-      </div>
+      </section>
     </>
   );
 }
@@ -697,10 +793,49 @@ function Streams() {
 
 const PAGES = ['Overview', 'People', 'Projects and groups', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
 type Page = (typeof PAGES)[number];
+const PAGE_ICONS: Record<Page, IconName> = { Overview: 'grid', People: 'users', 'Projects and groups': 'briefcases', Policy: 'shield', Directory: 'database', Audit: 'clipboardNote', 'Security tools': 'plug' };
+
+type Theme = 'light' | 'dark' | 'system';
+function useTheme(): [Theme, (t: Theme) => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      return (localStorage.getItem('weave-console-theme') as Theme) || 'system';
+    } catch {
+      return 'system';
+    }
+  });
+  useEffect(() => {
+    if (theme === 'system') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('weave-console-theme', theme);
+    } catch {
+      // A private window: the choice lasts until it's closed.
+    }
+  }, [theme]);
+  return [theme, setTheme];
+}
+
+function SignIn() {
+  return (
+    <div className="signin">
+      <div className="signin-card">
+        <Logo size={72} />
+        <h1>Weave Admin</h1>
+        <p className="muted">For your company's admins. Sign in with your company account.</p>
+        <a className="btn primary big" href="/login">
+          <Icon name="login" />
+          <span>Sign in with your company</span>
+        </a>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const me = useLoad(() => api<Me>('/me'));
   const company = useLoad(() => api<CompanyInfo | null>('/company'));
+  const [theme, setTheme] = useTheme();
   const fromHash = (): Page => {
     const name = decodeURIComponent(location.hash.slice(1)).replace(/-/g, ' ');
     return (PAGES as readonly string[]).includes(name) ? (name as Page) : 'Overview';
@@ -714,39 +849,55 @@ function App() {
     window.addEventListener('hashchange', follow);
     return () => window.removeEventListener('hashchange', follow);
   }, []);
-  if (me.error === 'signed out')
+  if (me.error === 'signed out') return <SignIn />;
+  if (!me.data || company.data === undefined)
     return (
       <div className="signin">
-        <div className="panel">
-          <h1>Weave Admin</h1>
-          <p className="lead">For your company's admins.</p>
-          <a className="btn primary" href="/login">
-            Sign in with your company
-          </a>
+        <div className="loading">
+          <Logo size={48} />
+          <span className="muted">{me.error ?? company.error ?? 'Loading…'}</span>
         </div>
       </div>
     );
-  if (!me.data || company.data === undefined) return <div className="signin muted">{me.error ?? company.error ?? 'Loading…'}</div>;
   if (!company.data) return <div className="signin">This node doesn't run a company yet (weave company create).</div>;
   const c = company.data;
+  const who = me.data.name ?? me.data.email ?? me.data.subject;
   return (
     <div className="shell">
       <nav>
-        <div className="brand">{c.name}</div>
-        <div className="sub">Weave Admin</div>
-        {PAGES.map((p) => (
-          <button key={p} className={p === page ? 'on' : ''} onClick={() => setPage(p)}>
-            {p}
+        <div className="brand">
+          <Logo size={30} />
+          <div>
+            <div className="wordmark">Weave</div>
+            <div className="sub">Admin</div>
+          </div>
+        </div>
+        <div className="company">
+          <span className="company-name">{c.name}</span>
+        </div>
+        <div className="links">
+          {PAGES.map((p) => (
+            <button key={p} className={p === page ? 'on' : ''} onClick={() => setPage(p)}>
+              <Icon name={PAGE_ICONS[p]} />
+              <span>{p}</span>
+            </button>
+          ))}
+        </div>
+        <div className="me">
+          <Avatar name={who} id={me.data.subject} />
+          <div className="me-text">
+            <div className="name">{who}</div>
+            <a href="/logout">
+              <Icon name="logout" size={12} /> Sign out
+            </a>
+          </div>
+          <button className="btn small ghost theme" title={`Theme: ${theme}`} onClick={() => setTheme(theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system')}>
+            <Icon name={theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor'} />
           </button>
-        ))}
-        <div className="who">
-          {me.data.name ?? me.data.email ?? me.data.subject}
-          <br />
-          <a href="/logout">Sign out</a>
         </div>
       </nav>
       <main>
-        {page === 'Overview' && <Overview company={c} reload={company.reload} />}
+        {page === 'Overview' && <Overview company={c} go={setPage} />}
         {page === 'People' && <People company={c} />}
         {page === 'Projects and groups' && <Spaces company={c} reload={company.reload} />}
         {page === 'Policy' && <Policy key={JSON.stringify(c.policy) + JSON.stringify(c.retention)} company={c} reload={company.reload} />}
