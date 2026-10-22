@@ -83,6 +83,10 @@ export const KIND_SIGNIN = 'weave.org.signin';
 export const KIND_HOLD = 'weave.space.hold';
 /** `{agent, on}`: in a managed space, an agent key those who manage it approved (or no longer do). */
 export const KIND_AGENT_APPROVE = 'weave.space.agent';
+/** `{person, wrapped, nonce, ct}`: an employee's recovery words, sealed under a key only the company's key service can unwrap. */
+export const KIND_ESCROW = 'weave.org.escrow';
+/** `{person}`: someone who manages the space opened that person's escrow (for the audit). */
+export const KIND_ESCROW_OPENED = 'weave.org.escrow.opened';
 
 /** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
 export interface ManagedSetting {

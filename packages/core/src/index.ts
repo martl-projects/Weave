@@ -73,6 +73,8 @@ export {
   KIND_SIGNIN,
   KIND_HOLD,
   KIND_AGENT_APPROVE,
+  KIND_ESCROW,
+  KIND_ESCROW_OPENED,
   type ManagedSetting,
   HISTORIES,
   epochsToShare,

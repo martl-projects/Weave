@@ -162,4 +162,40 @@ describe('managed spaces', () => {
     expect((await lena.agentBlocked('helper')).map((s) => s.name)).toEqual(['Acme']);
     for (const node of [martin, lena]) await node.close();
   });
+
+  it('keeps an employee’s recovery words with the company: only its key service opens them, for those who manage the space', async () => {
+    vault.createKey('acme-escrow');
+    const martin = person('Martin');
+    const lenaMade = WeaveNode.create('Lena', mkdtempSync(join(tmpdir(), 'weave-managed-')));
+    const lena = lenaMade.node;
+    const kofi = person('Kofi');
+    for (const node of [martin, lena, kofi]) node.kmsCredentials = { token: vault.rootToken };
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
+    };
+    await martin.createProject({ name: 'Acme' });
+    for (const node of [lena, kofi]) await node.joinSpace(await martin.invite('Acme'));
+    syncAll();
+    await martin.manageSpace({ space: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-escrow' } });
+    await new Promise((r) => setTimeout(r, 300));
+    syncAll();
+    for (const node of all) await node.reconcile();
+
+    await expect(lena.escrowRecovery({ space: 'Acme', words: martin.identity.author })).rejects.toThrow();
+    await lena.escrowRecovery({ space: 'Acme', words: lenaMade.words });
+    syncAll();
+    // Members see that it exists, not the words.
+    expect(JSON.stringify(kofi.replica.events())).not.toContain(lenaMade.words.split(' ')[0] + ' ' + lenaMade.words.split(' ')[1]);
+    await expect(kofi.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow(/manage/);
+    const words = await martin.openEscrow({ space: 'Acme', person: 'Lena' });
+    expect(words).toBe(lenaMade.words.trim().toLowerCase().split(/\s+/).join(' '));
+    // Lena's laptop is lost: the words set up a new one.
+    const again = await WeaveNode.restore(words, mkdtempSync(join(tmpdir(), 'weave-managed-')), { events: martin.replica.events((r) => r.scope === 'public' || r.v === 1) });
+    expect(again.identity.author).toBe(lena.identity.author);
+    // Without the company's key service, nobody opens it.
+    await martin.destroyCompanyKey('Acme');
+    await expect(martin.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow();
+    for (const node of [...all, again]) await node.close();
+  });
 });

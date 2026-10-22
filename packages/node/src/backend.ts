@@ -841,6 +841,10 @@ export interface Backend {
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  /** An employee: leave your recovery words with the company (sealed; only its key service opens them). */
+  escrowRecovery(input: { space: string; words: string }): Promise<void>;
+  /** Those who manage a company space: open an employee's escrowed words (through the key service; it's in the audit). */
+  openEscrow(input: { space: string; person: string }): Promise<string>;
   /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
   approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
@@ -1091,7 +1095,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

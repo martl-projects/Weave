@@ -46,6 +46,8 @@ import {
   KIND_ATTEST,
   KIND_HOLD,
   KIND_AGENT_APPROVE,
+  KIND_ESCROW,
+  KIND_ESCROW_OPENED,
   boxTo,
   openBox,
   type Box,
@@ -1111,6 +1113,44 @@ export class WeaveNode implements Backend {
     const space = d.space as StoredSpace | undefined;
     if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent' || !this.#managedRaw(space).setting) return true;
     return !!this.#state(space).approvedAgents?.has(d.event.signer);
+  }
+
+  // ---------------------------------------------------------------- escrowed recovery (stage 9.2)
+
+  /** What the key service binds an escrow to: the space and the person. */
+  #escrowContext(space: StoredSpace, person: Did) {
+    return { space: `${spaceScope(space)}/escrow/${person}`, epoch: 0 };
+  }
+
+  async escrowRecovery(input: { space: string; words: string }): Promise<void> {
+    const space = this.#space(input.space);
+    const setting = this.#state(space).managed;
+    if (!setting) throw new Error(`${space.name} isn't a company space: recovery words stay with you`);
+    const words = normalizeWords(input.words);
+    if (recoveryIdentity(words) !== this.identity.author) throw new Error("these words don't belong to this identity");
+    // The words are sealed with a fresh key; only that key goes through the key service (some can wrap only a key's worth).
+    const dataKey = new Uint8Array(randomBytes(32));
+    const context = this.#escrowContext(space, this.identity.author);
+    const sealed = seal(dataKey, words, `weave/escrow/v1:${context.space}`);
+    const wrapped = await this.#provider(setting).wrap(dataKey, context);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, wrapped, nonce: sealed.nonce, ct: sealed.ct } }));
+  }
+
+  async openEscrow(input: { space: string; person: string }): Promise<string> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (!state.managed) throw new Error(`${space.name} isn't a company space`);
+    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} open an escrow`);
+    const person = this.resolve(input.person);
+    const escrow = this.#decodedIn(space.id)
+      .filter((d) => d.inner.kind === KIND_ESCROW && d.event.author === person && (d.inner.body as { person?: unknown } | null)?.person === person)
+      .at(-1)?.inner.body as { wrapped: string; nonce: string; ct: string } | undefined;
+    if (!escrow) throw new Error(`${this.nameOf(person) ?? person} left no recovery words in ${space.name}`);
+    const context = this.#escrowContext(space, person);
+    const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
+    const words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person } }));
+    return words;
   }
 
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
