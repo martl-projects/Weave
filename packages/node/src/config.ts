@@ -15,6 +15,10 @@ export interface Config {
   agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
   githubApp?: { clientId: string; slug: string; name: string; owner: string };
+  /** This node is a company's attestor (stage 6): it checks employees' sign-ins with this OIDC provider and vouches for them. */
+  attestor?: { issuer: string; audience: string; hours?: number };
+  /** An archive node (stage 6): it keeps everything of its spaces, never forgets or lets go of anything. */
+  archive?: boolean;
   /** Where to look for new Weave versions, instead of the Weave project and its repository. */
   updates?: { project?: string; repo?: string };
 }

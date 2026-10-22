@@ -622,6 +622,8 @@ export interface MemberInfo {
   lastActive?: string;
   /** Names of their agents seen acting in the space. */
   agents: string[];
+  /** In a space with a company attestor: who the company says they are, until when. */
+  attested?: { subject: string; email?: string; groups: string[]; until: string };
 }
 
 export interface Person {
@@ -835,6 +837,8 @@ export interface Backend {
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
+  signIn(input: { space: string; idToken: string }): Promise<void>;
   /** Unlock a managed space's keys with its key service now (they unlock by themselves too). */
   unlockSpace(space: string): Promise<SpaceInfo>;
   /** The owner: destroy the company key: every copy of everything sealed under it becomes unreadable. */
@@ -1077,7 +1081,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

@@ -68,6 +68,8 @@ export {
   KIND_SHRED,
   KIND_MANAGED,
   KIND_KMS,
+  KIND_ATTEST,
+  KIND_SIGNIN,
   type ManagedSetting,
   HISTORIES,
   epochsToShare,

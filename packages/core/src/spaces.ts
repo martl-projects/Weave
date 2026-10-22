@@ -75,6 +75,10 @@ export const KIND_SHRED = 'weave.space.shred';
 export const KIND_MANAGED = 'weave.space.managed';
 /** `{epoch, wrapped}`: an epoch's company half, wrapped by the space's key provider. */
 export const KIND_KMS = 'weave.space.kms';
+/** `{did, subject, email?, groups, until}`: the company's attestor vouches that this Weave person is this employee, until then. */
+export const KIND_ATTEST = 'weave.org.attest';
+/** `{box}`: an employee's sign-in (an OIDC ID token), boxed to the attestor. */
+export const KIND_SIGNIN = 'weave.org.signin';
 
 /** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
 export interface ManagedSetting {

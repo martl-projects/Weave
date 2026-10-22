@@ -43,6 +43,11 @@ import {
   KIND_SHRED,
   KIND_MANAGED,
   KIND_KMS,
+  KIND_ATTEST,
+  boxTo,
+  openBox,
+  type Box,
+  KIND_SIGNIN,
   type ManagedSetting,
   HISTORIES,
   epochsToShare,
@@ -316,7 +321,7 @@ import { providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, hkdfSync } from 'node:crypto';
+import { createHash, createPublicKey, createVerify, hkdfSync } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
@@ -398,6 +403,29 @@ interface KeepState {
   seen: Record<string, string>;
   /** Hash of the last keep index written. */
   index: string;
+}
+
+/**
+ * An OIDC ID token, checked against its issuer: the signature with the
+ * issuer's published keys (RS256), the issuer, the audience, the expiry.
+ * Returns its claims, or throws.
+ */
+export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[] }> {
+  const [h, b, sig] = token.split('.');
+  if (!h || !b || !sig) throw new Error('not a token');
+  const header = JSON.parse(Buffer.from(h, 'base64url').toString()) as { alg?: string; kid?: string };
+  if (header.alg !== 'RS256') throw new Error(`unsupported token algorithm ${header.alg}`);
+  const discovery = (await (await fetch(`${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`)).json()) as { jwks_uri: string };
+  const { keys } = (await (await fetch(discovery.jwks_uri)).json()) as { keys: Array<Record<string, unknown> & { kid?: string }> };
+  const jwk = keys.find((k) => !header.kid || k.kid === header.kid);
+  if (!jwk) throw new Error('unknown signing key');
+  if (!createVerify('RSA-SHA256').update(`${h}.${b}`).verify(createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))) throw new Error('bad signature');
+  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown };
+  if (claims.iss !== issuer) throw new Error('wrong issuer');
+  if (!(Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(audience)) throw new Error('wrong audience');
+  if (!claims.exp || claims.exp * 1000 < Date.now()) throw new Error('expired');
+  if (!claims.sub) throw new Error('no subject');
+  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [] };
 }
 
 /** An event as a carry restates it: its id, who wrote it when, and what it said. */
@@ -1088,6 +1116,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     const lastActive = new Map<Did, string>();
     const agents = new Map<Did, Set<string>>();
+    const attested = state.managed?.attestor ? this.#attestations(space, state.managed.attestor) : new Map();
     for (const entry of this.#entries(space)) {
       const { author, signer, time } = entry.event;
       if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
@@ -1103,6 +1132,7 @@ export class WeaveNode implements Backend {
       ...(space.kind === 'project' && state.maintainers.has(m.did) ? { maintainer: true as const } : {}),
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
+      ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
     }));
   }
 
@@ -1796,6 +1826,8 @@ export class WeaveNode implements Backend {
     changed += this.#forget();
     changed += this.#release();
     for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#unlock(space);
+    changed += await this.#attest();
+    changed += await this.#offboard();
     // Bookkeeping for keepers, not a change to anyone's spaces.
     this.#writeKeepIndex();
     this.#recoverSpaces();
@@ -3917,6 +3949,80 @@ export class WeaveNode implements Backend {
       .wrap(kmsPart, { space: spaceScope(space), epoch })
       .then((wrapped) => this.replica.write(this.identity, sealFor(space, { kind: KIND_KMS, body: { epoch, wrapped } })))
       .catch((error: Error) => this.#managedProblems.set(space.id, `couldn't wrap the new key: ${error.message}`));
+  }
+
+  // ---------------------------------------------------------------- SSO (stage 6.3)
+
+  async signIn(input: { space: string; idToken: string }): Promise<void> {
+    const space = this.#space(input.space);
+    const setting = this.#state(space).managed;
+    if (!setting?.attestor) throw new Error(`${space.name} has no company sign-in`);
+    // Kept for the key service too (Vault's JWT auth), sealed at rest.
+    writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), { idToken: input.idToken });
+    await this.#unlock(space);
+    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken });
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
+  }
+
+  /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
+  #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string }> {
+    const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string }>();
+    for (const d of this.#decodedIn(space.id)) {
+      if (d.inner.kind !== KIND_ATTEST || d.event.author !== attestor) continue;
+      const b = d.inner.body as { did?: unknown; subject?: unknown; email?: unknown; groups?: unknown; until?: unknown } | null;
+      if (!isDid(b?.did) || typeof b?.subject !== 'string' || typeof b?.until !== 'string') continue;
+      out.set(b.did, { subject: b.subject, ...(typeof b.email === 'string' ? { email: b.email } : {}), groups: Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string') : [], until: b.until, time: d.event.time });
+    }
+    return out;
+  }
+
+  /** As a company's attestor: check new sign-ins with the OIDC provider and vouch for those that hold. */
+  async #attest(): Promise<number> {
+    const config = this.config.attestor;
+    if (!config) return 0;
+    let made = 0;
+    for (const space of [...this.#spaces.values()]) {
+      const setting = this.#state(space).managed;
+      if (setting?.attestor !== this.identity.author) continue;
+      const attested = this.#attestations(space, this.identity.author);
+      for (const d of this.#decodedIn(space.id)) {
+        if (d.inner.kind !== KIND_SIGNIN || (attested.get(d.event.author)?.time ?? '') >= d.event.time) continue;
+        const box = (d.inner.body as { box?: unknown } | null)?.box;
+        const opened = box ? this.#tryOpen((me) => openBox(me.keys.secretKey, me.keys.publicKey, box as unknown as Box) as { idToken?: unknown }) : undefined;
+        if (typeof opened?.idToken !== 'string') continue;
+        const claims = await verifyIdToken(opened.idToken, config.issuer, config.audience).catch(() => undefined);
+        if (!claims) continue;
+        const until = new Date(this.clock() + (config.hours ?? 24) * 3_600_000).toISOString();
+        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ATTEST, body: { did: d.event.author, subject: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: claims.groups, until } }));
+        attested.set(d.event.author, { subject: claims.sub, groups: claims.groups, until, time: new Date().toISOString() });
+        made++;
+      }
+    }
+    return made;
+  }
+
+  /**
+   * In a space with an attestor: people the company no longer vouches for are
+   * removed (with a new key), by whoever manages the space. Newcomers get an
+   * hour to sign in.
+   */
+  async #offboard(): Promise<number> {
+    let removed = 0;
+    const now = new Date(this.clock()).toISOString();
+    const hourAgo = new Date(this.clock() - 3_600_000).toISOString();
+    for (const space of [...this.#spaces.values()]) {
+      const state = this.#state(space);
+      const attestor = state.managed?.attestor;
+      if (!attestor || !canManage(state, this.identity.author)) continue;
+      const attested = this.#attestations(space, attestor);
+      for (const [did, member] of state.members) {
+        if (did === state.founder || did === attestor || did === this.identity.author) continue;
+        if ((attested.get(did)?.until ?? '') > now || member.since > hourAgo) continue;
+        await this.removeMember(space.id, did);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   async manageSpace(input: { space: string; provider: ProviderSpec; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo> {

@@ -48,6 +48,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.space.shred',
   'weave.space.managed',
   'weave.space.kms',
+  'weave.org.attest',
   'weave.space.rekey',
   'weave.space.gift',
   'weave.group.create', // older names of the space events above

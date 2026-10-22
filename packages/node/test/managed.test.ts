@@ -91,4 +91,45 @@ describe('managed spaces', () => {
     expect(await texts(lena)).toEqual(['before it was managed']);
     for (const node of all) await node.close();
   });
+
+  it('admits only people the company vouches for: sign-in through an attestor, and offboarding when it lapses', async () => {
+    vault.createKey('acme-sso');
+    const [martin, attestor, lena, kofi] = [person('Martin'), person('Acme sign-in'), person('Lena'), person('Kofi')];
+    const all = [martin, attestor, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
+    };
+    martin.kmsCredentials = { token: vault.rootToken };
+    attestor.kmsCredentials = { token: vault.rootToken };
+    attestor.config = { ...attestor.config, attestor: { issuer: oidc.issuer, audience: 'weave' } };
+    await martin.createProject({ name: 'Acme' });
+    for (const node of [attestor, lena, kofi]) await node.joinSpace(await martin.invite('Acme'));
+    syncAll();
+    await martin.manageSpace({ space: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-sso', jwt: { role: 'employees' } }, attestor: attestor.identity.author });
+    await new Promise((r) => setTimeout(r, 300));
+    syncAll();
+
+    // Lena signs in with her company account; a forged token gets nothing.
+    await lena.signIn({ space: 'Acme', idToken: oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees'] }) });
+    const { generateKeyPairSync } = await import('node:crypto');
+    kofi.kmsCredentials = { token: vault.rootToken };
+    await kofi.signIn({ space: 'Acme', idToken: oidc.token({ sub: 'kofi@acme', signWith: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey }) });
+    syncAll();
+    await attestor.reconcile();
+    syncAll();
+    const attested = new Map((await martin.members('Acme')).map((m) => [m.name, m.attested]));
+    expect(attested.get('Lena')).toMatchObject({ subject: 'lena@acme', email: 'lena@acme.example', groups: ['employees'] });
+    expect(attested.get('Kofi')).toBeUndefined();
+
+    // Two hours on: Kofi, never vouched for, is removed; Lena stays while her attestation holds.
+    martin.clock = () => Date.now() + 2 * 3_600_000;
+    await martin.reconcile();
+    syncAll();
+    expect((await martin.members('Acme')).map((m) => m.name).sort()).toEqual(['Acme sign-in', 'Lena', 'Martin']);
+    // A day on without signing in again: Lena too.
+    martin.clock = () => Date.now() + 25 * 3_600_000;
+    await martin.reconcile();
+    expect((await martin.members('Acme')).map((m) => m.name).sort()).toEqual(['Acme sign-in', 'Martin']);
+    for (const node of all) await node.close();
+  });
 });
