@@ -233,4 +233,20 @@ describe('Weave over MCP', () => {
     expect(Date.now() - started).toBeLessThan(3000);
     close();
   });
+
+  it('keeps company spaces an agent isn’t approved in out of its sight', async () => {
+    const { agentView } = await import('../src/index.ts');
+    const fake = {
+      agentBlocked: async () => [{ id: 'acme', name: 'Acme' }],
+      spaces: async () => [{ id: 'acme', kind: 'project', name: 'Acme' }, { id: 'open', kind: 'project', name: 'Open' }],
+      feed: async () => [{ id: '1', scope: 'project:acme' }, { id: '2', scope: 'project:open' }],
+      posts: async () => [],
+      post: async () => ({ id: 'p', space: { id: 'acme' } }),
+    } as unknown as import('@weave/node').Backend;
+    const seen = agentView(fake, 'helper');
+    expect((await seen.spaces()).map((s) => s.id)).toEqual(['open']);
+    expect((await seen.feed({})).map((i) => i.id)).toEqual(['2']);
+    await expect(seen.posts({ space: 'Acme' })).rejects.toThrow(/isn't approved/);
+    await expect(seen.post('p')).rejects.toThrow(/isn't approved/);
+  });
 });

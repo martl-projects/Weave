@@ -81,6 +81,8 @@ export const KIND_ATTEST = 'weave.org.attest';
 export const KIND_SIGNIN = 'weave.org.signin';
 /** `{until, reason}`: a legal hold by the owner: nothing is shredded or forgotten until then. */
 export const KIND_HOLD = 'weave.space.hold';
+/** `{agent, on}`: in a managed space, an agent key those who manage it approved (or no longer do). */
+export const KIND_AGENT_APPROVE = 'weave.space.agent';
 
 /** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
 export interface ManagedSetting {
@@ -378,6 +380,8 @@ export interface SpaceState {
   managed?: ManagedSetting;
   /** A legal hold: nothing is shredded or forgotten until `until`. */
   hold?: { until: string; reason: string; by: Did; time: string };
+  /** Agent keys approved to act here (counts in managed spaces). */
+  approvedAgents?: Set<Did>;
 }
 
 const byTime = (a: { event: EventView }, b: { event: EventView }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -492,6 +496,13 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
           state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), by: author, time: event.time };
         break;
       }
+      case KIND_AGENT_APPROVE:
+        if (canManage(state, author) && isDid(body.agent)) {
+          state.approvedAgents ??= new Set();
+          if (body.on === false) state.approvedAgents.delete(body.agent);
+          else state.approvedAgents.add(body.agent);
+        }
+        break;
       case KIND_HOLD:
         if (author === state.founder && typeof body.until === 'string' && !Number.isNaN(Date.parse(body.until)))
           state.hold = { until: body.until, reason: typeof body.reason === 'string' ? body.reason.slice(0, 200) : '', by: author, time: event.time };

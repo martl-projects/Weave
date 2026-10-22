@@ -72,6 +72,7 @@ export {
   KIND_ATTEST,
   KIND_SIGNIN,
   KIND_HOLD,
+  KIND_AGENT_APPROVE,
   type ManagedSetting,
   HISTORIES,
   epochsToShare,

@@ -132,4 +132,34 @@ describe('managed spaces', () => {
     expect((await martin.members('Acme')).map((m) => m.name).sort()).toEqual(['Acme sign-in', 'Martin']);
     for (const node of all) await node.close();
   });
+
+  it('lets only approved agents act in a company space, and keeps it out of other agents’ sight', async () => {
+    vault.createKey('acme-agents');
+    const [martin, lena] = [person('Martin'), person('Lena')];
+    for (const node of [martin, lena]) node.kmsCredentials = { token: vault.rootToken };
+    await martin.createProject({ name: 'Acme' });
+    await lena.joinSpace(await martin.invite('Acme'));
+    sync(martin, lena);
+    sync(lena, martin);
+    await martin.manageSpace({ space: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-agents' } });
+    await new Promise((r) => setTimeout(r, 300));
+    sync(martin, lena);
+    await lena.reconcile();
+    await lena.addAgent('helper', ['weave.msg']);
+    sync(lena, martin);
+    await expect(lena.say({ space: 'Acme', text: 'from the helper', as: 'helper' })).rejects.toThrow(/isn't approved/);
+    expect((await lena.agentBlocked('helper')).map((s) => s.name)).toEqual(['Acme']);
+    await expect(martin.approveAgent({ space: 'Acme', agent: 'Lena/helper' })).resolves.toMatchObject({ managed: { agents: ['Lena/helper'] } });
+    await expect(lena.approveAgent({ space: 'Acme', agent: 'Lena/helper' })).rejects.toThrow(/manage/);
+    sync(martin, lena);
+    expect(await lena.agentBlocked('helper')).toEqual([]);
+    await lena.say({ space: 'Acme', text: 'from the helper', as: 'helper' });
+    sync(lena, martin);
+    expect((await texts(martin)).includes('from the helper')).toBe(true);
+    // No longer approved: what it writes from now on doesn't count, and the space is out of its sight again.
+    await martin.approveAgent({ space: 'Acme', agent: 'Lena/helper', on: false });
+    sync(martin, lena);
+    expect((await lena.agentBlocked('helper')).map((s) => s.name)).toEqual(['Acme']);
+    for (const node of [martin, lena]) await node.close();
+  });
 });

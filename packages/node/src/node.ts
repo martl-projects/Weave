@@ -45,6 +45,7 @@ import {
   KIND_KMS,
   KIND_ATTEST,
   KIND_HOLD,
+  KIND_AGENT_APPROVE,
   boxTo,
   openBox,
   type Box,
@@ -747,6 +748,8 @@ export class WeaveNode implements Backend {
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
+    if (space && input.as && this.#state(space).managed && !this.#state(space).approvedAgents?.has(signer.did))
+      throw new Error(`agent "${input.as}" isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${this.nameOf(this.identity.author) ?? this.identity.author}/${input.as})`);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
     const fields: EventFields = space ? sealFor(this.#cipher(space), inner) : inner;
     const event = this.replica.write(signer, fields);
@@ -1083,6 +1086,58 @@ export class WeaveNode implements Backend {
       const trusted = d.event.author === space.via || canManage(stateOf(space), d.event.author);
       return trusted ? this.#expandCarry(d, space) : [];
     });
+  }
+
+  /** In managed spaces, what agent keys signed counts only if those who manage the space approved them (stage 9). */
+  #approvedOnly(decoded: Decoded[]): Decoded[] {
+    const approved = new Map<string, Set<Did>>();
+    const of = (space: StoredSpace) => {
+      let set = approved.get(space.id);
+      if (!set) {
+        set = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id)).approvedAgents ?? new Set();
+        approved.set(space.id, set);
+      }
+      return set;
+    };
+    return decoded.filter((d) => {
+      const space = d.space as StoredSpace | undefined;
+      if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent') return true;
+      return !this.#managedRaw(space).setting || of(space).has(d.event.signer);
+    });
+  }
+
+  /** One new event: does it count, by the space's state as known (see #approvedOnly)? */
+  #agentCounts(d: Decoded): boolean {
+    const space = d.space as StoredSpace | undefined;
+    if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent' || !this.#managedRaw(space).setting) return true;
+    return !!this.#state(space).approvedAgents?.has(d.event.signer);
+  }
+
+  async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (!state.managed) throw new Error(`${space.name} isn't a company space: agents act wherever their person lets them`);
+    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} approve agents there`);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
+    return this.#spaceInfo(space);
+  }
+
+  /** An agent key from `person/agent` (a person's name or id, the agent's name) or the key itself. */
+  #agentKey(ref: string): Did {
+    if (isDid(ref) && this.replica.authority.grant(ref)?.role === 'agent') return ref;
+    const at = ref.lastIndexOf('/');
+    if (at > 0) {
+      const person = this.resolve(ref.slice(0, at));
+      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.name === ref.slice(at + 1));
+      if (grant) return grant.subject;
+    }
+    throw new Error(`no agent "${ref}": name it as person/agent (e.g. Lena/claude) or by its key`);
+  }
+
+  async agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>> {
+    const key = this.#agents.find((a) => a.name === agent)?.did;
+    if (!key) throw new Error(noAgent(agent, this.#agents.map((a) => a.name)));
+    return [...this.#spaces.values()].filter((s) => this.#state(s).managed && !this.#state(s).approvedAgents?.has(key)).map((s) => ({ id: s.id, name: s.name }));
   }
 
   /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
@@ -4149,6 +4204,10 @@ export class WeaveNode implements Backend {
     const current = this.#cipher(space).keys[String(currentEpoch(space))] !== undefined;
     const problem = this.#managedProblems.get(space.id);
     return {
+      agents: [...(this.#state(space).approvedAgents ?? [])].map((did) => {
+        const grant = this.replica.authority.grant(did);
+        return grant ? `${this.nameOf(grant.author) ?? grant.author}/${grant.name ?? did.slice(8, 16)}` : did;
+      }),
       provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind,
       unlocked: current,
       ttlMinutes: setting.ttlMinutes,
@@ -5129,7 +5188,7 @@ export class WeaveNode implements Backend {
           const d = this.#decode(event);
           return d ? [d] : [];
         });
-        const decoded = [...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)];
+        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)]);
         // What a carry restates and we can read ourselves counts once, as read.
         // (and restated by several carries, once).
         const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
@@ -5172,7 +5231,12 @@ export class WeaveNode implements Backend {
     }
     this.#ensureDirectFor(event.signer);
     const d = this.#decode(event);
-    if (!d) return;
+    if (!d || !this.#agentCounts(d)) return;
+    // An approval makes an agent's earlier events count: decode again (rare).
+    if (d.inner.kind === KIND_AGENT_APPROVE) {
+      this.#decoded = undefined;
+      return;
+    }
     // A carry restates many events at their own times: decode everything again (they are rare).
     if (d.inner.kind === KIND_CARRY) {
       this.#decoded = undefined;

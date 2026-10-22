@@ -95,13 +95,62 @@ Releases: weave_app_releases lists the repository's releases and how many files 
 Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
 /**
+ * The node as an agent sees it: company spaces it isn't approved in (stage 9)
+ * stay out of everything it reads, and tools aimed at them are refused.
+ */
+export function agentView(backend: Backend, as: string): Backend {
+  let blocked: { at: number; list: Array<{ id: string; name: string }> } | undefined;
+  const blockedNow = async () => {
+    if (!blocked || Date.now() - blocked.at > 5000) blocked = { at: Date.now(), list: await backend.agentBlocked(as).catch(() => []) };
+    return blocked.list;
+  };
+  type Shape = { space?: { id?: string }; scope?: unknown; kind?: unknown; id?: unknown };
+  const spaceOf = (x: unknown): string | undefined => {
+    const v = x as Shape | null;
+    if (!v || typeof v !== 'object') return undefined;
+    if (typeof v.space?.id === 'string') return v.space.id;
+    if (typeof v.scope === 'string' && v.scope.includes(':')) return v.scope.slice(v.scope.indexOf(':') + 1);
+    if ((v.kind === 'project' || v.kind === 'group' || v.kind === 'community') && typeof v.id === 'string') return v.id;
+    return undefined;
+  };
+  const hidden = (list: Array<{ id: string }>, x: unknown) => list.some((b) => b.id === spaceOf(x));
+  const aimed = (list: Array<{ id: string; name: string }>, v: unknown) => typeof v === 'string' && list.some((b) => b.id === v || b.name === v);
+  const refuse = () => {
+    throw new Error(`agent "${as}" isn't approved in that company space: those who manage it can approve it`);
+  };
+  return new Proxy(backend, {
+    get(target, prop) {
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+      if (typeof value !== 'function') return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      if (prop === 'agentBlocked' || prop === 'whoami') return fn.bind(target);
+      if (prop === 'watch')
+        return (onItem: (item: FeedItem) => void, signal: AbortSignal) =>
+          fn.call(target, (item: FeedItem) => void blockedNow().then((list) => !hidden(list, item) && onItem(item)), signal);
+      return async (...args: unknown[]) => {
+        const list = await blockedNow();
+        for (const a of args) {
+          if (aimed(list, a)) refuse();
+          if (a && typeof a === 'object') for (const k of ['space', 'project', 'community', 'group']) if (aimed(list, (a as Record<string, unknown>)[k])) refuse();
+        }
+        const out = await fn.apply(target, args);
+        if (Array.isArray(out)) return out.filter((x) => !hidden(list, x));
+        if (hidden(list, out)) refuse();
+        return out;
+      };
+    },
+  });
+}
+
+/**
  * An MCP server that lets an agent harness take part in Weave: read projects and groups,
  * discussions, chat, issues and votes, write into them, and pick up what's new
  * through an inbox. It talks to a node through the Backend interface, so it
  * works against a running daemon or a node opened directly.
  */
-export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) {
+export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   const as = options.as;
+  const backend = as ? agentView(node, as) : node;
   const server = new McpServer({ name: 'weave', version: VERSION }, { instructions: INSTRUCTIONS });
 
   // ---------------------------------------------------------------- inbox

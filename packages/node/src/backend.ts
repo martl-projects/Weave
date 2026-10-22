@@ -166,8 +166,8 @@ export interface SpaceInfo extends SpaceRef {
   history: HistorySetting;
   /** A legal hold: nothing in it is shredded or forgotten until then. */
   hold?: { until: string; reason: string };
-  /** A company's key service holds half of its keys: which one, and whether this computer has them unlocked. */
-  managed?: { provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
+  /** A company's key service holds half of its keys: which one, and whether this computer has them unlocked; the agents approved there. */
+  managed?: { agents: string[]; provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
 }
@@ -841,6 +841,10 @@ export interface Backend {
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
+  approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
+  /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
+  agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>>;
   /** The owner: a legal hold until a date (nothing shredded or forgotten); a past date lifts it. */
   setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo>;
   /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
@@ -1087,7 +1091,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
