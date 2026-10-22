@@ -2,6 +2,13 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.9.0 · 2026-10-22
+
+- v2 stage 6.4: legal hold and archive nodes; company commands
+- v2 stage 6.3: company sign-in (SSO) and offboarding
+- v2 stage 6.2: managed spaces with split keys
+- v2 stage 6.1: key providers (local, Vault Transit)
+
 ## v0.8.0 · 2026-10-22
 
 - v2 stage 5: keepers
