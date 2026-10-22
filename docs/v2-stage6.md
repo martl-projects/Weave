@@ -57,3 +57,14 @@ Writing in a managed space needs the current epoch unlocked: the node unlocks ma
 5. CLI; release v0.9.
 
 Tested here without a real Vault or identity provider: the stand-ins follow Vault's Transit and JWT-auth HTTP APIs and OIDC's ID tokens and JWKS. A first company pilot is where these get tried for real.
+
+## As built
+
+- **Providers:** `local` and HashiCorp Vault Transit (token, or the person's SSO token through Vault's JWT auth). Cloud KMSs and PKCS#11 fit the same interface when a company asks.
+- **The setting and the company halves are sealed with the Weave half alone** and read straight from the events, so unlocking a space never needs it unlocked; everything else in a managed epoch needs both halves.
+- **Unlocking ahead:** on start and reconcile, and in the background when something locked is met; an unlock in progress is waited for, not repeated. The views decoded with a managed key run out with it (TTL or grace), so an offboarded person's screen empties too.
+- **The setting is the original owner's** (the one who created the space): a space handed over keeps its first owner's setting until a later version reads handovers here too.
+- **Attestor** checks RS256 ID tokens (the common case: Entra ID, Okta, Google); attestations last 24 hours. The app has no sign-in screen yet: `weave sso <space> <token>` with a token from the company's sign-in.
+- **Hold** stops shredding (by anyone), destroying the company key, forgetting and letting go; **archive nodes** (`"archive": true`) never forget or let go.
+- **Not tried against a real Vault or identity provider:** tested against stand-ins that follow Vault's Transit and JWT-auth APIs and OIDC (test/helpers/stubs.ts). A first company pilot is where these get tried for real.
+- Measured: opening a busy home and reading are close to stage 1 (feed again 165 ms, posts 49 ms on 10k events); the first feed after start is slower (584 ms) from per-post lifetimes and holding.

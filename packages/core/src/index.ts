@@ -70,6 +70,7 @@ export {
   KIND_KMS,
   KIND_ATTEST,
   KIND_SIGNIN,
+  KIND_HOLD,
   type ManagedSetting,
   HISTORIES,
   epochsToShare,

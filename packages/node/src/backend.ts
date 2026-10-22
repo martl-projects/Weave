@@ -162,6 +162,8 @@ export interface SpaceInfo extends SpaceRef {
   closed?: true;
   /** What newcomers get to read: everything (all), the last 30 days (30d), or from their invite on (joining). */
   history: HistorySetting;
+  /** A legal hold: nothing in it is shredded or forgotten until then. */
+  hold?: { until: string; reason: string };
   /** A company's key service holds half of its keys: which one, and whether this computer has them unlocked. */
   managed?: { provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
@@ -837,6 +839,8 @@ export interface Backend {
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  /** The owner: a legal hold until a date (nothing shredded or forgotten); a past date lifts it. */
+  setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo>;
   /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
   signIn(input: { space: string; idToken: string }): Promise<void>;
   /** Unlock a managed space's keys with its key service now (they unlock by themselves too). */
@@ -1081,7 +1085,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

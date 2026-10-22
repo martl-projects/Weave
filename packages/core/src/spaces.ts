@@ -79,6 +79,8 @@ export const KIND_KMS = 'weave.space.kms';
 export const KIND_ATTEST = 'weave.org.attest';
 /** `{box}`: an employee's sign-in (an OIDC ID token), boxed to the attestor. */
 export const KIND_SIGNIN = 'weave.org.signin';
+/** `{until, reason}`: a legal hold by the owner: nothing is shredded or forgotten until then. */
+export const KIND_HOLD = 'weave.space.hold';
 
 /** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
 export interface ManagedSetting {
@@ -374,6 +376,8 @@ export interface SpaceState {
   history?: { value: HistorySetting; by: Did; time: string };
   /** A company's key service holds half of the keys (stage 6). */
   managed?: ManagedSetting;
+  /** A legal hold: nothing is shredded or forgotten until `until`. */
+  hold?: { until: string; reason: string; by: Did; time: string };
 }
 
 const byTime = (a: { event: EventView }, b: { event: EventView }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -488,6 +492,10 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
           state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), by: author, time: event.time };
         break;
       }
+      case KIND_HOLD:
+        if (author === state.founder && typeof body.until === 'string' && !Number.isNaN(Date.parse(body.until)))
+          state.hold = { until: body.until, reason: typeof body.reason === 'string' ? body.reason.slice(0, 200) : '', by: author, time: event.time };
+        break;
       case KIND_HISTORY:
         if (kind !== 'direct' && canManage(state, author) && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: event.time };
         break;

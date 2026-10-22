@@ -105,6 +105,11 @@ projects — something being built; participants chat, discuss, vote and work on
   keep <post> / fading                   start a post's time again / your posts others will forget soon
   keepers                                your small spaces and the friends who keep them for you
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
+  manage <space> vault <addr> <key> [role]  a company's Vault holds half of every new key (owner)
+  unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
+  hold <space> <until> [reason]          legal hold: nothing shredded or forgotten until then (owner)
+  destroy-company-key <space>            shred everything under the company key (owner)
+  (company nodes: "attestor": {"issuer", "audience"} or "archive": true in config.json)
   older <space> [before]                 ask the members of a big space for the month before (what they hold)
   admissions [project]                   people the maintainers are asked about
   knocks                                 people asking to join with your --accept links
@@ -1128,6 +1133,39 @@ ${postLine(p)}`);
       if (!space || !before) throw new Error('usage: weave shred <space> <date>   (the keys that ended before that date)');
       const r = await (await backend()).shred({ space, before });
       return out(r, () => `carried ${r.carried} events forward; everyone in ${space} deletes ${r.epochs.length === 1 ? 'one old key' : `${r.epochs.length} old keys`}, so every copy of what was sealed with ${r.epochs.length === 1 ? 'it' : 'them'} becomes unreadable`);
+    }
+
+    case 'manage': {
+      const [space, kind, address, key, role] = args;
+      if (!space || kind !== 'vault' || !address || !key) throw new Error('usage: weave manage <space> vault <address> <transit key> [jwt role]   (the owner; WEAVE_VAULT_TOKEN or weave sso to sign in)');
+      const s = await (await backend()).manageSpace({ space, provider: { kind: 'vault', address, key, ...(role ? { jwt: { role } } : {}) } });
+      return out(s, () => `${s.name}: from now on half of every key is held by ${s.managed?.provider}`);
+    }
+
+    case 'unlock': {
+      if (!args[0]) throw new Error('usage: weave unlock <space>');
+      const s = await (await backend()).unlockSpace(args[0]);
+      return out(s, () => `${s.name}: ${s.managed?.unlocked ? 'unlocked' : 'still locked'}`);
+    }
+
+    case 'sso': {
+      const [space, token] = args;
+      if (!space || !token) throw new Error('usage: weave sso <space> <id token>   (an OIDC ID token from your company sign-in)');
+      await (await backend()).signIn({ space, idToken: token });
+      return out({ ok: true }, () => `signed in to ${space}: the company's attestor vouches for you once it has checked it`);
+    }
+
+    case 'hold': {
+      const [space, until, ...reason] = args;
+      if (!space || !until) throw new Error('usage: weave hold <space> <until date> [reason]   (a past date lifts it)');
+      const s = await (await backend()).setHold({ space, until, reason: reason.join(' ') });
+      return out(s, () => (s.hold ? `${s.name} is on legal hold until ${s.hold.until.slice(0, 10)}: nothing is shredded or forgotten` : `${s.name} is no longer on hold`));
+    }
+
+    case 'destroy-company-key': {
+      if (!args[0]) throw new Error('usage: weave destroy-company-key <space>');
+      await (await backend()).destroyCompanyKey(args[0]);
+      return out({ ok: true }, () => `destroyed: every copy of what ${args[0]}'s company key covered is unreadable now`);
     }
 
     case 'older': {

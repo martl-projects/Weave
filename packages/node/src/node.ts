@@ -44,6 +44,7 @@ import {
   KIND_MANAGED,
   KIND_KMS,
   KIND_ATTEST,
+  KIND_HOLD,
   boxTo,
   openBox,
   type Box,
@@ -3951,6 +3952,22 @@ export class WeaveNode implements Backend {
       .catch((error: Error) => this.#managedProblems.set(space.id, `couldn't wrap the new key: ${error.message}`));
   }
 
+  // ---------------------------------------------------------------- retention (stage 6.4)
+
+  /** Is a legal hold standing on this space? */
+  #held(state: SpaceState): boolean {
+    return !!state.hold && Date.parse(state.hold.until) > this.clock();
+  }
+
+  async setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} puts it on hold`);
+    if (Number.isNaN(Date.parse(input.until))) throw new Error('until is a date, e.g. 2027-12-31');
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HOLD, body: { until: new Date(input.until).toISOString(), reason: input.reason ?? '' } }));
+    return this.#spaceInfo(space);
+  }
+
   // ---------------------------------------------------------------- SSO (stage 6.3)
 
   async signIn(input: { space: string; idToken: string }): Promise<void> {
@@ -4055,6 +4072,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     if (!state.managed) throw new Error(`${space.name} isn't under a company's key service`);
     if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} destroys its company key`);
+    if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: its company key stays`);
     await this.#provider(state.managed).destroy();
     for (const id of [...this.#managedKeys.keys()]) if (id.startsWith(`${space.id}:`)) this.#managedKeys.delete(id);
     const cache = this.#graceCache();
@@ -4224,7 +4242,7 @@ export class WeaveNode implements Backend {
 
   /** Is this space held by its members between them (and not ours: owners hold all of theirs)? */
   #pulled(space: StoredSpace, state = this.#state(space)): boolean {
-    return (space.kind === 'community' || space.kind === 'project') && state.members.size > this.pulledAbove && state.founder !== this.identity.author;
+    return (space.kind === 'community' || space.kind === 'project') && state.members.size > this.pulledAbove && state.founder !== this.identity.author && !this.config.archive && !this.#held(state);
   }
 
   /** The 3 members who hold an event by share: the lowest H(id ‖ member). Nobody coordinates, everyone computes the same. */
@@ -4498,6 +4516,7 @@ export class WeaveNode implements Backend {
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
+      ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
   }
@@ -4643,7 +4662,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) {
       if (space.kind !== 'project' && space.kind !== 'community') continue;
       const state = this.#state(space);
-      if (state.founder === me) continue;
+      if (state.founder === me || this.config.archive || this.#held(state)) continue;
       const due = this.#spacePosts(space).posts.filter((p) => p.lifetime && isDue(p.lifetime, this.clock()) && p.by.did !== me);
       if (!due.length) continue;
       const around = this.#aroundPosts(this.#entries(space));
@@ -4683,6 +4702,7 @@ export class WeaveNode implements Backend {
     if (space.kind === 'direct') throw new Error('a direct chat has nobody who manages it: there is nothing to shred');
     const state = this.#state(space);
     if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} shred its old keys`);
+    if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: nothing is shredded`);
     const before = Date.parse(input.before);
     if (Number.isNaN(before)) throw new Error('before is a date, e.g. 2026-09-01');
     // An epoch ends when the next one begins; the current one can't be shredded.
@@ -4743,6 +4763,7 @@ export class WeaveNode implements Backend {
 
   /** A shred from someone who manages the space: keep what we wrote, then let those keys go, with the bodies sealed with them. */
   #applyShred(space: StoredSpace, epochs: number[]): void {
+    if (this.#held(this.#state(space))) return; // on legal hold: keys stay
     const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
     if (!doomed.size) return;
     // Our own work stays with us: restated in our private space first.
