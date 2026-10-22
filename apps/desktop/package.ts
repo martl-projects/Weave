@@ -115,12 +115,12 @@ const config: Configuration = {
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
   mac: {
-    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune). The Intel pkg is
-    // built in a second pass below: two pkg builds at once share a temporary org.weave.desktop.pkg
-    // in release/, and one deletes it from under the other.
+    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune). For installers
+    // they're built one architecture at a time (below): two pkg builds at once share a temporary
+    // org.weave.desktop.pkg in release/, and two hdiutil runs at once fail with "Resource busy".
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },
-      { target: 'pkg', arch: ['arm64'] },
+      { target: 'pkg', arch: ['arm64', 'x64'] },
     ],
     category: 'public.app-category.social-networking',
     // Ad-hoc signed until there is an Apple Developer ID: Apple silicon refuses to run unsigned apps at all.
@@ -134,6 +134,8 @@ const config: Configuration = {
 // We publish ourselves (the release workflow attaches the installers): electron-builder 27 wants that said
 // explicitly, and on a CI tag it crashes without it.
 const dir = process.argv.includes('--dir');
-await build({ config, publish: 'never', dir });
-if (process.platform === 'darwin' && !dir) await build({ config: { ...config, mac: { ...config.mac, target: [{ target: 'pkg', arch: ['x64'] }] } }, publish: 'never' });
+if (process.platform === 'darwin' && !dir) {
+  for (const arch of ['arm64', 'x64'] as const)
+    await build({ config: { ...config, mac: { ...config.mac, target: [{ target: 'dmg', arch: [arch] }, { target: 'pkg', arch: [arch] }] } }, publish: 'never' });
+} else await build({ config, publish: 'never', dir });
 console.log('installers in apps/desktop/release/');
