@@ -215,4 +215,47 @@ describe('PeerSession2: members-only sync', () => {
     await settle(a, b);
     expect(texts(b, 'group:a')).toEqual([null, 'old but kept', 'old one', 'recent']);
   });
+
+  it('reconciles by ranges when both can, with id lists to peers that can’t, and costs far less by ranges', async () => {
+    const day = 24 * 3600 * 1000;
+    const build = () => {
+      const a = peer('group:a');
+      const b = peer('group:a');
+      // 1,000 messages both hold, a few only one side has.
+      for (let i = 0; i < 1000; i++) {
+        const r = say(a, 'group:a', `shared ${i}`, new Date(Date.now() - (2000 - i) * 60_000).toISOString());
+        b.replica.ingest(r.wire);
+      }
+      say(a, 'group:a', 'only a', new Date(Date.now() - 3 * day).toISOString());
+      say(b, 'group:a', 'only b');
+      return { a, b };
+    };
+    const measure = async (neg: boolean) => {
+      const { a, b } = build();
+      const [sa, sb] = duplexPair();
+      let bytes = 0;
+      const types = new Set<string>();
+      for (const s of [sa, sb]) {
+        const write = s.write.bind(s);
+        s.write = ((chunk: string, ...rest: unknown[]) => {
+          bytes += chunk.length;
+          types.add(JSON.parse(chunk).t);
+          return (write as (...x: unknown[]) => boolean)(chunk, ...rest);
+        }) as typeof s.write;
+      }
+      new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces } });
+      new PeerSession2(b.replica, sb, { access: { spaces: () => b.spaces }, neg });
+      await settle(a, b);
+      expect(texts(a, 'group:a')).toEqual(texts(b, 'group:a'));
+      expect(texts(a, 'group:a')).toContain('only b');
+      expect(texts(b, 'group:a')).toContain('only a');
+      return { bytes, types };
+    };
+    const byRanges = await measure(true);
+    const byIds = await measure(false);
+    expect(byRanges.types.has('neg')).toBe(true);
+    expect(byIds.types.has('neg')).toBe(false);
+    expect(byIds.types.has('have')).toBe(true);
+    expect(byRanges.bytes).toBeLessThan(byIds.bytes / 3);
+  });
 });

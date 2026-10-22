@@ -1,7 +1,7 @@
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { Duplex } from 'node:stream';
-import { b64u, canonicalIdV2, isWireItemV2, utf8, verifyEventV2, type Did, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
+import { b64u, canonicalIdV2, compact, expand, isWireItemV2, openRanges, reconcileStep, reconKey, utf8, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
 import type { BlobSource } from './session.ts';
 
 /*
@@ -21,6 +21,12 @@ import type { BlobSource } from './session.ts';
  *   `fetch`es what it lacks. In a pulled space (stage 4) bodies come only for
  *   the recent window and what the node wants (`wantsBody`); for the rest
  *   `bare` asks for the envelopes alone.
+ * - `neg {space, since, until?, bare?, ranges}`: between peers that both say
+ *   `features: ['neg']` in their hello, range-based set reconciliation
+ *   (stage 7) instead of `sync`/`have`: ranges of items compared by
+ *   fingerprint until each side knows what it lacks, then `fetch` as before.
+ *   Without `bare` the items are the events with their bodies; with it, all
+ *   envelopes.
  * - `items {items}`: v2 events `{e, b?}`.
  * - `keys {space, items}`: a space's rekey events, for a peer that proved only
  *   the space's previous key: a member who is behind takes the new key from
@@ -39,7 +45,8 @@ import type { BlobSource } from './session.ts';
  * and nothing is taken from it.
  */
 export type Message2 =
-  | { t: 'hello'; v: 2; tags: string[] }
+  | { t: 'hello'; v: 2; tags: string[]; features?: string[] }
+  | { t: 'neg'; space: string; since: string; until?: string; bare?: true; init?: true; ranges: Array<Partial<ReconRange>> }
   | { t: 'chains'; space: string; heads: Record<string, number> }
   | { t: 'sync'; space: string; since: string; until?: string; bare?: true }
   | { t: 'have'; space: string; ids: string[]; bare?: true }
@@ -112,6 +119,10 @@ export class PeerSession2 {
   #started = new Map<string, string>();
   /** The tags of the peer's last hello. */
   #peerTags?: unknown[];
+  /** The peer reconciles by ranges (stage 7); else it gets id lists. */
+  #peerNeg = false;
+  /** Set false to speak only id lists (as v0.4–v0.9 do): for tests of the fallback. */
+  readonly neg: boolean;
   /** Asking a keeper again is due (after new events in a kept space). */
   #keepSoon?: ReturnType<typeof setTimeout>;
   /** What the peer is known to hold: v1 heads, and v2 events by canonical id (`<id>+body` with the body). */
@@ -123,8 +134,9 @@ export class PeerSession2 {
   #unsubscribe: () => void;
   #closed = false;
 
-  constructor(replica: Replica, stream: Duplex, options: { access: SpaceAccess; handshakeHash?: Uint8Array; blobs?: BlobSource }) {
+  constructor(replica: Replica, stream: Duplex, options: { access: SpaceAccess; handshakeHash?: Uint8Array; blobs?: BlobSource; neg?: boolean }) {
     this.replica = replica;
+    this.neg = options.neg !== false;
     this.stream = stream;
     this.blobs = options.blobs;
     this.#access = options.access;
@@ -153,7 +165,7 @@ export class PeerSession2 {
   /** Tell the peer which spaces this node holds (again, after they changed). */
   announce(): void {
     const tags = this.#access.spaces().flatMap(({ keys }) => keys.map((key) => spaceTag(key, this.#handshakeHash)));
-    this.#send({ t: 'hello', v: 2, tags });
+    this.#send({ t: 'hello', v: 2, tags, ...(this.neg ? { features: ['neg'] } : {}) });
     // Spaces new here may be ones the peer already said it holds.
     if (this.#peerTags) this.#hello(this.#peerTags);
   }
@@ -198,7 +210,20 @@ export class PeerSession2 {
     const v2 = this.#peerVersion === 2;
     switch (message.t) {
       case 'hello':
-        if (v2 && Array.isArray(message.tags)) this.#hello(message.tags);
+        if (v2 && Array.isArray(message.tags)) {
+          this.#peerNeg = this.neg && Array.isArray(message.features) && message.features.includes('neg');
+          this.#hello(message.tags);
+        }
+        break;
+      case 'neg':
+        if (v2 && this.neg && this.#shared.has(message.space) && typeof message.since === 'string' && Array.isArray(message.ranges)) {
+          const until = typeof message.until === 'string' ? message.until : undefined;
+          const step = reconcileStep(this.#reconItems(message.space, message.since, until, !!message.bare), expand(message.ranges).slice(0, 4096));
+          // The side that started the exchange keeps saying so; replies come from the other side.
+          if (step.reply.length) this.#send({ t: 'neg', space: message.space, since: message.since, ...(until ? { until } : {}), ...(message.bare ? { bare: true as const } : {}), ...(message.init ? {} : { init: true as const }), ranges: compact(step.reply) });
+          // As with id lists, whoever asked fetches, by its own rules; the other side's turn is its own exchange.
+          if (!message.init) this.#fetchLacking(message.space, step.lacking, !!message.bare);
+        }
         break;
       case 'heads':
         if (message.heads && typeof message.heads === 'object') {
@@ -227,21 +252,7 @@ export class PeerSession2 {
         }
         break;
       case 'have':
-        if (v2 && this.#shared.has(message.space) && Array.isArray(message.ids)) {
-          const full: string[] = [];
-          const bare: string[] = [];
-          for (const id of message.ids.filter((x): x is string => typeof x === 'string')) {
-            this.#peerHas.add(id);
-            const held = this.replica.store.get2(id);
-            // Held without its body: fetch it, unless this node forgot it on purpose (or, for envelopes only, doesn't keep it).
-            const bodyLacking = !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined && !this.replica.store.forgotten(held.event.body));
-            const wanted = !message.bare || this.#access.wantsBody?.(message.space, id) !== false;
-            if (bodyLacking && wanted) full.push(id);
-            else if (!held) bare.push(id);
-          }
-          for (let i = 0; i < full.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: full.slice(i, i + MAX_IDS) });
-          for (let i = 0; i < bare.length; i += MAX_IDS) this.#send({ t: 'fetch', space: message.space, ids: bare.slice(i, i + MAX_IDS), bare: true });
-        }
+        if (v2 && this.#shared.has(message.space) && Array.isArray(message.ids)) this.#fetchLacking(message.space, message.ids.filter((x): x is string => typeof x === 'string'), !!message.bare);
         break;
       case 'fetch':
         if (v2 && this.#shared.has(message.space) && Array.isArray(message.ids)) {
@@ -385,17 +396,50 @@ export class PeerSession2 {
     const pulled = this.#access.spaces().find((h) => h.space === space)?.pulled;
     if (pulled) {
       // Bodies for the recent window; envelopes of the rest (with the bodies this node keeps).
-      this.#send({ t: 'sync', space, since: new Date(Date.now() - pulled.windowMs).toISOString() });
-      this.#send({ t: 'sync', space, since: '', bare: true });
+      this.#syncRange(space, new Date(Date.now() - pulled.windowMs).toISOString(), undefined, false);
+      this.#syncRange(space, '', undefined, true);
       return;
     }
-    const since = newest ? new Date(Date.parse(newest) - RECENT_MS).toISOString() : '';
-    this.#send({ t: 'sync', space, since });
+    // By ranges, everything costs only its differences; by id lists, the last week (or all, for a newcomer).
+    const since = this.#peerNeg || !newest ? '' : new Date(Date.parse(newest) - RECENT_MS).toISOString();
+    this.#syncRange(space, since, undefined, false);
   }
 
   /** Ask the peer for a space's content between two times, bodies included ("load older"). */
   fetchRange(space: string, since: string, until: string): void {
-    if (this.#shared.has(space)) this.#send({ t: 'sync', space, since, until });
+    if (this.#shared.has(space)) this.#syncRange(space, since, until, false);
+  }
+
+  /** Compare a stretch of a space with the peer: by ranges if it can, else by id lists. */
+  #syncRange(space: string, since: string, until: string | undefined, bare: boolean): void {
+    const context = { space, since, ...(until ? { until } : {}), ...(bare ? { bare: true as const } : {}) };
+    if (this.#peerNeg) this.#send({ t: 'neg', ...context, init: true, ranges: compact(openRanges(this.#reconItems(space, since, until, bare))) });
+    else this.#send({ t: 'sync', ...context });
+  }
+
+  /** What a stretch of a space holds, for reconciling: events with their bodies, or (bare) every envelope. */
+  #reconItems(space: string, since: string, until: string | undefined, bare: boolean): ReconItem[] {
+    return this.replica.store
+      .inSpace2(space, since, until)
+      .filter(({ event }) => event.class === 'content' && (bare || this.replica.store.body(event.body) !== undefined))
+      .map(({ id, event }) => ({ key: reconKey(event.time, id), id }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  }
+
+  /** Ids the peer holds and we may lack: fetch the events (with bodies where we keep them), not what we forgot on purpose. */
+  #fetchLacking(space: string, ids: string[], bare: boolean): void {
+    const full: string[] = [];
+    const envelopes: string[] = [];
+    for (const id of ids) {
+      this.#peerHas.add(id);
+      const held = this.replica.store.get2(id);
+      const bodyLacking = !held || (held.event.class === 'content' && this.replica.store.body(held.event.body) === undefined && !this.replica.store.forgotten(held.event.body));
+      const wanted = !bare || this.#access.wantsBody?.(space, id) !== false;
+      if (bodyLacking && wanted) full.push(id);
+      else if (!held) envelopes.push(id);
+    }
+    for (let i = 0; i < full.length; i += MAX_IDS) this.#send({ t: 'fetch', space, ids: full.slice(i, i + MAX_IDS) });
+    for (let i = 0; i < envelopes.length; i += MAX_IDS) this.#send({ t: 'fetch', space, ids: envelopes.slice(i, i + MAX_IDS), bare: true });
   }
 
   /** A space's rekey events, for a peer that holds only its previous key. */

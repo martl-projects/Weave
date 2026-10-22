@@ -46,6 +46,7 @@ export {
   type Lifetime,
   type LifetimeInput,
 } from './forgetting.ts';
+export { BUCKETS, compact, expand, fingerprint, HIGHEST, LEAF, LOWEST, openRanges, reconcileStep, reconKey, type ReconItem, type ReconRange } from './reconcile.ts';
 export { keepStreamId, keepTag, keepWrapKey, padded, unwrapFromKeeper, wrapForKeeper } from './keep.ts';
 export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
