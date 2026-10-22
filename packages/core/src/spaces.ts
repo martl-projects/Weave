@@ -97,8 +97,10 @@ export const KIND_ORG_START = 'weave.org.start';
 export const KIND_ORG_REQUEST = 'weave.org.request';
 /** `{request, error?}`: the company's answer. */
 export const KIND_ORG_DONE = 'weave.org.done';
-/** `{links}`, public, by the company: whether links of its identities count. */
+/** `{links, outside, directs, public, chats}`, public, by the company: what its accounts may do (stage 11), and whether their links count. */
 export const KIND_ORG_POLICY = 'weave.org.policy';
+/** `{space, people}`: a company chat between colleagues, made by the company (stage 11). */
+export const KIND_ORG_CHAT = 'weave.org.chat';
 /** `{to, on}`: this identity is also that one (both have to say so). Public, or sealed into a space. */
 export const KIND_LINK = 'weave.link';
 

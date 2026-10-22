@@ -49,7 +49,7 @@ export function boardRulesOf(entries: Entry[], managers: Set<Did>): Map<string, 
 /** How long a post stays: forever (and why), or until a time (and what stretched it). */
 export type Lifetime =
   | { forever: 'pinned' | 'permanent' | 'no-rule' }
-  | { until: string; upvotes: number; addedDays: number; grace?: true; full?: true; overShare?: number };
+  | { until: string; upvotes: number; addedDays: number; grace?: true; full?: true; overShare?: number; floor?: string };
 
 export interface LifetimeInput {
   /** Its last activity: the post, its edits and chat, upvotes, "keep". */
@@ -62,6 +62,8 @@ export interface LifetimeInput {
   permanent?: boolean;
   /** How far its author is over their fair share of the board (their bytes / the fair share); 1 or less: within it. */
   overuse?: number;
+  /** A company's minimum: kept at least this many days after its last activity, whatever the rule (stage 11). */
+  minDays?: number;
 }
 
 /**
@@ -78,12 +80,14 @@ export function lifetimeOf(input: LifetimeInput): Lifetime {
   const days = (input.rule.keepDays * (1 + Math.log2(1 + Math.max(0, input.upvotes)))) / squeeze;
   const byRule = Date.parse(input.active) + days * DAY;
   const grace = Date.parse(input.rule.time) + GRACE_DAYS * DAY;
+  const floor = input.minDays ? Date.parse(input.active) + input.minDays * DAY : 0;
   return {
-    until: new Date(Math.max(byRule, grace)).toISOString(),
+    until: new Date(Math.max(byRule, grace, floor)).toISOString(),
     upvotes: input.upvotes,
     addedDays: Math.round(days - input.rule.keepDays),
     ...(grace > byRule ? { grace: true as const } : {}),
     ...(squeeze > 1 ? { overShare: Math.round(squeeze * 10) / 10 } : {}),
+    ...(floor ? { floor: new Date(floor).toISOString() } : {}),
   };
 }
 
@@ -99,7 +103,8 @@ export function overBudget<T extends { id: string; lifetime: Lifetime; bytes: nu
   if (total <= budget || now < Date.parse(rule.time) + GRACE_DAYS * DAY) return out;
   // The biggest over-users' posts first (stage 8), then those that would go soonest.
   const goingFirst = posts
-    .filter((p) => 'until' in p.lifetime || p.lifetime.forever === 'no-rule')
+    // Never what a company's minimum still keeps.
+    .filter((p) => ('until' in p.lifetime && !(p.lifetime.floor && Date.parse(p.lifetime.floor) > now)) || ('forever' in p.lifetime && p.lifetime.forever === 'no-rule'))
     .sort((a, b) => Math.max(1, b.overuse ?? 1) - Math.max(1, a.overuse ?? 1) || untilOf(a.lifetime).localeCompare(untilOf(b.lifetime)));
   for (const p of goingFirst) {
     if (total <= budget) break;

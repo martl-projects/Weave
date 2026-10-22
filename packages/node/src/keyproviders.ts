@@ -3,6 +3,21 @@ import { b64u, open, seal, type Sealed } from '@weave/core';
 import type { Home } from './home.ts';
 import { vaultOf } from './vault.ts';
 
+/**
+ * A request to a key service, tried once more if the connection drops before
+ * an answer (a kept-alive connection the service just closed): nothing was
+ * done then, so asking again is safe.
+ */
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const code = (error as { cause?: { code?: unknown } }).cause?.code;
+    if (code !== 'ECONNRESET' && code !== 'UND_ERR_SOCKET') throw error;
+    return fetch(url, init);
+  }
+}
+
 /*
  * Key providers (docs/v2-stage6.md, part 1): where the company half of a
  * managed space's epoch keys is wrapped. A provider never sees content or the
@@ -104,7 +119,7 @@ export class VaultTransitProvider implements KeyProvider {
     if (this.#token && this.#token.until > Date.now()) return this.#token.value;
     const jwt = this.#credentials.idToken?.();
     if (!this.#spec.jwt || !jwt) throw new Error(`no way to sign in to Vault at ${this.#spec.address}: sign in with your company (weave sso) or set a Vault token`);
-    const res = await fetch(`${this.#spec.address}/v1/auth/${this.#spec.jwt.mount ?? 'jwt'}/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: this.#spec.jwt.role, jwt }) });
+    const res = await send(`${this.#spec.address}/v1/auth/${this.#spec.jwt.mount ?? 'jwt'}/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: this.#spec.jwt.role, jwt }) });
     if (!res.ok) throw new Error(`Vault refused the sign-in (${res.status})`);
     const auth = ((await res.json()) as { auth: { client_token: string; lease_duration: number } }).auth;
     this.#token = { value: auth.client_token, until: Date.now() + Math.max(60, auth.lease_duration - 30) * 1000 };
@@ -113,7 +128,7 @@ export class VaultTransitProvider implements KeyProvider {
 
   async #call(method: string, path: string, body?: unknown): Promise<{ data: Record<string, unknown> }> {
     const token = await this.#login();
-    const res = await fetch(`${this.#spec.address}/v1/${this.#spec.mount ?? 'transit'}/${path}`, {
+    const res = await send(`${this.#spec.address}/v1/${this.#spec.mount ?? 'transit'}/${path}`, {
       method,
       headers: { 'x-vault-token': token, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
@@ -184,7 +199,7 @@ export class AzureKeyVaultProvider implements KeyProvider {
       form.set('client_assertion_type', 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
       form.set('client_assertion', assertion!);
     }
-    const res = await fetch(`${this.#spec.authority ?? 'https://login.microsoftonline.com'}/${tenant}/oauth2/v2.0/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
+    const res = await send(`${this.#spec.authority ?? 'https://login.microsoftonline.com'}/${tenant}/oauth2/v2.0/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
     if (!res.ok) throw new Error(`Entra refused the sign-in (${res.status})`);
     const t = (await res.json()) as { access_token: string; expires_in: number };
     this.#token = { value: t.access_token, until: Date.now() + Math.max(60, t.expires_in - 60) * 1000 };
@@ -193,7 +208,7 @@ export class AzureKeyVaultProvider implements KeyProvider {
 
   async #call(method: string, path: string, body?: unknown): Promise<unknown> {
     const token = await this.#login();
-    const res = await fetch(`${this.#spec.vault.replace(/\/$/, '')}/${path}?api-version=7.4`, {
+    const res = await send(`${this.#spec.vault.replace(/\/$/, '')}/${path}?api-version=7.4`, {
       method,
       headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),

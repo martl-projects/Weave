@@ -1,6 +1,7 @@
 import {
   b64u,
   isDid,
+  KIND_ORG_CHAT,
   KIND_ORG_DONE,
   KIND_ORG_MAP,
   KIND_ORG_REQUEST,
@@ -72,8 +73,43 @@ export function decodeRecoveryAnswer(text: string): { person: Did; box: Json } {
 export type MapRole = 'member' | 'maintainer';
 
 /** What an admin may ask the company for (and the company does itself). */
+/** What a company's accounts may do (stage 11): published by the company, so every node holds them to it. */
+export interface CompanyPolicy {
+  /** Their links to other identities count. */
+  links: boolean;
+  /** They may create and join spaces the company doesn't own. */
+  outside: boolean;
+  /** Direct chats with anyone, only with colleagues, or none. */
+  directs: 'all' | 'company' | 'off';
+  /** Public posts, shares and follows (beyond colleagues). */
+  public: boolean;
+  /** Chats between colleagues go through company chats, not direct chats. */
+  chats: boolean;
+}
+
+export const OPEN_POLICY: CompanyPolicy = { links: true, outside: true, directs: 'all', public: true, chats: false };
+
+/** A policy from what the company signed: anything it didn't say stays open. */
+export function readPolicy(body: unknown, base: CompanyPolicy = OPEN_POLICY): CompanyPolicy {
+  const b = (body ?? {}) as Record<string, unknown>;
+  return {
+    links: typeof b.links === 'boolean' ? b.links : base.links,
+    outside: typeof b.outside === 'boolean' ? b.outside : base.outside,
+    directs: b.directs === 'company' || b.directs === 'off' || b.directs === 'all' ? b.directs : base.directs,
+    public: typeof b.public === 'boolean' ? b.public : base.public,
+    chats: typeof b.chats === 'boolean' ? b.chats : base.chats,
+  };
+}
+
+/** How long company spaces keep things, in days: at least, and at most. */
+export interface Retention {
+  minDays?: number;
+  maxDays?: number;
+}
+
 export type CompanyAction =
-  | { action: 'settings'; admins?: string; links?: boolean }
+  | ({ action: 'settings'; admins?: string; retention?: { minDays?: number | null; maxDays?: number | null } } & Partial<CompanyPolicy>)
+  | { action: 'chat'; with: string }
   | { action: 'map'; group: string; space: string; role?: MapRole; on?: boolean }
   | { action: 'start'; contacts: string[] }
   | { action: 'space'; kind: 'project' | 'group'; name: string }
@@ -81,11 +117,15 @@ export type CompanyAction =
   | { action: 'destroy-key'; space: string }
   | { action: 'freeze'; person: string };
 
-export const COMPANY_ACTIONS = ['settings', 'map', 'start', 'space', 'hold', 'destroy-key', 'freeze'] as const;
+export const COMPANY_ACTIONS = ['settings', 'chat', 'map', 'start', 'space', 'hold', 'destroy-key', 'freeze'] as const;
 
 export interface OrgState {
   admins?: string;
   links: boolean;
+  policy: CompanyPolicy;
+  retention: Retention;
+  /** Company chats between colleagues. */
+  chats: Array<{ space: string; people: Did[] }>;
   /** Sign-in group → company space id → role, as the company last said. */
   maps: Array<{ group: string; space: string; role: MapRole }>;
   start?: { contacts: string[] };
@@ -97,7 +137,7 @@ type Opened = { id: string; event: { author: Did; time: string }; inner: Inner }
 
 /** A company group's settings: only what the company itself signed counts, except requests (anyone may ask; the company decides). */
 export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
-  const state: OrgState = { links: true, maps: [], requests: [], done: new Map() };
+  const state: OrgState = { links: true, policy: OPEN_POLICY, retention: {}, chats: [], maps: [], requests: [], done: new Map() };
   let known = false;
   const maps = new Map<string, { group: string; space: string; role: MapRole }>();
   for (const o of [...opened].sort((a, b) => a.event.time.localeCompare(b.event.time))) {
@@ -111,7 +151,16 @@ export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
       case KIND_ORG_SETTINGS:
         known = true;
         if (typeof b.admins === 'string') state.admins = b.admins;
-        if (typeof b.links === 'boolean') state.links = b.links;
+        state.policy = readPolicy(b, state.policy);
+        state.links = state.policy.links;
+        if (b.retention && typeof b.retention === 'object') {
+          const r = b.retention as Record<string, unknown>;
+          const days = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+          state.retention = { ...(days(r.minDays) ? { minDays: days(r.minDays) } : {}), ...(days(r.maxDays) ? { maxDays: days(r.maxDays) } : {}) };
+        }
+        break;
+      case KIND_ORG_CHAT:
+        if (typeof b.space === 'string' && Array.isArray(b.people) && b.people.every(isDid)) state.chats.push({ space: b.space, people: b.people as Did[] });
         break;
       case KIND_ORG_MAP:
         if (typeof b.group === 'string' && typeof b.space === 'string') {

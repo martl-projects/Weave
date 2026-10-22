@@ -82,6 +82,7 @@ export {
   KIND_ORG_REQUEST,
   KIND_ORG_DONE,
   KIND_ORG_POLICY,
+  KIND_ORG_CHAT,
   KIND_LINK,
   type ManagedSetting,
   HISTORIES,

@@ -1,4 +1,4 @@
-import type { CompanyAction } from './company.ts';
+import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { GumroadLink } from '@weave/core';
 import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
@@ -718,6 +718,12 @@ export interface CompanyInfo {
   admin: boolean;
   admins?: string;
   links: boolean;
+  /** What the company's accounts may do (published, so every node holds them to it). */
+  policy: CompanyPolicy;
+  /** How long company spaces keep things, in days. */
+  retention: { minDays?: number; maxDays?: number };
+  /** Company chats between colleagues. */
+  chats: Array<{ space: string; name: string; people: string[] }>;
   maps: Array<{ group: string; space: string; spaceName: string; role: 'member' | 'maintainer' }>;
   /** Contacts a new account starts with. */
   start: string[];
