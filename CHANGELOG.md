@@ -2,6 +2,12 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.15.0 · 2026-10-22
+
+- Say projects and groups in the admin console, and open them in Weave
+- v2 stage 12: SCIM, device checks, managed settings, IT installers, audit streams, admin console
+- Give the company tests two minutes: slow CI runners timed out
+
 ## v0.14.0 · 2026-10-22
 
 - v2 stage 11: company policy and retention minimums
