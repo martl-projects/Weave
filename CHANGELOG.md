@@ -2,6 +2,11 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.15.1 · 2026-10-22
+
+- Fix the macOS pkg build; the app's own icons in the admin console
+- Give the admin console Weave's look: the woven logo, pixel icons, avatars, light and dark
+
 ## v0.15.0 · 2026-10-22
 
 - Say projects and groups in the admin console, and open them in Weave
