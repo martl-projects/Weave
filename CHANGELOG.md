@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.14.0 · 2026-10-22
+
+- v2 stage 11: company policy and retention minimums
+
 ## v0.13.0 · 2026-10-22
 
 - v2 stage 10: company accounts
