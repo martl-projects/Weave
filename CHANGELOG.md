@@ -2,6 +2,13 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.12.0 · 2026-10-22
+
+- v2 stage 9.4: Azure Key Vault as a key provider
+- v2 stage 9.3: audit export; company commands
+- v2 stage 9.2: recovery words kept by the company
+- v2 stage 9.1: approved agents in company spaces
+
 ## v0.11.0 · 2026-10-22
 
 - v2 stage 8: abuse budgets (part 1): a fair share, and a rate budget
