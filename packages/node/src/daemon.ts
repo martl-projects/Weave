@@ -21,6 +21,8 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   const info: DaemonInfo = { pid: process.pid, port: api.port, token: api.token };
   writeJson(home.daemon, info);
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
+  // A company's node serves its user management and admins too (stage 12).
+  await node.startServices();
 
   // Carry out standing admission rules shortly after new events arrive.
   let timer: ReturnType<typeof setTimeout> | undefined;

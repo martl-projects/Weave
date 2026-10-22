@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  An example configuration profile for Weave's managed settings on macOS (Jamf,
+  Intune, Kandji): fill in the values, change the UUIDs, and deploy it. Weave
+  reads them from /Library/Managed Preferences/org.weave.desktop.plist.
+  See docs/managed-settings.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>org.weave.desktop</string>
+      <key>PayloadIdentifier</key>
+      <string>org.weave.desktop.settings</string>
+      <key>PayloadUUID</key>
+      <string>6F1D2C3B-0000-4000-8000-000000000001</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>Enroll</key>
+      <string>weave:enroll:…</string>
+      <key>CompanyOnly</key>
+      <true/>
+      <key>Companies</key>
+      <array>
+        <string>did:key:…</string>
+      </array>
+      <key>DeviceCert</key>
+      <string>/Library/Application Support/Weave/device.pem</string>
+      <key>DeviceKey</key>
+      <string>/Library/Application Support/Weave/device.key</string>
+      <key>Updates</key>
+      <false/>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key>
+  <string>Weave</string>
+  <key>PayloadIdentifier</key>
+  <string>org.weave.desktop.profile</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>6F1D2C3B-0000-4000-8000-000000000002</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>

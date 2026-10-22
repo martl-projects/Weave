@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Weave</displayName>
+  <description>Managed settings for Weave</description>
+  <resources>
+    <stringTable>
+      <string id="Weave">Weave</string>
+      <string id="SUPPORTED_Weave_0_15">Weave 0.15 and later</string>
+      <string id="Enroll">Enrollment link</string>
+      <string id="Enroll_Explain">The company's enrollment link (weave company link). New company accounts on this computer are set up with it and the person's company sign-in.</string>
+      <string id="CompanyOnly">Only company accounts</string>
+      <string id="CompanyOnly_Explain">Enabled: no private Weave identities can be created or restored on this computer, only company accounts.</string>
+      <string id="Companies">Allowed companies</string>
+      <string id="Companies_Explain">The ids (did:key:…) of the companies whose accounts may be set up on this computer, one per line. Empty: any.</string>
+      <string id="DeviceCertificate">Device certificate</string>
+      <string id="DeviceCertificate_Explain">Paths to this computer's certificate from the company's device authority and its private key (PEM files). Signing in, Weave shows the certificate so the company vouches only for its own computers.</string>
+      <string id="Updates">Update prompts</string>
+      <string id="Updates_Explain">Disabled: Weave doesn't ask to update; IT rolls out new versions.</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="Enroll">
+        <textBox refId="EnrollText"><label>Enrollment link:</label></textBox>
+      </presentation>
+      <presentation id="Companies">
+        <multiTextBox refId="CompaniesList">Company ids:</multiTextBox>
+      </presentation>
+      <presentation id="DeviceCertificate">
+        <textBox refId="DeviceCertText"><label>Certificate (PEM file):</label></textBox>
+        <textBox refId="DeviceKeyText"><label>Private key (PEM file):</label></textBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

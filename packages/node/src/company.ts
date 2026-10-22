@@ -108,7 +108,7 @@ export interface Retention {
 }
 
 export type CompanyAction =
-  | ({ action: 'settings'; admins?: string; retention?: { minDays?: number | null; maxDays?: number | null } } & Partial<CompanyPolicy>)
+  | ({ action: 'settings'; admins?: string; retention?: { minDays?: number | null; maxDays?: number | null }; deviceCA?: string | null } & Partial<CompanyPolicy>)
   | { action: 'chat'; with: string }
   | { action: 'map'; group: string; space: string; role?: MapRole; on?: boolean }
   | { action: 'start'; contacts: string[] }
@@ -124,6 +124,8 @@ export interface OrgState {
   links: boolean;
   policy: CompanyPolicy;
   retention: Retention;
+  /** The company's device certificate authority (PEM): only sign-ins from its computers are vouched for (stage 12). */
+  deviceCA?: string;
   /** Company chats between colleagues. */
   chats: Array<{ space: string; people: Did[] }>;
   /** Sign-in group → company space id → role, as the company last said. */
@@ -151,6 +153,8 @@ export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
       case KIND_ORG_SETTINGS:
         known = true;
         if (typeof b.admins === 'string') state.admins = b.admins;
+        if (typeof b.deviceCA === 'string') state.deviceCA = b.deviceCA;
+        else if (b.deviceCA === null) state.deviceCA = undefined;
         state.policy = readPolicy(b, state.policy);
         state.links = state.policy.links;
         if (b.retention && typeof b.retention === 'object') {

@@ -34,6 +34,8 @@ jobs:
           name: installers-${{ matrix.os }}
           path: |
             apps/desktop/release/*.exe
+            apps/desktop/release/*.msi
             apps/desktop/release/*.dmg
+            apps/desktop/release/*.pkg
             apps/desktop/release/*.AppImage
           if-no-files-found: error

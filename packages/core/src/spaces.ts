@@ -101,6 +101,8 @@ export const KIND_ORG_DONE = 'weave.org.done';
 export const KIND_ORG_POLICY = 'weave.org.policy';
 /** `{space, people}`: a company chat between colleagues, made by the company (stage 11). */
 export const KIND_ORG_CHAT = 'weave.org.chat';
+/** `{subject, email?, action, …}`: an admin did this in the admin console (stage 12), recorded by the company's node. */
+export const KIND_ORG_CONSOLE = 'weave.org.console';
 /** `{to, on}`: this identity is also that one (both have to say so). Public, or sealed into a space. */
 export const KIND_LINK = 'weave.link';
 

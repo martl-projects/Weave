@@ -1,4 +1,5 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
+import type { AuditSinkInput } from './auditsinks.ts';
 import type { GumroadLink } from '@weave/core';
 import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
@@ -278,6 +279,8 @@ export interface CommunityInfo extends SpaceInfo {
 /** A board of posts inside a project (or the one board of a community). */
 /** One line of a space's audit (stage 9). */
 export interface AuditLine {
+  /** The event's id: each line once, wherever it's sent. */
+  id?: string;
   time: string;
   kind: string;
   by: Did;
@@ -642,8 +645,8 @@ export interface MemberInfo {
   lastActive?: string;
   /** Names of their agents seen acting in the space. */
   agents: string[];
-  /** In a space with a company attestor: who the company says they are, until when. */
-  attested?: { subject: string; email?: string; groups: string[]; until: string };
+  /** In a space with a company attestor: who the company says they are, until when (and from which company computer). */
+  attested?: { subject: string; email?: string; groups: string[]; until: string; device?: { subject: string; serial: string } };
   /** A company-owned identity: its company's name. */
   company?: string;
 }
@@ -677,6 +680,53 @@ export interface Profile {
   company?: { did: Did; name?: string; frozen?: true };
   /** Their other identities, where both sides say so. */
   links: LinkInfo[];
+}
+
+/** Where the company's node streams its audit (stage 12), without secrets. */
+export interface AuditStreamInfo {
+  id: string;
+  kind: AuditSinkInput['kind'];
+  target: string;
+  /** Lines sent so far (of the last 31 days). */
+  sent: number;
+  lastSent?: string;
+  problem?: string;
+}
+
+/** One event of a space, for a legal search (stage 12). */
+export interface ExportLine {
+  id: string;
+  time: string;
+  kind: string;
+  by: Did;
+  byName?: string;
+  signer: Did;
+  agent?: string;
+  body: Json;
+  /** A post deleted (hidden) later, and when. */
+  deleted?: string;
+  /** A post edited later: the times of its edits. */
+  edited?: string[];
+}
+
+/** The admin console (stage 12). */
+export interface ConsoleInfo {
+  on: boolean;
+  url?: string;
+  port?: number;
+  clientId?: string;
+  /** Right after turning it on: a link that lets one person in once, before sign-in is set up. */
+  operatorLink?: string;
+}
+
+/** The company's SCIM directory (stage 12). */
+export interface ScimInfo {
+  on: boolean;
+  port?: number;
+  /** Only right after turning it on: the bearer token for the user management's settings. */
+  token?: string;
+  users: Array<{ userName: string; displayName?: string; active: boolean; groups: string[]; did?: Did; name?: string }>;
+  groups: Array<{ name: string; members: number }>;
 }
 
 /** One identity's link to another (stage 10). */
@@ -945,6 +995,19 @@ export interface Backend {
   link(input: { who: string; space?: string; on?: boolean }): Promise<LinkInfo[]>;
   /** A person's links to other identities (yours by default), as this node can see them. */
   links(who?: string): Promise<LinkInfo[]>;
+  /** On the company's node: send the audit of the company's spaces, as it happens, to the company's security tools. */
+  addAuditStream(input: AuditSinkInput): Promise<AuditStreamInfo[]>;
+  removeAuditStream(id: string): Promise<AuditStreamInfo[]>;
+  auditStreams(): Promise<AuditStreamInfo[]>;
+  /** Those who manage a space: everything it holds, as JSON lines, deleted and edited posts included (marked): for legal searches. */
+  exportSpace(input: { space: string; since?: string; until?: string }): Promise<ExportLine[]>;
+  /** On the company's node: serve SCIM to the company's user management (the token is shown once), or stop. */
+  setScim(input: { on: boolean; port?: number }): Promise<ScimInfo>;
+  /** The company's directory as its user management provisioned it. */
+  scim(): Promise<ScimInfo>;
+  /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
+  setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo>;
+  consoleInfo(): Promise<ConsoleInfo>;
   /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
   approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
@@ -1195,7 +1258,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

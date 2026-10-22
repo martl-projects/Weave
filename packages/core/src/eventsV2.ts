@@ -62,6 +62,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.org.done',
   'weave.org.policy',
   'weave.org.chat',
+  'weave.org.console',
   'weave.link',
   'weave.space.rekey',
   'weave.space.gift',

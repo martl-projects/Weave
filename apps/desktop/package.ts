@@ -1,5 +1,6 @@
 // Packages the desktop app into installers for this platform (unsigned for
-// now): an NSIS setup .exe on Windows, a .dmg on macOS, an AppImage on Linux.
+// now): an NSIS setup .exe and an MSI (per machine, for IT) on Windows, a .dmg
+// and a .pkg on macOS, an AppImage on Linux.
 //
 //   npm run package                 installers in apps/desktop/release/
 //   npm run package -- --dir        just the unpacked app, for a quick look
@@ -52,6 +53,9 @@ const dependencies = Object.fromEntries(NATIVE.map((name) => [name, pkg(join(roo
 writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon', private: true, type: 'module', dependencies }, null, 2));
 execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
+// The admin console a company's node serves (packages/node/src/console.ts looks for it next to the daemon).
+execFileSync(process.execPath, [join(root, 'apps', 'console', 'build.ts')], { stdio: 'inherit' });
+cpSync(join(root, 'apps', 'console', 'dist'), 'pack/daemon/console', { recursive: true });
 
 // --- the `weave` command: small scripts in resources/bin that run the bundled
 // CLI with the app's own Node. The Windows installer puts that folder on the
@@ -105,15 +109,22 @@ const config: Configuration = {
   artifactName: 'Weave-${version}-${os}-${arch}.${ext}',
   nativeModules: { npmRebuild: false },
   publish: null,
-  win: { target: [{ target: 'nsis', arch: ['x64'] }] },
+  // nsis: per person, with the weave command on PATH. msi: per machine, for IT to push silently (msiexec /i … /qn).
+  win: { target: [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }] },
+  msi: { perMachine: true, oneClick: true, runAfterFinish: false },
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
   mac: {
-    target: [{ target: 'dmg', arch: ['arm64', 'x64'] }],
+    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune).
+    target: [
+      { target: 'dmg', arch: ['arm64', 'x64'] },
+      { target: 'pkg', arch: ['arm64', 'x64'] },
+    ],
     category: 'public.app-category.social-networking',
     // Ad-hoc signed until there is an Apple Developer ID: Apple silicon refuses to run unsigned apps at all.
     sign: { identity: '-', hardenedRuntime: false },
   },
+  pkg: { installLocation: '/Applications', isRelocatable: false },
   linux: { target: [{ target: 'AppImage', arch: ['x64'] }], category: 'Network' },
   // weave:post:… links open the app at that post (see src/main.ts).
   protocols: [{ name: 'Weave link', schemes: ['weave'] }],

@@ -1,4 +1,4 @@
-import { constants, createCipheriv, createDecipheriv, createHmac, createSign, createVerify, generateKeyPairSync, privateDecrypt, publicEncrypt, randomBytes, type KeyObject } from 'node:crypto';
+import { constants, createCipheriv, createDecipheriv, createHash, createHmac, createSign, createVerify, generateKeyPairSync, privateDecrypt, publicEncrypt, randomBytes, type KeyObject } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -16,11 +16,39 @@ export class OidcStub {
   readonly kid = 'test-key';
   #server?: Server;
   issuer = '';
+  /** Who signs in through /authorize (the code flow). */
+  loginAs?: { sub: string; email?: string; name?: string; groups?: string[] };
+  readonly #codes = new Map<string, { claims: { sub: string; email?: string; name?: string; groups?: string[] }; clientId: string; redirect: string; challenge: string; nonce: string }>();
 
   async start(): Promise<this> {
     this.#server = createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
-      if (req.url === '/.well-known/openid-configuration') return res.end(JSON.stringify({ issuer: this.issuer, jwks_uri: `${this.issuer}/jwks` }));
+      if (req.url === '/.well-known/openid-configuration')
+        return res.end(JSON.stringify({ issuer: this.issuer, jwks_uri: `${this.issuer}/jwks`, authorization_endpoint: `${this.issuer}/authorize`, token_endpoint: `${this.issuer}/token` }));
+      // Sign-in with authorization code and PKCE: whoever loginAs names signs in at once.
+      if (req.url?.startsWith('/authorize')) {
+        const q = new URL(req.url, this.issuer).searchParams;
+        if (!this.loginAs) return void ((res.statusCode = 401), res.end('{}'));
+        const code = randomBytes(12).toString('hex');
+        this.#codes.set(code, { claims: this.loginAs, clientId: q.get('client_id') ?? '', redirect: q.get('redirect_uri') ?? '', challenge: q.get('code_challenge') ?? '', nonce: q.get('nonce') ?? '' });
+        res.statusCode = 302;
+        res.setHeader('location', `${q.get('redirect_uri')}?code=${code}&state=${encodeURIComponent(q.get('state') ?? '')}`);
+        return res.end();
+      }
+      if (req.url === '/token' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', (c) => (raw += c));
+        req.on('end', () => {
+          const form = new URLSearchParams(raw);
+          const grant = this.#codes.get(form.get('code') ?? '');
+          this.#codes.delete(form.get('code') ?? '');
+          const verifier = form.get('code_verifier') ?? '';
+          const ok = grant && grant.clientId === form.get('client_id') && grant.redirect === form.get('redirect_uri') && createHash('sha256').update(verifier).digest('base64url') === grant.challenge;
+          if (!ok) return void ((res.statusCode = 400), res.end(JSON.stringify({ error: 'invalid_grant' })));
+          res.end(JSON.stringify({ id_token: this.token({ ...grant.claims, aud: grant.clientId, nonce: grant.nonce }), token_type: 'Bearer' }));
+        });
+        return;
+      }
       if (req.url === '/jwks') return res.end(JSON.stringify({ keys: [{ ...(this.#keys.publicKey.export({ format: 'jwk' }) as object), kid: this.kid, alg: 'RS256', use: 'sig' }] }));
       res.statusCode = 404;
       res.end('{}');
@@ -35,10 +63,10 @@ export class OidcStub {
   }
 
   /** An ID token for an employee. */
-  token(claims: { sub: string; email?: string; groups?: string[]; aud?: string; expiresIn?: number; signWith?: KeyObject }): string {
+  token(claims: { sub: string; email?: string; name?: string; groups?: string[]; aud?: string; nonce?: string; expiresIn?: number; signWith?: KeyObject }): string {
     const now = Math.floor(Date.now() / 1000);
     const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: this.kid }));
-    const body = b64url(JSON.stringify({ iss: this.issuer, aud: claims.aud ?? 'weave', sub: claims.sub, email: claims.email, groups: claims.groups ?? [], iat: now, exp: now + (claims.expiresIn ?? 3600) }));
+    const body = b64url(JSON.stringify({ iss: this.issuer, aud: claims.aud ?? 'weave', sub: claims.sub, email: claims.email, name: claims.name, groups: claims.groups ?? [], nonce: claims.nonce, iat: now, exp: now + (claims.expiresIn ?? 3600) }));
     const signature = createSign('RSA-SHA256').update(`${header}.${body}`).sign(claims.signWith ?? this.#keys.privateKey);
     return `${header}.${body}.${b64url(signature)}`;
   }

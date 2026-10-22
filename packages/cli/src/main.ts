@@ -40,6 +40,7 @@ import {
   type RoomInfo,
   type LinkInfo,
   SqliteStore,
+  machinePolicy,
 } from '@weave/node';
 
 /** Set when this file is bundled into the desktop app (see apps/desktop/package.ts). */
@@ -124,6 +125,11 @@ projects — something being built; participants chat, discuss, vote and work on
   company policy outside|public|chats on|off / company policy directs all|company|off   what company accounts may do
   company retention <min days|-> [max days|-]   how long company spaces keep things, at least and at most
   company chat <colleague>               a chat with a colleague, kept by the company
+  company scim on [port] | off           SCIM for your user management (Entra ID, Okta, Google): deactivating someone takes them out at once
+  company devices <ca.pem> | off         vouch only for sign-ins from computers with a certificate from your device authority
+  company console on [port] --client-id <id> [--url <address>]   the admin console, for admins signing in with their company account
+  company stream add webhook|splunk|syslog|sentinel …  /  company stream [remove <id>]   the audit to your security tools, as it happens
+  company export <space> [since] [until] everything a company space holds, as JSON lines (legal searches)
   link <person or contact link> [--in <space>] [--off] / links [person]   this identity is also that one (both say so)
   audit <space> [since]                  the space's governance as JSON lines: who changed what, when
   (company nodes: "attestor": {"issuer", "audience"} or "archive": true in config.json)
@@ -319,6 +325,11 @@ const { values, positionals } = parseArgs({
     months: { type: 'string' },
     name: { type: 'string' },
     'id-token': { type: 'string' },
+    'client-id': { type: 'string' },
+    secret: { type: 'string' },
+    url: { type: 'string' },
+    token: { type: 'string' },
+    tenant: { type: 'string' },
     issuer: { type: 'string' },
     audience: { type: 'string' },
     admins: { type: 'string' },
@@ -1226,7 +1237,8 @@ ${postLine(p)}`);
     }
 
     case 'enroll': {
-      const link = args[0];
+      // The company's link from the computer's managed settings, unless one is given.
+      const link = args[0] ?? machinePolicy().enroll;
       const idToken = values['id-token'] ?? process.env.WEAVE_ID_TOKEN;
       if (!link || !idToken) throw new Error('usage: weave enroll <enrollment link> --id-token <your company sign-in token> [--name <name>]');
       const node = await WeaveNode.enroll(link, home.dir, { idToken, ...(values.name ? { name: values.name } : {}) });
@@ -1335,6 +1347,62 @@ ${postLine(p)}`);
         case 'freeze':
           if (!rest[0]) throw new Error('usage: weave company freeze <person>   (what their account signs from now on counts nowhere)');
           return show(await b.companyAction({ action: 'freeze', person: rest[0] }));
+        case 'devices':
+          if (!rest[0]) throw new Error('usage: weave company devices <device authority certificate (PEM file)> | off   (only sign-ins from company computers)');
+          return show(await b.companyAction({ action: 'settings', deviceCA: rest[0] === 'off' ? null : readFileSync(rest[0], 'utf8') }));
+        case 'scim': {
+          const [what, port] = rest;
+          if (what === 'on' || what === 'off') {
+            const s = await b.setScim({ on: what === 'on', ...(port ? { port: Number(port) } : {}) });
+            return out(s, () => (s.on ? `SCIM at http://<this node>:${s.port}/scim/v2\n  bearer token (shown once; put it in your user management's provisioning settings): ${s.token}` : 'SCIM is off'));
+          }
+          const s = await b.scim();
+          return out(s, () =>
+            [s.on ? `SCIM on, port ${s.port}` : 'SCIM off   (weave company scim on [port])', ...s.users.map((u) => `  ${u.userName.padEnd(30)} ${u.active ? 'active     ' : 'deactivated'} ${u.groups.join(', ')}${u.name ? `  → ${u.name}` : ''}`)].join('\n'),
+          );
+        }
+        case 'console': {
+          const [what, port] = rest;
+          if (what === 'on' || what === 'off') {
+            const c = await b.setConsole({ on: what === 'on', ...(port ? { port: Number(port) } : {}), ...(values['client-id'] ? { clientId: values['client-id'] } : {}), ...(values.url ? { url: values.url } : {}), ...(values.secret ? { clientSecret: values.secret } : {}) });
+            return out(c, () => (c.on ? `the admin console is at ${c.url} (admins sign in with their company account)\n  one-time operator link, for the first admin: ${c.operatorLink}` : 'the admin console is off'));
+          }
+          const c = await b.consoleInfo();
+          return out(c, () => (c.on ? `the admin console is at ${c.url}` : 'the admin console is off   (weave company console on [port] --client-id <app registration> [--url <public address>] [--secret <client secret>])'));
+        }
+        case 'stream': {
+          const [what, kind, ...more] = rest;
+          if (what === 'add') {
+            const input =
+              kind === 'webhook' && more[0]
+                ? { kind, url: more[0], ...(values.token ? { token: values.token } : {}) }
+                : kind === 'splunk' && more[0] && values.token
+                  ? { kind, url: more[0], token: values.token }
+                  : kind === 'syslog' && more[0]
+                    ? { kind, host: more[0].split(':')[0], port: Number(more[0].split(':')[1] ?? 514) }
+                    : kind === 'sentinel' && more.length === 3 && values.tenant && values['client-id'] && values.secret
+                      ? { kind, endpoint: more[0], rule: more[1], stream: more[2], tenant: values.tenant, clientId: values['client-id'], secret: values.secret }
+                      : undefined;
+            if (!input)
+              throw new Error(
+                'usage: weave company stream add webhook <url> [--token t]\n       weave company stream add splunk <collector url> --token <HEC token>\n       weave company stream add syslog <host:port>\n       weave company stream add sentinel <endpoint> <rule id> <stream> --tenant t --client-id c --secret s',
+              );
+            const added = await b.addAuditStream(input as Parameters<typeof b.addAuditStream>[0]);
+            return out(added, () => added.map((s) => `${s.id}  ${s.kind.padEnd(8)} ${s.target}  ${s.sent} sent${s.problem ? `  ⚠ ${s.problem}` : ''}`).join('\n'));
+          }
+          if (what === 'remove' && kind) {
+            const left = await b.removeAuditStream(kind);
+            return out(left, () => left.map((s) => `${s.id}  ${s.kind}  ${s.target}`).join('\n') || 'no audit streams');
+          }
+          const list = await b.auditStreams();
+          return out(list, () => list.map((s) => `${s.id}  ${s.kind.padEnd(8)} ${s.target}  ${s.sent} sent${s.lastSent ? `, last ${s.lastSent.slice(0, 16)}` : ''}${s.problem ? `  ⚠ ${s.problem}` : ''}`).join('\n') || 'no audit streams   (weave company stream add …)');
+        }
+        case 'export': {
+          const [space, since, until] = rest;
+          if (!space) throw new Error('usage: weave company export <space> [since] [until] > space.jsonl   (everything it holds, deleted posts marked: for legal searches)');
+          const lines = await b.exportSpace({ space, ...(since ? { since } : {}), ...(until ? { until } : {}) });
+          return void console.log(lines.map((l) => JSON.stringify(l)).join('\n'));
+        }
         default:
           throw new Error(`unknown: weave company ${sub} (see weave --help)`);
       }

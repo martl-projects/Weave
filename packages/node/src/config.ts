@@ -21,6 +21,10 @@ export interface Config {
   archive?: boolean;
   /** Where to look for new Weave versions, instead of the Weave project and its repository. */
   updates?: { project?: string; repo?: string };
+  /** The company's node serves SCIM for its user management on this port (stage 12; the token is kept sealed). */
+  scim?: { port: number };
+  /** The company's node serves the admin console on this port (stage 12). */
+  console?: { port: number; url?: string; clientId?: string };
 }
 
 export function loadConfig(home: Home): Config {
@@ -33,6 +37,15 @@ export function loadConfig(home: Home): Config {
     approvedLaunches: stored.approvedLaunches ?? {},
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
+    // A company's node (stages 6 and 12): written by weave company create and friends, read back here.
+    ...(stored.attestor && typeof stored.attestor.issuer === 'string' && typeof stored.attestor.audience === 'string'
+      ? { attestor: { issuer: stored.attestor.issuer, audience: stored.attestor.audience, ...(typeof stored.attestor.hours === 'number' ? { hours: stored.attestor.hours } : {}) } }
+      : {}),
+    ...(stored.archive === true ? { archive: true } : {}),
+    ...(stored.scim && Number.isInteger(stored.scim.port) ? { scim: { port: stored.scim.port } } : {}),
+    ...(stored.console && Number.isInteger(stored.console.port)
+      ? { console: { port: stored.console.port, ...(typeof stored.console.url === 'string' ? { url: stored.console.url } : {}), ...(typeof stored.console.clientId === 'string' ? { clientId: stored.console.clientId } : {}) } }
+      : {}),
     ...(stored.updates && typeof stored.updates === 'object'
       ? { updates: { ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}), ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}) } }
       : {}),
