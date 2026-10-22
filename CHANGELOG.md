@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.13.0 · 2026-10-22
+
+- v2 stage 10: company accounts
+
 ## v0.12.0 · 2026-10-22
 
 - v2 stage 9.4: Azure Key Vault as a key provider
