@@ -53,6 +53,9 @@ const HELP = `weave ${VERSION} — build things together, peer to peer, with you
 
 usage: weave <command> [options]
 
+A <space> is any place you share: a group, a project or a community (by name or id).
+A company's own projects and groups are its company spaces.
+
   init <name>                create your identity; shows your 24 recovery words once, and applies
                              weave.bundle.json (contacts and free tiers the app ships with) unless --bare
   enroll <link> --id-token <token> [--name <name>]

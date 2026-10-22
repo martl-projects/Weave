@@ -28,6 +28,17 @@ async function api<T>(path: string, init?: { method?: string; body?: unknown }):
 
 const act = (action: CompanyAction) => api<CompanyInfo>('/action', { method: 'POST', body: action });
 
+/** Opens it in the Weave app (weave:project:…, weave:group:…). */
+function Open({ kind, id, children }: { kind?: string; id: string; children: ReactNode }) {
+  return kind ? (
+    <a href={`weave:${kind}:${id}`} title="Open in Weave">
+      {children}
+    </a>
+  ) : (
+    <>{children}</>
+  );
+}
+
 const when = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
 
 /** Load something, with a way to load it again. */
@@ -88,7 +99,7 @@ function Overview({ company, reload }: { company: CompanyInfo; reload(): void })
   return (
     <>
       <h1>{company.name}</h1>
-      <p className="lead">Your company's Weave: its people, spaces, policy and audit.</p>
+      <p className="lead">Your company's Weave: its people, projects and groups, policy and audit.</p>
       <div className="cards">
         <div className="card">
           <div className="k">People vouched for</div>
@@ -96,7 +107,7 @@ function Overview({ company, reload }: { company: CompanyInfo; reload(): void })
           <div className="s">{members.data ? `${members.data.length} in the company group` : ''}</div>
         </div>
         <div className="card">
-          <div className="k">Company spaces</div>
+          <div className="k">Projects and groups</div>
           <div className="v">{company.spaces.length + 1}</div>
           <div className="s">{company.maps.length} mapped from sign-in groups</div>
         </div>
@@ -114,7 +125,7 @@ function Overview({ company, reload }: { company: CompanyInfo; reload(): void })
       <div className="panel">
         <h2>Policy in effect</h2>
         <div className="row">
-          <span className="chip">{p.outside ? 'Outside spaces allowed' : "Company spaces only"}</span>
+          <span className="chip">{p.outside ? 'Outside projects and groups allowed' : "Company projects and groups only"}</span>
           <span className="chip">Direct chats: {{ all: 'anyone', company: 'colleagues', off: 'none' }[p.directs]}</span>
           <span className="chip">{p.public ? 'Public posting allowed' : 'No public posting'}</span>
           <span className="chip">{p.chats ? 'Colleagues chat in company chats' : 'Direct chats between colleagues'}</span>
@@ -251,14 +262,14 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const [map, setMap] = useState({ group: '', space: '', role: 'member' as 'member' | 'maintainer' });
   return (
     <>
-      <h1>Spaces</h1>
-      <p className="lead">The company's own projects and groups. Sign-in groups decide who is in them.</p>
+      <h1>Projects and groups</h1>
+      <p className="lead">The company's own projects and groups. Sign-in groups decide who is in them. Click one to open it in Weave.</p>
       <Problem error={spaces.error} />
       <div className="panel table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Space</th>
+              <th>Project or group</th>
               <th>Members</th>
               <th>Keys</th>
               <th>Hold</th>
@@ -268,8 +279,12 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
             {(spaces.data ?? []).map((s) => (
               <tr key={s.id}>
                 <td>
-                  <div>{s.name}</div>
-                  <div className="muted">{s.id === company.group.id ? 'company group' : s.kind}</div>
+                  <div>
+                    <Open kind={s.kind} id={s.id}>
+                      {s.name}
+                    </Open>
+                  </div>
+                  <div className="muted">{s.id === company.group.id ? 'company group (everyone)' : s.kind}</div>
                 </td>
                 <td>{s.members.map((m) => <span key={m.did} className="chip">{m.name ?? m.did.slice(8, 16)}{m.maintainer ? ' ★' : ''}</span>)}</td>
                 <td className={s.managed?.problem ? 'bad' : 'muted'}>{s.managed?.problem ?? `epoch ${s.epoch}`}</td>
@@ -294,7 +309,7 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
         </table>
       </div>
       <div className="panel">
-        <h2>New company space</h2>
+        <h2>New project or group</h2>
         <div className="row">
           <select value={kind} onChange={(e) => setKind(e.target.value as 'project' | 'group')}>
             <option value="project">Project</option>
@@ -307,13 +322,13 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
         </div>
       </div>
       <div className="panel">
-        <h2>Sign-in groups → spaces</h2>
+        <h2>Sign-in groups → projects and groups</h2>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Sign-in group</th>
-                <th>Space</th>
+                <th>Project or group</th>
                 <th>As</th>
                 <th />
               </tr>
@@ -324,7 +339,11 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
                   <td>
                     <span className="chip">{m.group}</span>
                   </td>
-                  <td>{m.spaceName}</td>
+                  <td>
+                    <Open kind={company.spaces.find((s) => s.id === m.space)?.kind} id={m.space}>
+                      {m.spaceName}
+                    </Open>
+                  </td>
                   <td>{m.role === 'maintainer' ? 'maintainers' : 'members'}</td>
                   <td>
                     <Run kind="danger" run={async () => (await act({ action: 'map', group: m.group, space: m.space, on: false }), reload())}>
@@ -339,7 +358,7 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
         <div className="row" style={{ marginTop: 12 }}>
           <input placeholder="Sign-in group, e.g. engineering" value={map.group} onChange={(e) => setMap({ ...map, group: e.target.value })} />
           <select value={map.space} onChange={(e) => setMap({ ...map, space: e.target.value })}>
-            <option value="">Space…</option>
+            <option value="">Project or group…</option>
             {company.spaces.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -369,11 +388,11 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
   return (
     <>
       <h1>Policy</h1>
-      <p className="lead">What company accounts may do, and how long company spaces keep things. The policy is published, so every Weave app holds company accounts to it.</p>
+      <p className="lead">What company accounts may do, and how long the company's projects and groups keep things. The policy is published, so every Weave app holds company accounts to it.</p>
       <div className="panel">
         <h2>Company accounts</h2>
         <div className="form">
-          <label>Spaces outside the company</label>
+          <label>Projects and groups outside the company</label>
           <select value={String(p.outside)} onChange={(e) => setP({ ...p, outside: e.target.value === 'true' })}>
             <option value="true">Allowed</option>
             <option value="false">Not allowed</option>
@@ -404,14 +423,14 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
         </div>
       </div>
       <div className="panel">
-        <h2>Retention in company spaces</h2>
+        <h2>Retention in the company's projects and groups</h2>
         <div className="form">
           <label>Keep at least (days)</label>
           <input type="number" min={1} placeholder="no minimum" value={min} onChange={(e) => setMin(e.target.value)} />
           <label>Keep at most (days)</label>
           <input type="number" min={1} placeholder="no maximum" value={max} onChange={(e) => setMax(e.target.value)} />
         </div>
-        <p className="muted">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each space's page stay. A legal hold stops it.</p>
+        <p className="muted">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each project's page stay. A legal hold stops it.</p>
       </div>
       <div className="panel">
         <h2>Company computers</h2>
@@ -438,7 +457,7 @@ function Directory() {
   return (
     <>
       <h1>Directory</h1>
-      <p className="lead">Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of every company space at once.</p>
+      <p className="lead">Your user management (Entra ID, Okta, Google) provisions people and groups here over SCIM. Deactivating someone there takes them out of all the company's projects and groups at once.</p>
       <Problem error={scim.error} />
       <div className="panel">
         <div className="row">
@@ -512,10 +531,10 @@ function Audit({ company }: { company: CompanyInfo }) {
   return (
     <>
       <h1>Audit</h1>
-      <p className="lead">Who changed what in the company's spaces over the last 30 days. No content, no secrets.</p>
+      <p className="lead">Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.</p>
       <div className="row" style={{ marginBottom: 14 }}>
         <select value={space} onChange={(e) => setSpace(e.target.value)}>
-          <option value="">All company spaces</option>
+          <option value="">All projects and groups</option>
           {spaces.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
@@ -534,7 +553,7 @@ function Audit({ company }: { company: CompanyInfo }) {
           <thead>
             <tr>
               <th>When</th>
-              <th>Space</th>
+              <th>Where</th>
               <th>What</th>
               <th>Who</th>
               <th>Detail</th>
@@ -551,7 +570,11 @@ function Audit({ company }: { company: CompanyInfo }) {
             {(audit.data?.lines ?? []).slice(0, 500).map((l) => (
               <tr key={`${l.space.id} ${l.id ?? l.time + l.kind}`}>
                 <td style={{ whiteSpace: 'nowrap' }}>{when(l.time)}</td>
-                <td>{l.space.name}</td>
+                <td>
+                  <Open kind={l.space.id === company.group.id ? 'group' : company.spaces.find((s) => s.id === l.space.id)?.kind} id={l.space.id}>
+                    {l.space.name}
+                  </Open>
+                </td>
                 <td>
                   <span className="chip">{l.kind.replace(/^weave\./, '')}</span>
                 </td>
@@ -672,7 +695,7 @@ function Streams() {
 
 // ------------------------------------------------------------------ the app
 
-const PAGES = ['Overview', 'People', 'Spaces', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
+const PAGES = ['Overview', 'People', 'Projects and groups', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
 type Page = (typeof PAGES)[number];
 
 function App() {
@@ -725,7 +748,7 @@ function App() {
       <main>
         {page === 'Overview' && <Overview company={c} reload={company.reload} />}
         {page === 'People' && <People company={c} />}
-        {page === 'Spaces' && <Spaces company={c} reload={company.reload} />}
+        {page === 'Projects and groups' && <Spaces company={c} reload={company.reload} />}
         {page === 'Policy' && <Policy key={JSON.stringify(c.policy) + JSON.stringify(c.retention)} company={c} reload={company.reload} />}
         {page === 'Directory' && <Directory />}
         {page === 'Audit' && <Audit company={c} />}

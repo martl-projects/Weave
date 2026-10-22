@@ -11,6 +11,7 @@ import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 // --route <hash>       start on a view, e.g. "#/groups"
 // --screenshot <file>  render, save a PNG of the window and quit (for checks)
 // weave:post:…         open at that post (how the OS hands over a clicked link)
+// weave:project:…      open that project (also weave:group:…, weave:community:…)
 const { values } = parseArgs({
   args: process.argv.slice(app.isPackaged ? 1 : 2),
   strict: false,
@@ -25,7 +26,7 @@ let window: BrowserWindow | undefined;
 let watching = new AbortController();
 let quitting = false;
 
-// weave:post:… links: the OS starts the app with one (registered by the installer,
+// weave:post:… and weave:project:… (group, community) links: the OS starts the app with one (registered by the installer,
 // see `protocols` in package.ts), or hands it to the app that's already open.
 const LINK = /^weave:[a-z]+:[A-Za-z0-9_-]{1,200}$/;
 const linkIn = (argv: string[]) => argv.find((arg) => LINK.test(arg));

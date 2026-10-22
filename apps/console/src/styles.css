@@ -137,7 +137,7 @@ h2 {
 }
 /* On a phone, wide tables scroll sideways instead of squeezing their columns. */
 .table-wrap table {
-  min-width: 640px;
+  min-width: 560px;
 }
 table {
   width: 100%;

@@ -11,7 +11,7 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, POST_LINK, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
+import { api, applySkin, bridge, bump, isActive, isUnread, loadSkin, navigate, POST_LINK, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
@@ -353,7 +353,9 @@ function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: Space
 /** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. */
 function openLink(link: string): void {
   const post = POST_LINK.exec(link);
+  const space = SPACE_LINK.exec(link);
   if (post) navigate(`#/post/${post[1]}`);
+  else if (space) navigate(spaceRoute(space[1], space[2]));
   else toast('Paste this link into “Join with an invite link…” or “Add someone”');
 }
 bridge.onLink(openLink);

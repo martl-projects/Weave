@@ -190,6 +190,10 @@ const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob|weave):|[^a-z]|[a-z+.-]+(?
 export const POST_LINK = /weave:post:([A-Za-z0-9_-]+)/;
 export const postLink = (id: string) => `weave:post:${id}`;
 
+/** A link to a project, group or community (weave:project:…), and where it opens in the app. */
+export const SPACE_LINK = /^weave:(project|group|community):([A-Za-z0-9_-]+)$/;
+export const spaceRoute = (kind: string, id: string) => `#/${({ project: 'p', group: 'g', community: 'r' } as Record<string, string>)[kind]}/${id}`;
+
 /** What renderMarkdown picks out of plain text: @mentions and post links. */
 const INLINE = /@[\w-]+|weave:post:[A-Za-z0-9_-]+/;
 
