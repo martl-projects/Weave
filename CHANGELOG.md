@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.8.0 · 2026-10-22
+
+- v2 stage 5: keepers
+
 ## v0.7.0 · 2026-10-21
 
 - v2 stage 4.3: held by, and load older, in the app
