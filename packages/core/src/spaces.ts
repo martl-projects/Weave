@@ -71,6 +71,21 @@ export type HistorySetting = 'all' | '30d' | 'joining';
 export const KIND_CARRY = 'weave.space.carry';
 /** `{epochs}`: members delete these keys of the space, so every copy of what they sealed becomes unreadable. */
 export const KIND_SHRED = 'weave.space.shred';
+/** `{provider, ttlMinutes, graceHours, attestor?}`: a company's key service holds half of every new epoch key (stage 6). */
+export const KIND_MANAGED = 'weave.space.managed';
+/** `{epoch, wrapped}`: an epoch's company half, wrapped by the space's key provider. */
+export const KIND_KMS = 'weave.space.kms';
+
+/** A managed space's setting, as its owner signed it. No secrets: the provider says where, not how to get in. */
+export interface ManagedSetting {
+  provider: Json;
+  ttlMinutes: number;
+  graceHours: number;
+  /** The company's attestor: only people it vouches for count as members (SSO). */
+  attestor?: Did;
+  by: Did;
+  time: string;
+}
 export const HISTORIES: readonly HistorySetting[] = ['all', '30d', 'joining'];
 const DAY = 24 * 3600 * 1000;
 
@@ -353,6 +368,8 @@ export interface SpaceState {
   closed?: { by: Did; time: string };
   /** What newcomers get to read, and who set it when (absent: everything). */
   history?: { value: HistorySetting; by: Did; time: string };
+  /** A company's key service holds half of the keys (stage 6). */
+  managed?: ManagedSetting;
 }
 
 const byTime = (a: { event: EventView }, b: { event: EventView }) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq;
@@ -460,6 +477,13 @@ export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event:
       case KIND_CLOSE:
         if (canManage(state, author)) state.closed = body.closed === false ? undefined : { by: author, time: event.time };
         break;
+      case KIND_MANAGED: {
+        const ttl = Number(body.ttlMinutes);
+        const grace = Number(body.graceHours);
+        if (kind !== 'direct' && author === state.founder && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
+          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), by: author, time: event.time };
+        break;
+      }
       case KIND_HISTORY:
         if (kind !== 'direct' && canManage(state, author) && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: event.time };
         break;

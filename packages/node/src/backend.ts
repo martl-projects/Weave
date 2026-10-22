@@ -162,6 +162,8 @@ export interface SpaceInfo extends SpaceRef {
   closed?: true;
   /** What newcomers get to read: everything (all), the last 30 days (30d), or from their invite on (joining). */
   history: HistorySetting;
+  /** A company's key service holds half of its keys: which one, and whether this computer has them unlocked. */
+  managed?: { provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
 }
@@ -831,6 +833,12 @@ export interface Backend {
   closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo>;
   /** Maintainers or moderators: how long a board's posts stay after their last activity (keepDays), and how much it may hold (maxMB); null for no limit. */
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
+  /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
+  manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  /** Unlock a managed space's keys with its key service now (they unlock by themselves too). */
+  unlockSpace(space: string): Promise<SpaceInfo>;
+  /** The owner: destroy the company key: every copy of everything sealed under it becomes unreadable. */
+  destroyCompanyKey(space: string): Promise<void>;
   /** Whoever manages the space: carry forward what its rules still keep, then have everyone delete the keys of the epochs that ended before `before`. */
   shred(input: { space: string; before: string }): Promise<{ epochs: number[]; carried: number }>;
   /** "Keep this": counts as activity on the post, so its time starts again (its author, or those who manage the space). */
@@ -1069,7 +1077,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
