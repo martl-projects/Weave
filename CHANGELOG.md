@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.16.1 · 2026-10-22
+
+- Build the macOS installers one architecture at a time
+
 ## v0.16.0 · 2026-10-22
 
 - Fixes from running the company flow end to end, and the demo that runs it
