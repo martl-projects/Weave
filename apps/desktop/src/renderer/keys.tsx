@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import type { IdentityInfo, KeepersInfo, KeyInfo, Status } from '@weave/node/client';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { IdentityInfo, KeepersInfo, KeyInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
@@ -28,9 +28,20 @@ function Words({ words }: { words: string }) {
   );
 }
 
-/** First start: a name, then the words to write down; or restore from words you already have. */
+/** First start: a name, then the words to write down; or restore from words you already have; or a company account. */
 export function Onboarding({ onDone }: { onDone(): void }) {
-  const [mode, setMode] = useState<'create' | 'restore'>('create');
+  const [mode, setMode] = useState<'create' | 'restore' | 'company'>('create');
+  // A company's device management may name its enrollment link, or allow only company accounts here.
+  const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
+  const [link, setLink] = useState('');
+  const [enrolled, setEnrolled] = useState<{ name?: string; company?: { name?: string } }>();
+  useEffect(() => {
+    void bridge.state().then((s) => {
+      setManaged({ enrollLink: s.enrollLink, companyOnly: s.companyOnly });
+      if (s.enrollLink) setLink(s.enrollLink);
+      if (s.enrollLink || s.companyOnly) setMode('company');
+    });
+  }, []);
   const [name, setName] = useState('');
   const [words, setWords] = useState<string>();
   const [wrote, setWrote] = useState(false);
@@ -70,6 +81,63 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           </button>
         </div>
       </>,
+    );
+
+  if (enrolled)
+    return window(
+      'Your company account is ready',
+      <>
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          <p>
+            Welcome, <b>{enrolled.name}</b>. Your account belongs to <b>{enrolled.company?.name ?? 'your company'}</b>: it keeps it safe and can set it up on a new computer, so there are no words
+            to write down.
+          </p>
+        </div>
+        <p className="small">You stay signed in with your company account; Weave renews it by itself. Your company's projects and groups appear as soon as the company has let you in.</p>
+        <div className="buttons">
+          <button className="default" onClick={() => (setEnrolled(undefined), onDone())}>
+            Open Weave
+          </button>
+        </div>
+      </>,
+    );
+
+  if (mode === 'company')
+    return window(
+      'Set up your company account',
+      <form
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          setBusy(true);
+          const who = await attempt(() => bridge.enroll(link.trim()));
+          setBusy(false);
+          if (who) setEnrolled(who);
+        }}
+      >
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          <p>Your company sets up your Weave account. You sign in with your company account in your browser; there are no recovery words to keep.</p>
+        </div>
+        {managed.enrollLink ? (
+          <p className="small">Your company has set this computer up for its Weave already.</p>
+        ) : (
+          <div className="field-row-stacked">
+            <label htmlFor="enroll-link">The enrollment link from your company</label>
+            <textarea id="enroll-link" className="wide" rows={3} required autoFocus spellCheck={false} placeholder="weave:enroll:…" value={link} onChange={(e) => setLink(e.target.value)} />
+          </div>
+        )}
+        <div className="buttons">
+          {!managed.companyOnly && (
+            <button type="button" onClick={() => setMode('create')}>
+              Back
+            </button>
+          )}
+          <button className="default" disabled={busy || !link.trim()}>
+            {busy ? 'Waiting for the sign-in in your browser…' : 'Sign in with your company'}
+          </button>
+        </div>
+      </form>,
     );
 
   if (mode === 'restore')
@@ -119,6 +187,9 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="buttons">
+        <button type="button" onClick={() => setMode('company')}>
+          My company uses Weave…
+        </button>
         <button type="button" onClick={() => setMode('restore')}>
           I already use Weave…
         </button>
@@ -127,6 +198,41 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </button>
       </div>
     </form>,
+  );
+}
+
+/** A company account (stage 13): whose it is, and whether it's signed in and vouched for. */
+function CompanyAccountBox() {
+  const { data: status } = useApi(() => api<SignInStatus>('signInStatus'), []);
+  if (!status?.company) return null;
+  const day = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+  return (
+    <fieldset>
+      <legend>Company account</legend>
+      <p>
+        This account belongs to <b>{status.name}</b>
+        {status.account ? (
+          <>
+            {' '}
+            and is signed in as <b>{status.account}</b>
+          </>
+        ) : null}
+        . The company keeps it safe and can set it up on a new computer.
+      </p>
+      {status.problem ? (
+        <p className="notice alarm">
+          <Icon name="lock" /> {status.problem}
+        </p>
+      ) : (
+        <p className="small">
+          {status.renews ? 'Weave renews the sign-in by itself.' : 'Sign in again when it runs out.'}
+          {status.vouchedUntil ? ` The company vouches for you until ${day(status.vouchedUntil)}.` : ' The company vouches for you once it has checked the sign-in.'}
+        </p>
+      )}
+      <AsyncButton onClick={() => api('companySignIn').then(bump)} title="Opens your company's sign-in in the browser">
+        Sign in again
+      </AsyncButton>
+    </fieldset>
   );
 }
 
@@ -253,6 +359,7 @@ export function KeysView() {
           last trusted it.
         </div>
       )}
+      <CompanyAccountBox />
       {status && (
         <fieldset>
           <legend>On this computer</legend>

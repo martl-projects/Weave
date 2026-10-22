@@ -18,6 +18,11 @@ export class OidcStub {
   issuer = '';
   /** Who signs in through /authorize (the code flow). */
   loginAs?: { sub: string; email?: string; name?: string; groups?: string[] };
+  /** The stand-in's clock, for tokens' times (tests move it). */
+  now = () => Date.now();
+  /** How many times a refresh token was used. */
+  refreshes = 0;
+  readonly #refresh = new Map<string, { claims: { sub: string; email?: string; name?: string; groups?: string[] }; clientId: string }>();
   readonly #codes = new Map<string, { claims: { sub: string; email?: string; name?: string; groups?: string[] }; clientId: string; redirect: string; challenge: string; nonce: string }>();
 
   async start(): Promise<this> {
@@ -40,12 +45,20 @@ export class OidcStub {
         req.on('data', (c) => (raw += c));
         req.on('end', () => {
           const form = new URLSearchParams(raw);
+          if (form.get('grant_type') === 'refresh_token') {
+            const held = this.#refresh.get(form.get('refresh_token') ?? '');
+            if (!held || held.clientId !== form.get('client_id')) return void ((res.statusCode = 400), res.end(JSON.stringify({ error: 'invalid_grant', error_description: 'sign in again' })));
+            this.refreshes++;
+            return void res.end(JSON.stringify({ id_token: this.token({ ...held.claims, aud: held.clientId }), refresh_token: form.get('refresh_token'), token_type: 'Bearer' }));
+          }
           const grant = this.#codes.get(form.get('code') ?? '');
           this.#codes.delete(form.get('code') ?? '');
           const verifier = form.get('code_verifier') ?? '';
           const ok = grant && grant.clientId === form.get('client_id') && grant.redirect === form.get('redirect_uri') && createHash('sha256').update(verifier).digest('base64url') === grant.challenge;
           if (!ok) return void ((res.statusCode = 400), res.end(JSON.stringify({ error: 'invalid_grant' })));
-          res.end(JSON.stringify({ id_token: this.token({ ...grant.claims, aud: grant.clientId, nonce: grant.nonce }), token_type: 'Bearer' }));
+          const refresh = randomBytes(16).toString('hex');
+          this.#refresh.set(refresh, { claims: grant.claims, clientId: grant.clientId });
+          res.end(JSON.stringify({ id_token: this.token({ ...grant.claims, aud: grant.clientId, nonce: grant.nonce }), refresh_token: refresh, token_type: 'Bearer' }));
         });
         return;
       }
@@ -64,7 +77,7 @@ export class OidcStub {
 
   /** An ID token for an employee. */
   token(claims: { sub: string; email?: string; name?: string; groups?: string[]; aud?: string; nonce?: string; expiresIn?: number; signWith?: KeyObject }): string {
-    const now = Math.floor(Date.now() / 1000);
+    const now = Math.floor(this.now() / 1000);
     const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: this.kid }));
     const body = b64url(JSON.stringify({ iss: this.issuer, aud: claims.aud ?? 'weave', sub: claims.sub, email: claims.email, name: claims.name, groups: claims.groups ?? [], nonce: claims.nonce, iat: now, exp: now + (claims.expiresIn ?? 3600) }));
     const signature = createSign('RSA-SHA256').update(`${header}.${body}`).sign(claims.signWith ?? this.#keys.privateKey);

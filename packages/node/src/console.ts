@@ -176,6 +176,8 @@ export async function startConsole(node: WeaveNode, options: ConsoleOptions): Pr
     void (async () => {
       try {
         const url = new URL(req.url ?? '/', base || 'http://localhost');
+        // For load balancers and container health checks.
+        if (url.pathname === '/healthz') return send(res, 200, { ok: true, company: (await node.company())?.name ?? null });
         if (url.pathname === '/login') {
           const operator = url.searchParams.get('operator');
           if (operator) {

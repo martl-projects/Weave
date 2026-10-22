@@ -333,6 +333,7 @@ import {
   type LinkInfo,
   type ScimInfo,
   type ConsoleInfo,
+  type SignInStatus,
   type AuditStreamInfo,
   type ExportLine,
   noAgent,
@@ -356,6 +357,7 @@ import { acquireLock } from './lock.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
 import { checkAuthority, checkDevice, deviceProof } from './devices.ts';
 import { machinePolicy } from './machine.ts';
+import { browserSignIn, claimsOf, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -385,6 +387,15 @@ import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
 /** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
 const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
+/** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
+interface Sso {
+  idToken: string;
+  expires?: number;
+  refreshToken?: string;
+  issuer?: string;
+  clientId?: string;
+}
+
 export const KIND_PROFILE = 'weave.profile';
 /** A project's page, sealed inside the project; the latest one by a maintainer counts. */
 export const KIND_PAGE = 'weave.project.page';
@@ -751,14 +762,22 @@ export class WeaveNode implements Backend {
    * deleted (see #continueEnrollment). The app's bundle isn't applied; the
    * company's starting setup is.
    */
-  static async enroll(link: string, dir: string | undefined, options: { idToken: string; name?: string }): Promise<WeaveNode> {
+  static async enroll(link: string, dir: string | undefined, options: { idToken?: string; name?: string; open?: (url: string) => void | Promise<void> }): Promise<WeaveNode> {
     const enrollment = decodeEnrollment(link);
-    const name = options.name?.trim() || nameFromToken(options.idToken) || 'New colleague';
+    // Without a token: the company's sign-in, in the browser (its refresh token keeps the account signed in).
+    let tokens: SignInTokens | undefined;
+    if (!options.idToken) {
+      if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: give your company sign-in token (--id-token)");
+      tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser);
+    }
+    const idToken = options.idToken ?? tokens!.idToken;
+    const name = options.name?.trim() || nameFromToken(idToken) || 'New colleague';
     const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company });
+    node.#saveSso({ idToken, expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
     const { invite } = await node.#takeInvite(enrollment.invite);
-    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken: options.idToken } satisfies Enrolling);
+    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken } satisfies Enrolling);
     await node.#continueEnrollment();
     return node;
   }
@@ -2087,6 +2106,7 @@ export class WeaveNode implements Backend {
     changed += this.#applyShreds();
     changed += this.#forget();
     changed += this.#release();
+    changed += await this.#renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
     await Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id)));
@@ -4087,12 +4107,108 @@ export class WeaveNode implements Backend {
   #managedProblems = new Map<string, string>();
 
   #provider(setting: ManagedSetting): KeyProvider {
-    return providerFor(setting.provider as unknown as ProviderSpec, this.home, this.kmsCredentials ?? { ...(process.env.WEAVE_VAULT_TOKEN ? { token: process.env.WEAVE_VAULT_TOKEN } : {}), idToken: () => this.#ssoToken() });
+    // A company's node signs in to its key service with a Vault token or an Azure app's secret (or token), from its environment;
+    // people sign in with their company account.
+    const env = process.env;
+    return providerFor(
+      setting.provider as unknown as ProviderSpec,
+      this.home,
+      this.kmsCredentials ?? {
+        ...(env.WEAVE_VAULT_TOKEN ? { token: env.WEAVE_VAULT_TOKEN } : {}),
+        ...(env.WEAVE_AZURE_CLIENT_SECRET ? { azureClientSecret: env.WEAVE_AZURE_CLIENT_SECRET } : {}),
+        ...(env.WEAVE_AZURE_TOKEN ? { azureToken: env.WEAVE_AZURE_TOKEN } : {}),
+        idToken: () => this.#ssoToken(),
+      },
+    );
   }
 
   /** The person's latest company sign-in (stage 6.3); none yet. */
   #ssoToken(): string | undefined {
-    return readSecretJson<{ idToken?: string }>(this.home, joinPath(this.home.dir, 'sso.json'))?.idToken;
+    return this.#sso()?.idToken;
+  }
+
+  /** The company sign-in kept here (sealed at rest): the ID token, and what renews it (stage 13). */
+  #sso(): Sso | undefined {
+    return readSecretJson<Sso>(this.home, joinPath(this.home.dir, 'sso.json'));
+  }
+
+  #saveSso(sso: Sso): void {
+    writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), sso);
+  }
+
+  #signInProblem?: string;
+
+  /** The company group this company account belongs to (not the company's own node). */
+  #myCompanyGroup(): StoredSpace | undefined {
+    const here = this.#companyHere();
+    return here && here.group.founder !== this.identity.author ? here.group : undefined;
+  }
+
+  /**
+   * Keep a company account signed in (stage 13): renew the ID token with the
+   * refresh token before it runs out, and sign in to the company again before
+   * its vouching (24 hours) runs out, so nobody has to.
+   */
+  async #renewSignIn(): Promise<number> {
+    const sso = this.#sso();
+    if (!sso?.idToken) return 0;
+    const now = this.clock();
+    let changed = 0;
+    if (sso.refreshToken && sso.issuer && sso.clientId && (sso.expires ?? 0) - now < 10 * 60_000) {
+      try {
+        const fresh = await refreshSignIn({ issuer: sso.issuer, clientId: sso.clientId }, sso.refreshToken);
+        Object.assign(sso, fresh);
+        this.#saveSso(sso);
+        this.#signInProblem = undefined;
+        changed++;
+      } catch (error) {
+        this.#signInProblem = (error as Error).message;
+        return changed;
+      }
+    }
+    const group = this.#myCompanyGroup();
+    if (!group || (sso.expires ?? 0) <= now || !this.#state(group).members.has(this.identity.author)) return changed;
+    const vouched = this.#attestations(group, group.founder).get(this.identity.author);
+    const lastSignIn = this.#decodedIn(group.id).filter((d) => d.inner.kind === KIND_SIGNIN && d.event.author === this.identity.author).at(-1)?.event.time ?? '';
+    const soon = new Date(now + 6 * 3_600_000).toISOString();
+    const hourAgo = new Date(now - 3_600_000).toISOString();
+    if ((!vouched || vouched.until < soon) && lastSignIn < hourAgo) {
+      await this.signIn({ space: group.id, idToken: sso.idToken });
+      changed++;
+    }
+    return changed;
+  }
+
+  /** Sign in with your company account again, in the browser (when renewing stopped working, or to switch accounts). */
+  async companySignIn(): Promise<SignInStatus> {
+    const group = this.#myCompanyGroup();
+    const here = this.#companyHere();
+    const sso = this.#sso();
+    const config = sso?.issuer && sso.clientId ? { issuer: sso.issuer, clientId: sso.clientId } : here?.org.signIn;
+    if (!group || !config) throw new Error("this isn't a company account, or its company hasn't said where to sign in");
+    const tokens = await browserSignIn(config, openInBrowser, { ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
+    this.#saveSso({ ...tokens, ...config });
+    this.#signInProblem = undefined;
+    await this.signIn({ space: group.id, idToken: tokens.idToken });
+    return this.signInStatus();
+  }
+
+  async signInStatus(): Promise<SignInStatus> {
+    const here = this.#companyHere();
+    const group = this.#myCompanyGroup();
+    if (!here || !group) return { company: false };
+    const sso = this.#sso();
+    const vouched = this.#attestations(group, group.founder).get(this.identity.author);
+    const claims = claimsOf(sso?.idToken ?? '');
+    return {
+      company: true,
+      name: this.nameOf(here.group.founder) ?? here.group.name,
+      ...(claims.email ? { account: claims.email } : {}),
+      ...(sso?.expires ? { tokenUntil: new Date(sso.expires).toISOString() } : {}),
+      renews: !!sso?.refreshToken,
+      ...(vouched ? { vouchedUntil: vouched.until } : {}),
+      ...(this.#signInProblem ? { problem: this.#signInProblem } : {}),
+    };
   }
 
   /** Per space, its managed setting and halves: built once, kept up to date as events come, dropped when its keys change. */
@@ -4308,7 +4424,7 @@ export class WeaveNode implements Backend {
     this.config = { ...this.config, attestor: { issuer: input.issuer, audience: input.audience, ...(input.hours ? { hours: input.hours } : {}) } };
     saveConfig(this.home, this.config);
     await this.manageSpace({ space: group.id, provider: input.provider as ProviderSpec, ttlMinutes: input.ttlMinutes, graceHours: input.graceHours, attestor: this.identity.author, company: group.id });
-    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_SETTINGS, body: { admins: input.admins.trim(), links: true } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_SETTINGS, body: { admins: input.admins.trim(), links: true, signIn: { issuer: input.issuer, clientId: input.audience } } }));
     return (await this.company())!;
   }
 
@@ -4361,7 +4477,8 @@ export class WeaveNode implements Backend {
     if (!this.#isOrgAdmin(here.group, here.org, this.identity.author)) throw new Error('only the company and its admins hand out enrollment links');
     const invite = await this.invite(here.group.id, (input.days ?? 30) * 24);
     const company = here.group.founder;
-    return encodeEnrollment({ v: 1, company, name: this.nameOf(company) ?? here.group.name, group: here.group.id, invite, entry: { topics: [company], bootstrap: this.config.bootstrap } });
+    const signIn = here.org.signIn ?? (this.config.attestor ? { issuer: this.config.attestor.issuer, clientId: this.config.attestor.audience } : undefined);
+    return encodeEnrollment({ v: 1, company, name: this.nameOf(company) ?? here.group.name, group: here.group.id, invite, entry: { topics: [company], bootstrap: this.config.bootstrap }, ...(signIn ? { signIn } : {}) });
   }
 
   /** What the company does, on its own node: for itself, or for an admin who asked. */
@@ -4392,7 +4509,7 @@ export class WeaveNode implements Backend {
           checkAuthority(action.deviceCA);
           deviceCA = action.deviceCA;
         }
-        write(KIND_ORG_SETTINGS, { admins: action.admins?.trim() || org.admins || null, ...policy, retention: retention as unknown as Json, deviceCA });
+        write(KIND_ORG_SETTINGS, { admins: action.admins?.trim() || org.admins || null, ...policy, retention: retention as unknown as Json, deviceCA, ...(org.signIn ? { signIn: org.signIn } : {}) });
         // Published, so every node holds the company's accounts to it (and counts their links only while allowed).
         if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy } });
         return;
@@ -4632,7 +4749,7 @@ export class WeaveNode implements Backend {
     const group = this.#spaces.get(pending.group);
     if (!group || !this.#managedRaw(group).setting?.attestor) return 0;
     let changed = 0;
-    if (pending.idToken) writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), { idToken: pending.idToken });
+    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
     await this.#unlock(group);
     if (this.#managedProblems.has(group.id)) return 0;
     if (!pending.joined) {
@@ -4956,6 +5073,11 @@ export class WeaveNode implements Backend {
     return { ...(await this.consoleInfo()), operatorLink: this.#console!.operatorLink() };
   }
 
+  async consoleOperatorLink(): Promise<string> {
+    if (!this.#console) throw new Error('the admin console is off (weave company console on)');
+    return this.#console.operatorLink();
+  }
+
   async consoleInfo(): Promise<ConsoleInfo> {
     return { on: !!this.#console, ...(this.#console ? { url: this.#console.url, port: this.#console.port } : {}), ...(this.config.console?.clientId ? { clientId: this.config.console.clientId } : {}) };
   }
@@ -5138,7 +5260,7 @@ export class WeaveNode implements Backend {
     const setting = this.#state(space).managed;
     if (!setting?.attestor) throw new Error(`${space.name} has no company sign-in`);
     // Kept for the key service too (Vault's JWT auth), sealed at rest.
-    writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), { idToken: input.idToken });
+    this.#saveSso({ ...(this.#sso() ?? {}), idToken: input.idToken, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
     await this.#unlock(space);
     const device = this.#deviceProof(input.idToken);
     const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, ...(device ? { device: device as unknown as Json } : {}) });

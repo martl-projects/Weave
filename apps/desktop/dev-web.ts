@@ -4,11 +4,12 @@
 //
 //   npm run dev:web -- --home .dev/alice --port 8770
 
+import { execFile } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { connectDaemon, resolveHome } from '@weave/node/client';
+import { connectDaemon, machinePolicy, resolveHome } from '@weave/node/client';
 import { RENDERER_METHODS, type RendererMethod } from './src/methods.ts';
 
 const { values } = parseArgs({ options: { home: { type: 'string' }, port: { type: 'string', default: '8770' } } });
@@ -27,7 +28,18 @@ createServer(async (req, res) => {
   try {
     if (url.pathname === '/state') {
       const client = await connectDaemon(home);
-      return json(res, 200, { home: home.dir, hasIdentity: existsSync(home.identity), connected: !!client });
+      const managed = machinePolicy();
+      return json(res, 200, { home: home.dir, hasIdentity: existsSync(home.identity), connected: !!client, ...(managed.enroll ? { enrollLink: managed.enroll } : {}), ...(managed.companyOnly ? { companyOnly: true } : {}) });
+    }
+    // Setting up a company account, as the app does it: `weave enroll` signs in through the browser.
+    if (url.pathname === '/enroll' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const { link } = JSON.parse(body) as { link: string };
+      const cli = join(import.meta.dirname, '..', '..', 'packages', 'cli', 'src', 'main.ts');
+      return execFile(process.execPath, [cli, '--home', home.dir, '--json', 'enroll', link], { timeout: 6 * 60_000 }, (error, stdout, stderr) =>
+        error ? json(res, 400, { error: stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message }) : json(res, 200, JSON.parse(stdout)),
+      );
     }
     if (url.pathname === '/rpc' && req.method === 'POST') {
       let body = '';

@@ -81,4 +81,5 @@ export { decodePhoneLink, PHONE_METHODS, type PairedPhone, type PairingOffer, ty
 export { connectTo, pairWith, type Dialer, type PairedNode, type RemoteSession } from './remote-client.ts';
 export type { CompanyAction } from './company.ts';
 export { machinePolicy, type MachinePolicy } from './machine.ts';
+export { browserSignIn, openInBrowser, refreshSignIn, type SignInConfig, type SignInTokens } from './signin.ts';
 export type { AuditSinkInput } from './auditsinks.ts';

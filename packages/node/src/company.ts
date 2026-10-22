@@ -30,6 +30,8 @@ export interface Enrollment {
   group: string;
   invite: string;
   entry: Invite['entry'];
+  /** The company's sign-in (stage 13): where a new account signs in, in the browser. */
+  signIn?: { issuer: string; clientId: string };
 }
 
 const encode = (prefix: string, value: unknown) => prefix + b64u.encode(new TextEncoder().encode(JSON.stringify(value)));
@@ -126,6 +128,8 @@ export interface OrgState {
   retention: Retention;
   /** The company's device certificate authority (PEM): only sign-ins from its computers are vouched for (stage 12). */
   deviceCA?: string;
+  /** Where its people sign in (stage 13): the issuer and the app registration. */
+  signIn?: { issuer: string; clientId: string };
   /** Company chats between colleagues. */
   chats: Array<{ space: string; people: Did[] }>;
   /** Sign-in group → company space id → role, as the company last said. */
@@ -154,6 +158,8 @@ export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
         known = true;
         if (typeof b.admins === 'string') state.admins = b.admins;
         if (typeof b.deviceCA === 'string') state.deviceCA = b.deviceCA;
+        const signIn = b.signIn as { issuer?: unknown; clientId?: unknown } | undefined;
+        if (typeof signIn?.issuer === 'string' && typeof signIn.clientId === 'string') state.signIn = { issuer: signIn.issuer, clientId: signIn.clientId };
         else if (b.deviceCA === null) state.deviceCA = undefined;
         state.policy = readPolicy(b, state.policy);
         state.links = state.policy.links;

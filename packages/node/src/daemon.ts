@@ -32,6 +32,9 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   };
   const unsubscribe = node.replica.onAppend(reconcile);
   reconcile();
+  // And every few minutes regardless: sign-ins renew, keys time out, the company's duties come due.
+  const heartbeat = setInterval(reconcile, 5 * 60_000);
+  heartbeat.unref();
 
   let stopped = false;
   return {
@@ -42,6 +45,7 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
       stopped = true;
       unsubscribe();
       clearTimeout(timer);
+      clearInterval(heartbeat);
       rmSync(home.daemon, { force: true });
       await api.close();
       await online;

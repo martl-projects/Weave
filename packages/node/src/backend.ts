@@ -709,6 +709,21 @@ export interface ExportLine {
   edited?: string[];
 }
 
+/** A company account's sign-in (stage 13). */
+export interface SignInStatus {
+  /** It is a company account. */
+  company: boolean;
+  name?: string;
+  /** The company account it signed in with. */
+  account?: string;
+  tokenUntil?: string;
+  /** It renews by itself (a refresh token). */
+  renews?: boolean;
+  /** The company vouches for it until then. */
+  vouchedUntil?: string;
+  problem?: string;
+}
+
 /** The admin console (stage 12). */
 export interface ConsoleInfo {
   on: boolean;
@@ -1005,6 +1020,12 @@ export interface Backend {
   setScim(input: { on: boolean; port?: number }): Promise<ScimInfo>;
   /** The company's directory as its user management provisioned it. */
   scim(): Promise<ScimInfo>;
+  /** A company account: sign in with your company account again, in the browser (stage 13). */
+  companySignIn(): Promise<SignInStatus>;
+  /** A company account: whether it's signed in, until when, and whether it renews by itself. */
+  signInStatus(): Promise<SignInStatus>;
+  /** On the company's node: a new one-time link into the admin console, for an operator. */
+  consoleOperatorLink(): Promise<string>;
   /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
   setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo>;
   consoleInfo(): Promise<ConsoleInfo>;
@@ -1258,7 +1279,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

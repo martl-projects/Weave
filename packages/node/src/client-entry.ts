@@ -7,3 +7,5 @@ export { HOME_SOURCES, PROJECT_STATUSES, RPC_METHODS, TEXT_LIMITS } from './back
 export { DEFAULT_THEME, FONTS, PATTERNS, type Theme } from './theme.ts';
 export type { CompanyAction, CompanyPolicy } from './company.ts';
 export type { AuditSinkInput } from './auditsinks.ts';
+// Managed settings: node builtins only, safe for the desktop app's main process.
+export { machinePolicy, type MachinePolicy } from './machine.ts';

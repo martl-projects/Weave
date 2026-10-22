@@ -1,6 +1,7 @@
 # Publishes a GitHub Release for every version tag (made by `npm run release`),
 # after the full CI passes, with that version's section of CHANGELOG.md as notes
-# and the installers for Windows, macOS and Linux attached.
+# and the installers for Windows, macOS and Linux attached, and Weave Server (a
+# folder for Node 24, and an image on ghcr.io).
 name: Release
 
 on:
@@ -18,8 +19,54 @@ jobs:
     needs: ci
     uses: ./.github/workflows/installers.yml
 
+  # Weave Server: the company's node as a folder to run with Node 24 (attached to the release) ...
+  server:
+    needs: ci
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node apps/server/build.ts
+      - run: tar -czf "weave-server-$GITHUB_REF_NAME.tgz" -C apps/server/dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-server
+          path: weave-server-*.tgz
+          if-no-files-found: error
+
+  # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
+  server-image:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/weave-server" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
+
   release:
-    needs: [ci, installers]
+    needs: [ci, installers, server]
     runs-on: ubuntu-latest
     permissions:
       contents: write

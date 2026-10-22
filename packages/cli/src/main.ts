@@ -41,6 +41,7 @@ import {
   type LinkInfo,
   SqliteStore,
   machinePolicy,
+  openInBrowser,
 } from '@weave/node';
 
 /** Set when this file is bundled into the desktop app (see apps/desktop/package.ts). */
@@ -1212,8 +1213,16 @@ ${postLine(p)}`);
 
     case 'sso': {
       const [space, token] = args;
-      if (!space || !token) throw new Error('usage: weave sso <space> <id token>   (an OIDC ID token from your company sign-in)');
-      await (await backend()).signIn({ space, idToken: token });
+      const b = await backend();
+      // No token: sign in with your company account again, in the browser.
+      if (!token) {
+        if (space) throw new Error('usage: weave sso   (sign in with your company account again)   or   weave sso <space> <id token>');
+        console.error('signing in with your company account in the browser…');
+        const s = await b.companySignIn();
+        return out(s, () => `signed in to ${s.name}${s.account ? ` as ${s.account}` : ''}${s.renews ? '; it renews by itself' : ''}`);
+      }
+      if (!space) throw new Error('usage: weave sso <space> <id token>');
+      await b.signIn({ space, idToken: token });
       return out({ ok: true }, () => `signed in to ${space}: the company's attestor vouches for you once it has checked it`);
     }
 
@@ -1243,8 +1252,15 @@ ${postLine(p)}`);
       // The company's link from the computer's managed settings, unless one is given.
       const link = args[0] ?? machinePolicy().enroll;
       const idToken = values['id-token'] ?? process.env.WEAVE_ID_TOKEN;
-      if (!link || !idToken) throw new Error('usage: weave enroll <enrollment link> --id-token <your company sign-in token> [--name <name>]');
-      const node = await WeaveNode.enroll(link, home.dir, { idToken, ...(values.name ? { name: values.name } : {}) });
+      if (!link) throw new Error('usage: weave enroll <enrollment link> [--name <name>]   (signs in with your company account in the browser; or --id-token <token>)');
+      const node = await WeaveNode.enroll(link, home.dir, {
+        ...(idToken ? { idToken } : {}),
+        ...(values.name ? { name: values.name } : {}),
+        open: (url) => {
+          console.error(`signing in with your company account in the browser… (if it doesn't open: ${url})`);
+          openInBrowser(url);
+        },
+      });
       const me = await node.whoami();
       await node.close();
       return out(me, () =>
@@ -1254,7 +1270,7 @@ ${postLine(p)}`);
           `  in ${home.dir}`,
           '',
           'The company holds this identity and its recovery: there are no words to write down.',
-          'Start the daemon (weave daemon) to finish joining once the company is reachable.',
+          'It stays signed in by itself. Start the daemon (weave daemon) to finish joining once the company is reachable.',
         ].join('\n'),
       );
     }

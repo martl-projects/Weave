@@ -25,6 +25,20 @@ export async function createIdentity(home: Home, name: string): Promise<string> 
   return (JSON.parse(stdout) as { words: string }).words;
 }
 
+/**
+ * Set up a company account (stage 13): `weave enroll` opens the company's
+ * sign-in in the browser and waits for it; no words are shown. Resolves to who
+ * it set up.
+ */
+export function enrollIdentity(home: Home, link: string): Promise<{ name?: string; company?: { name?: string } }> {
+  return new Promise((resolve, reject) => {
+    execFile(NODE, [CLI, '--home', home.dir, '--json', 'enroll', link], { timeout: 6 * 60_000, env: ENV }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message));
+      else resolve(JSON.parse(stdout) as { name?: string; company?: { name?: string } });
+    });
+  });
+}
+
 /** Set this computer up as another device of an identity; the words go in on stdin, never on the command line. */
 export function restoreIdentity(home: Home, words: string): Promise<void> {
   return new Promise((resolve, reject) => {

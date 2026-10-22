@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('weave', {
   state: () => ipcRenderer.invoke('weave:state'),
   init: (name: string) => ipcRenderer.invoke('weave:init', name),
   restore: (words: string) => ipcRenderer.invoke('weave:restore', words),
+  enroll: (link: string) => ipcRenderer.invoke('weave:enroll', link),
   openApp: (url: string, title: string) => ipcRenderer.invoke('weave:open-app', url, title),
   pickFolder: (title: string) => ipcRenderer.invoke('weave:pick-folder', title),
   show: () => ipcRenderer.invoke('weave:show'),

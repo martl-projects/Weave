@@ -2,9 +2,9 @@ import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
-import { resolveHome, type Backend } from '@weave/node/client';
+import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { hasCommand, macMenu } from './command.ts';
-import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
+import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
@@ -74,7 +74,18 @@ async function connect(): Promise<void> {
 /** The daemon can't be reached: it was restarted on another port, or stopped. */
 const unreachable = (error: unknown) => /ECONNREFUSED|ECONNRESET|socket hang up/.test(String((error as Error)?.message ?? error) + String((error as { code?: string })?.code ?? ''));
 
-ipcMain.handle('weave:state', () => ({ home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined }));
+ipcMain.handle('weave:state', () => {
+  // A company's device management may name its enrollment link, or allow only company accounts here.
+  const managed = machinePolicy();
+  return { home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined, ...(managed.enroll ? { enrollLink: managed.enroll } : {}), ...(managed.companyOnly ? { companyOnly: true } : {}) };
+});
+
+ipcMain.handle('weave:enroll', async (_event, link: string) => {
+  if (hasIdentity(home)) throw new Error('this computer already has an identity');
+  const who = await enrollIdentity(home, link);
+  if (!daemon) await connect();
+  return who;
+});
 
 ipcMain.handle('weave:init', async (_event, name: string) => {
   const words = hasIdentity(home) ? undefined : await createIdentity(home, name);
