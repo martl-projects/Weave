@@ -236,6 +236,7 @@ import {
   canonicalIdV2,
   isWireItemV2,
   type WireItemV2,
+  type EventV2,
   signEventV2,
   KIND_IDENTITY,
   KIND_ROTATE,
@@ -429,6 +430,14 @@ export async function verifyIdToken(token: string, issuer: string, audience: str
   return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [] };
 }
 
+/** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
+const DAY_MS = 24 * 3600 * 1000;
+const BUDGETS = {
+  trusted: { events: 1200, bytes: 10 * 1024 * 1024 },
+  member: { events: 300, bytes: 2 * 1024 * 1024 },
+  newcomer: { events: 60, bytes: 512 * 1024 },
+};
+
 /** An event as a carry restates it: its id, who wrote it when, and what it said. */
 const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
   id: d.id,
@@ -568,6 +577,7 @@ export class WeaveNode implements Backend {
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
+    this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#rawCache.get(scoped) : undefined;
@@ -837,6 +847,7 @@ export class WeaveNode implements Backend {
       logs: signers.length,
       events: signers.reduce((sum, signer) => sum + this.replica.number(signer), 0),
       pending: this.replica.pendingCount,
+      heldBack: this.#heldBack,
       keystore: vaultOf(this.home).keystore,
       ...(vaultOf(this.home).warning ? { keystoreWarning: vaultOf(this.home).warning } : {}),
     };
@@ -3025,6 +3036,7 @@ export class WeaveNode implements Backend {
   #personEventsAdd(event: WeaveRecord): void {
     const list = this.#personEvents.get(event.author);
     if (!list || event.missing) return;
+    if (list.some((e) => e.id === event.id)) return void this.#personEvents.delete(event.author); // re-signed: gather again
     if (this.replica.authority.personOf(event.signer) !== event.author) return void this.#personEvents.delete(event.author);
     let lo = 0;
     let hi = list.length;
@@ -3952,6 +3964,57 @@ export class WeaveNode implements Backend {
       .catch((error: Error) => this.#managedProblems.set(space.id, `couldn't wrap the new key: ${error.message}`));
   }
 
+  // ---------------------------------------------------------------- budgets (stage 8)
+
+  #heldBack = 0;
+  /** Off for tools that load whole histories as if live (the benchmark). */
+  budgets = true;
+
+  /**
+   * An author's budget for live content in a space, as this node sees them
+   * (docs/v2-stage8.md): no limit for those who manage it (and ourselves); a
+   * lot for long-time members and our friends; less for newer members; little
+   * for strangers.
+   */
+  #budgetOf(author: Did, scope: string): { events: number; bytes: number } | undefined {
+    if (author === this.identity.author) return undefined;
+    const now = this.clock();
+    const friend = this.#friends().includes(author);
+    const id = parseScope(scope)?.id;
+    const space = id ? this.#spaces.get(id) : undefined;
+    if (space) {
+      const state = this.#state(space);
+      if (this.#managers(state).has(author)) return undefined;
+      const since = Date.parse(state.members.get(author)?.since ?? '') || now;
+      if (friend || now - since >= 30 * DAY_MS) return BUDGETS.trusted;
+      if (now - since >= DAY_MS) return BUDGETS.member;
+      return BUDGETS.newcomer;
+    }
+    // Direct chats: between two people; public: friends, or strangers.
+    if (id && this.#directs.has(id)) return undefined;
+    return friend ? BUDGETS.trusted : BUDGETS.newcomer;
+  }
+
+  /** Over budget? Counted from what this node holds of the author's live content in that space (the last hour). */
+  #admit = (event: EventV2, body: Json | undefined): string | undefined => {
+    if (!this.budgets || event.class !== 'content') return undefined; // control is never held back: nothing may block a rekey
+    const hourAgo = this.clock() - 3_600_000;
+    if (Date.parse(event.time) < hourAgo) return undefined; // history, not live
+    const budget = this.#budgetOf(event.author, event.space);
+    if (!budget) return undefined;
+    let events = 1;
+    let bytes = body === undefined ? 0 : JSON.stringify(body).length;
+    for (const { event: e } of this.replica.store.inSpace2(event.space, new Date(hourAgo).toISOString())) {
+      if (e.author !== event.author || e.class !== 'content') continue;
+      events++;
+      const held = this.replica.store.body(e.body);
+      if (held !== undefined) bytes += JSON.stringify(held).length;
+    }
+    if (events <= budget.events && bytes <= budget.bytes) return undefined;
+    this.#heldBack++;
+    return 'over budget';
+  };
+
   // ---------------------------------------------------------------- retention (stage 6.4)
 
   /** Is a legal hold standing on this space? */
@@ -4596,15 +4659,23 @@ export class WeaveNode implements Backend {
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
     const rules = boardRulesOf(entries, this.#managers(state));
     const around = this.#aroundPosts(entries);
-    const posts = postsOf(space.kind, entries, state.maintainers)
-      .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
+    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
+    // Each author's share of each board with a rule: their bytes against an even split (stage 8).
+    const overuse = new Map<string, number>();
+    for (const board of rules.keys()) {
+      const mine = new Map<Did, number>();
+      for (const p of visible.filter((x) => x.board === board)) mine.set(p.author, (mine.get(p.author) ?? 0) + p.title.length + p.text.length);
+      const total = [...mine.values()].reduce((a, b) => a + b, 0);
+      for (const [author, bytes] of mine) if (total && mine.size > 1) overuse.set(`${board} ${author}`, bytes / (total / mine.size));
+    }
+    const posts = visible
       .map((p) => {
         const info = this.#postInfo(p, space, ctx);
         if (pinned.has(p.id)) info.pinned = true;
         const near = around.get(p.id);
         const active = near && near.last > info.active ? near.last : info.active;
         const permanent = p.type !== 'post' || (space.kind === 'project' && p.board === 'releases');
-        info.lifetime = lifetimeOf({ active, upvotes: ctx.scores.get(p.id)?.up ?? 0, rule: rules.get(p.board), pinned: info.pinned, permanent });
+        info.lifetime = lifetimeOf({ active, upvotes: ctx.scores.get(p.id)?.up ?? 0, rule: rules.get(p.board), pinned: info.pinned, permanent, overuse: overuse.get(`${p.board} ${p.author}`) });
         if (p.author === this.identity.author || state.founder === this.identity.author) info.lifetime.yours = true;
         const issue = issues.get(p.id);
         if (issue) info.issue = { status: issue.status, labels: issue.labels, ...(issue.assignee ? { assignee: this.#actor(issue.assignee.author, issue.assignee.signer) } : {}) };
@@ -4619,7 +4690,7 @@ export class WeaveNode implements Backend {
     }
     // A board over its size: the posts that would go soonest go now.
     for (const [board, rule] of rules) {
-      const inBoard = posts.filter((p) => p.board === board).map((p) => ({ id: p.id, lifetime: p.lifetime!, bytes: (around.get(p.id)?.bytes ?? 0) + JSON.stringify(p.text).length + p.title.length }));
+      const inBoard = posts.filter((p) => p.board === board).map((p) => ({ id: p.id, lifetime: p.lifetime!, bytes: (around.get(p.id)?.bytes ?? 0) + JSON.stringify(p.text).length + p.title.length, overuse: overuse.get(`${board} ${p.by.did}`) }));
       const full = overBudget(inBoard, rule, this.clock());
       for (const post of posts) if (full.has(post.id)) post.lifetime = { until: new Date(this.clock()).toISOString(), upvotes: 0, addedDays: 0, full: true, ...(post.lifetime?.yours ? { yours: true as const } : {}) };
     }
@@ -5090,6 +5161,11 @@ export class WeaveNode implements Backend {
   #decodedAdd(event: WeaveRecord): void {
     const decoded = this.#decoded;
     if (!decoded) return;
+    // A v2 event standing for a v1 event already decoded (same id, re-signed): decode again, so it replaces it (rare).
+    if (isWireItemV2(event.wire) && event.wire.e.was && decoded.some((x) => x.id === event.id)) {
+      this.#decoded = undefined;
+      return;
+    }
     if (KEY_KINDS.has(event.kind)) {
       this.#decoded = undefined;
       return;

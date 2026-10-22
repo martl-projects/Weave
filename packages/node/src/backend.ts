@@ -122,6 +122,8 @@ export interface Status {
   logs: number;
   events: number;
   pending: number;
+  /** Events this node held back since it started: their authors were over their budget in that space (stage 8). */
+  heldBack: number;
   /** Where this home's keys are protected: the OS keystore (dpapi, keychain, secret-service) or nowhere (file). */
   keystore: 'dpapi' | 'keychain' | 'secret-service' | 'file';
   /** Said when the keys aren't protected by the operating system. */

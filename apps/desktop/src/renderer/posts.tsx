@@ -334,7 +334,13 @@ export function lifetimeText(l: NonNullable<PostInfo['lifetime']>): string {
   const yours = l.yours ? ' Your devices keep it regardless.' : '';
   if ('forever' in l) return { pinned: 'Stays for good: it is pinned.', permanent: 'Stays for good: issues, proposals and releases always do.', 'no-rule': 'Stays for good: this board has no rule for forgetting.' }[l.forever];
   if (l.full) return `Goes now: the board is over its size, and this post would go soonest.${yours}`;
-  const why = l.grace ? ', given 14 days after the rule was set' : l.upvotes ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days` : '';
+  const why = l.grace
+    ? ', given 14 days after the rule was set'
+    : l.overShare
+      ? `, shortened: its author posts ${l.overShare}× their share of this board`
+      : l.upvotes
+        ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days`
+        : '';
   const gone = Date.parse(l.until) <= Date.now();
   return `${gone ? 'Forgotten since' : 'Stays until'} ${day(l.until)}${why}.${yours}`;
 }

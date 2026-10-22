@@ -21,6 +21,8 @@ if (mode === 'seed') {
   const homes = ['martin', 'lena', 'kofi'].map((name) => join(dir, 'build', name));
   const writeVersion = format === 'v1' ? 1 : 2;
   const [martin, lena, kofi] = homes.map((home, i) => WeaveNode.init(['Martin', 'Lena', 'Kofi'][i], home, { writeVersion }));
+  // The history is written in a minute and handed over as if live: no budgets for that.
+  for (const node of [martin, lena, kofi]) node.budgets = false;
   const project = await martin.createProject({ name: 'Bench' });
   await lena.joinSpace(await martin.invite('Bench'));
   await kofi.joinSpace(await martin.invite('Bench'));

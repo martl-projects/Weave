@@ -38,6 +38,13 @@ export class Replica {
   readonly forks = new Set<Did>();
   #listeners = new Set<(record: WeaveRecord) => void>();
 
+  /**
+   * The node's say on a v2 event it otherwise accepts: a reason to refuse it
+   * (stage 8: over its author's budget), or undefined. Refused events aren't
+   * stored or passed on; a later sync may bring them again.
+   */
+  admit?: (event: EventV2, body: Json | undefined) => string | undefined;
+
   /** 1 writes as v0.3 did: for tests that build an older home. */
   writeVersion: 1 | 2 = 2;
 
@@ -231,6 +238,8 @@ export class Replica {
     const record = recordOfV2(id, event, goodBody);
     const check = this.authority.check(record);
     if (!check.ok) return check.retry ? this.#park(`v2 ${ownId}`, wireItem(event, goodBody), check.reason) : { status: 'rejected', reason: check.reason };
+    const refused = this.admit?.(event, goodBody);
+    if (refused) return { status: 'rejected', reason: refused };
 
     this.store.add2({ id, event });
     if (goodBody !== undefined) this.store.putBody(event.body as string, goodBody);

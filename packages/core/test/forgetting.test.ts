@@ -40,4 +40,21 @@ describe('lifetimes', () => {
     expect([...overBudget(posts, r, Date.parse(at(21)))]).toEqual(['new']);
     expect(overBudget(posts, rule(30, 10), Date.parse(at(21))).size).toBe(0);
   });
+
+  it('squeezes the posts of whoever takes more than their share, unless others upvote them', () => {
+    // Ten times the fair share: a fifth of the time (up to twice is free).
+    expect(lifetimeOf({ active: at(0), upvotes: 0, rule: rule(30), overuse: 10 })).toMatchObject({ until: at(6), overShare: 5 });
+    // Within twice the share: as before.
+    expect(lifetimeOf({ active: at(0), upvotes: 0, rule: rule(30), overuse: 1.8 })).toEqual({ until: at(30), upvotes: 0, addedDays: 0 });
+    // Valued by others: not squeezed.
+    expect(lifetimeOf({ active: at(0), upvotes: 1, rule: rule(30), overuse: 10 })).toEqual({ until: at(60), upvotes: 1, addedDays: 30 });
+    // Over the size: the biggest over-user goes first, before posts that would go sooner.
+    const r = rule(30, 1);
+    const mb = 1024 * 1024;
+    const posts = [
+      { id: 'flood', lifetime: lifetimeOf({ active: at(20), upvotes: 0, rule: r }), bytes: 0.6 * mb, overuse: 5 },
+      { id: 'old', lifetime: lifetimeOf({ active: at(0), upvotes: 0, rule: r }), bytes: 0.6 * mb, overuse: 0.5 },
+    ];
+    expect([...overBudget(posts, r, Date.parse(at(21)))]).toEqual(['flood']);
+  });
 });
