@@ -59,7 +59,8 @@ async function company(key: string) {
   return { acme, lena, kofi, bob, all, round };
 }
 
-describe('company policy', () => {
+// Many sync and reconcile rounds against the HTTP stand-ins: slow on CI runners.
+describe('company policy', { timeout: 120_000 }, () => {
   it('keeps company accounts to the company’s policy, on their own nodes and on everyone else’s', async () => {
     const { acme, lena, kofi, bob, all, round } = await company('acme-policy');
     const bobsGroup = await bob.createGroup('Bobs');

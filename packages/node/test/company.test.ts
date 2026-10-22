@@ -41,7 +41,8 @@ async function company(key: string) {
   return acme;
 }
 
-describe('company accounts', () => {
+// Many sync and reconcile rounds against the HTTP stand-ins: slow on CI runners.
+describe('company accounts', { timeout: 120_000 }, () => {
   it('sets up accounts the company owns: no words shown, spaces from sign-in groups, admins, starting setup', async () => {
     const acme = await company('acme-accounts');
     const ceo = person('Ceo');

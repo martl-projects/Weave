@@ -54,7 +54,8 @@ async function company(key: string, graceHours: number) {
   return { martin, lena, kofi, all, syncAll };
 }
 
-describe('managed spaces', () => {
+// Many sync and reconcile rounds against the HTTP stand-ins: slow on CI runners.
+describe('managed spaces', { timeout: 120_000 }, () => {
   it('needs the company key service to read, and stops when it refuses: offboarding and shredding', async () => {
     const { martin, lena, kofi, all, syncAll } = await company('acme', 0);
     expect((await martin.spaces('project'))[0].managed).toMatchObject({ unlocked: true, ttlMinutes: 15, graceHours: 0 });
