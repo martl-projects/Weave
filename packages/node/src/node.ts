@@ -4282,7 +4282,7 @@ export class WeaveNode implements Backend {
         const grant = this.replica.authority.grant(did);
         return grant ? `${this.nameOf(grant.author) ?? grant.author}/${grant.name ?? did.slice(8, 16)}` : did;
       }),
-      provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind,
+      provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind === 'azure' ? `Azure Key Vault ${spec.vault} (${spec.key})` : spec.kind,
       unlocked: current,
       ttlMinutes: setting.ttlMinutes,
       graceHours: setting.graceHours,

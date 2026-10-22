@@ -41,3 +41,11 @@ A provider for Entra-ID companies: `{kind: 'azure', vault, key}` (an RSA key in 
 3. Audit export; tests.
 4. Azure Key Vault provider; tests against a stand-in following Key Vault's API and Entra's token endpoint.
 5. Release.
+
+## As built
+
+- **Approved agents:** checked when writing (the node), when counting (every node), and when reading (the MCP server keeps unapproved company spaces out of an agent's answers and refuses tools aimed at them). Approving or withdrawing makes views decode again, so it applies to what the agent wrote before too.
+- **Escrow** seals the words under a fresh key and wraps only that key (Key Vault's RSA can't wrap 24 words directly); opening writes `weave.org.escrow.opened`.
+- **Audit** covers control events, escrows opened and rekeys, without boxes, wrapped parts, ciphertext or keys.
+- **Azure Key Vault:** `RSA-OAEP-256` wrap of a seed, the company half `seed-derived ⊕ mask` with a check value, so a part opens only for its own space and epoch; sign-in by access token, client secret, or the person's sign-in token as a federated assertion. `weave manage <space> azure <vault> <key> <tenant> <client id>`.
+- As with stage 6, tried against stand-ins that follow the services' APIs (Key Vault's wrapkey/unwrapkey and delete, Entra's token endpoint), not a real tenant yet.

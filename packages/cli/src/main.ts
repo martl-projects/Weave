@@ -105,7 +105,7 @@ projects — something being built; participants chat, discuss, vote and work on
   keep <post> / fading                   start a post's time again / your posts others will forget soon
   keepers                                your small spaces and the friends who keep them for you
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
-  manage <space> vault <addr> <key> [role]  a company's Vault holds half of every new key (owner)
+  manage <space> vault|azure ...         a company's Vault or Azure Key Vault holds half of every new key (owner)
   unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
   hold <space> <until> [reason]          legal hold: nothing shredded or forgotten until then (owner)
   destroy-company-key <space>            shred everything under the company key (owner)
@@ -1140,9 +1140,11 @@ ${postLine(p)}`);
     }
 
     case 'manage': {
-      const [space, kind, address, key, role] = args;
-      if (!space || kind !== 'vault' || !address || !key) throw new Error('usage: weave manage <space> vault <address> <transit key> [jwt role]   (the owner; WEAVE_VAULT_TOKEN or weave sso to sign in)');
-      const s = await (await backend()).manageSpace({ space, provider: { kind: 'vault', address, key, ...(role ? { jwt: { role } } : {}) } });
+      const [space, kind, address, key, a, b] = args;
+      if (!space || (kind !== 'vault' && kind !== 'azure') || !address || !key)
+        throw new Error('usage: weave manage <space> vault <address> <transit key> [jwt role]\n       weave manage <space> azure <key vault url> <key> <tenant> <client id>   (the owner; weave sso to sign in)');
+      const provider = kind === 'vault' ? { kind: 'vault' as const, address, key, ...(a ? { jwt: { role: a } } : {}) } : { kind: 'azure' as const, vault: address, key, ...(a ? { tenant: a } : {}), ...(b ? { clientId: b } : {}) };
+      const s = await (await backend()).manageSpace({ space, provider });
       return out(s, () => `${s.name}: from now on half of every key is held by ${s.managed?.provider}`);
     }
 

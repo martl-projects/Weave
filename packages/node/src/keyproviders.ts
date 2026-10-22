@@ -1,3 +1,4 @@
+import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { b64u, open, seal, type Sealed } from '@weave/core';
 import type { Home } from './home.ts';
 import { vaultOf } from './vault.ts';
@@ -26,7 +27,9 @@ export interface KeyProvider {
 /** A provider as a managed space names it (in its signed setting): no secrets in here. */
 export type ProviderSpec =
   | { kind: 'local' }
-  | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } };
+  | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }
+  /** Azure Key Vault (an RSA key) with Entra ID: `tenant` and `clientId` for signing in by the person's token or a client secret. */
+  | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
 
 const contextOf = (c: KeyContext): string => `weave/kms/v1:${c.space}:${c.epoch}`;
 
@@ -53,8 +56,12 @@ export class LocalProvider implements KeyProvider {
 /** How a node signs in to Vault: a token it was given, or the person's SSO token through Vault's JWT auth. */
 export interface VaultCredentials {
   token?: string;
-  /** The employee's current OIDC ID token, for Vault's JWT auth. */
+  /** The employee's current OIDC ID token, for Vault's JWT auth (or as Entra's federated client assertion). */
   idToken?: () => string | undefined;
+  /** Azure: an access token for Key Vault, given directly. */
+  azureToken?: string;
+  /** Azure: an app's client secret (for service nodes such as attestors and archives). */
+  azureClientSecret?: string;
 }
 
 /**
@@ -117,8 +124,88 @@ export class VaultTransitProvider implements KeyProvider {
   }
 }
 
+/**
+ * Azure Key Vault with an RSA key. Key Vault's wrap takes no context, so what
+ * it wraps is a seed, and the key comes out of `HKDF(seed, space ‖ epoch)`
+ * with a check value: a wrapped part opens only for its own space and epoch.
+ */
+export class AzureKeyVaultProvider implements KeyProvider {
+  readonly #spec: Extract<ProviderSpec, { kind: 'azure' }>;
+  readonly #credentials: VaultCredentials;
+  #token?: { value: string; until: number };
+
+  constructor(spec: Extract<ProviderSpec, { kind: 'azure' }>, credentials: VaultCredentials) {
+    this.#spec = spec;
+    this.#credentials = credentials;
+  }
+
+  describe() {
+    return { kind: 'azure', keyRef: `${this.#spec.vault} ${this.#spec.key}` };
+  }
+
+  #mask(seed: Uint8Array, context: KeyContext): { mask: Buffer; check: Buffer } {
+    const okm = Buffer.from(hkdfSync('sha256', seed, Buffer.alloc(0), contextOf(context), 64));
+    return { mask: okm.subarray(0, 32), check: createHmac('sha256', okm.subarray(32)).update('check').digest().subarray(0, 16) };
+  }
+
+  async wrap(key: Uint8Array, context: KeyContext): Promise<string> {
+    if (key.length !== 32) throw new Error('Azure Key Vault wraps 32-byte keys here');
+    const seed = new Uint8Array(randomBytes(32));
+    const { mask, check } = this.#mask(seed, context);
+    const r = (await this.#call('POST', `keys/${this.#spec.key}/wrapkey`, { alg: 'RSA-OAEP-256', value: Buffer.from(seed).toString('base64url') })) as { kid: string; value: string };
+    const masked = Buffer.from(key.map((b, i) => b ^ mask[i]));
+    return `azure:${r.kid}|${r.value}|${masked.toString('base64url')}|${check.toString('base64url')}`;
+  }
+
+  async unwrap(wrapped: string, context: KeyContext): Promise<Uint8Array> {
+    const [kid, value, masked, check] = wrapped.replace(/^azure:/, '').split('|');
+    if (!kid || !value || !masked || !check) throw new Error('not an Azure Key Vault part');
+    const version = kid.split('/').pop();
+    const r = (await this.#call('POST', `keys/${this.#spec.key}/${version}/unwrapkey`, { alg: 'RSA-OAEP-256', value })) as { value: string };
+    const { mask, check: expected } = this.#mask(new Uint8Array(Buffer.from(r.value, 'base64url')), context);
+    if (!timingSafeEqual(expected, Buffer.from(check, 'base64url'))) throw new Error('this part belongs to another space or epoch');
+    return new Uint8Array(Buffer.from(masked, 'base64url').map((b, i) => b ^ mask[i]));
+  }
+
+  async destroy(): Promise<void> {
+    await this.#call('DELETE', `keys/${this.#spec.key}`);
+  }
+
+  /** An Entra access token for Key Vault: given, or by client credentials (a secret, or the person's token as a federated assertion). */
+  async #login(): Promise<string> {
+    if (this.#credentials.azureToken) return this.#credentials.azureToken;
+    if (this.#token && this.#token.until > Date.now()) return this.#token.value;
+    const { tenant, clientId } = this.#spec;
+    const assertion = this.#credentials.idToken?.();
+    if (!tenant || !clientId || (!this.#credentials.azureClientSecret && !assertion)) throw new Error(`no way to sign in to Azure Key Vault ${this.#spec.vault}: sign in with your company (weave sso) or give an access token`);
+    const form = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, scope: 'https://vault.azure.net/.default' });
+    if (this.#credentials.azureClientSecret) form.set('client_secret', this.#credentials.azureClientSecret);
+    else {
+      form.set('client_assertion_type', 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
+      form.set('client_assertion', assertion!);
+    }
+    const res = await fetch(`${this.#spec.authority ?? 'https://login.microsoftonline.com'}/${tenant}/oauth2/v2.0/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form });
+    if (!res.ok) throw new Error(`Entra refused the sign-in (${res.status})`);
+    const t = (await res.json()) as { access_token: string; expires_in: number };
+    this.#token = { value: t.access_token, until: Date.now() + Math.max(60, t.expires_in - 60) * 1000 };
+    return t.access_token;
+  }
+
+  async #call(method: string, path: string, body?: unknown): Promise<unknown> {
+    const token = await this.#login();
+    const res = await fetch(`${this.#spec.vault.replace(/\/$/, '')}/${path}?api-version=7.4`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    if (!res.ok) throw new Error(`Azure Key Vault ${res.status === 403 || res.status === 401 ? 'refused' : 'failed'}: ${(await res.text()).slice(0, 200)}`);
+    return res.status === 204 ? {} : res.json();
+  }
+}
+
 export function providerFor(spec: ProviderSpec, home: Home, credentials: VaultCredentials): KeyProvider {
   if (spec.kind === 'local') return new LocalProvider(home);
   if (spec.kind === 'vault') return new VaultTransitProvider(spec, credentials);
+  if (spec.kind === 'azure') return new AzureKeyVaultProvider(spec, credentials);
   throw new Error(`no key provider ${(spec as { kind: string }).kind}`);
 }

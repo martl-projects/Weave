@@ -853,7 +853,13 @@ export interface Backend {
   /** Maintainers or moderators: how long a board's posts stay after their last activity (keepDays), and how much it may hold (maxMB); null for no limit. */
   setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
-  manageSpace(input: { space: string; provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } }; ttlMinutes?: number; graceHours?: number; attestor?: string }): Promise<SpaceInfo>;
+  manageSpace(input: {
+    space: string;
+    provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+    ttlMinutes?: number;
+    graceHours?: number;
+    attestor?: string;
+  }): Promise<SpaceInfo>;
   /** A space's governance, oldest first: who joined, left or was removed, keys, settings, attestations, shreds, escrows opened. No content, no secrets. */
   audit(input: { space: string; since?: string }): Promise<AuditLine[]>;
   /** An employee: leave your recovery words with the company (sealed; only its key service opens them). */

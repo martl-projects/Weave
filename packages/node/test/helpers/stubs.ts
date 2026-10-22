@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, createSign, createVerify, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
+import { constants, createCipheriv, createDecipheriv, createHmac, createSign, createVerify, generateKeyPairSync, privateDecrypt, publicEncrypt, randomBytes, type KeyObject } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -146,6 +146,98 @@ export class VaultStub {
     const ok = createVerify('RSA-SHA256').update(`${h}.${b}`).verify(this.oidc.publicKey, Buffer.from(s, 'base64url'));
     const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { sub: string; exp: number };
     return ok && claims.exp * 1000 > Date.now() ? claims.sub : undefined;
+  }
+
+  async stop(): Promise<void> {
+    await new Promise((resolve) => this.#server?.close(resolve));
+  }
+}
+
+/** Azure Key Vault (RSA keys, wrapkey/unwrapkey) with Entra's token endpoint: a client secret, or a federated assertion from the OIDC stand-in. */
+export class AzureStub {
+  readonly #keys = new Map<string, { privateKey: KeyObject; publicKey: KeyObject }>();
+  readonly #tokens = new Map<string, string>();
+  readonly #disabled = new Set<string>();
+  readonly secret = 'client-secret';
+  readonly log: Array<{ op: string; sub: string }> = [];
+  #server?: Server;
+  url = '';
+  readonly oidc?: OidcStub;
+
+  constructor(oidc?: OidcStub) {
+    this.oidc = oidc;
+  }
+
+  createKey(name: string): void {
+    this.#keys.set(name, generateKeyPairSync('rsa', { modulusLength: 2048 }));
+  }
+
+  hasKey(name: string): boolean {
+    return this.#keys.has(name);
+  }
+
+  disable(sub: string): void {
+    this.#disabled.add(sub);
+    for (const [token, who] of this.#tokens) if (who === sub) this.#tokens.delete(token);
+  }
+
+  async start(): Promise<this> {
+    this.#server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const send = (status: number, body: unknown) => {
+          res.statusCode = status;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(body));
+        };
+        const url = new URL(req.url ?? '/', this.url);
+        if (url.pathname.endsWith('/oauth2/v2.0/token')) {
+          const form = new URLSearchParams(raw);
+          let sub: string | undefined;
+          if (form.get('client_secret') === this.secret) sub = `app:${form.get('client_id')}`;
+          const assertion = form.get('client_assertion');
+          if (assertion && this.oidc) {
+            const [h, b, sig] = assertion.split('.');
+            const ok = !!h && !!b && !!sig && createVerify('RSA-SHA256').update(`${h}.${b}`).verify(this.oidc.publicKey, Buffer.from(sig, 'base64url'));
+            const claims = ok ? (JSON.parse(Buffer.from(b, 'base64url').toString()) as { sub: string; exp: number }) : undefined;
+            if (claims && claims.exp * 1000 > Date.now()) sub = claims.sub;
+          }
+          if (!sub || this.#disabled.has(sub)) return send(401, { error: 'invalid_client' });
+          const token = `a-${randomBytes(8).toString('hex')}`;
+          this.#tokens.set(token, sub);
+          return send(200, { access_token: token, expires_in: 3600, token_type: 'Bearer' });
+        }
+        const who = this.#tokens.get(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+        if (!who) return send(401, { error: { code: 'Unauthorized' } });
+        const m = /^\/keys\/([^/]+)(?:\/([^/]+))?(?:\/(wrapkey|unwrapkey))?$/.exec(url.pathname);
+        if (!m) return send(404, {});
+        const [, name, part, op] = m;
+        const version = op ? part : undefined;
+        const action = op ?? (part === 'wrapkey' || part === 'unwrapkey' ? part : undefined);
+        if (req.method === 'DELETE' && !action) {
+          this.#keys.delete(name);
+          return send(200, {});
+        }
+        const key = this.#keys.get(name);
+        if (!key) return send(404, { error: { code: 'KeyNotFound' } });
+        const body = JSON.parse(raw || '{}') as { value: string };
+        this.log.push({ op: action ?? '', sub: who });
+        const options = { oaepHash: 'sha256', padding: constants.RSA_PKCS1_OAEP_PADDING };
+        if (action === 'wrapkey') return send(200, { kid: `${this.url}/keys/${name}/v1`, value: publicEncrypt({ key: key.publicKey, ...options }, Buffer.from(body.value, 'base64url')).toString('base64url') });
+        if (action === 'unwrapkey' && version) {
+          try {
+            return send(200, { kid: `${this.url}/keys/${name}/${version}`, value: privateDecrypt({ key: key.privateKey, ...options }, Buffer.from(body.value, 'base64url')).toString('base64url') });
+          } catch {
+            return send(400, { error: { code: 'BadParameter' } });
+          }
+        }
+        return send(400, {});
+      });
+    });
+    await new Promise<void>((resolve) => this.#server!.listen(0, '127.0.0.1', resolve));
+    this.url = `http://127.0.0.1:${(this.#server.address() as AddressInfo).port}`;
+    return this;
   }
 
   async stop(): Promise<void> {

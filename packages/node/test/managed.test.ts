@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
-import { OidcStub, VaultStub } from './helpers/stubs.ts';
+import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
 let oidc: OidcStub;
@@ -204,5 +204,34 @@ describe('managed spaces', () => {
     await martin.destroyCompanyKey('Acme');
     await expect(martin.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow();
     for (const node of [...all, again]) await node.close();
+  });
+
+  it('works the same with Azure Key Vault: employees through Entra, offboarding at the end of the TTL', async () => {
+    const azure = await new AzureStub(oidc).start();
+    try {
+      azure.createKey('acme');
+      const [martin, lena] = [person('Martin'), person('Lena')];
+      martin.kmsCredentials = { azureClientSecret: azure.secret };
+      lena.kmsCredentials = { idToken: () => oidc.token({ sub: 'lena@acme' }) };
+      await martin.createProject({ name: 'Acme' });
+      await lena.joinSpace(await martin.invite('Acme'));
+      sync(martin, lena);
+      sync(lena, martin);
+      await martin.manageSpace({ space: 'Acme', provider: { kind: 'azure', vault: azure.url, key: 'acme', tenant: 'acme', clientId: 'weave', authority: azure.url }, graceHours: 0 });
+      await new Promise((r) => setTimeout(r, 300));
+      sync(martin, lena);
+      await lena.reconcile();
+      await martin.say({ space: 'Acme', text: 'on azure' });
+      sync(martin, lena);
+      expect(await texts(lena)).toContain('on azure');
+      expect((await martin.spaces('project'))[0].managed?.provider).toMatch(/Azure Key Vault/);
+      azure.disable('lena@acme');
+      lena.clock = () => Date.now() + 20 * minute;
+      await lena.reconcile();
+      expect(await texts(lena)).not.toContain('on azure');
+      for (const node of [martin, lena]) await node.close();
+    } finally {
+      await azure.stop();
+    }
   });
 });

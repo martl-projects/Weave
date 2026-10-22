@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LocalProvider, VaultTransitProvider } from '../src/keyproviders.ts';
+import { AzureKeyVaultProvider, LocalProvider, VaultTransitProvider } from '../src/keyproviders.ts';
 import { resolveHome } from '../src/index.ts';
-import { OidcStub, VaultStub } from './helpers/stubs.ts';
+import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
 let oidc: OidcStub;
@@ -58,5 +58,30 @@ describe('key providers', () => {
     await byToken.destroy();
     expect(vault.hasKey('weave')).toBe(false);
     await expect(byToken.unwrap(wrapped, ctx)).rejects.toThrow();
+  });
+
+  it('azure: Key Vault RSA wrap bound to space and epoch, Entra sign-in by secret or the person’s token, and deleting the key', async () => {
+    const azure = await new AzureStub(oidc).start();
+    try {
+      azure.createKey('weave');
+      const spec = { kind: 'azure' as const, vault: azure.url, key: 'weave', tenant: 'acme', clientId: 'weave-app', authority: azure.url };
+      const service = new AzureKeyVaultProvider(spec, { azureClientSecret: azure.secret });
+      const wrapped = await service.wrap(key, ctx);
+      expect(await service.unwrap(wrapped, ctx)).toEqual(key);
+      await expect(service.unwrap(wrapped, { ...ctx, epoch: 3 })).rejects.toThrow(/another space or epoch/);
+      // An employee, through Entra with their company sign-in (no secret on the laptop).
+      const idToken = oidc.token({ sub: 'ada@acme' });
+      const ada = new AzureKeyVaultProvider(spec, { idToken: () => idToken });
+      expect(await ada.unwrap(wrapped, ctx)).toEqual(key);
+      expect(azure.log.at(-1)).toEqual({ op: 'unwrapkey', sub: 'ada@acme' });
+      azure.disable('ada@acme');
+      await expect(new AzureKeyVaultProvider(spec, { idToken: () => idToken }).unwrap(wrapped, ctx)).rejects.toThrow(/Entra refused/);
+      // Deleting the key: nothing opens any more.
+      await service.destroy();
+      expect(azure.hasKey('weave')).toBe(false);
+      await expect(service.unwrap(wrapped, ctx)).rejects.toThrow();
+    } finally {
+      await azure.stop();
+    }
   });
 });
