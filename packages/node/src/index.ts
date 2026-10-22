@@ -19,6 +19,7 @@ export type {
   IdentityInfo,
   KeyInfo,
   KeepersInfo,
+  AuditLine,
   EdgeInput,
   FeedItem,
   FeedQuery,

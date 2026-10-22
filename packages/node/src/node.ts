@@ -286,6 +286,7 @@ import {
   type GranteeInfo,
   type InviteOptions,
   type KeepersInfo,
+  type AuditLine,
   type KnockInfo,
   type InProject,
   type InSpace,
@@ -440,6 +441,14 @@ const BUDGETS = {
   member: { events: 300, bytes: 2 * 1024 * 1024 },
   newcomer: { events: 60, bytes: 512 * 1024 },
 };
+
+/** For the audit: what an event says, without keys, boxes, wrapped parts or ciphertext. */
+const SECRET_FIELDS = new Set(['boxes', 'box', 'wrapped', 'ct', 'nonce', 'key', 'keys', 'secret', 'boards']);
+function withoutSecrets(value: Json): Json {
+  if (Array.isArray(value)) return value.map(withoutSecrets);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([k]) => !SECRET_FIELDS.has(k)).map(([k, v]) => [k, withoutSecrets(v as Json)]));
+  return value;
+}
 
 /** An event as a carry restates it: its id, who wrote it when, and what it said. */
 const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
@@ -1113,6 +1122,31 @@ export class WeaveNode implements Backend {
     const space = d.space as StoredSpace | undefined;
     if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent' || !this.#managedRaw(space).setting) return true;
     return !!this.#state(space).approvedAgents?.has(d.event.signer);
+  }
+
+  // ---------------------------------------------------------------- audit (stage 9.3)
+
+  async audit(input: { space: string; since?: string }): Promise<AuditLine[]> {
+    const space = this.#space(input.space);
+    const since = input.since ? new Date(input.since).toISOString() : '';
+    const scope = spaceScope(space);
+    const lines: AuditLine[] = [];
+    const line = (time: string, kind: string, author: Did, signer: Did, detail: Json): AuditLine => {
+      const agent = this.#agentName(signer, author);
+      const name = this.nameOf(author);
+      return { time, kind, by: author, ...(name ? { byName: name } : {}), signer, ...(agent ? { agent } : {}), detail: withoutSecrets(detail) };
+    };
+    // Governance: control events, and the company's own (attestations, escrows).
+    for (const d of this.#decodedIn(space.id)) {
+      if (d.event.time < since || d.carried) continue;
+      if (classOf(canonicalKind(d.inner.kind)) !== 'control' && d.inner.kind !== KIND_ESCROW_OPENED) continue;
+      lines.push(line(d.event.time, d.inner.kind, d.event.author, d.event.signer, d.inner.body));
+    }
+    // New keys: who rotated, which epoch (the boxes stay out).
+    for (const r of this.replica.events((e) => e.scope === scope && canonicalKind(e.kind) === KIND_REKEY && e.time >= since)) {
+      lines.push(line(r.time, KIND_REKEY, r.author, r.signer, { epoch: (r.body as { epoch?: Json } | null)?.epoch ?? null }));
+    }
+    return lines.sort((a, b) => a.time.localeCompare(b.time));
   }
 
   // ---------------------------------------------------------------- escrowed recovery (stage 9.2)

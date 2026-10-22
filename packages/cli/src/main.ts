@@ -109,6 +109,9 @@ projects — something being built; participants chat, discuss, vote and work on
   unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
   hold <space> <until> [reason]          legal hold: nothing shredded or forgotten until then (owner)
   destroy-company-key <space>            shred everything under the company key (owner)
+  approve-agent <space> <person/agent> [off]  let an agent act in a company space (managers)
+  escrow <space> <words> / escrow-open <space> <person>  leave recovery words with the company / open them (managers)
+  audit <space> [since]                  the space's governance as JSON lines: who changed what, when
   (company nodes: "attestor": {"issuer", "audience"} or "archive": true in config.json)
   older <space> [before]                 ask the members of a big space for the month before (what they hold)
   admissions [project]                   people the maintainers are asked about
@@ -1154,6 +1157,34 @@ ${postLine(p)}`);
       if (!space || !token) throw new Error('usage: weave sso <space> <id token>   (an OIDC ID token from your company sign-in)');
       await (await backend()).signIn({ space, idToken: token });
       return out({ ok: true }, () => `signed in to ${space}: the company's attestor vouches for you once it has checked it`);
+    }
+
+    case 'audit': {
+      const [space, since] = args;
+      if (!space) throw new Error('usage: weave audit <space> [since date]   (JSON lines: who changed what, when; no content, no secrets)');
+      const lines = await (await backend()).audit({ space, ...(since ? { since } : {}) });
+      return void console.log(lines.map((l) => JSON.stringify(l)).join('\n'));
+    }
+
+    case 'escrow': {
+      const [space, ...words] = args;
+      if (!space || words.length < 12) throw new Error('usage: weave escrow <space> <your recovery words>   (leave them with the company, sealed)');
+      await (await backend()).escrowRecovery({ space, words: words.join(' ') });
+      return out({ ok: true }, () => `your recovery words are with ${space}: only its key service opens them`);
+    }
+
+    case 'escrow-open': {
+      const [space, person] = args;
+      if (!space || !person) throw new Error('usage: weave escrow-open <space> <person>   (those who manage it; it is in the audit)');
+      const words = await (await backend()).openEscrow({ space, person });
+      return out({ words }, () => `${person}'s recovery words (hand them over safely; set up with weave restore):\n${words}`);
+    }
+
+    case 'approve-agent': {
+      const [space, agent, off] = args;
+      if (!space || !agent) throw new Error('usage: weave approve-agent <space> <person/agent> [off]');
+      const s = await (await backend()).approveAgent({ space, agent, on: off !== 'off' });
+      return out(s, () => `agents approved in ${s.name}: ${s.managed?.agents.join(', ') || 'none'}`);
     }
 
     case 'hold': {

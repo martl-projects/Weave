@@ -193,6 +193,13 @@ describe('managed spaces', () => {
     // Lena's laptop is lost: the words set up a new one.
     const again = await WeaveNode.restore(words, mkdtempSync(join(tmpdir(), 'weave-managed-')), { events: martin.replica.events((r) => r.scope === 'public' || r.v === 1) });
     expect(again.identity.author).toBe(lena.identity.author);
+    // The audit says who did what, without secrets.
+    const audit = await martin.audit({ space: 'Acme' });
+    const kinds = audit.map((l) => l.kind);
+    for (const kind of ['weave.space.create', 'weave.space.join', 'weave.space.managed', 'weave.space.rekey', 'weave.space.kms', 'weave.org.escrow', 'weave.org.escrow.opened']) expect(kinds).toContain(kind);
+    expect(audit.find((l) => l.kind === 'weave.org.escrow.opened')).toMatchObject({ byName: 'Martin', detail: { person: lena.identity.author } });
+    expect(JSON.stringify(audit)).not.toMatch(/"(wrapped|boxes|ct|nonce)"/);
+    expect(audit.map((l) => l.time)).toEqual([...audit.map((l) => l.time)].sort());
     // Without the company's key service, nobody opens it.
     await martin.destroyCompanyKey('Acme');
     await expect(martin.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow();
