@@ -127,7 +127,11 @@ export async function refreshSignIn(config: SignInConfig, refreshToken: string):
 export function openInBrowser(url: string): void {
   const chosen = process.env.BROWSER;
   if (chosen === 'none') return;
-  if (chosen) return void spawn(chosen, [url], { detached: true, stdio: 'ignore', shell: true, windowsHide: true }).on('error', () => {}).unref();
+  if (chosen) {
+    // A program and its own arguments ("node C:\path\open.mjs"), then the address: no shell, so the address's & stays whole.
+    const [command, ...rest] = (chosen.match(/"[^"]+"|\S+/g) ?? []).map((part) => part.replace(/^"|"$/g, ''));
+    return void spawn(command, [...rest, url], { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
+  }
   const [command, args] =
     process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();

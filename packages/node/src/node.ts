@@ -849,6 +849,8 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
+    // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
+    await Promise.race([Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id))), new Promise((r) => setTimeout(r, 15_000).unref())]);
     await this.#scimServer?.close();
     this.#scimServer = undefined;
     await this.#console?.close();
@@ -5097,9 +5099,9 @@ export class WeaveNode implements Backend {
     let groups = claims.groups;
     if (this.config.scim) {
       const directory = this.#scimDirectory();
-      const { user } = findPerson(directory, { subject: claims.sub, email: claims.email });
-      if (!user?.active) return false;
-      groups = groupsOf(directory, user.id);
+      const { user, deleted } = findPerson(directory, { subject: claims.sub, email: claims.email });
+      if (deleted || (user && !user.active)) return false;
+      if (user) groups = groupsOf(directory, user.id);
     }
     return groups.includes(admins);
   }
@@ -5301,9 +5303,11 @@ export class WeaveNode implements Backend {
         let groups = claims.groups;
         if (this.config.scim) {
           const directory = this.#scimDirectory();
-          const { user } = findPerson(directory, { subject: claims.sub, email: claims.email });
-          if (!user?.active) continue;
-          groups = groupsOf(directory, user.id);
+          // The directory decides for those it knows: deactivated or deleted aren't vouched for; the rest get its groups.
+          // Those it doesn't know yet (before the first provisioning) keep their sign-in's groups.
+          const { user, deleted } = findPerson(directory, { subject: claims.sub, email: claims.email });
+          if (deleted || (user && !user.active)) continue;
+          if (user) groups = groupsOf(directory, user.id);
         }
         // With a device authority, only sign-ins from the company's computers.
         const ca = this.#orgOf(space)?.deviceCA;
@@ -5424,7 +5428,8 @@ export class WeaveNode implements Backend {
     return [
       { scope: SELF_SCOPE },
       ...[...this.#directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer })),
-      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO).map((space) => ({ scope: spaceScope(space), space })),
+      // A company's spaces are kept by its own archive, never by friends (stage 13).
+      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO && !this.#managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
     ];
   }
 

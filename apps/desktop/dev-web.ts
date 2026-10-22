@@ -4,7 +4,7 @@
 //
 //   npm run dev:web -- --home .dev/alice --port 8770
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
@@ -37,9 +37,12 @@ createServer(async (req, res) => {
       for await (const chunk of req) body += chunk;
       const { link } = JSON.parse(body) as { link: string };
       const cli = join(import.meta.dirname, '..', '..', 'packages', 'cli', 'src', 'main.ts');
-      return execFile(process.execPath, [cli, '--home', home.dir, '--json', 'enroll', link], { timeout: 6 * 60_000 }, (error, stdout, stderr) =>
-        error ? json(res, 400, { error: stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message }) : json(res, 200, JSON.parse(stdout)),
-      );
+      return execFile(process.execPath, [cli, '--home', home.dir, '--json', 'enroll', link], { timeout: 6 * 60_000 }, (error, stdout, stderr) => {
+        if (error) return json(res, 400, { error: stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message });
+        // Then, as the app does, the person's daemon starts.
+        spawn(process.execPath, [cli, '--home', home.dir, 'daemon'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+        json(res, 200, JSON.parse(stdout));
+      });
     }
     if (url.pathname === '/rpc' && req.method === 'POST') {
       let body = '';

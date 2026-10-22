@@ -185,4 +185,18 @@ describe('company accounts', { timeout: 120_000 }, () => {
     expect((await carol.links()).find((l) => l.did === martl.identity.author)?.state).toBe('waiting');
     for (const node of all) await node.close();
   });
+
+  it('still knows its company after closing right away and opening again (the company half is published first)', async () => {
+    vault.createKey('acme-reopen');
+    const home = dir();
+    const acme = WeaveNode.init('Acme', home);
+    acme.kmsCredentials = { token: vault.rootToken };
+    await acme.createCompany({ name: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-reopen', jwt: { role: 'employees' } }, issuer: oidc.issuer, audience: 'weave', admins: 'weave-admins' });
+    await acme.close();
+    const again = WeaveNode.open(home);
+    again.kmsCredentials = { token: vault.rootToken };
+    await again.reconcile();
+    expect((await again.company())?.name).toBe('Acme');
+    await again.close();
+  });
 });

@@ -349,6 +349,9 @@ export function KeysView() {
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
   const { data: keeping } = useApi(() => api<KeepersInfo>('keepers'), []);
+  // A company account has no recovery words: its company holds them.
+  const { data: signIn } = useApi(() => api<SignInStatus>('signInStatus'), []);
+  const company = signIn?.company ? (signIn.name ?? 'your company') : undefined;
   const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
   if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
   return (
@@ -370,8 +373,8 @@ export function KeysView() {
             </p>
           ) : (
             <p className="small">
-              Your keys are sealed, and the key to them is kept by {KEYSTORE_NAME[status.keystore]}: a copy of your Weave folder can't be opened on another computer or by another user. To use
-              Weave on another computer, set it up from your recovery words.
+              Your keys are sealed, and the key to them is kept by {KEYSTORE_NAME[status.keystore]}: a copy of your Weave folder can't be opened on another computer or by another user.{' '}
+              {company ? `To use Weave on another computer, ask ${company} to set it up.` : 'To use Weave on another computer, set it up from your recovery words.'}
             </p>
           )}
         </fieldset>
@@ -399,14 +402,18 @@ export function KeysView() {
         <p className="small">
           <code>{info.did}</code>
         </p>
-        {info.recoverable ? (
+        {company ? (
+          <p className="small">
+            {company} holds this identity's recovery words. For a new computer, run <code>weave recover-request</code> there and give the request to one of {company}'s admins.
+          </p>
+        ) : info.recoverable ? (
           <p className="small">
             Protected by your recovery words. Your root key was rotated {info.rotations} time{info.rotations === 1 ? '' : 's'}; your words already cover the next one.
           </p>
         ) : (
           <p className="small">This identity was made before recovery words existed: it can't rotate keys or add devices. Creating a new identity gives you both.</p>
         )}
-        {info.recoverable && (
+        {info.recoverable && !company && (
           <div className="buttons">
             <button onClick={() => setDialog({ kind: 'rotate' })}>Rotate keys…</button>
           </div>
@@ -440,7 +447,7 @@ export function KeysView() {
                           Revoke
                         </AsyncButton>
                       </>
-                    ) : (
+                    ) : company ? null : (
                       <button onClick={() => setDialog({ kind: 'revoke', key: k })}>{k.current ? 'Replace…' : 'Revoke…'}</button>
                     ))}
                 </td>
@@ -448,7 +455,10 @@ export function KeysView() {
             ))}
           </tbody>
         </table>
-        <p className="small">Each computer signs with its own key. To use Weave on another computer, choose “I already use Weave” there and type your words; don't copy your Weave folder.</p>
+        <p className="small">
+          Each computer signs with its own key.{' '}
+          {company ? `For another computer, ask ${company}; don't copy your Weave folder.` : 'To use Weave on another computer, choose “I already use Weave” there and type your words; don\'t copy your Weave folder.'}
+        </p>
       </fieldset>
       <PhonesBox />
       <AgentAppsBox />

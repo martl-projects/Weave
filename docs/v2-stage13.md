@@ -41,3 +41,14 @@ The gaps a company would hit setting Weave up (see the setup guide sent to Julia
 - **Fixed:** enrollment overwrote the saved sign-in and lost its refresh token.
 - **Tested:** enrolling through the browser against the OIDC stand-in (code flow with PKCE, nonce, refresh tokens, a clock it can move). The test checks that, an hour on, the account renews its token by itself and signs in to the company again.
 - **Not tried here:** the Docker image. Docker Desktop wasn't running; the image is built from the same folder the release attaches, which was tried.
+- **Run end to end on one computer** (`scripts/company-demo.ts`, with the stand-ins, a local network, the built Weave Server and the app in a browser):
+  - `weave-server init`
+  - the admin signs in to the console through the company's sign-in page and creates a group with a mapping
+  - an employee enrolls from the link in the app, signing in in the browser
+  - the company vouches for them and puts them in the mapped group by itself
+- **Found and fixed in that run:**
+  - **Closing a node lost a new key's company half** if it hadn't been published yet. After `init`, a restarted server couldn't read its own settings. Closing now waits for unpublished halves; a test closes right after creating the company.
+  - **SCIM turned on before the first provisioning shut everyone out**, the first admin included. People the directory doesn't know yet now keep their sign-in's groups; deactivated and deleted people are still refused.
+  - **The console's sign-in refusals** are pages now, not JSON.
+  - **A company account's Keys & devices** spoke of recovery words it doesn't have. It now says the company holds them; rotating and replacing keys are hidden.
+  - **Company spaces asked for friends as keepers.** They're kept by the company's own archive instead.

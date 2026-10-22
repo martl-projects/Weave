@@ -54,6 +54,16 @@ export async function startConsole(node: WeaveNode, options: ConsoleOptions): Pr
   const discover = async () =>
     (discovery ??= (await (await fetch(`${options.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`)).json()) as { authorization_endpoint: string; token_endpoint: string });
 
+  /** A refusal a person sees in their browser (sign-in), as a page rather than JSON. */
+  const page = (res: ServerResponse, status: number, title: string, text: string) => {
+    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    const escape = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+    res.end(`<!doctype html><meta charset="utf-8"><title>Weave Admin</title><link rel="icon" href="/favicon.svg">
+<style>body{font:15px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;background:#f4f5f8;color:#101828}
+div{background:#fff;border:1px solid #e4e7ec;border-radius:14px;padding:32px 36px;text-align:center;max-width:440px;box-shadow:0 12px 24px -8px #10182826}
+h1{font-size:20px;margin:14px 0 6px}p{color:#667085;margin:0 0 18px}a{color:#1f3a93}</style>
+<div><img src="/favicon.svg" width="56" height="56" alt=""><h1>${escape(title)}</h1><p>${escape(text)}</p><a href="/logout">Sign in with another account</a></div>`);
+  };
   const send = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
     res.end(JSON.stringify(body));
@@ -181,7 +191,7 @@ export async function startConsole(node: WeaveNode, options: ConsoleOptions): Pr
         if (url.pathname === '/login') {
           const operator = url.searchParams.get('operator');
           if (operator) {
-            if (!operatorTokens.delete(operator)) return send(res, 403, { error: 'that operator link was used already' });
+            if (!operatorTokens.delete(operator)) return page(res, 403, 'That link was used already', 'Operator links let one person in, once. Make a new one on the server: weave-server operator.');
             return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: 'operator', name: "The company's operator" })) });
           }
           const { authorization_endpoint } = await discover();
@@ -198,15 +208,15 @@ export async function startConsole(node: WeaveNode, options: ConsoleOptions): Pr
           const state = url.searchParams.get('state') ?? '';
           const waiting = pending.get(state);
           pending.delete(state);
-          if (!waiting || waiting.expires < Date.now()) return send(res, 400, { error: 'that sign-in expired: start again' });
+          if (!waiting || waiting.expires < Date.now()) return page(res, 400, 'That sign-in expired', 'Start again from the console.');
           const { token_endpoint } = await discover();
           const form = new URLSearchParams({ grant_type: 'authorization_code', code: url.searchParams.get('code') ?? '', redirect_uri: `${base}/callback`, client_id: options.clientId, code_verifier: waiting.verifier, ...(options.clientSecret ? { client_secret: options.clientSecret } : {}) });
           const answer = (await (await fetch(token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json()) as { id_token?: string };
-          if (!answer.id_token) return send(res, 401, { error: 'the sign-in gave no ID token' });
+          if (!answer.id_token) return page(res, 401, 'Not signed in', "The company's sign-in gave no ID token.");
           const claims = await verifyIdToken(answer.id_token, options.issuer, options.clientId);
           const payload = JSON.parse(Buffer.from(answer.id_token.split('.')[1], 'base64url').toString()) as { nonce?: string; name?: string };
-          if (payload.nonce !== waiting.nonce) return send(res, 401, { error: 'the sign-in was for another request' });
-          if (!node.consoleAdmin(claims)) return send(res, 403, { error: "you're not one of the company's admins" });
+          if (payload.nonce !== waiting.nonce) return page(res, 401, 'Not signed in', 'That sign-in was for another request. Start again from the console.');
+          if (!node.consoleAdmin(claims)) return page(res, 403, 'Only for admins', `${claims.email ?? claims.sub} isn't in the company's admins group. Ask an admin to add you, or sign in with another account.`);
           return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: claims.sub, ...(claims.email ? { email: claims.email } : {}), ...(payload.name ? { name: payload.name } : {}) })) });
         }
         if (url.pathname === '/logout') {

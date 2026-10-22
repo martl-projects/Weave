@@ -18,6 +18,8 @@ export class OidcStub {
   issuer = '';
   /** Who signs in through /authorize (the code flow). */
   loginAs?: { sub: string; email?: string; name?: string; groups?: string[] };
+  /** With people, /authorize shows a sign-in page to pick one (demos); without, loginAs signs in at once. */
+  people?: Array<{ sub: string; email?: string; name?: string; groups?: string[] }>;
   /** The stand-in's clock, for tokens' times (tests move it). */
   now = () => Date.now();
   /** How many times a refresh token was used. */
@@ -25,7 +27,7 @@ export class OidcStub {
   readonly #refresh = new Map<string, { claims: { sub: string; email?: string; name?: string; groups?: string[] }; clientId: string }>();
   readonly #codes = new Map<string, { claims: { sub: string; email?: string; name?: string; groups?: string[] }; clientId: string; redirect: string; challenge: string; nonce: string }>();
 
-  async start(): Promise<this> {
+  async start(port = 0): Promise<this> {
     this.#server = createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
       if (req.url === '/.well-known/openid-configuration')
@@ -33,6 +35,12 @@ export class OidcStub {
       // Sign-in with authorization code and PKCE: whoever loginAs names signs in at once.
       if (req.url?.startsWith('/authorize')) {
         const q = new URL(req.url, this.issuer).searchParams;
+        const chosen = q.get('as');
+        if (this.people && chosen === null) {
+          res.setHeader('content-type', 'text/html; charset=utf-8');
+          return void res.end(signInPage(this.people, q));
+        }
+        if (this.people && chosen !== null) this.loginAs = this.people[Number(chosen)];
         if (!this.loginAs) return void ((res.statusCode = 401), res.end('{}'));
         const code = randomBytes(12).toString('hex');
         this.#codes.set(code, { claims: this.loginAs, clientId: q.get('client_id') ?? '', redirect: q.get('redirect_uri') ?? '', challenge: q.get('code_challenge') ?? '', nonce: q.get('nonce') ?? '' });
@@ -66,7 +74,7 @@ export class OidcStub {
       res.statusCode = 404;
       res.end('{}');
     });
-    await new Promise<void>((resolve) => this.#server!.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => this.#server!.listen(port, '127.0.0.1', resolve));
     this.issuer = `http://127.0.0.1:${(this.#server.address() as AddressInfo).port}`;
     return this;
   }
@@ -121,7 +129,7 @@ export class VaultStub {
     for (const [token, t] of this.#tokens) if (t.sub === sub) this.#tokens.delete(token);
   }
 
-  async start(): Promise<this> {
+  async start(port = 0): Promise<this> {
     this.#server = createServer((req, res) => {
       let raw = '';
       req.on('data', (c) => (raw += c));
@@ -174,7 +182,7 @@ export class VaultStub {
         }
       });
     });
-    await new Promise<void>((resolve) => this.#server!.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => this.#server!.listen(port, '127.0.0.1', resolve));
     this.address = `http://127.0.0.1:${(this.#server.address() as AddressInfo).port}`;
     return this;
   }
@@ -284,4 +292,21 @@ export class AzureStub {
   async stop(): Promise<void> {
     await new Promise((resolve) => this.#server?.close(resolve));
   }
+}
+
+/** A company sign-in page for demos: pick who signs in. */
+function signInPage(people: Array<{ sub: string; email?: string; name?: string; groups?: string[] }>, query: URLSearchParams): string {
+  const choice = (i: number) => {
+    const q = new URLSearchParams(query);
+    q.set('as', String(i));
+    return `/authorize?${q.toString()}`;
+  };
+  return `<!doctype html><meta charset="utf-8"><title>Sign in · Acme</title>
+<style>body{font:15px 'Segoe UI',system-ui,sans-serif;background:#f3f2f1;margin:0;display:grid;place-items:center;min-height:100vh}
+.box{background:#fff;width:380px;padding:40px 44px;box-shadow:0 2px 6px #0003}h1{font-size:24px;font-weight:600;margin:16px 0 4px}p{color:#605e5c;margin:0 0 20px}
+a{display:flex;gap:12px;align-items:center;padding:10px 12px;margin:0 -12px;text-decoration:none;color:#1b1b1b;border-radius:4px}a:hover{background:#f3f2f1}
+.av{width:36px;height:36px;border-radius:50%;background:#0067b8;color:#fff;display:grid;place-items:center;font-weight:600}.e{color:#605e5c;font-size:13px}.logo{font-weight:700;color:#0067b8}</style>
+<div class="box"><div class="logo">Acme · company sign-in (demo)</div><h1>Pick an account</h1><p>to continue to Weave</p>
+${people.map((p, i) => `<a href="${choice(i)}"><span class="av">${(p.name ?? p.sub).split(' ').map((w) => w[0]).join('').slice(0, 2)}</span><span><div>${p.name ?? p.sub}</div><div class="e">${p.email ?? ''}</div></span></a>`).join('')}
+</div>`;
 }
