@@ -20,6 +20,10 @@ interface Bridge {
   show(): Promise<void>;
   /** Show or hide the Mentions panel window; missing in a browser (open #/overlay there). */
   mentions?(action: 'show' | 'hide'): Promise<void>;
+  /** From the panel: show this route (#/…) in the main window. Missing in a browser. */
+  route?(hash: string): Promise<void>;
+  /** In the main window: a route the panel asked for. */
+  onRoute?(listener: (hash: string) => void): void;
   /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */
   platform?: string;
   /** The app's own title bar buttons; missing in a browser, which has its own window. */

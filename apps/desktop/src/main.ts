@@ -168,13 +168,22 @@ function showMentions(focus = true): void {
     return { action: 'deny' };
   });
   panel.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('file:')) event.preventDefault();
+    if (url.startsWith('file:')) return;
+    event.preventDefault();
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
   });
   panel.once('ready-to-show', () => (focus ? panel.show() : panel.showInactive()));
   void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
 }
 
 ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' ? mentions?.hide() : showMentions()));
+
+/** The panel's links open in the main window: Weave comes to the front there. */
+ipcMain.handle('weave:route', (_event, hash: string) => {
+  if (typeof hash !== 'string' || !hash.startsWith('#/') || hash.length > 2000) return;
+  showWindow();
+  window?.webContents.send('weave:route', hash);
+});
 
 /** The buttons of the app's own title bar. Close hides to the tray like the system's close would. */
 ipcMain.handle('weave:window', (_event, action: string) => {

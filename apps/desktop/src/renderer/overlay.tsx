@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import type { ClaudeCodeFollow, MentionInfo, SessionInfo } from '@weave/node/client';
-import { ago, api, bridge, onItem, plain, shortDid } from './lib.ts';
-import { attempt, Sprite } from './ui.tsx';
+import { useEffect, useState, type MouseEvent } from 'react';
+import type { ClaudeCodeFollow, MentionInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
+import { ago, api, bridge, navigate, onItem } from './lib.ts';
+import { PostRow } from './posts.tsx';
+import { attempt } from './ui.tsx';
 
 /** Board names say what a post is: "ideas" → an idea. */
 const SINGULAR: Record<string, string> = { ideas: 'idea', issues: 'issue', proposals: 'proposal', releases: 'release', posts: 'post', showcase: 'showcase post' };
@@ -19,79 +20,46 @@ function source(m: MentionInfo): string {
   return `in Claude Code${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
 }
 
-const open = (m: MentionInfo) => attempt(() => api('openInApp', { what: 'post', post: m.post.id }));
+/** What every post row needs to know: who you are and your spaces. */
+interface Context {
+  me: Profile;
+  spaces: SpaceInfo[];
+}
 
-function MentionCard({ mention }: { mention: MentionInfo }) {
-  const p = mention.post;
-  const text = plain(p.text);
-  const where = [p.by.agent ? `u/${p.by.name ?? shortDid(p.by.did)} · ${p.by.agent}` : `u/${p.by.name ?? shortDid(p.by.did)}`, p.issue?.status].filter(Boolean).join(' · ');
+function MentionCard({ mention, ctx }: { mention: MentionInfo; ctx: Context }) {
   return (
     <li className="mention">
       <div className="mention-line">
-        Mentioned {what(p)}
+        Mentioned {what(mention.post)}
         <span className="mention-when">
           {source(mention)} · {ago(mention.time)}
         </span>
       </div>
       {mention.note && <div className="mention-note">“{mention.note}”</div>}
-      <a
-        className="post-embed-card"
-        href="#"
-        title="Open in Weave"
-        onClick={(e) => {
-          e.preventDefault();
-          void open(mention);
-        }}
-      >
-        <span className="post-embed-thumb">
-          <Sprite seed={p.type === 'project' && p.space ? p.space.id : p.id} size={40} />
-        </span>
-        <span className="post-embed-body">
-          <span className="post-embed-where">{where}</span>
-          <b className="post-embed-title">{p.title}</b>
-          {text && <span className="post-embed-text">{text.length > 160 ? `${text.slice(0, 160)}…` : text}</span>}
-          <span className="post-embed-meta">
-            ▲ {p.score} · {p.chat} in chat
-          </span>
-        </span>
-      </a>
+      <PostRow post={mention.post} meDid={ctx.me.did} spaces={ctx.spaces} />
     </li>
   );
 }
 
 type StackEntry = SessionInfo['stack'][number];
 
-/** One work item on the session's stack: the top one is Now, the others wait. */
-function StackCard({ entry, now }: { entry: StackEntry; now: boolean }) {
+/** One work item on the session's stack, shown like on a board: the top one is Now, the others wait. */
+function StackCard({ entry, now, ctx }: { entry: StackEntry; now: boolean; ctx: Context }) {
   const p = entry.post;
   if ('missing' in p) return <li className="stack-item missing">A post you can't see here</li>;
   return (
     <li className={`stack-item${now ? ' now' : ''}`}>
-      <span className="stack-state">{now ? 'Now' : 'Waiting'}</span>
-      <a
-        className="post-embed-card"
-        href="#"
-        title="Open in Weave"
-        onClick={(e) => {
-          e.preventDefault();
-          void attempt(() => api('openInApp', { what: 'post', post: p.id }));
-        }}
-      >
-        <span className="post-embed-body">
-          <span className="post-embed-where">
-            {[p.type === 'issue' ? 'issue' : (p.board ?? 'post'), p.space ? `${p.space.kind} ${p.space.name}` : '', p.issue?.status].filter(Boolean).join(' · ')}
-          </span>
-          <b className="post-embed-title">{p.title}</b>
-          {p.prompt && now && <span className="post-embed-text">{p.prompt.length > 200 ? `${p.prompt.slice(0, 200)}…` : p.prompt}</span>}
-          <span className="post-embed-meta">since {ago(entry.since)}</span>
-        </span>
-      </a>
+      <span className="stack-state">
+        {now ? 'Now' : 'Waiting'} · since {ago(entry.since)}
+      </span>
+      <PostRow post={p} meDid={ctx.me.did} spaces={ctx.spaces} />
+      {now && p.prompt && <p className="stack-prompt">{p.prompt.length > 300 ? `${p.prompt.slice(0, 300)}…` : p.prompt}</p>}
     </li>
   );
 }
 
 /** The session you're looking at in the Claude app: its name, folder and work items. */
-function SessionSection({ session }: { session: SessionInfo }) {
+function SessionSection({ session, ctx }: { session: SessionInfo; ctx: Context }) {
   const folder = session.folder?.split(/[\\/]/).filter(Boolean).pop();
   return (
     <section className="panel-session">
@@ -104,12 +72,22 @@ function SessionSection({ session }: { session: SessionInfo }) {
       ) : (
         <ul className="mentions">
           {session.stack.map((entry, i) => (
-            <StackCard key={'id' in entry.post ? entry.post.id : i} entry={entry} now={i === 0} />
+            <StackCard key={'missing' in entry.post ? `${entry.post.id}-${i}` : entry.post.id} entry={entry} now={i === 0} ctx={ctx} />
           ))}
         </ul>
       )}
     </section>
   );
+}
+
+/** Links in the panel open in Weave's main window, not in the panel. */
+function openInWeave(event: MouseEvent): void {
+  const link = (event.target as Element).closest?.('a[href^="#/"]');
+  if (!link) return;
+  event.preventDefault();
+  const route = link.getAttribute('href')!;
+  if (bridge.route) void bridge.route(route);
+  else navigate(route);
 }
 
 /**
@@ -122,18 +100,30 @@ export function MentionsPanel() {
   const [mentions, setMentions] = useState<MentionInfo[]>([]);
   const [follow, setFollow] = useState<ClaudeCodeFollow>();
   const [session, setSession] = useState<SessionInfo | null>(null);
+  const [ctx, setCtx] = useState<Context>();
+  // Which session to show: the one the Claude app shows (''), or one you picked (#/overlay?session=…).
+  const [pinned, setPinned] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '');
+  const [recent, setRecent] = useState<SessionInfo[]>([]);
   useEffect(() => {
-    const refresh = () => void api<SessionInfo | null>('focusedSession').then(setSession, () => {});
+    void Promise.all([api<Profile>('profile'), api<SpaceInfo[]>('spaces')]).then(([me, spaces]) => setCtx({ me, spaces }), () => {});
+  }, []);
+  useEffect(() => {
+    const refresh = () => {
+      void api<SessionInfo[]>('sessions').then(setRecent, () => {});
+      void (pinned ? api<SessionInfo>('session', { id: pinned }) : api<SessionInfo | null>('focusedSession')).then(setSession, () => {});
+    };
     void api<MentionInfo[]>('mentions').then(setMentions, () => {});
     void api<ClaudeCodeFollow>('claudeCode').then(setFollow, () => {});
     refresh();
     return onItem((item) => {
       if (item?.kind === 'weave.mention') setMentions((list) => [item.body as unknown as MentionInfo, ...list.filter((m) => m.id !== item.id)].slice(0, 100));
-      else if (item?.kind === 'weave.focus') setSession(item.body as unknown as SessionInfo | null);
+      else if (item?.kind === 'weave.focus') {
+        if (!pinned) setSession(item.body as unknown as SessionInfo | null);
+      }
       // A stack may have changed (they're your own sealed events): look again.
       else if (!item || item.scope !== 'live') refresh();
     });
-  }, []);
+  }, [pinned]);
   const here = session ? mentions.filter((m) => m.session?.id === session.id) : [];
   const elsewhere = session ? mentions.filter((m) => m.session?.id !== session.id) : mentions;
   const toggle = async () => {
@@ -141,7 +131,7 @@ export function MentionsPanel() {
     if (next) setFollow(next);
   };
   return (
-    <div className="window mentions-window">
+    <div className="window mentions-window" onClickCapture={openInWeave}>
       <div className="title-bar mentions-drag">
         <div className="title-bar-text">Weave · {session ? 'Session' : 'Mentions'}</div>
         <div className="title-bar-controls">
@@ -149,23 +139,32 @@ export function MentionsPanel() {
         </div>
       </div>
       <div className="window-body mentions-body">
-        <label className="mentions-follow" title={follow ? `Reads the agent's answers in ${follow.dir}, on this computer only, for links to posts` : undefined}>
-          <input type="checkbox" checked={!!follow?.on} onChange={() => void toggle()} disabled={!follow} />
-          <span>Follow Claude Code{follow && !follow.found ? ' (not found on this computer)' : ''}</span>
-        </label>
+        <select className="panel-pick" value={pinned} onChange={(e) => setPinned(e.target.value)} aria-label="Which session">
+          <option value="">The session open in the Claude app</option>
+          {recent.map((r) => (
+            <option key={`${r.provider}:${r.id}`} value={r.id}>
+              {r.title ?? r.id.slice(0, 8)} ({r.stack.length})
+            </option>
+          ))}
+        </select>
+        <div className="mentions-follow" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
+          <input id="follow-claude-code" type="checkbox" checked={!!follow?.on} onChange={() => void toggle()} disabled={!follow} />
+          <label htmlFor="follow-claude-code">Follow Claude Code{follow && !follow.found ? ' (not found on this computer)' : ''}</label>
+        </div>
         <div className="mentions-scroll">
-          {session && <SessionSection session={session} />}
+          {session && ctx && <SessionSection session={session} ctx={ctx} />}
           {here.length > 0 && (
             <>
               <h4 className="panel-heading">Mentioned in this session</h4>
               <ul className="mentions">
-                {here.map((m) => (
-                  <MentionCard key={m.id} mention={m} />
-                ))}
+                {ctx &&
+                  here.map((m) => (
+                    <MentionCard key={m.id} mention={m} ctx={ctx} />
+                  ))}
               </ul>
             </>
           )}
-          {elsewhere.length === 0 && here.length === 0 ? (
+          {elsewhere.length === 0 && here.length === 0 && !session?.stack.length ? (
             <p className="empty">
               {follow?.on
                 ? 'Switch to a session in the Claude app: its work items show here. Posts your agents point to (weave_show, or Weave links in their answers) show up too.'
@@ -176,9 +175,10 @@ export function MentionsPanel() {
               <>
                 {session && <h4 className="panel-heading">Elsewhere</h4>}
                 <ul className="mentions">
-                  {elsewhere.map((m) => (
-                    <MentionCard key={m.id} mention={m} />
-                  ))}
+                  {ctx &&
+                    elsewhere.map((m) => (
+                      <MentionCard key={m.id} mention={m} ctx={ctx} />
+                    ))}
                 </ul>
               </>
             )

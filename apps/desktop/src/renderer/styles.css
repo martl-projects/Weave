@@ -580,8 +580,10 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
 .panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
 .stack-item { display: flex; flex-direction: column; gap: 3px; }
-.stack-state { font-family: var(--content-font); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #666; }
-.stack-item.now .stack-state { color: var(--accent); font-weight: 700; }
+.stack-state { font-family: var(--content-font); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .65; }
+.stack-item.now .stack-state { opacity: 1; font-weight: 700; }
+.stack-prompt { margin: 4px 0 0; padding: 6px 8px; border-left: 3px solid currentColor; font-family: var(--content-font); font-size: 12px; opacity: .85; }
+.panel-pick { width: 100%; }
 .stack-item:not(.now) .post-embed-card { opacity: .8; }
 .mention-line { font-family: var(--content-font); font-size: 12px; margin-bottom: 4px; }
 .mention-when { display: block; color: #666; font-size: 11px; }

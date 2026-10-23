@@ -350,17 +350,22 @@ function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: Space
   return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
 
+/** Where a Weave link goes: this window, or, from the side panel, the main window. */
+const go = (hash: string) => (location.hash.startsWith('#/overlay') && bridge.route ? void bridge.route(hash) : navigate(hash));
+
 /** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. Post addresses open here, not in a browser. */
 function openLink(link: string): void {
   const ref = postRefOfHref(link);
   if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
-  if (!ref.startsWith('http')) return navigate(`#/post/${ref}`);
+  if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
-    (post) => navigate(postHref(post)),
+    (post) => go(postHref(post)),
     () => toast("This post isn't on this computer. It may be in a project or community you're not in.", 'error'),
   );
 }
 bridge.onLink(openLink);
+// The side panel's links open here.
+bridge.onRoute?.(navigate);
 document.addEventListener('click', (event) => {
   const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"], a[href^="http://weave.localhost"]');
   if (!anchor) return;

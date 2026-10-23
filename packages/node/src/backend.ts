@@ -443,7 +443,8 @@ export interface AppOpen {
 export interface MentionInfo {
   id: string;
   time: string;
-  post: Pick<PostInfo, 'id' | 'url' | 'title' | 'type' | 'text' | 'board' | 'space' | 'by' | 'issue' | 'chat' | 'score'>;
+  /** The post as it was when mentioned, shown like on a board. */
+  post: PostInfo;
   /** weave_show by an agent, or a link in a Claude Code session. */
   source: 'agent' | 'claude-code';
   /** The agent that showed it (weave_show). */
@@ -463,8 +464,8 @@ export interface SessionRef {
   folder?: string;
 }
 
-/** A work item on a session's stack. */
-export type StackPost = Pick<PostInfo, 'id' | 'url' | 'title' | 'type' | 'board' | 'space' | 'issue' | 'prompt'>;
+/** A work item on a session's stack: the post as it is now, shown like on a board. */
+export type StackPost = PostInfo;
 
 /**
  * An agent session and its stack of work items: the top one is what it's on

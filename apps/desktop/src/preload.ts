@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('weave', {
   pickFolder: (title: string) => ipcRenderer.invoke('weave:pick-folder', title),
   show: () => ipcRenderer.invoke('weave:show'),
   mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
+  route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
+  onRoute: (listener: (hash: string) => void) => {
+    ipcRenderer.on('weave:route', (_event, hash: string) => listener(hash));
+  },
   platform: process.platform,
   windowControl: (action: string) => ipcRenderer.invoke('weave:window', action),
   onWindowState: (listener: (state: { maximized: boolean; focused: boolean }) => void) => {

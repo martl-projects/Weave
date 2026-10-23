@@ -1212,11 +1212,10 @@ export class WeaveNode implements Backend {
   }
 
   #mention(post: PostInfo, how: Pick<MentionInfo, 'source'> & Partial<Pick<MentionInfo, 'agent' | 'session' | 'note'>>): MentionInfo {
-    const { id, url, title, type, text, board, space, by, issue, chat, score } = post;
     const mention: MentionInfo = {
       id: `mention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       time: new Date().toISOString(),
-      post: { id, url, title, type, text: text.slice(0, 600), ...(board ? { board } : {}), ...(space ? { space } : {}), by, ...(issue ? { issue } : {}), chat, score },
+      post,
       ...how,
     };
     this.#mentions = [mention, ...this.#mentions].slice(0, 100);
@@ -1310,9 +1309,7 @@ export class WeaveNode implements Backend {
   #sessionInfo(record: SessionRecord, posts: Map<string, PostInfo>): SessionInfo {
     const brief = (item: StackItem): SessionInfo['stack'][number]['post'] => {
       const p = posts.get(item.post);
-      if (!p) return { id: item.post, missing: true };
-      const { id, url, title, type, board, space, issue, prompt } = p;
-      return { id, url, title, type, ...(board ? { board } : {}), ...(space ? { space } : {}), ...(issue ? { issue } : {}), ...(prompt ? { prompt } : {}) } satisfies StackPost;
+      return p ?? { id: item.post, missing: true };
     };
     const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
     return {
