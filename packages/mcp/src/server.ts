@@ -3,11 +3,26 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
   as?: string;
+  /** The agent session this server serves, when its harness says (see sessionFromEnv). */
+  session?: SessionRef;
+}
+
+/**
+ * The session a harness runs this server in, from what it tells the programs it
+ * starts. Claude Code: CLAUDE_CODE_SESSION_ID (its transcript's id) and
+ * CLAUDE_CODE_HOST_SESSION_ID (the Claude app's own id for it), in the folder it
+ * started this server in. Other harnesses: the session tools take an id instead.
+ */
+export function sessionFromEnv(env: NodeJS.ProcessEnv = process.env, folder = process.cwd()): SessionRef | undefined {
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (!id) return undefined;
+  const host = env.CLAUDE_CODE_HOST_SESSION_ID?.trim();
+  return { provider: 'claude-code', id, ...(host ? { host } : {}), folder };
 }
 
 /** A new event, shortened for an agent to read. */
@@ -297,19 +312,37 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     {
       title: 'Submit a post',
       description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
-      inputSchema: { space: z.string().describe('Project or community name or id'), title: z.string().min(1).max(200), text: z.string().optional(), link: z.string().url().optional(), board: z.string().optional() },
+      inputSchema: {
+        space: z.string().describe('Project or community name or id'),
+        title: z.string().min(1).max(200),
+        text: z.string().optional(),
+        link: z.string().url().optional(),
+        board: z.string().optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it (its starting prompt)'),
+      },
     },
-    run(async ({ space, title, text, link, board }: { space: string; title: string; text?: string; link?: string; board?: string }) => backend.submit({ space, board, title, text, link, as })),
+    run(async ({ space, title, text, link, board, prompt }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string }) =>
+      backend.submit({ space, board, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
     'weave_edit_post',
     {
       title: 'Edit a post',
-      description: 'Change the title, text or link of your own post (an empty link removes it). Leave out what stays the same. Everyone sees it marked as edited.',
-      inputSchema: { post: z.string().min(6), title: z.string().min(1).max(200).optional(), text: z.string().optional(), link: z.union([z.string().url(), z.literal('')]).optional() },
+      description:
+        'Change the title, text, link or starting prompt of your own post (an empty link or prompt removes it). Leave out what stays the same. Everyone sees it marked as edited.',
+      inputSchema: {
+        post: z.string().min(6),
+        title: z.string().min(1).max(200).optional(),
+        text: z.string().optional(),
+        link: z.union([z.string().url(), z.literal('')]).optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it'),
+      },
     },
-    run(async ({ post, title, text, link }: { post: string; title?: string; text?: string; link?: string }) => backend.editPost({ post, title, text, link, as })),
+    run(async ({ post, title, text, link, prompt }: { post: string; title?: string; text?: string; link?: string; prompt?: string }) =>
+      backend.editPost({ post, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
@@ -545,6 +578,74 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   server.registerResource('post-cards', POST_CARD_URI, { title: 'Weave post cards', mimeType: MCP_APP_MIME }, async () => ({
     contents: [{ uri: POST_CARD_URI, mimeType: MCP_APP_MIME, text: POST_CARD_HTML, _meta: { ui: { prefersBorder: false } } }],
   }));
+
+  // ---------------------------------------------------------------- this session's work items
+
+  const sessionId = z.string().min(4).optional().describe("A session's id, when your harness doesn't tell Weave which session you are");
+  const sessionOf = (id?: string): SessionRef => {
+    if (id) return { id };
+    if (options.session) return options.session;
+    throw new Error("Weave doesn't know which session you are: pass session_id (your harness's session id)");
+  };
+
+  server.registerTool(
+    'weave_session',
+    {
+      title: "This session's work items",
+      description:
+        "Your session's stack of work items: the top one is what you're on now, the ones below wait for it (an item that came in on top of unfinished work). Each has its starting prompt: what to do with it. Your person sees the stack in Weave's side panel.",
+      inputSchema: { session_id: sessionId },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ session_id }: { session_id?: string }) => backend.session(sessionOf(session_id))),
+  );
+
+  server.registerTool(
+    'weave_work_on',
+    {
+      title: 'Work on an item',
+      description:
+        "Put a work item on top of your session's stack: an existing post (url or id), or a new one you create in its project or community (with a starting prompt: what a session should do with it). Whatever you were on waits below and comes back when this one is done (weave_done). Use it when your person gives you a new item, or when you start one.",
+      inputSchema: {
+        post: z.string().min(4).optional().describe('An existing post: url, id or weave:post: link'),
+        create: z
+          .object({
+            space: z.string().describe('Project or community name or id'),
+            board: z.string().optional(),
+            title: z.string().min(1).max(200),
+            text: z.string().optional(),
+            prompt: z.string().max(4000).optional().describe('What a session should do with it'),
+          })
+          .optional()
+          .describe('A new work item, posted in that project or community'),
+        session_id: sessionId,
+      },
+    },
+    run(async ({ post, create, session_id }: { post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; session_id?: string }) =>
+      backend.workOn({ session: sessionOf(session_id), post, create, as }),
+    ),
+  );
+
+  server.registerTool(
+    'weave_done',
+    {
+      title: 'Done with an item',
+      description:
+        "Take a work item off your session's stack (the top one if you don't name one); the item below comes back to the top: tell your person what you're back to. close: true also marks an issue done.",
+      inputSchema: { post: z.string().min(4).optional(), close: z.boolean().optional(), session_id: sessionId },
+    },
+    run(async ({ post, close, session_id }: { post?: string; close?: boolean; session_id?: string }) => backend.doneWith({ session: sessionOf(session_id), post, close, as })),
+  );
+
+  server.registerTool(
+    'weave_stack',
+    {
+      title: "Rearrange this session's stack",
+      description: 'Put these posts first, in this order (the first is what you work on now), and take others off with remove. Nothing changes on the posts themselves.',
+      inputSchema: { posts: z.array(z.string().min(4)).optional(), remove: z.array(z.string().min(4)).optional(), session_id: sessionId },
+    },
+    run(async ({ posts, remove, session_id }: { posts?: string[]; remove?: string[]; session_id?: string }) => backend.restack({ session: sessionOf(session_id), posts, remove })),
+  );
 
   server.registerTool(
     'weave_show',

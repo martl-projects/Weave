@@ -109,6 +109,14 @@ import {
   MAX_COAUTHORS,
   postRefOf,
   postRefsIn,
+  KIND_SESSION,
+  pushOnto,
+  reorder,
+  sessionKey,
+  sessionsOf,
+  takeOff,
+  type SessionRecord,
+  type StackItem,
   postTargetOf,
   postUrl,
   shortPrefixes,
@@ -228,6 +236,9 @@ import {
   type AppOpen,
   type ClaudeCodeFollow,
   type MentionInfo,
+  type SessionInfo,
+  type SessionRef,
+  type StackPost,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -274,7 +285,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
-import { TranscriptFollower, type SessionText } from './claudecode.ts';
+import { AppLogFollower, TranscriptFollower, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
@@ -375,6 +386,9 @@ export class WeaveNode implements Backend {
   readonly #mentionListeners = new Set<(mention: MentionInfo) => void>();
   /** Claude Code sessions followed for links to posts, while that's on (see followClaudeCode). */
   #follower?: TranscriptFollower;
+  /** The Claude app's log, for the session you're looking at, while that's on too. */
+  #appLog?: AppLogFollower;
+  readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -564,6 +578,7 @@ export class WeaveNode implements Backend {
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
     this.#follower?.stop();
+    this.#appLog?.stop();
     await this.goOffline();
     this.#releaseLock();
   }
@@ -705,10 +720,14 @@ export class WeaveNode implements Backend {
     // Neither: a post an agent pointed to, for the Mentions panel.
     const onMention = (mention: MentionInfo) => onItem({ id: mention.id, time: mention.time, kind: 'weave.mention', scope: 'live', body: mention as unknown as Json, author: me, signer: me, seq: 0 });
     this.#mentionListeners.add(onMention);
+    // You switched sessions in the Claude app: the panel follows.
+    const onFocus = (session: SessionInfo | null) => onItem({ id: `focus-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.focus', scope: 'live', body: session as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#focusListeners.add(onFocus);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
     this.#mentionListeners.delete(onMention);
+    this.#focusListeners.delete(onFocus);
     unsubscribe();
   }
 
@@ -1003,7 +1022,7 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -1017,9 +1036,12 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (image) body.image = image;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
+    const prompt = input.prompt?.trim();
+    if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
+    if (prompt) body.prompt = prompt;
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
-      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
+      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name, prompt })).id);
       if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
       body.board = board.name;
     }
@@ -1149,6 +1171,8 @@ export class WeaveNode implements Backend {
     else {
       this.#follower?.stop();
       this.#follower = undefined;
+      this.#appLog?.stop();
+      this.#appLog = undefined;
     }
     return this.claudeCode();
   }
@@ -1163,6 +1187,12 @@ export class WeaveNode implements Backend {
     if (!this.config.followClaudeCode || this.#follower?.running) return;
     this.#follower = new TranscriptFollower((said) => this.#mentionsIn(said));
     this.#follower.start();
+    this.#appLog = new AppLogFollower(() => {
+      void this.focusedSession().then((session) => {
+        for (const listener of this.#focusListeners) listener(session);
+      });
+    });
+    this.#appLog.start();
   }
 
   /** Links to posts in what an agent said in a Claude Code session: each post once per session and hour. */
@@ -1192,6 +1222,108 @@ export class WeaveNode implements Backend {
     this.#mentions = [mention, ...this.#mentions].slice(0, 100);
     for (const listener of this.#mentionListeners) listener(mention);
     return mention;
+  }
+
+  // ---------------------------------------------------------------- sessions and their stacks
+
+  async sessions(): Promise<SessionInfo[]> {
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    return [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time)).map((r) => this.#sessionInfo(r, posts));
+  }
+
+  async focusedSession(): Promise<SessionInfo | null> {
+    const focus = this.#appLog?.current;
+    if (!focus) return null;
+    // Before the app has said which Claude Code session it is, it's known by the app's id alone.
+    return this.session({ provider: 'claude-code', id: focus.id ?? focus.host, host: focus.host });
+  }
+
+  async session(input: SessionRef): Promise<SessionInfo> {
+    return this.#sessionInfo(this.#sessionRecord(input), new Map(this.#allPosts().map((p) => [p.id, p])));
+  }
+
+  async workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo> {
+    if (!input.post === !input.create) throw new Error('name a post to work on, or create one (not both)');
+    const post = input.post ? await this.post(input.post) : await this.submit({ ...input.create!, as: input.as });
+    const record = this.#sessionRecord(input.session);
+    return this.#saveSession({ ...record, stack: pushOnto(record.stack, post.id, new Date().toISOString()) });
+  }
+
+  async doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const id = input.post ? (await this.post(input.post)).id : record.stack[0]?.post;
+    if (!id) throw new Error('this session has no work items');
+    if (!record.stack.some((s) => s.post === id)) throw new Error("that post isn't on this session's stack");
+    if (input.close) {
+      const post = await this.post(id);
+      if (post.type === 'issue' && post.issue?.status !== 'done') await this.setIssueStatus({ issue: id, status: 'done', as: input.as });
+    }
+    return this.#saveSession({ ...record, stack: takeOff(record.stack, id, new Date().toISOString()) });
+  }
+
+  async restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const ids = async (refs: string[] = []) => Promise.all(refs.map(async (ref) => (await this.post(ref)).id));
+    const remove = new Set(await ids(input.remove));
+    const stack = reorder(record.stack, await ids(input.posts)).filter((s) => !remove.has(s.post));
+    return this.#saveSession({ ...record, stack });
+  }
+
+  #sessionRecords(): Map<string, SessionRecord> {
+    const mine = this.#decodeAll()
+      .filter((d) => d.private && d.inner.kind === KIND_SESSION)
+      .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    return sessionsOf(mine);
+  }
+
+  /** A session's record, with what the caller now knows about it (host id, folder) filled in. */
+  #sessionRecord(ref: SessionRef): SessionRecord {
+    const provider = ref.provider?.trim() || 'claude-code';
+    const id = ref.id?.trim();
+    if (!id || id.length > 200) throw new Error('say which session (its id)');
+    const known = this.#sessionRecords().get(sessionKey(provider, id));
+    return {
+      provider,
+      id,
+      ...((ref.host ?? known?.host) ? { host: ref.host ?? known?.host } : {}),
+      ...((ref.folder ?? known?.folder) ? { folder: ref.folder ?? known?.folder } : {}),
+      ...(known?.title ? { title: known.title } : {}),
+      stack: known?.stack ?? [],
+      time: known?.time ?? new Date().toISOString(),
+    };
+  }
+
+  #saveSession(record: SessionRecord): SessionInfo {
+    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const body: Record<string, Json> = {
+      provider: record.provider,
+      id: record.id,
+      ...(record.host ? { host: record.host } : {}),
+      ...(record.folder ? { folder: record.folder } : {}),
+      ...(title ? { title } : {}),
+      stack: record.stack.map((s) => ({ post: s.post, since: s.since })),
+    };
+    const event = this.replica.append(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
+    return this.#sessionInfo({ ...record, ...(title ? { title } : {}), time: event.time }, new Map(this.#allPosts().map((p) => [p.id, p])));
+  }
+
+  #sessionInfo(record: SessionRecord, posts: Map<string, PostInfo>): SessionInfo {
+    const brief = (item: StackItem): SessionInfo['stack'][number]['post'] => {
+      const p = posts.get(item.post);
+      if (!p) return { id: item.post, missing: true };
+      const { id, url, title, type, board, space, issue, prompt } = p;
+      return { id, url, title, type, ...(board ? { board } : {}), ...(space ? { space } : {}), ...(issue ? { issue } : {}), ...(prompt ? { prompt } : {}) } satisfies StackPost;
+    };
+    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    return {
+      provider: record.provider,
+      id: record.id,
+      ...(record.host ? { host: record.host } : {}),
+      ...(record.folder ? { folder: record.folder } : {}),
+      ...(title ? { title } : {}),
+      stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),
+      time: record.time,
+    };
   }
 
   async permissionRequests(): Promise<PermissionRequest[]> {
@@ -1278,7 +1410,7 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const post = await this.#ownPost(input.post, 'edit');
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
@@ -1293,6 +1425,7 @@ export class WeaveNode implements Backend {
       if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
       body.link = link;
     }
+    if (input.prompt !== undefined) body.prompt = input.prompt.trim();
     if (input.image !== undefined) {
       const image = input.image.trim();
       if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
@@ -3124,11 +3257,12 @@ export class WeaveNode implements Backend {
     return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
   }
 
-  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo> {
+  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo> {
     if (!input.title?.trim()) throw new Error('an issue needs a title');
     const project = this.#project(input.project);
     const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
     if (input.board) body.board = input.board;
+    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
     const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
     return (await this.issues(project.id)).find((i) => i.id === id)!;
   }
@@ -3641,6 +3775,7 @@ export class WeaveNode implements Backend {
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
       ...(p.image ? { image: p.image } : {}),
+      ...(p.prompt ? { prompt: p.prompt } : {}),
       time: p.time,
       ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,

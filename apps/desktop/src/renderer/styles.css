@@ -575,7 +575,14 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mentions-drag button { -webkit-app-region: no-drag; }
 .mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
 .mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
-.mentions { list-style: none; margin: 0; padding: 0 2px 0 0; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
+.panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
+.stack-item { display: flex; flex-direction: column; gap: 3px; }
+.stack-state { font-family: var(--content-font); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #666; }
+.stack-item.now .stack-state { color: var(--accent); font-weight: 700; }
+.stack-item:not(.now) .post-embed-card { opacity: .8; }
 .mention-line { font-family: var(--content-font); font-size: 12px; margin-bottom: 4px; }
 .mention-when { display: block; color: #666; font-size: 11px; }
 .mention-note { font-family: var(--content-font); font-size: 12px; font-style: italic; margin-bottom: 4px; }

@@ -1,5 +1,8 @@
 export type {
   Actor,
+  SessionInfo,
+  SessionRef,
+  StackPost,
   ClaudeCodeFollow,
   MentionInfo,
   Admission,

@@ -11,13 +11,15 @@ import type { SpaceKind } from './spaces.ts';
  * one board of posts. Every post has a chat (weave.msg with `post`) instead of
  * a comment tree.
  *
- *   weave.post     {title, text, link, image, board, share, with}
+ *   weave.post     {title, text, link, image, board, share, with, prompt}
  *                                                      a post in a community or in a project's board; image: a wblob: reference;
  *                                                      with: co-authors it names (people's identifiers or agents' keys);
  *                                                      an edit by its author may carry a new `with` list
  *   weave.post.coauthor {target, on}                  someone named in `with` confirms (or declines) being a co-author;
  *                                                      only confirmed ones are shown (see coauthorsOf)
- *   weave.post.edit   {target, title, text, link, image}
+ *   weave.post.edit   {target, title, text, link, image, prompt}
+ *                                                      prompt: what a session should do with it as a work item
+ *                                                      (posts and issues carry one; '' removes it)
  *                                                      the post's author changes it; the latest edit counts
  *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
  *                                                      take it down; it stays in the logs, out of sight
@@ -174,6 +176,8 @@ export interface Post {
   link?: string;
   /** An attached image (wblob: reference): the post's thumbnail. */
   image?: string;
+  /** As a work item: what a session should do with it (its starting prompt). */
+  prompt?: string;
   share?: Share;
   time: string;
   /** When its author last edited it. */
@@ -404,6 +408,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
       const coauthors = withOf(e.body, e.event.author, e.event.signer);
+      const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
       posts.push({
         ...base,
         type: 'post',
@@ -414,12 +419,14 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
         ...(image ? { image } : {}),
         ...(share ? { share } : {}),
         ...(coauthors.length ? { with: coauthors } : {}),
+        ...(prompt ? { prompt } : {}),
       });
     } else if (kind === 'project' && e.kind === KIND_THREAD && str(e.body, 'title')) {
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     } else if (kind === 'project' && (e.kind === KIND_ISSUE || e.kind === KIND_PROPOSAL) && str(e.body, 'title')) {
       const issue = e.kind === KIND_ISSUE;
-      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board: issue ? 'issues' : 'proposals', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
+      const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
+      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board: issue ? 'issues' : 'proposals', title: str(e.body, 'title', 200), text: str(e.body, 'text'), ...(prompt ? { prompt } : {}) });
     }
   }
   return reviseAll(posts, entries, maintainers);
@@ -445,6 +452,9 @@ function reviseAll(posts: Post[], entries: Entry[], maintainers: Set<Did>): Post
     const link = field(e.body, 'link');
     if (link === '') delete post.link;
     else if (typeof link === 'string' && /^https?:\/\//.test(link)) post.link = link.slice(0, 500);
+    const prompt = field(e.body, 'prompt');
+    if (prompt === '') delete post.prompt;
+    else if (typeof prompt === 'string' && prompt.trim()) post.prompt = prompt.trim().slice(0, TEXT_LIMITS.prompt);
     const image = field(e.body, 'image');
     if (image === '') delete post.image;
     else if (parseBlobRef(image)) post.image = (image as string).trim();

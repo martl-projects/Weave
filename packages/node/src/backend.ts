@@ -332,6 +332,8 @@ export interface PostInfo {
   link?: string;
   /** An attached image (wblob: reference), shown as the post's thumbnail. */
   image?: string;
+  /** As a work item: what a session should do with it (its starting prompt). */
+  prompt?: string;
   time: string;
   /** When its author last edited it. */
   edited?: string;
@@ -450,6 +452,35 @@ export interface MentionInfo {
   session?: { id: string; folder?: string };
   /** What the agent said about it (weave_show). */
   note?: string;
+}
+
+/** A session, as a tool or the app names it: its provider (default claude-code) and id, plus what's known about it. */
+export interface SessionRef {
+  provider?: string;
+  id: string;
+  /** The provider's other id for it, e.g. the Claude app's local_… id. */
+  host?: string;
+  folder?: string;
+}
+
+/** A work item on a session's stack. */
+export type StackPost = Pick<PostInfo, 'id' | 'url' | 'title' | 'type' | 'board' | 'space' | 'issue' | 'prompt'>;
+
+/**
+ * An agent session and its stack of work items: the top one is what it's on
+ * now, the ones below wait for it. Kept sealed to you, on all your devices.
+ */
+export interface SessionInfo {
+  provider: string;
+  id: string;
+  host?: string;
+  folder?: string;
+  /** Its name with the provider (the Claude app's sidebar title), when known. */
+  title?: string;
+  /** Top first. A post you can no longer see is listed by id only. */
+  stack: Array<{ post: StackPost | { id: string; missing: true }; since: string }>;
+  /** When its stack last changed. */
+  time: string;
 }
 
 /** Whether Weave follows your Claude Code sessions for links to posts. */
@@ -853,7 +884,8 @@ export interface Backend {
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  /** prompt: as a work item, what a session should do with it (its starting prompt). */
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
@@ -881,12 +913,27 @@ export interface Backend {
   /** Follow your Claude Code sessions for links to posts (reads the agent's answers in its transcripts, here only), or stop. */
   followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow>;
   claudeCode(): Promise<ClaudeCodeFollow>;
+  /** Sessions with work items, the latest changed first. */
+  sessions(): Promise<SessionInfo[]>;
+  /** The session the Claude app shows right now (while Follow Claude Code is on), with its stack. */
+  focusedSession(): Promise<SessionInfo | null>;
+  /** One session and its stack (an empty stack if it has none yet). */
+  session(input: SessionRef): Promise<SessionInfo>;
+  /**
+   * Put a work item on top of a session's stack: an existing post, or a new one (`create`, posted in its
+   * project or community). Whatever was on top waits below until this one is done.
+   */
+  workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo>;
+  /** Take a work item off a session's stack (the top one if none is named); the next one comes back up. `close` marks an issue done. */
+  doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
+  /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
+  restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
   answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */
@@ -1028,7 +1075,7 @@ export interface Backend {
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same project. */
   reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
   issues(project: string): Promise<IssueInfo[]>;
-  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo>;
+  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo>;
   claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
   setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
   proposals(project: string): Promise<ProposalInfo[]>;
@@ -1051,7 +1098,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

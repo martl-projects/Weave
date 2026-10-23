@@ -231,3 +231,4 @@ export {
   type RepoLink,
   type SyncPlan,
 } from './github.ts';
+export { KIND_SESSION, MAX_STACK, pushOnto, reorder, sessionKey, sessionsOf, takeOff, type SessionRecord, type StackItem } from './sessions.ts';
