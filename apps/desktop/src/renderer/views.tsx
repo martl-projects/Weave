@@ -12,7 +12,6 @@ import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, u
 import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
-import { RoutineSettings } from './routines.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -829,7 +828,6 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
         <p className="small">Chat, boards and votes always stay among participants{info.page.public ? '; the title, subtitle and icon are public' : ''}.</p>
       </fieldset>
       {info.maintainer && boards && <BoardSettings project={project} boards={boards} />}
-      {info.maintainer && boards && <RoutineSettings project={project} boards={boards} />}
       <fieldset>
         <legend>Groups</legend>
         {info.groups.map((g) => {

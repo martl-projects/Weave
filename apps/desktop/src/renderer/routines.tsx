@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import type { BoardInfo, DeskInfo, PostInfo, RoutineInfo, SpaceInfo } from '@weave/node/client';
+import type { BoardInfo, DeskInfo, PostInfo, ProjectInfo, RoutineInfo, SpaceInfo } from '@weave/node/client';
+import { Icon } from './icons.tsx';
+import { Page } from './views.tsx';
 import { ago, api, bridge, bump, navigate, useApi } from './lib.ts';
 import { spaceHref } from './posts.tsx';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
@@ -128,8 +130,8 @@ function RoutineEditor({ project, boards, routine, onClose }: { project: SpaceIn
   );
 }
 
-/** A project's routines, in its settings (maintainers): what each creates, when, and when it last ran. */
-export function RoutineSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
+/** A project's routines (its Routines tab): what each creates, when, and when it last ran; maintainers change them. */
+export function RoutineSettings({ project, boards, maintainer = true }: { project: SpaceInfo; boards: BoardInfo[]; maintainer?: boolean }) {
   const { data: routines } = useApi(() => api<RoutineInfo[]>('routines', { space: project.id }), [project.id]);
   const [editing, setEditing] = useState<RoutineInfo | 'new'>();
   const run = async (r: RoutineInfo) => {
@@ -144,28 +146,64 @@ export function RoutineSettings({ project, boards }: { project: SpaceInfo; board
     if (await ask(`Remove the routine “${r.name}”? The items it made stay.`, 'Remove')) await attempt(() => api('removeRoutine', { space: project.id, id: r.id }).then(bump), 'Routine removed');
   };
   return (
-    <fieldset>
-      <legend>Routines</legend>
-      <p className="small">Each routine creates a work item when it's time, once per day, with its starting prompt: Ctrl+click the item to work on it in Claude.</p>
+    <div className="routines">
+      <p className="small">Each routine creates a work item when it's time, once per day, with its starting prompt. Ctrl+click the item to work on it in Claude.</p>
       {routines?.map((r) => (
-        <div className="field-row routine-row" key={r.id}>
-          <input type="checkbox" id={`routine-on-${r.id}`} checked={r.on} onChange={() => void toggle(r)} />
-          <label htmlFor={`routine-on-${r.id}`} className="grow">
-            <b>{r.name}</b> · {triggerText(r.trigger)} → {r.create.board}: “{r.create.title}”
-            <span className="small muted">
-              {r.last ? ` · last ${ago(r.last.time)}` : ' · not run yet'}
-              {r.next && r.on ? ` · next ${new Date(r.next).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+        <fieldset className={`routine-card${r.on ? '' : ' off'}`} key={r.id}>
+          <div className="routine-head">
+            <input type="checkbox" id={`routine-on-${r.id}`} checked={r.on} disabled={!maintainer} onChange={() => void toggle(r)} aria-label={r.on ? 'On' : 'Off'} />
+            <label htmlFor={`routine-on-${r.id}`} className="grow">
+              <b>{r.name}</b>
+            </label>
+            <span className="routine-when">
+              <Icon name="clock" /> {triggerText(r.trigger)}
             </span>
-          </label>
-          <AsyncButton onClick={() => run(r)}>Run now</AsyncButton>
-          <button onClick={() => setEditing(r)}>Edit</button>
-          <button onClick={() => void remove(r)}>Remove</button>
-        </div>
+          </div>
+          <div className="routine-what small">
+            Creates “{r.create.title}” in {r.create.board}
+            {r.create.prompt ? <> · starting prompt: “{r.create.prompt.length > 140 ? `${r.create.prompt.slice(0, 140)}…` : r.create.prompt}”</> : null}
+          </div>
+          <div className="routine-foot">
+            <span className="small muted grow">
+              {r.last ? <a href={`#/post/${r.last.post}`}>last {ago(r.last.time)}</a> : 'not run yet'}
+              {r.next && r.on ? ` · next ${new Date(r.next).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+              {!r.on ? ' · off' : ''}
+            </span>
+            {maintainer && (
+              <>
+                <AsyncButton onClick={() => run(r)}>Run now</AsyncButton>
+                <button onClick={() => setEditing(r)}>Edit</button>
+                <button onClick={() => void remove(r)}>Remove</button>
+              </>
+            )}
+          </div>
+        </fieldset>
       ))}
-      {routines?.length === 0 && <p className="small">No routines yet.</p>}
-      <button onClick={() => setEditing('new')}>New routine…</button>
+      {routines?.length === 0 && <p className="empty">No routines yet{maintainer ? ': add one to have work items made for you on a schedule.' : '.'}</p>}
+      {maintainer && (
+        <button className="default" onClick={() => setEditing('new')}>
+          New routine…
+        </button>
+      )}
       {editing && <RoutineEditor project={project} boards={boards.filter((b) => b.type !== 'proposals')} routine={editing === 'new' ? undefined : editing} onClose={() => setEditing(undefined)} />}
-    </fieldset>
+    </div>
+  );
+}
+
+/** A project's Routines tab. */
+export function RoutinesPage({ project }: { project: SpaceInfo }) {
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
+  return (
+    <Page
+      title={
+        <>
+          <Icon name="clock" /> Routines · p/{project.name}
+        </>
+      }
+    >
+      {info && boards ? <RoutineSettings project={project} boards={boards} maintainer={info.maintainer} /> : null}
+    </Page>
   );
 }
 

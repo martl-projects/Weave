@@ -585,6 +585,13 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .stack-prompt { margin: 4px 0 0; padding: 6px 8px; border-left: 3px solid currentColor; font-family: var(--content-font); font-size: 12px; opacity: .85; }
 .panel-pick { width: 100%; }
 .routine-row { align-items: center; gap: 6px; }
+.routines { display: flex; flex-direction: column; gap: 10px; font-family: var(--content-font); }
+.routines > button { align-self: flex-start; }
+.routine-card { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.routine-card.off { opacity: .6; }
+.routine-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.routine-when { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+.routine-foot { display: flex; align-items: center; gap: 6px; }
 .routine-days { flex-wrap: wrap; gap: 8px; }
 .stack-item:not(.now) .post-embed-card { opacity: .8; }
 .mention-line { font-family: var(--content-font); font-size: 12px; margin-bottom: 4px; }
