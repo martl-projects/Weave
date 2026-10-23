@@ -17,6 +17,8 @@ export interface Config {
   githubApp?: { clientId: string; slug: string; name: string; owner: string };
   /** Follow Claude Code sessions for links to posts (the Mentions panel). */
   followClaudeCode?: boolean;
+  /** Space id → folders on this computer its sessions ran in, latest first (see rememberFolder). */
+  spaceFolders?: Record<string, string[]>;
 }
 
 export function loadConfig(home: Home): Config {
@@ -30,6 +32,7 @@ export function loadConfig(home: Home): Config {
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
     ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
+    ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
   };
 }
 

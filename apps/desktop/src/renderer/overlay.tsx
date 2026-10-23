@@ -124,6 +124,8 @@ export function MentionsPanel() {
       else if (!item || item.scope !== 'live') refresh();
     });
   }, [pinned]);
+  // Ctrl+click on a work item: show the session it went to.
+  useEffect(() => bridge.onPanelSession?.(setPinned), []);
   const here = session ? mentions.filter((m) => m.session?.id === session.id) : [];
   const elsewhere = session ? mentions.filter((m) => m.session?.id !== session.id) : mentions;
   const toggle = async () => {

@@ -1,5 +1,6 @@
 export type {
   Actor,
+  WorkTarget,
   SessionInfo,
   SessionRef,
   StackPost,

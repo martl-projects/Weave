@@ -484,6 +484,17 @@ export interface SessionInfo {
   time: string;
 }
 
+/** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
+export interface WorkTarget {
+  post: PostInfo;
+  /** The latest session with this item on its stack, if any. */
+  session?: SessionInfo;
+  /** Folders on this computer known for the item's project, most likely first. */
+  folders: string[];
+  /** The message for the session: the item, its address, and its starting prompt. */
+  text: string;
+}
+
 /** Whether Weave follows your Claude Code sessions for links to posts. */
 export interface ClaudeCodeFollow {
   on: boolean;
@@ -927,6 +938,10 @@ export interface Backend {
   workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo>;
   /** Take a work item off a session's stack (the top one if none is named); the next one comes back up. `close` marks an issue done. */
   doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
+  /** Where to work on an item (Ctrl+click): its latest session or the folders known for its project, and the message to start with. */
+  workTarget(input: { post: string }): Promise<WorkTarget>;
+  /** Remember a folder on this computer for a project (or community), for the next new session there. */
+  rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
   /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
   restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
@@ -1099,7 +1114,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

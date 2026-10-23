@@ -238,6 +238,7 @@ import {
   type MentionInfo,
   type SessionInfo,
   type SessionRef,
+  type WorkTarget,
   type StackPost,
   type HubGitHub,
   type RepoInfo,
@@ -1266,6 +1267,35 @@ export class WeaveNode implements Backend {
     const remove = new Set(await ids(input.remove));
     const stack = reorder(record.stack, await ids(input.posts)).filter((s) => !remove.has(s.post));
     return this.#saveSession({ ...record, stack });
+  }
+
+  async workTarget(input: { post: string }): Promise<WorkTarget> {
+    const post = await this.post(input.post);
+    const records = [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time));
+    const latest = records.find((r) => r.stack.some((s) => s.post === post.id));
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    // Folders for the item's space: the ones you chose, then the ones its sessions ran in.
+    const space = post.space?.id;
+    const used = space ? records.filter((r) => r.folder && r.stack.some((s) => posts.get(s.post)?.space?.id === space)).map((r) => r.folder!) : [];
+    const folders = [...new Set([...(space ? (this.config.spaceFolders?.[space] ?? []) : []), ...used])];
+    const lines = [
+      `Weave work item: ${post.title}`,
+      post.url,
+      '',
+      post.prompt ?? "Let's work on this.",
+      ...(latest ? [] : ['', `(This is a new session: first put the item on your stack with weave_work_on, post ${post.url}.)`]),
+    ];
+    return { post, ...(latest ? { session: this.#sessionInfo(latest, posts) } : {}), folders, text: lines.join('\n') };
+  }
+
+  async rememberFolder(input: { space: string; folder: string }): Promise<string[]> {
+    const space = this.#space(input.space);
+    const folder = input.folder?.trim();
+    if (!folder || folder.length > 1000) throw new Error('say which folder');
+    const list = [folder, ...(this.config.spaceFolders?.[space.id] ?? []).filter((f) => f !== folder)].slice(0, 10);
+    this.config = { ...this.config, spaceFolders: { ...this.config.spaceFolders, [space.id]: list } };
+    saveConfig(this.home, this.config);
+    return list;
   }
 
   #sessionRecords(): Map<string, SessionRecord> {

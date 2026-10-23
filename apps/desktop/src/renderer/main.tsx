@@ -366,6 +366,28 @@ function openLink(link: string): void {
 bridge.onLink(openLink);
 // The side panel's links open here.
 bridge.onRoute?.(navigate);
+
+/** Ctrl+click (Cmd+click on a Mac) on a post: work on it in the Claude app. */
+document.addEventListener(
+  'click',
+  (event) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const post = (event.target as Element | null)?.closest?.<HTMLElement>('[data-post]')?.dataset.post;
+    if (!post) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!bridge.workOn) return toast('Ctrl+click opens a work item in the Claude app: that works in the desktop app');
+    bridge.workOn(post).then(
+      (r) => {
+        if (r.how === 'cancelled') return;
+        if (r.delivered === 'clipboard') toast('The message is on your clipboard: paste it in Claude (Ctrl+V)');
+        else toast(r.how === 'new' ? `New Claude session in ${r.where}: the message is in its text box` : `Back in “${r.where}”: the message is in its text box`);
+      },
+      (error: Error) => toast(error.message, 'error'),
+    );
+  },
+  true,
+);
 document.addEventListener('click', (event) => {
   const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"], a[href^="http://weave.localhost"]');
   if (!anchor) return;

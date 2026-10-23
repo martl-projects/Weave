@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
+import { newSession, openSession, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -177,6 +178,35 @@ function showMentions(focus = true): void {
 }
 
 ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' ? mentions?.hide() : showMentions()));
+
+/**
+ * Ctrl+click on a work item: the Claude app comes to the item's latest session
+ * with the item and its starting prompt in the text box (it goes on top of that
+ * session's stack), or to a new session in a folder known for its project
+ * (asked once). The side panel shows that session. Nothing is sent.
+ */
+ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: Delivered; where?: string }> => {
+  if (typeof post !== 'string' || !daemon) throw new Error('not connected to Weave');
+  const client = daemon.client;
+  const target = await client.workTarget({ post });
+  const session = target.session;
+  if (session?.provider === 'claude-code' && session.host) {
+    await client.workOn({ session: { provider: session.provider, id: session.id, host: session.host, ...(session.folder ? { folder: session.folder } : {}) }, post: target.post.id });
+    showMentions(false);
+    mentions?.webContents.send('weave:panel-session', session.id);
+    return { how: 'session', delivered: await openSession(session.host, target.text), where: session.title ?? session.id };
+  }
+  let folder = target.folders[0];
+  if (!folder) {
+    const where = target.post.space ? `${target.post.space.kind} ${target.post.space.name}` : 'this post';
+    const options = { title: `Folder for ${where} (Claude Code works in it)`, properties: ['openDirectory' as const, 'createDirectory' as const] };
+    const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    if (picked.canceled || !picked.filePaths[0]) return { how: 'cancelled' };
+    folder = picked.filePaths[0];
+    if (target.post.space) await client.rememberFolder({ space: target.post.space.id, folder });
+  }
+  return { how: 'new', delivered: await newSession(folder, target.text), where: folder };
+});
 
 /** The panel's links open in the main window: Weave comes to the front there. */
 ipcMain.handle('weave:route', (_event, hash: string) => {

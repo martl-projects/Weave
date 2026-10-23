@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('weave', {
   show: () => ipcRenderer.invoke('weave:show'),
   mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
   route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
+  workOn: (post: string) => ipcRenderer.invoke('weave:work-on', post),
+  onPanelSession: (listener: (session: string) => void) => {
+    ipcRenderer.on('weave:panel-session', (_event, session: string) => listener(session));
+  },
   onRoute: (listener: (hash: string) => void) => {
     ipcRenderer.on('weave:route', (_event, hash: string) => listener(hash));
   },

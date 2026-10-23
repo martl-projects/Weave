@@ -214,7 +214,7 @@ function Badges({ post }: { post: PostInfo }) {
 export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate; moderator?: boolean }) {
   const href = postHref(post);
   return (
-    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`}>
+    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
       <a className={`thumb${post.image ? ' has-image' : ''}`} href={href}>
         {post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}

@@ -122,6 +122,7 @@ function embedCard(p: PostInfo): HTMLElement {
   };
   const card = el('a', 'post-embed-card');
   card.setAttribute('href', `weave:post:${p.id}`);
+  card.dataset.post = p.id;
   const thumb = el('span', 'post-embed-thumb');
   if (p.image) {
     const img = document.createElement('img');

@@ -24,6 +24,10 @@ interface Bridge {
   route?(hash: string): Promise<void>;
   /** In the main window: a route the panel asked for. */
   onRoute?(listener: (hash: string) => void): void;
+  /** Ctrl+click: work on a post in the Claude app (its session, or a new one). Missing in a browser. */
+  workOn?(post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: 'pasted' | 'clipboard' | 'link'; where?: string }>;
+  /** In the side panel: show this session (after Ctrl+click). */
+  onPanelSession?(listener: (session: string) => void): void;
   /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */
   platform?: string;
   /** The app's own title bar buttons; missing in a browser, which has its own window. */
