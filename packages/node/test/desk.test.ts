@@ -62,6 +62,32 @@ describe('your desk and its routines', () => {
     }
   });
 
+  it("sends the desk's items to your daily driver: the first session that took one on", async () => {
+    const martin = WeaveNode.init('Martin', temp('weave-desk-'));
+    const desk = await martin.setupDesk({ folder: join(temp('weave-desk-folder-'), 'Desk') });
+    await martin.createProject({ name: 'Weave' });
+    const fix = await martin.submit({ space: 'Weave', board: 'issues', title: 'Fix the login' });
+    const [setup] = await martin.posts({ space: desk.space.id, board: 'ideas' });
+    expect(setup.prompt).toMatch(/name this session "Daily driver".*sidebar group "Desk"/);
+
+    // A session elsewhere taking on another project's item doesn't make it the driver.
+    await martin.workOn({ session: { id: 'weave-work', host: 'local_w' }, post: fix.id });
+    expect((await martin.desk())!.driver).toBeUndefined();
+    // The first session that takes on a desk item does.
+    await martin.workOn({ session: { id: 'driver-1', host: 'local_d', folder: desk.folder }, post: setup.id });
+    expect((await martin.desk())!.driver).toEqual({ provider: 'claude-code', id: 'driver-1', host: 'local_d', folder: desk.folder });
+
+    // Tomorrow's journal entry goes to the driver, though it isn't on its stack yet.
+    const [entry] = await martin.tickRoutines(new Date(2026, 9, 26, 8, 0));
+    const target = await martin.workTarget({ post: entry.id });
+    expect(target.session).toMatchObject({ id: 'driver-1', host: 'local_d' });
+    expect(target.text).not.toContain('new session');
+    // Another project's item still goes to its own session; another session on the desk doesn't take over.
+    expect((await martin.workTarget({ post: fix.id })).session).toMatchObject({ id: 'weave-work' });
+    await martin.workOn({ session: { id: 'other' }, post: entry.id });
+    expect((await martin.desk())!.driver).toMatchObject({ id: 'driver-1' });
+  });
+
   it("creates each day's item once, when its time has come", async () => {
     const martin = WeaveNode.init('Martin', temp('weave-desk-'));
     const desk = await martin.setupDesk({ folder: join(temp('weave-desk-folder-'), 'Desk') });

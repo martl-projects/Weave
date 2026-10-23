@@ -20,7 +20,7 @@ export interface Config {
   /** Space id → folders on this computer its sessions ran in, latest first (see rememberFolder). */
   spaceFolders?: Record<string, string[]>;
   /** Your desk: its project, and the folder here where your daily driver works. */
-  desk?: { space: string; folder?: string };
+  desk?: { space: string; folder?: string; driver?: { provider: string; id: string; host?: string; folder?: string } };
 }
 
 export function loadConfig(home: Home): Config {

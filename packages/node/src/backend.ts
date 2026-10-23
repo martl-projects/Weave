@@ -516,6 +516,8 @@ export interface DeskInfo {
   space: SpaceRef;
   /** The folder on this computer where your daily driver's sessions run. */
   folder?: string;
+  /** Your daily driver: the session your desk's items go to (the first one that took one on). */
+  driver?: SessionRef;
 }
 
 /** Whether Weave follows your Claude Code sessions for links to posts. */

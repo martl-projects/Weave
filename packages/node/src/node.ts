@@ -387,7 +387,7 @@ const DESK_ROUTINES: Array<{ id: string; name: string; trigger: RoutineInfo['tri
       title: 'Set up your desk',
       text: 'Your desk is new: a Journal (one entry per weekday, from the Journal entry routine) and Ideas. Ctrl+click this item to set it up with your daily driver.',
       prompt:
-        "Help me set up my Weave desk. Look at who I am and my projects (weave_whoami), ask how I like to plan my days, suggest routines that would help (a time for the journal entry, a standup, a backlog check), and write what you learn about how I work into this folder's CLAUDE.md.",
+        "Help me set up my Weave desk; this session is my daily driver from now on. If you can, name this session \"Daily driver\" and put it in a sidebar group \"Desk\" in the Claude app. Then look at who I am and my projects (weave_whoami), ask how I like to plan my days, suggest routines that would help (a time for the journal entry, a standup, a backlog check), and write what you learn about how I work into this folder's CLAUDE.md.",
     },
   },
 ];
@@ -1316,6 +1316,12 @@ export class WeaveNode implements Backend {
     if (!input.post === !input.create) throw new Error('name a post to work on, or create one (not both)');
     const post = input.post ? await this.post(input.post) : await this.submit({ ...input.create!, as: input.as });
     const record = this.#sessionRecord(input.session);
+    // The first session that takes on a desk item becomes your daily driver: the desk's items go to it from then on.
+    const desk = this.config.desk;
+    if (desk && !desk.driver && post.space?.id === desk.space) {
+      this.config = { ...this.config, desk: { ...desk, driver: { provider: record.provider, id: record.id, ...(record.host ? { host: record.host } : {}), ...(record.folder ? { folder: record.folder } : {}) } } };
+      saveConfig(this.home, this.config);
+    }
     return this.#saveSession({ ...record, stack: pushOnto(record.stack, post.id, new Date().toISOString()) });
   }
 
@@ -1344,7 +1350,7 @@ export class WeaveNode implements Backend {
   async desk(): Promise<DeskInfo | null> {
     const desk = this.config.desk;
     const space = desk && this.#spaces.get(desk.space);
-    return space ? { space: { id: space.id, kind: space.kind, name: space.name }, ...(desk.folder ? { folder: desk.folder } : {}) } : null;
+    return space ? { space: { id: space.id, kind: space.kind, name: space.name }, ...(desk.folder ? { folder: desk.folder } : {}), ...(desk.driver ? { driver: desk.driver } : {}) } : null;
   }
 
   /** Where your desk's folder is, or goes by default. */
@@ -1374,7 +1380,7 @@ export class WeaveNode implements Backend {
     if (!existsSync(instructions)) writeFileSync(instructions, deskInstructions(this.nameOf(this.identity.author) ?? 'me', desk.space.name));
     // A desk that moved: the old folder isn't suggested for it any more.
     const known = (this.config.spaceFolders?.[desk.space.id] ?? []).filter((f) => f !== previous || f === folder);
-    this.config = { ...this.config, desk: { space: desk.space.id, folder }, spaceFolders: { ...this.config.spaceFolders, [desk.space.id]: known } };
+    this.config = { ...this.config, desk: { ...this.config.desk, space: desk.space.id, folder }, spaceFolders: { ...this.config.spaceFolders, [desk.space.id]: known } };
     saveConfig(this.home, this.config);
     await this.rememberFolder({ space: desk.space.id, folder });
     // First start: the routines that run once, now.
@@ -1481,7 +1487,10 @@ export class WeaveNode implements Backend {
   async workTarget(input: { post: string }): Promise<WorkTarget> {
     const post = await this.post(input.post);
     const records = [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time));
-    const latest = records.find((r) => r.stack.some((s) => s.post === post.id));
+    // Your desk's items go to your daily driver; others to their latest session.
+    const driver = this.config.desk?.driver;
+    const latest =
+      driver && post.space?.id === this.config.desk?.space ? this.#sessionRecord(driver) : records.find((r) => r.stack.some((s) => s.post === post.id));
     const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
     // Folders for the item's space: the ones you chose, then the ones its sessions ran in.
     const space = post.space?.id;
