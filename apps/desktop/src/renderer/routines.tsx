@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { BoardInfo, DeskInfo, PostInfo, RoutineInfo, SpaceInfo } from '@weave/node/client';
-import { ago, api, bump, navigate, useApi } from './lib.ts';
+import { ago, api, bridge, bump, navigate, useApi } from './lib.ts';
 import { spaceHref } from './posts.tsx';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
@@ -172,7 +172,12 @@ export function RoutineSettings({ project, boards }: { project: SpaceInfo; board
 /** Set up your desk: a private project with Journal and Ideas, the folder where your daily driver works, and the first routines. */
 export function SetupDeskDialog({ onClose }: { onClose(): void }) {
   const { data: desk } = useApi(() => api<DeskInfo | null>('desk'), []);
+  const { data: current } = useApi(() => api<string>('deskFolder'), []);
   const [folder, setFolder] = useState('');
+  const choose = async () => {
+    const picked = await bridge.pickFolder("Your daily driver's folder");
+    if (picked) setFolder(picked);
+  };
   const setup = async (e: FormEvent) => {
     e.preventDefault();
     const made = await attempt(() => api<DeskInfo>('setupDesk', folder.trim() ? { folder: folder.trim() } : {}), 'Your desk is set up');
@@ -196,8 +201,13 @@ export function SetupDeskDialog({ onClose }: { onClose(): void }) {
           </p>
         )}
         <div className="field-row-stacked">
-          <label htmlFor="desk-folder">The daily driver's folder</label>
-          <input id="desk-folder" placeholder={desk?.folder ?? 'Weave Desk, in your user folder'} value={folder} onChange={(e) => setFolder(e.target.value)} />
+          <label htmlFor="desk-folder">The daily driver's folder (a full path, or a name for a folder in your user folder)</label>
+          <div className="field-row">
+            <input id="desk-folder" className="grow" placeholder={current ?? ''} value={folder} onChange={(e) => setFolder(e.target.value)} />
+            <button type="button" onClick={() => void choose()}>
+              Choose…
+            </button>
+          </div>
         </div>
         <div className="buttons">
           <button type="button" onClick={onClose}>

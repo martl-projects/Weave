@@ -305,7 +305,7 @@ import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './a
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join as joinPath, resolve as resolvePath } from 'node:path';
+import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
@@ -1347,6 +1347,11 @@ export class WeaveNode implements Backend {
     return space ? { space: { id: space.id, kind: space.kind, name: space.name }, ...(desk.folder ? { folder: desk.folder } : {}) } : null;
   }
 
+  /** Where your desk's folder is, or goes by default. */
+  async deskFolder(): Promise<string> {
+    return this.config.desk?.folder ?? joinPath(homedir(), 'Weave Desk');
+  }
+
   async setupDesk(input: { name?: string; folder?: string } = {}): Promise<DeskInfo> {
     let desk = await this.desk();
     if (!desk) {
@@ -1360,11 +1365,16 @@ export class WeaveNode implements Backend {
       for (const routine of DESK_ROUTINES) await this.setRoutine({ space: project.id, ...routine });
     }
     // The folder where the daily driver works, with its instructions (yours to change: never overwritten).
-    const folder = resolvePath(input.folder?.trim() || desk.folder || joinPath(homedir(), 'Weave Desk'));
+    // A bare name is a folder in your user folder, not wherever the daemon happens to run.
+    const asked = input.folder?.trim();
+    const folder = asked ? (isAbsolute(asked) ? resolvePath(asked) : joinPath(homedir(), asked)) : (desk.folder ?? joinPath(homedir(), 'Weave Desk'));
+    const previous = desk.folder;
     mkdirSync(folder, { recursive: true });
     const instructions = joinPath(folder, 'CLAUDE.md');
     if (!existsSync(instructions)) writeFileSync(instructions, deskInstructions(this.nameOf(this.identity.author) ?? 'me', desk.space.name));
-    this.config = { ...this.config, desk: { space: desk.space.id, folder } };
+    // A desk that moved: the old folder isn't suggested for it any more.
+    const known = (this.config.spaceFolders?.[desk.space.id] ?? []).filter((f) => f !== previous || f === folder);
+    this.config = { ...this.config, desk: { space: desk.space.id, folder }, spaceFolders: { ...this.config.spaceFolders, [desk.space.id]: known } };
     saveConfig(this.home, this.config);
     await this.rememberFolder({ space: desk.space.id, folder });
     // First start: the routines that run once, now.

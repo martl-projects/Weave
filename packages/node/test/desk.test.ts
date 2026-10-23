@@ -41,6 +41,27 @@ describe('your desk and its routines', () => {
     expect((await martin.spaces()).filter((s) => s.kind === 'project').length).toBe(1);
   });
 
+  it('puts a desk folder given by name in your user folder, and forgets the old one when it moves', async () => {
+    const home = temp('weave-desk-home-');
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      const martin = WeaveNode.init('Martin', temp('weave-desk-'));
+      expect(await martin.deskFolder()).toBe(join(home, 'Weave Desk'));
+      const desk = await martin.setupDesk({ folder: 'Desk' });
+      expect(desk.folder).toBe(join(home, 'Desk'));
+      expect(existsSync(join(home, 'Desk', 'CLAUDE.md'))).toBe(true);
+      const moved = await martin.setupDesk({ folder: join(home, 'Elsewhere') });
+      expect(moved.folder).toBe(join(home, 'Elsewhere'));
+      const [setup] = await martin.posts({ space: desk.space.id, board: 'ideas' });
+      expect((await martin.workTarget({ post: setup.id })).folders).toEqual([join(home, 'Elsewhere')]);
+    } finally {
+      process.env.HOME = saved.HOME;
+      process.env.USERPROFILE = saved.USERPROFILE;
+    }
+  });
+
   it("creates each day's item once, when its time has come", async () => {
     const martin = WeaveNode.init('Martin', temp('weave-desk-'));
     const desk = await martin.setupDesk({ folder: join(temp('weave-desk-folder-'), 'Desk') });

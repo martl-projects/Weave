@@ -965,6 +965,8 @@ export interface Backend {
   workTarget(input: { post: string }): Promise<WorkTarget>;
   /** Your desk, once it's set up. */
   desk(): Promise<DeskInfo | null>;
+  /** Where your desk's folder is, or goes unless you choose another. */
+  deskFolder(): Promise<string>;
   /**
    * Set up your desk (once): a private project with Journal and Ideas boards, the folder where your daily
    * driver works (with a CLAUDE.md for it), and the first routines. Running it again changes nothing that exists.
@@ -1151,7 +1153,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder', 'desk', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',
