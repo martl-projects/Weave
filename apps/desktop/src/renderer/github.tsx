@@ -233,6 +233,13 @@ function useShare(space: SpaceInfo) {
   return { share, dialog };
 }
 
+/** Before someone gives a space their GitHub account: who sees the name, and what it's for. */
+function whoSeesIt(data: SpaceRepos, space: SpaceInfo): string {
+  const linkers = [...new Set(data.repos.filter((r) => !r.mine).map((r) => r.by.name ?? shortDid(r.by.did)))];
+  const by = linkers.length ? `${linkers.join(' and ')}, who linked ${data.repos.length === 1 ? 'the repository' : 'its repositories'}, ${linkers.length === 1 ? 'uses' : 'use'} it` : 'Whoever linked its repositories uses it';
+  return `Your GitHub name goes to this ${space.kind}, sealed for its members (not public). ${by} to invite you on GitHub.`;
+}
+
 /** On a space's page: its repositories wait for your GitHub account. */
 export function RepoBanner({ space }: { space: SpaceInfo }) {
   const { data } = useApi(() => api<SpaceRepos>('spaceRepos', space.id).catch(() => undefined), [space.id]);
@@ -251,6 +258,7 @@ export function RepoBanner({ space }: { space: SpaceInfo }) {
           <>{theirs.length} GitHub repositories</>
         )}{' '}
         follow{theirs.length === 1 ? 's' : ''} this {space.kind}. Give it your GitHub account to get read access.
+        <div className="small muted">{whoSeesIt(data, space)}</div>
       </span>
       <AsyncButton className="default" onClick={share}>
         Give my GitHub account
@@ -333,7 +341,10 @@ export function RepoSettings({ space }: { space: SpaceInfo }) {
       )}
       {data.repos.length > 0 && (
         <div className="field-row">
-          <span className="grow small">{data.shared ? <>You gave it your GitHub account <b>{data.shared}</b>.</> : "You haven't given it your GitHub account."}</span>
+          <span className="grow small">
+            {data.shared ? <>You gave it your GitHub account <b>{data.shared}</b>.</> : "You haven't given it your GitHub account."}
+            {!data.shared && <div className="muted">{whoSeesIt(data, space)}</div>}
+          </span>
           {data.shared ? (
             <AsyncButton onClick={() => attempt(() => api('shareGithub', { space: space.id, on: false }).then(bump), 'Your GitHub account was taken back')}>Take it back</AsyncButton>
           ) : (
