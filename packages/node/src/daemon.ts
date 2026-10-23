@@ -40,6 +40,11 @@ export async function startDaemon(dir?: string, options: { port?: number; linkPo
   const unsubscribe = node.replica.onAppend(reconcile);
   reconcile();
 
+  // Routines: create what's due, shortly after starting (the computer may have been off) and every minute.
+  const tick = () => void node.tickRoutines().catch((error: Error) => console.error(`weave: routines: ${error.message}`));
+  const firstTick = setTimeout(tick, 3000);
+  const routines = setInterval(tick, 60_000);
+
   let stopped = false;
   return {
     node,
@@ -49,6 +54,8 @@ export async function startDaemon(dir?: string, options: { port?: number; linkPo
       stopped = true;
       unsubscribe();
       clearTimeout(timer);
+      clearTimeout(firstTick);
+      clearInterval(routines);
       rmSync(home.daemon, { force: true });
       await api.close();
       await links?.close();

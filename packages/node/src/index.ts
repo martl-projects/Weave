@@ -1,5 +1,7 @@
 export type {
   Actor,
+  DeskInfo,
+  RoutineInfo,
   WorkTarget,
   SessionInfo,
   SessionRef,

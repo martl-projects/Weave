@@ -109,6 +109,15 @@ import {
   MAX_COAUTHORS,
   postRefOf,
   postRefsIn,
+  dayKey,
+  dueOccurrence,
+  KIND_ROUTINE,
+  nextRun,
+  parseCreate,
+  parseTrigger,
+  renderTitle,
+  routinesOf,
+  type Routine,
   KIND_SESSION,
   pushOnto,
   reorder,
@@ -239,6 +248,8 @@ import {
   type SessionInfo,
   type SessionRef,
   type WorkTarget,
+  type DeskInfo,
+  type RoutineInfo,
   type StackPost,
   type HubGitHub,
   type RepoInfo,
@@ -292,8 +303,8 @@ import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
@@ -353,6 +364,65 @@ const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', descripti
  * peers. The CLI uses it directly when no daemon runs; the daemon wraps it
  * with networking and the HTTP API.
  */
+/** The routines a new desk starts with. */
+const DESK_ROUTINES: Array<{ id: string; name: string; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }> = [
+  {
+    id: 'journal',
+    name: 'Journal entry',
+    trigger: { type: 'schedule', days: [1, 2, 3, 4, 5], time: '08:00' },
+    create: {
+      board: 'journal',
+      title: '{date}',
+      text: '## Plan\n\n- \n\n## Notes\n\n## Done\n',
+      prompt:
+        "This is today's journal entry, and our planning for the day. Start by reading yesterday's entry, my open work items and what's hot in my projects, then propose a plan for today and keep it in this entry's text (weave_edit_post). Listen and ask while I journal; when something deserves work, create a work item in the project it belongs to, with a clear starting prompt, and tell me where you put it.",
+    },
+  },
+  {
+    id: 'setup',
+    name: 'Set up your desk',
+    trigger: { type: 'first-start' },
+    create: {
+      board: 'ideas',
+      title: 'Set up your desk',
+      text: 'Your desk is new: a Journal (one entry per weekday, from the Journal entry routine) and Ideas. Ctrl+click this item to set it up with your daily driver.',
+      prompt:
+        "Help me set up my Weave desk. Look at who I am and my projects (weave_whoami), ask how I like to plan my days, suggest routines that would help (a time for the journal entry, a standup, a backlog check), and write what you learn about how I work into this folder's CLAUDE.md.",
+    },
+  },
+];
+
+/** The CLAUDE.md a new desk folder starts with: who the daily driver works for and how. */
+function deskInstructions(person: string, desk: string): string {
+  return `# Weave desk
+
+This folder is where my daily driver works: the Claude Code sessions where we
+plan, journal and hand out work, with Weave. (Weave wrote this file once; it's
+mine now, change it as you learn how I work.)
+
+## Who and where
+
+- I'm ${person}. In Weave you act as my agent; your tools are the weave_* ones.
+- My desk is the private project "${desk}": Journal (one entry per weekday) and
+  Ideas. My other projects are where the real work lives.
+
+## How we work
+
+- A work item is a Weave post with a starting prompt (what to do with it).
+  Your session has a stack of work items (weave_session): the top one is what
+  we're on. Items I start from Weave arrive as "Weave work item: …" messages.
+- Today's journal entry is our planning: keep the plan in its text, and turn
+  what deserves it into work items in the right project, each with a clear
+  starting prompt. Say where you put them, as links.
+- When something interrupts, put it on top of the stack (weave_work_on); when
+  it's done, weave_done, and tell me what we're back to.
+- Folders and projects aren't one to one. To start work elsewhere, use a
+  folder Weave knows for that project; if none fits, ask me, or ask to create
+  one. Never guess a folder you haven't seen used for that project.
+- When you mention a post, link it with its url.
+`;
+}
+
 export class WeaveNode implements Backend {
   readonly home: Home;
   #identity: SigningIdentity;
@@ -1267,6 +1337,135 @@ export class WeaveNode implements Backend {
     const remove = new Set(await ids(input.remove));
     const stack = reorder(record.stack, await ids(input.posts)).filter((s) => !remove.has(s.post));
     return this.#saveSession({ ...record, stack });
+  }
+
+  // ---------------------------------------------------------------- your desk and its routines
+
+  async desk(): Promise<DeskInfo | null> {
+    const desk = this.config.desk;
+    const space = desk && this.#spaces.get(desk.space);
+    return space ? { space: { id: space.id, kind: space.kind, name: space.name }, ...(desk.folder ? { folder: desk.folder } : {}) } : null;
+  }
+
+  async setupDesk(input: { name?: string; folder?: string } = {}): Promise<DeskInfo> {
+    let desk = await this.desk();
+    if (!desk) {
+      const project = await this.createProject({ name: input.name?.trim() || 'Desk', description: 'My desk: journal, ideas and routines. Private.' });
+      await this.setBoard({ project: project.id, name: 'journal', title: 'Journal', type: 'posts', sort: 'new', position: 0 });
+      await this.setBoard({ project: project.id, name: 'releases', on: false });
+      await this.setBoard({ project: project.id, name: 'proposals', on: false });
+      this.config = { ...this.config, desk: { space: project.id } };
+      saveConfig(this.home, this.config);
+      desk = (await this.desk())!;
+      for (const routine of DESK_ROUTINES) await this.setRoutine({ space: project.id, ...routine });
+    }
+    // The folder where the daily driver works, with its instructions (yours to change: never overwritten).
+    const folder = resolvePath(input.folder?.trim() || desk.folder || joinPath(homedir(), 'Weave Desk'));
+    mkdirSync(folder, { recursive: true });
+    const instructions = joinPath(folder, 'CLAUDE.md');
+    if (!existsSync(instructions)) writeFileSync(instructions, deskInstructions(this.nameOf(this.identity.author) ?? 'me', desk.space.name));
+    this.config = { ...this.config, desk: { space: desk.space.id, folder } };
+    saveConfig(this.home, this.config);
+    await this.rememberFolder({ space: desk.space.id, folder });
+    // First start: the routines that run once, now.
+    for (const routine of (await this.routines({ space: desk.space.id })).filter((r) => r.on && r.trigger.type === 'first-start')) await this.runRoutine({ space: desk.space.id, id: routine.id });
+    return (await this.desk())!;
+  }
+
+  async routines(input: { space?: string } = {}): Promise<RoutineInfo[]> {
+    const space = this.#routineSpace(input.space);
+    const posts = this.#spacePosts(space).posts.filter((p) => p.routine);
+    const now = new Date();
+    return this.#routineRecords(space).map((r) => {
+      const last = posts.filter((p) => p.routine!.id === r.id).sort((a, b) => b.time.localeCompare(a.time))[0];
+      const next = nextRun(r, now);
+      return {
+        id: r.id,
+        name: r.name,
+        on: r.on,
+        trigger: r.trigger,
+        create: r.create,
+        space: { id: space.id, kind: space.kind, name: space.name },
+        ...(last ? { last: { post: last.id, occurrence: last.routine!.occurrence, time: last.time } } : {}),
+        ...(next ? { next: next.toISOString() } : {}),
+      };
+    });
+  }
+
+  async setRoutine(input: { space?: string; id?: string; name: string; on?: boolean; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }): Promise<RoutineInfo> {
+    const space = this.#routineSpace(input.space);
+    this.#maintainerState(space);
+    const name = input.name?.trim();
+    if (!name || name.length > 100) throw new Error('a routine needs a name (up to 100 characters)');
+    const trigger = parseTrigger(input.trigger);
+    if (!trigger) throw new Error('a routine runs on a schedule (days 0-6, Sunday is 0, and a time like 08:00) or at first start');
+    const create = parseCreate(input.create);
+    if (!create) throw new Error('say what the routine creates: a board and a title pattern ({date}, {day}, {weekday})');
+    this.#board(space, this.#spacePosts(space).boards, create.board);
+    const id = input.id?.trim() || randomUUID().slice(0, 8);
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
+    return (await this.routines({ space: space.id })).find((r) => r.id === id)!;
+  }
+
+  async removeRoutine(input: { space?: string; id: string }): Promise<void> {
+    const space = this.#routineSpace(input.space);
+    this.#maintainerState(space);
+    if (!this.#routineRecords(space).some((r) => r.id === input.id)) throw new Error('no such routine');
+    this.replica.append(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
+  }
+
+  async runRoutine(input: { space?: string; id: string }): Promise<PostInfo> {
+    const space = this.#routineSpace(input.space);
+    const routine = this.#routineRecords(space).find((r) => r.id === input.id);
+    if (!routine) throw new Error('no such routine');
+    const now = new Date();
+    return this.#runOccurrence(space, routine, routine.trigger.type === 'first-start' ? 'first-start' : dayKey(now), now);
+  }
+
+  /**
+   * Create what's due: today's item of every scheduled routine whose time has come and that you made
+   * (in a shared project, only its author's Weave runs it). The daemon calls this every minute.
+   */
+  async tickRoutines(now = new Date()): Promise<PostInfo[]> {
+    const made: PostInfo[] = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'project') continue;
+      for (const routine of this.#routineRecords(space)) {
+        if (routine.by !== this.identity.author) continue;
+        const occurrence = dueOccurrence(routine, now);
+        if (!occurrence || this.#occurrence(space, routine.id, occurrence)) continue;
+        made.push(await this.#runOccurrence(space, routine, occurrence, now));
+      }
+    }
+    return made;
+  }
+
+  #routineSpace(ref?: string): StoredSpace {
+    const id = ref ?? this.config.desk?.space;
+    if (!id) throw new Error('set up your desk first, or say which project');
+    const space = this.#space(id);
+    if (space.kind !== 'project') throw new Error('routines live in projects');
+    return space;
+  }
+
+  #routineRecords(space: StoredSpace): Routine[] {
+    return routinesOf(this.#entries(space), this.#state(space).maintainers);
+  }
+
+  #occurrence(space: StoredSpace, id: string, occurrence: string): PostInfo | undefined {
+    return this.#spacePosts(space).posts.find((p) => p.routine?.id === id && p.routine.occurrence === occurrence);
+  }
+
+  async #runOccurrence(space: StoredSpace, routine: Routine, occurrence: string, now: Date): Promise<PostInfo> {
+    const existing = this.#occurrence(space, routine.id, occurrence);
+    if (existing) return existing;
+    const { create } = routine;
+    const body: Record<string, Json> = { title: renderTitle(create.title, now), text: create.text ?? '', board: create.board, routine: { id: routine.id, occurrence } };
+    if (create.prompt) body.prompt = create.prompt;
+    const { id } = await this.publish({ kind: KIND_POST, body, space: space.id });
+    const post = await this.post(id);
+    this.#emitLive({ type: 'routine', category: 'activity', title: routine.name, text: `${post.title} is ready`, open: { post: post.id } });
+    return post;
   }
 
   async workTarget(input: { post: string }): Promise<WorkTarget> {
@@ -3803,6 +4002,7 @@ export class WeaveNode implements Backend {
       ...(p.link ? { link: p.link } : {}),
       ...(p.image ? { image: p.image } : {}),
       ...(p.prompt ? { prompt: p.prompt } : {}),
+      ...(p.routine ? { routine: p.routine } : {}),
       time: p.time,
       ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,

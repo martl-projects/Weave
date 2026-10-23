@@ -232,3 +232,4 @@ export {
   type SyncPlan,
 } from './github.ts';
 export { KIND_SESSION, MAX_STACK, pushOnto, reorder, sessionKey, sessionsOf, takeOff, type SessionRecord, type StackItem } from './sessions.ts';
+export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';

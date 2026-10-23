@@ -11,7 +11,8 @@ import type { SpaceKind } from './spaces.ts';
  * one board of posts. Every post has a chat (weave.msg with `post`) instead of
  * a comment tree.
  *
- *   weave.post     {title, text, link, image, board, share, with, prompt}
+ *   weave.post     {title, text, link, image, board, share, with, prompt, routine}
+ *                                                      routine: {id, occurrence} when a routine made it (see routines.ts)
  *                                                      a post in a community or in a project's board; image: a wblob: reference;
  *                                                      with: co-authors it names (people's identifiers or agents' keys);
  *                                                      an edit by its author may carry a new `with` list
@@ -178,6 +179,8 @@ export interface Post {
   image?: string;
   /** As a work item: what a session should do with it (its starting prompt). */
   prompt?: string;
+  /** The routine occurrence that made it. */
+  routine?: { id: string; occurrence: string };
   share?: Share;
   time: string;
   /** When its author last edited it. */
@@ -409,6 +412,8 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
       const coauthors = withOf(e.body, e.event.author, e.event.signer);
       const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
+      const made = field(e.body, 'routine') as Json;
+      const routine = { id: str(made, 'id', 60), occurrence: str(made, 'occurrence', 60) };
       posts.push({
         ...base,
         type: 'post',
@@ -420,6 +425,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
         ...(share ? { share } : {}),
         ...(coauthors.length ? { with: coauthors } : {}),
         ...(prompt ? { prompt } : {}),
+        ...(routine.id && routine.occurrence ? { routine } : {}),
       });
     } else if (kind === 'project' && e.kind === KIND_THREAD && str(e.body, 'title')) {
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });

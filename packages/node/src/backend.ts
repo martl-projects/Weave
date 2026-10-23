@@ -33,7 +33,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'routine';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -334,6 +334,8 @@ export interface PostInfo {
   image?: string;
   /** As a work item: what a session should do with it (its starting prompt). */
   prompt?: string;
+  /** The routine occurrence that made it. */
+  routine?: { id: string; occurrence: string };
   time: string;
   /** When its author last edited it. */
   edited?: string;
@@ -493,6 +495,27 @@ export interface WorkTarget {
   folders: string[];
   /** The message for the session: the item, its address, and its starting prompt. */
   text: string;
+}
+
+/** A routine: a trigger and a work item it creates (see core routines.ts), with when it last and next fires. */
+export interface RoutineInfo {
+  id: string;
+  name: string;
+  on: boolean;
+  trigger: { type: 'schedule'; days: number[]; time: string } | { type: 'first-start' };
+  create: { board: string; title: string; text?: string; prompt?: string };
+  space: SpaceRef;
+  /** The latest item it made. */
+  last?: { post: string; occurrence: string; time: string };
+  /** When it next fires (scheduled routines that are on). */
+  next?: string;
+}
+
+/** Your desk: the private project where your journal, ideas and routines live, and its folder here. */
+export interface DeskInfo {
+  space: SpaceRef;
+  /** The folder on this computer where your daily driver's sessions run. */
+  folder?: string;
 }
 
 /** Whether Weave follows your Claude Code sessions for links to posts. */
@@ -940,6 +963,20 @@ export interface Backend {
   doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
   /** Where to work on an item (Ctrl+click): its latest session or the folders known for its project, and the message to start with. */
   workTarget(input: { post: string }): Promise<WorkTarget>;
+  /** Your desk, once it's set up. */
+  desk(): Promise<DeskInfo | null>;
+  /**
+   * Set up your desk (once): a private project with Journal and Ideas boards, the folder where your daily
+   * driver works (with a CLAUDE.md for it), and the first routines. Running it again changes nothing that exists.
+   */
+  setupDesk(input: { name?: string; folder?: string }): Promise<DeskInfo>;
+  /** A project's routines (your desk's by default). */
+  routines(input?: { space?: string }): Promise<RoutineInfo[]>;
+  /** Add or change a routine (maintainers). Without an id, a new one. */
+  setRoutine(input: { space?: string; id?: string; name: string; on?: boolean; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }): Promise<RoutineInfo>;
+  removeRoutine(input: { space?: string; id: string }): Promise<void>;
+  /** Run a routine now: its item for today (or its first start), unless that exists already. */
+  runRoutine(input: { space?: string; id: string }): Promise<PostInfo>;
   /** Remember a folder on this computer for a project (or community), for the next new session there. */
   rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
   /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
@@ -1114,7 +1151,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder', 'desk', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

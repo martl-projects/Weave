@@ -10,6 +10,7 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { MentionsPanel } from './overlay.tsx';
+import { SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
@@ -33,7 +34,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -500,6 +501,7 @@ function Shell() {
           items={[
             { label: 'New project, community or group…', onClick: () => setDialog({ kind: 'new' }) },
             { label: 'Join with an invite link…', onClick: () => setDialog({ kind: 'new' }) },
+            { label: 'Your desk…', onClick: () => setDialog({ kind: 'desk' }) },
             'sep',
             { label: 'Close', onClick: () => window.close() },
           ]}
@@ -590,6 +592,7 @@ function Shell() {
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
+      {dialog?.kind === 'desk' && <SetupDeskDialog onClose={close} />}
     </div>
   );
 }

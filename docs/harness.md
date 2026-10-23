@@ -238,7 +238,7 @@ app has let go (it keeps them warm 30 minutes) may work, but is untested.
 
 Set up once (Weave offers it): a personal project, private to you, with:
 
-- **Journal**: one entry per day ("Thursday, 23 October 2026"), sorted new.
+- **Journal**: one entry per day ("Friday, 23 October 2026"), sorted new.
   One board for all years rather than a board per year: Weave boards are
   long-lived, and the board view filters by month and year. Each entry's body
   is that day's scratchpad; its chat is where the day's sessions report.
