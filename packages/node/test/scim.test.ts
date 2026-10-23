@@ -140,6 +140,13 @@ describe('the company in its user management and device management', { timeout: 
     expect(members.find((m) => m.name === 'Lena')?.attested?.device?.subject).toMatch(/ACME-LAPTOP-7/);
     expect(members.find((m) => m.name === 'Kofi')?.attested).toBeUndefined();
     expect(members.find((m) => m.name === 'Ade')?.attested).toBeUndefined();
+    // Each person's computer as the company saw it, and why a sign-in wasn't vouched for (stage 15).
+    const devices = new Map((await acme.companyDevices()).map((d) => [d.name, d]));
+    expect(devices.get('Lena')).toMatchObject({ required: true, vouched: true, device: { subject: expect.stringMatching(/ACME-LAPTOP-7/), validTo: expect.any(String) } });
+    expect(Date.parse(devices.get('Lena')!.device!.validTo!)).toBeGreaterThan(Date.now());
+    expect(devices.get('Lena')?.problem).toBeUndefined();
+    expect(devices.get('Kofi')).toMatchObject({ vouched: false, problem: expect.stringMatching(/another authority/) });
+    expect(devices.get('Ade')).toMatchObject({ vouched: false, problem: 'no company computer certificate' });
     for (const node of all) await node.close();
   });
 

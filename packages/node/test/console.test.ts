@@ -154,4 +154,89 @@ describe('the admin console', { timeout: 120_000 }, () => {
       await mail.stop();
     }
   });
+
+  it('gives auditors and the helpdesk their own roles, approves agents, and searches the audit by person, date and words', async () => {
+    vault.createKey('acme-roles');
+    const dir = mkdtempSync(join(tmpdir(), 'weave-roles-'));
+    dirs.push(dir);
+    const acme = WeaveNode.init('Acme', dir);
+    acme.kmsCredentials = { token: vault.rootToken };
+    await acme.createCompany({ name: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-roles', jwt: { role: 'employees' } }, issuer: oidc.issuer, audience: 'weave', admins: 'weave-admins' });
+    await new Promise((r) => setTimeout(r, 300));
+    await acme.companyAction({ action: 'settings', auditors: 'weave-auditors', helpdesk: 'weave-helpdesk' });
+    expect(await acme.company()).toMatchObject({ admins: 'weave-admins', auditors: 'weave-auditors', helpdesk: 'weave-helpdesk' });
+
+    // Noah enrolls, and his node gets an agent.
+    const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
+    const noah = await WeaveNode.enroll(await acme.enrollLink(), mkdtempSync(join(tmpdir(), 'weave-roles-noah-')), { idToken: oidc.token({ sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
+    const both = async () => {
+      sync(acme, noah);
+      sync(noah, acme);
+      await noah.reconcile();
+      await new Promise((r) => setTimeout(r, 300));
+      sync(noah, acme);
+      await acme.reconcile();
+      sync(acme, noah);
+    };
+    await both();
+    await noah.addAgent('helper', ['weave.msg']);
+    sync(noah, acme);
+
+    const info = await acme.setConsole({ on: true, port: 0, clientId: 'weave-console' });
+    const base = info.url!;
+    const as = async (who: { sub: string; email: string; name: string; groups: string[] }) => {
+      oidc.loginAs = who;
+      const { cookie, status } = await signIn(base);
+      return {
+        status,
+        get: (path: string) => fetch(`${base}/api${path}`, { headers: { cookie: cookie! } }),
+        post: (path: string, body: unknown) => fetch(`${base}/api${path}`, { method: 'POST', headers: { cookie: cookie!, 'content-type': 'application/json', 'x-weave-console': '1' }, body: JSON.stringify(body) }),
+      };
+    };
+    // Someone in none of the three groups: refused.
+    expect((await as({ sub: 'pat', email: 'pat@acme.example', name: 'Pat', groups: ['employees'] })).status).toBe(403);
+
+    // The admin approves Noah's agent in the company group.
+    const kim = await as({ sub: 'kim', email: 'kim@acme.example', name: 'Kim', groups: ['weave-admins'] });
+    const agents = (await (await kim.get('/agents')).json()) as Array<{ did: string; name: string; personName: string; spaces: Array<{ id: string; name: string; approved: boolean }> }>;
+    expect(agents).toEqual([expect.objectContaining({ name: 'helper', personName: 'Noah', spaces: [expect.objectContaining({ name: 'Acme', approved: false })] })]);
+    expect((await noah.agentBlocked('helper')).map((s) => s.name)).toEqual(['Acme']);
+    expect((await kim.post('/agent', { space: agents[0].spaces[0].id, agent: agents[0].did })).status).toBe(200);
+    expect(((await (await kim.get('/agents')).json()) as typeof agents)[0].spaces[0].approved).toBe(true);
+    sync(acme, noah);
+    expect(await noah.agentBlocked('helper')).toEqual([]);
+
+    // An auditor reads everything and changes nothing.
+    const ada = await as({ sub: 'ada', email: 'ada@acme.example', name: 'Ada', groups: ['weave-auditors'] });
+    expect(await (await ada.get('/me')).json()).toMatchObject({ role: 'auditor' });
+    for (const path of ['/company', '/members', '/agents', '/devices', '/audit', '/scim', '/streams']) expect((await ada.get(path)).status, path).toBe(200);
+    expect((await ada.post('/agent', { space: agents[0].spaces[0].id, agent: agents[0].did, on: false })).status).toBe(403);
+    expect((await ada.post('/enroll-link', {})).status).toBe(403);
+    expect((await ada.post('/action', { action: 'space', kind: 'project', name: 'Sneaky' })).status).toBe(403);
+
+    // The helpdesk sets people up, and sees nothing else.
+    const hal = await as({ sub: 'hal', email: 'hal@acme.example', name: 'Hal', groups: ['weave-helpdesk'] });
+    expect(await (await hal.get('/me')).json()).toMatchObject({ role: 'helpdesk' });
+    expect((await hal.get('/members')).status).toBe(200);
+    expect((await hal.get('/devices')).status).toBe(200);
+    expect((await hal.post('/enroll-link', { days: 7 })).status).toBe(200);
+    for (const path of ['/audit', '/agents', '/scim', '/streams']) expect((await hal.get(path)).status, path).toBe(403);
+    expect((await hal.post('/action', { action: 'freeze', person: noah.identity.author })).status).toBe(403);
+
+    // Searching the audit: by person, by words, by date.
+    type Lines = { lines: Array<{ kind: string; by: string; detail: Record<string, unknown> }> };
+    const search = async (query: string) => ((await (await kim.get(`/audit?${query}`)).json()) as Lines).lines;
+    const noahs = await search(`person=${encodeURIComponent(noah.identity.author)}`);
+    expect(noahs.length).toBeGreaterThan(0);
+    expect(noahs.every((l) => l.by === noah.identity.author || JSON.stringify(l.detail).includes(noah.identity.author) || JSON.stringify(l.detail).includes('noah'))).toBe(true);
+    expect(noahs.some((l) => l.kind === 'weave.org.console' && l.detail.action === 'agent-on')).toBe(false); // Kim did that, about the agent
+    expect((await search('q=agent-on')).map((l) => `${l.detail.subject}:${l.detail.action}`)).toEqual(['kim:agent-on']);
+    expect((await search('q=helpdesk%20enroll-link')).map((l) => `${l.detail.subject}:${l.detail.role}`)).toEqual(['hal:helpdesk']);
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    expect(await search(`since=2020-01-01&until=${yesterday}`)).toEqual([]);
+    expect((await search(`since=${new Date().toISOString().slice(0, 10)}`)).length).toBeGreaterThan(0);
+
+    await noah.close();
+    await acme.close();
+  });
 });

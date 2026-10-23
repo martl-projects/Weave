@@ -128,7 +128,8 @@ projects — something being built; participants chat, discuss, vote and work on
   company space project|group <name> / company start <contact links…> / company admins <group> / company links on|off
   company hold <space> <until> / company destroy-key <space> / company freeze <person>   (admins ask; the company's node does it)
   company policy outside|public|chats on|off / company policy directs all|company|off   what company accounts may do
-  company retention <min days|-> [max days|-]   how long company spaces keep things, at least and at most
+  company retention <min days|-> [max days|-] [--in <space>]   how long company spaces keep things, at least and at most (--in: that one's own; - - back to the company's)
+  company auditors|helpdesk <sign-in group>|-   console roles: auditors read everything, the helpdesk sets people up
   company chat <colleague>               a chat with a colleague, kept by the company
   company scim on [port] [--send-invites] | off   SCIM for your user management (Entra ID, Okta, Google): deactivating someone takes them out at once
   company devices <ca.pem> | off         vouch only for sign-ins from computers with a certificate from your device authority
@@ -1299,9 +1300,10 @@ ${postLine(p)}`);
           if (!c) return "you're not in a company";
           return [
             `${c.name}${c.runsHere ? ' (this is its node)' : c.admin ? ' (you administer it)' : ''}  · group ${c.group.name}`,
-            `  admins: sign-in group ${c.admins ?? '(none)'} · linking accounts: ${c.links ? 'allowed' : 'off'}`,
+            `  admins: sign-in group ${c.admins ?? '(none)'}${c.auditors ? ` · auditors: ${c.auditors}` : ''}${c.helpdesk ? ` · helpdesk: ${c.helpdesk}` : ''} · linking accounts: ${c.links ? 'allowed' : 'off'}`,
             `  accounts: ${c.policy.outside ? 'may use other spaces' : "only the company's spaces"} · direct chats: ${{ all: 'anyone', company: 'colleagues only', off: 'none' }[c.policy.directs]} · public: ${c.policy.public ? 'yes' : 'no'}${c.policy.chats ? ' · colleagues chat in company chats' : ''}`,
             `  retention: ${c.retention.minDays ? `at least ${c.retention.minDays} days` : 'no minimum'} · ${c.retention.maxDays ? `at most ${c.retention.maxDays} days` : 'no maximum'}`,
+            ...Object.entries(c.spaceRetention).map(([id, r]) => `    ${c.spaces.find((s) => s.id === id)?.name ?? (id === c.group.id ? c.group.name : id)}: ${r.minDays ? `at least ${r.minDays} days` : 'no minimum'} · ${r.maxDays ? `at most ${r.maxDays} days` : 'no maximum'}`),
             ...c.chats.map((ch) => `  company chat ${ch.name}`),
             ...(c.spaces.length ? [`  spaces: ${c.spaces.map((s) => `${s.name} (${s.kind})`).join(', ')}`] : []),
             ...c.maps.map((m) => `  ${m.group} → ${m.spaceName}${m.role === 'maintainer' ? ' as maintainers' : ''}`),
@@ -1344,6 +1346,10 @@ ${postLine(p)}`);
         case 'admins':
           if (!rest[0]) throw new Error('usage: weave company admins <sign-in group>');
           return show(await b.companyAction({ action: 'settings', admins: rest[0] }));
+        case 'auditors':
+        case 'helpdesk':
+          if (!rest[0]) throw new Error(`usage: weave company ${sub} <sign-in group>|-   (- for nobody)`);
+          return show(await b.companyAction({ action: 'settings', [sub]: rest[0] === '-' ? null : rest[0] }));
         case 'links':
           if (rest[0] !== 'on' && rest[0] !== 'off') throw new Error('usage: weave company links on|off');
           return show(await b.companyAction({ action: 'settings', links: rest[0] === 'on' }));
@@ -1356,8 +1362,8 @@ ${postLine(p)}`);
         }
         case 'retention': {
           const days = (v: string | undefined) => (v === undefined ? undefined : v === '-' || v === 'none' ? null : Number(v));
-          if (!rest.length) throw new Error('usage: weave company retention <minimum days|-> [maximum days|-]   (- for none)');
-          return show(await b.companyAction({ action: 'settings', retention: { minDays: days(rest[0]), ...(rest[1] !== undefined ? { maxDays: days(rest[1]) } : {}) } }));
+          if (!rest.length) throw new Error('usage: weave company retention <minimum days|-> [maximum days|-] [--in <space>]   (- for none)');
+          return show(await b.companyAction({ action: 'settings', retention: { ...(values.in ? { space: values.in } : {}), minDays: days(rest[0]), ...(rest[1] !== undefined ? { maxDays: days(rest[1]) } : {}) } }));
         }
         case 'chat':
           if (!rest[0]) throw new Error('usage: weave company chat <colleague>   (a company chat: the company keeps and archives it)');

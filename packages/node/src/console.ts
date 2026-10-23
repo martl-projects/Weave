@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { extname, join } from 'node:path';
 import type { CompanyAction } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
+import type { ConsoleRole } from './backend.ts';
 import type { WeaveNode } from './node.ts';
 import { verifyIdToken } from './node.ts';
 
@@ -15,6 +16,10 @@ import { verifyIdToken } from './node.ts';
  * in. What they do is carried out by the company's node and recorded with who
  * did it. A one-time operator link lets the first admin in before sign-in is
  * set up.
+ *
+ * Roles (stage 15), by sign-in group: admins do everything; auditors read
+ * everything and change nothing; the helpdesk sets people up (enrollment
+ * links, invitations, recovery for a new computer) and sees who's who.
  */
 
 export interface ConsoleOptions {
@@ -32,7 +37,18 @@ interface Session {
   subject: string;
   email?: string;
   name?: string;
+  role: ConsoleRole;
   expires: number;
+}
+
+/** What the helpdesk may call: who's who, and setting people up. */
+const HELPDESK = new Set(['GET /me', 'GET /company', 'GET /members', 'GET /devices', 'POST /enroll-link', 'POST /invite', 'POST /recovery']);
+
+/** May this role make this call? Auditors read everything; admins do everything. */
+export function consoleAllows(role: ConsoleRole, route: string): boolean {
+  if (role === 'admin') return true;
+  if (role === 'auditor') return route.startsWith('GET ');
+  return HELPDESK.has(route);
 }
 
 const SESSION_MS = 8 * 3_600_000;
@@ -108,10 +124,15 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL, who: Session): Promise<void> {
     const route = `${req.method} ${url.pathname.replace(/^\/api/, '')}`;
-    const admin = { subject: who.subject, ...(who.email ? { email: who.email } : {}) };
+    if (!consoleAllows(who.role, route)) return send(res, 403, { error: `not for ${who.role === 'auditor' ? 'auditors: they read, and change nothing' : 'the helpdesk'}` });
+    const admin = { subject: who.subject, ...(who.email ? { email: who.email } : {}), ...(who.role !== 'admin' ? { role: who.role } : {}) };
     switch (route) {
       case 'GET /me':
-        return send(res, 200, { subject: who.subject, email: who.email, name: who.name });
+        return send(res, 200, { subject: who.subject, email: who.email, name: who.name, role: who.role });
+      case 'GET /agents':
+        return send(res, 200, await node.companyAgents());
+      case 'GET /devices':
+        return send(res, 200, await node.companyDevices());
       case 'GET /company':
         return send(res, 200, (await node.company()) ?? null);
       case 'GET /members': {
@@ -136,24 +157,40 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
       case 'GET /audit': {
         const company = await node.company();
         if (!company) return send(res, 200, []);
+        // Search (stage 15): a date range (default the last 30 days), a project or group, a person, and words.
         const since = url.searchParams.get('since') ?? new Date(Date.now() - 30 * 86_400_000).toISOString();
+        const until = url.searchParams.get('until') ?? undefined;
         const only = url.searchParams.get('space');
-        const lines = [];
+        const person = url.searchParams.get('person');
+        const words = (url.searchParams.get('q') ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        let lines = [];
         for (const s of [company.group, ...company.spaces]) {
           if (only && s.id !== only) continue;
-          for (const l of await node.audit({ space: s.id, since })) lines.push({ ...l, space: { id: s.id, name: s.name } });
+          for (const l of await node.audit({ space: s.id, since, ...(until ? { until } : {}) })) lines.push({ ...l, space: { id: s.id, name: s.name } });
         }
         // Names for the people and spaces the lines mention, so admins don't read keys.
         const names: Record<string, string> = Object.fromEntries([company.group, ...company.spaces].map((s) => [s.id, s.name]));
-        const mentioned = new Set<string>();
-        const walk = (v: unknown): void => {
-          if (typeof v === 'string' && v.startsWith('did:key:')) mentioned.add(v);
-          else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+        const strings = (v: unknown, into: string[] = []): string[] => {
+          if (typeof v === 'string') into.push(v);
+          else if (v && typeof v === 'object') Object.values(v).forEach((x) => strings(x, into));
+          return into;
         };
-        lines.forEach((l) => walk(l.detail));
-        for (const did of mentioned) {
-          const name = node.nameOf(did as `did:key:z${string}`);
-          if (name) names[did] = name;
+        for (const l of lines)
+          for (const did of [l.by, ...strings(l.detail)].filter((v) => v.startsWith('did:key:'))) {
+            const name = node.nameOf(did as `did:key:z${string}`);
+            if (name) names[did] = name;
+          }
+        // A person: what they did, and what was done about them (a line naming them, or their sign-in's subject or email).
+        if (person) {
+          const vouched = (await node.members(company.group.id)).find((m) => m.did === person)?.attested;
+          const theirs = new Set([person, vouched?.subject, vouched?.email].filter((v): v is string => !!v));
+          lines = lines.filter((l) => l.by === person || strings(l.detail).some((v) => theirs.has(v)));
+        }
+        if (words.length) {
+          lines = lines.filter((l) => {
+            const text = [l.kind, l.by, l.byName ?? '', l.agent ?? '', l.space.name, ...strings(l.detail).map((v) => names[v] ?? v)].join(' ').toLowerCase();
+            return words.every((w) => text.includes(w));
+          });
         }
         return send(res, 200, { lines: lines.sort((a, b) => b.time.localeCompare(a.time)), names });
       }
@@ -176,6 +213,10 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
     switch (route) {
       case 'POST /action':
         return send(res, 200, await node.consoleAction(input as unknown as CompanyAction, admin));
+      case 'POST /agent': {
+        await node.consoleRecord({ action: input.on === false ? 'agent-off' : 'agent-on', space: String(input.space), agent: String(input.agent) }, admin);
+        return send(res, 200, await node.approveAgent({ space: String(input.space), agent: String(input.agent), on: input.on !== false }));
+      }
       case 'POST /enroll-link':
         await node.consoleRecord({ action: 'enroll-link' }, admin);
         return send(res, 200, { link: await node.enrollLink(typeof input.days === 'number' ? { days: input.days } : {}) });
@@ -215,7 +256,7 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
           const operator = url.searchParams.get('operator');
           if (operator) {
             if (!operatorTokens.delete(operator)) return page(res, 403, 'That link was used already', 'Operator links let one person in, once. Make a new one on the server: weave-server operator.');
-            return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: 'operator', name: "The company's operator" })) });
+            return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: 'operator', name: "The company's operator", role: 'admin' })) });
           }
           const { authorization_endpoint } = await discover();
           const state = b64url(randomBytes(16));
@@ -239,8 +280,9 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
           const claims = await verifyIdToken(answer.id_token, options.issuer, options.clientId);
           const payload = JSON.parse(Buffer.from(answer.id_token.split('.')[1], 'base64url').toString()) as { nonce?: string; name?: string };
           if (payload.nonce !== waiting.nonce) return page(res, 401, 'Not signed in', 'That sign-in was for another request. Start again from the console.');
-          if (!node.consoleAdmin(claims)) return page(res, 403, 'Only for admins', `${claims.email ?? claims.sub} isn't in the company's admins group. Ask an admin to add you, or sign in with another account.`);
-          return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: claims.sub, ...(claims.email ? { email: claims.email } : {}), ...(payload.name ? { name: payload.name } : {}) })) });
+          const role = node.consoleRole(claims);
+          if (!role) return page(res, 403, 'Only for admins', `${claims.email ?? claims.sub} isn't in the company's admins, auditors or helpdesk group. Ask an admin to add you, or sign in with another account.`);
+          return redirect(res, '/', { 'set-cookie': cookie(startSession({ subject: claims.sub, role, ...(claims.email ? { email: claims.email } : {}), ...(payload.name ? { name: payload.name } : {}) })) });
         }
         if (url.pathname === '/logout') {
           const sid = /(?:^|;\s*)weave_console=([^;]+)/.exec(req.headers.cookie ?? '')?.[1];

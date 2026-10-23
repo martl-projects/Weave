@@ -328,7 +328,10 @@ import {
   type ThreadInfo,
   type TierInfo,
   type Whoami,
+  type CompanyAgentInfo,
+  type CompanyDeviceInfo,
   type CompanyInfo,
+  type ConsoleRole,
   type CreateCompanyInput,
   type LinkInfo,
   type ScimInfo,
@@ -355,7 +358,7 @@ import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
-import { checkAuthority, checkDevice, deviceProof } from './devices.ts';
+import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
 import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
@@ -1273,9 +1276,11 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- audit (stage 9.3)
 
-  async audit(input: { space: string; since?: string }): Promise<AuditLine[]> {
+  async audit(input: { space: string; since?: string; until?: string }): Promise<AuditLine[]> {
     const space = this.#space(input.space);
     const since = input.since ? new Date(input.since).toISOString() : '';
+    // Up to the end of `until` (stage 15): a date alone means that whole day.
+    const until = input.until ? (/^\d{4}-\d{2}-\d{2}$/.test(input.until) ? `${input.until}T23:59:59.999Z` : new Date(input.until).toISOString()) : '\uffff';
     const scope = spaceScope(space);
     const lines: AuditLine[] = [];
     const line = (time: string, kind: string, author: Did, signer: Did, detail: Json, id: string): AuditLine => {
@@ -1286,12 +1291,12 @@ export class WeaveNode implements Backend {
     // Governance: control events, and the company's own (attestations, escrows).
     for (const d of this.#decodedIn(space.id)) {
       // Carried events count: after a shred they are the only record left (decoding counts each once).
-      if (d.event.time < since) continue;
+      if (d.event.time < since || d.event.time > until) continue;
       if (classOf(canonicalKind(d.inner.kind)) !== 'control' && d.inner.kind !== KIND_ESCROW_OPENED && d.inner.kind !== KIND_POST_DELETE) continue;
       lines.push(line(d.event.time, d.inner.kind, d.event.author, d.event.signer, d.inner.body, d.id));
     }
     // New keys: who rotated, which epoch (the boxes stay out).
-    for (const r of this.replica.events((e) => e.scope === scope && canonicalKind(e.kind) === KIND_REKEY && e.time >= since)) {
+    for (const r of this.replica.events((e) => e.scope === scope && canonicalKind(e.kind) === KIND_REKEY && e.time >= since && e.time <= until)) {
       lines.push(line(r.time, KIND_REKEY, r.author, r.signer, { epoch: (r.body as { epoch?: Json } | null)?.epoch ?? null }, r.id));
     }
     return lines.sort((a, b) => a.time.localeCompare(b.time));
@@ -4471,9 +4476,12 @@ export class WeaveNode implements Backend {
       runsHere: group.founder === this.identity.author,
       admin: this.#isOrgAdmin(group, org, this.identity.author),
       ...(org.admins ? { admins: org.admins } : {}),
+      ...(org.auditors ? { auditors: org.auditors } : {}),
+      ...(org.helpdesk ? { helpdesk: org.helpdesk } : {}),
       links: org.links,
       policy: org.policy,
       retention: org.retention,
+      spaceRetention: org.spaceRetention,
       chats: org.chats.map((c) => ({ space: c.space, name: name(c.space), people: c.people.map((d) => this.nameOf(d) ?? d) })),
       maps: org.maps.map((m) => ({ ...m, spaceName: name(m.space) })),
       start: org.start?.contacts ?? [],
@@ -4541,7 +4549,10 @@ export class WeaveNode implements Backend {
       case 'settings': {
         const org = this.#orgOf(group)!;
         const policy = readPolicy(action, org.policy);
-        const retention: Retention = { ...org.retention };
+        // The company's retention, or one project's or group's own (stage 15).
+        const forSpace = action.retention?.space ? companySpace(action.retention.space) : undefined;
+        const spaceRetention: Record<string, Retention> = { ...org.spaceRetention };
+        const retention: Retention = forSpace ? { ...(org.spaceRetention[forSpace.id] ?? {}) } : { ...org.retention };
         for (const key of ['minDays', 'maxDays'] as const) {
           const days = action.retention?.[key];
           if (days === null) delete retention[key];
@@ -4551,13 +4562,27 @@ export class WeaveNode implements Backend {
           }
         }
         if (retention.minDays && retention.maxDays && retention.minDays > retention.maxDays) throw new Error('the minimum is longer than the maximum');
+        if (forSpace) {
+          if (retention.minDays || retention.maxDays) spaceRetention[forSpace.id] = retention;
+          else delete spaceRetention[forSpace.id];
+        }
+        const role = (value: string | null | undefined, now: string | undefined) => (value === null ? null : value?.trim() || now || null);
         let deviceCA = org.deviceCA ?? null;
         if (action.deviceCA === null) deviceCA = null;
         else if (action.deviceCA !== undefined) {
           checkAuthority(action.deviceCA);
           deviceCA = action.deviceCA;
         }
-        write(KIND_ORG_SETTINGS, { admins: action.admins?.trim() || org.admins || null, ...policy, retention: retention as unknown as Json, deviceCA, ...(org.signIn ? { signIn: org.signIn } : {}) });
+        write(KIND_ORG_SETTINGS, {
+          admins: action.admins?.trim() || org.admins || null,
+          auditors: role(action.auditors, org.auditors),
+          helpdesk: role(action.helpdesk, org.helpdesk),
+          ...policy,
+          retention: (forSpace ? org.retention : retention) as unknown as Json,
+          spaceRetention: spaceRetention as unknown as Json,
+          deviceCA,
+          ...(org.signIn ? { signIn: org.signIn } : {}),
+        });
         // Published, so every node holds the company's accounts to it (and counts their links only while allowed).
         if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy } });
         return;
@@ -4684,7 +4709,10 @@ export class WeaveNode implements Backend {
           changed++;
         }
       }
-      if (org.retention.maxDays) for (const space of [group, ...this.#companySpaces(group)]) changed += await this.#shredOlder(space, org.retention.maxDays);
+      for (const space of [group, ...this.#companySpaces(group)]) {
+        const maxDays = (org.spaceRetention[space.id] ?? org.retention).maxDays;
+        if (maxDays) changed += await this.#shredOlder(space, maxDays);
+      }
     }
     return changed;
   }
@@ -4701,11 +4729,12 @@ export class WeaveNode implements Backend {
     return 1;
   }
 
-  /** A company space's retention, from its company group. */
+  /** A company space's retention, from its company group: its own if the company gave it one (stage 15), else the company's. */
   #companyRetention(space: StoredSpace): Retention | undefined {
     const company = this.#managedRaw(space).setting?.company;
-    const group = company ? this.#spaces.get(company) : undefined;
-    return group ? this.#orgOf(group)?.retention : undefined;
+    const group = company ? this.#spaces.get(company) : this.#orgOf(space) ? space : undefined;
+    const org = group ? this.#orgOf(group) : undefined;
+    return org ? (org.spaceRetention[space.id] ?? org.retention) : undefined;
   }
 
   /** A space's epochs that ended less than `days` ago (or haven't ended): a company's minimum keeps them. */
@@ -5185,28 +5214,91 @@ export class WeaveNode implements Backend {
 
   /** Is the person behind this company sign-in one of the company's admins (by the directory's groups when SCIM is on)? */
   consoleAdmin(claims: { sub: string; email?: string; groups: string[] }): boolean {
+    return this.consoleRole(claims) === 'admin';
+  }
+
+  /**
+   * What the person behind this company sign-in may do in the console (stage 15), by their sign-in groups
+   * (the directory's when SCIM is on): admins everything, auditors read everything, the helpdesk sets people up.
+   */
+  consoleRole(claims: { sub: string; email?: string; groups: string[] }): ConsoleRole | undefined {
     const group = this.#companyGroups()[0];
-    const admins = group ? this.#orgOf(group)?.admins : undefined;
-    if (!admins) return false;
+    const org = group ? this.#orgOf(group) : undefined;
+    if (!org) return undefined;
     let groups = claims.groups;
     if (this.config.scim) {
       const directory = this.#scimDirectory();
       const { user, deleted } = findPerson(directory, { subject: claims.sub, email: claims.email });
-      if (deleted || (user && !user.active)) return false;
+      if (deleted || (user && !user.active)) return undefined;
       if (user) groups = groupsOf(directory, user.id);
     }
-    return groups.includes(admins);
+    if (org.admins && groups.includes(org.admins)) return 'admin';
+    if (org.auditors && groups.includes(org.auditors)) return 'auditor';
+    if (org.helpdesk && groups.includes(org.helpdesk)) return 'helpdesk';
+    return undefined;
+  }
+
+  /**
+   * The agents of the company's people, and in which of its projects and groups each may act (stage 15).
+   * Agents act in a company space only once whoever manages it approves them: on the company's node, the company.
+   */
+  async companyAgents(): Promise<CompanyAgentInfo[]> {
+    const group = this.#companyGroups()[0];
+    if (!group) throw new Error('not a company node');
+    const spaces = [group, ...this.#companySpaces(group)];
+    const people = new Set<Did>();
+    for (const space of spaces) for (const did of this.#state(space).members.keys()) people.add(did);
+    const out: CompanyAgentInfo[] = [];
+    for (const person of people) {
+      for (const grant of this.replica.authority.grantsOf(person)) {
+        if (grant.role !== 'agent') continue;
+        out.push({
+          did: grant.subject,
+          name: grant.name ?? 'agent',
+          person,
+          ...(this.nameOf(person) ? { personName: this.nameOf(person) } : {}),
+          spaces: spaces.filter((s) => this.#state(s).members.has(person)).map((s) => ({ id: s.id, name: s.name, approved: !!this.#state(s).approvedAgents?.has(grant.subject) })),
+        });
+      }
+    }
+    return out.sort((a, b) => `${a.personName ?? a.person}/${a.name}`.localeCompare(`${b.personName ?? b.person}/${b.name}`));
+  }
+
+  /**
+   * Each person's company computer as the company last saw it (stage 15): the certificate their sign-in came with,
+   * until when it's valid, or why a sign-in wasn't vouched for (no certificate, another authority, expired).
+   */
+  async companyDevices(): Promise<CompanyDeviceInfo[]> {
+    const group = this.#companyGroups()[0];
+    if (!group) throw new Error('not a company node');
+    const required = !!this.#orgOf(group)?.deviceCA;
+    const attested = this.#attestations(group, group.founder);
+    const now = new Date(this.clock()).toISOString();
+    return [...this.#state(group).members.keys()]
+      .filter((did) => did !== group.founder)
+      .map((did) => {
+        const a = attested.get(did);
+        const refused = this.#deviceRefused.get(did);
+        return {
+          did,
+          ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}),
+          required,
+          ...(a?.device ? { device: a.device } : {}),
+          ...(a ? { vouchedUntil: a.until, vouched: a.until > now } : { vouched: false }),
+          ...(refused && (!a || refused.time > a.time) ? { problem: refused.problem, problemTime: refused.time } : {}),
+        };
+      });
   }
 
   /** Record what an admin did in the console, in the company's audit. */
-  async consoleRecord(what: Record<string, string>, admin: { subject: string; email?: string }): Promise<void> {
+  async consoleRecord(what: Record<string, string>, admin: { subject: string; email?: string; role?: string }): Promise<void> {
     const group = this.#companyGroups()[0];
     if (!group) throw new Error('not a company node');
-    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_CONSOLE, body: { subject: admin.subject, ...(admin.email ? { email: admin.email } : {}), ...what } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_CONSOLE, body: { subject: admin.subject, ...(admin.email ? { email: admin.email } : {}), ...(admin.role ? { role: admin.role } : {}), ...what } }));
   }
 
   /** An admin in the console: the company does it, recorded with who asked. */
-  async consoleAction(action: CompanyAction, admin: { subject: string; email?: string }): Promise<CompanyInfo> {
+  async consoleAction(action: CompanyAction, admin: { subject: string; email?: string; role?: string }): Promise<CompanyInfo> {
     const group = this.#companyGroups()[0];
     if (!group) throw new Error('not a company node');
     const what: Record<string, string> = { action: action.action };
@@ -5369,15 +5461,18 @@ export class WeaveNode implements Backend {
   }
 
   /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
-  #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string } }> {
-    const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string } }>();
+  /** Sign-ins the company didn't vouch for because of the computer they came from (stage 15): person → why, and when. */
+  #deviceRefused = new Map<Did, { problem: string; time: string }>();
+
+  #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }> {
+    const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }>();
     // A company space's people are vouched for in the company group (stage 10).
     const company = this.#managedRaw(space).setting?.company;
     for (const d of this.#decodedIn(company && this.#spaces.has(company) ? company : space.id)) {
       if (d.inner.kind !== KIND_ATTEST || d.event.author !== attestor) continue;
-      const b = d.inner.body as { did?: unknown; subject?: unknown; email?: unknown; groups?: unknown; until?: unknown; device?: { subject?: unknown; serial?: unknown } } | null;
+      const b = d.inner.body as { did?: unknown; subject?: unknown; email?: unknown; groups?: unknown; until?: unknown; device?: { subject?: unknown; serial?: unknown; validTo?: unknown } } | null;
       if (!isDid(b?.did) || typeof b?.subject !== 'string' || typeof b?.until !== 'string') continue;
-      out.set(b.did, { subject: b.subject, ...(typeof b.email === 'string' ? { email: b.email } : {}), groups: Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string') : [], until: b.until, time: d.event.time, ...(typeof b.device?.subject === 'string' && typeof b.device.serial === 'string' ? { device: { subject: b.device.subject, serial: b.device.serial } } : {}) });
+      out.set(b.did, { subject: b.subject, ...(typeof b.email === 'string' ? { email: b.email } : {}), groups: Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string') : [], until: b.until, time: d.event.time, ...(typeof b.device?.subject === 'string' && typeof b.device.serial === 'string' ? { device: { subject: b.device.subject, serial: b.device.serial, ...(typeof b.device.validTo === 'string' ? { validTo: b.device.validTo } : {}) } } : {}) });
     }
     return out;
   }
@@ -5410,8 +5505,13 @@ export class WeaveNode implements Backend {
         }
         // With a device authority, only sign-ins from the company's computers.
         const ca = this.#orgOf(space)?.deviceCA;
-        const device = ca ? checkDevice((opened as { device?: unknown }).device, ca, d.event.author, opened.idToken, this.clock()) : undefined;
-        if (ca && !device) continue;
+        const checked = ca ? inspectDevice((opened as { device?: unknown }).device, ca, d.event.author, opened.idToken, this.clock()) : undefined;
+        if (checked && 'problem' in checked) {
+          this.#deviceRefused.set(d.event.author, { problem: checked.problem, time: d.event.time });
+          continue;
+        }
+        const device = checked?.device;
+        this.#deviceRefused.delete(d.event.author);
         const until = new Date(this.clock() + (config.hours ?? 24) * 3_600_000).toISOString();
         this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ATTEST, body: { did: d.event.author, subject: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups, until, ...(device ? { device } : {}) } }));
         attested.set(d.event.author, { subject: claims.sub, groups, until, time: new Date().toISOString() });

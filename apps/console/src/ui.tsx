@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 // Pixel icons, as in the Weave app: pixelarticons (MIT).
 import analytics from 'pixelarticons/svg/analytics.svg';
 import briefcases from 'pixelarticons/svg/briefcases.svg';
@@ -20,6 +20,8 @@ import moon from 'pixelarticons/svg/moon.svg';
 import plug from 'pixelarticons/svg/plug.svg';
 import plus from 'pixelarticons/svg/plus.svg';
 import reload from 'pixelarticons/svg/reload.svg';
+import robot from 'pixelarticons/svg/robot.svg';
+import search from 'pixelarticons/svg/search.svg';
 import send from 'pixelarticons/svg/send.svg';
 import shield from 'pixelarticons/svg/shield.svg';
 import sun from 'pixelarticons/svg/sun.svg';
@@ -70,7 +72,7 @@ const BITMAPS = {
 } satisfies Record<string, [string, string?]>;
 
 /** Tintable SVGs (pixelarticons), for small signs SerenityOS doesn't cover. */
-const VECTORS = { analytics, briefcases, check, clipboardNote, clock, copy, database, download, externalLink, grid, key, link, lock, login, logout, monitor, moon, plug, plus, reload, send, shield, sun, trash, users, warning };
+const VECTORS = { analytics, briefcases, check, clipboardNote, clock, copy, database, download, externalLink, grid, key, link, lock, login, logout, monitor, moon, plug, plus, reload, robot, search, send, shield, sun, trash, users, warning };
 
 export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 
@@ -133,9 +135,18 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[] = []): { data
 
 export const when = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
 
-/** A button that runs something, shows it's busy and reports what went wrong. */
-export function Run({ children, run, kind, icon, confirm: ask, disabled, small, title }: { children?: ReactNode; run: () => Promise<unknown>; kind?: 'primary' | 'danger' | 'ghost'; icon?: IconName; confirm?: string; disabled?: boolean; small?: boolean; title?: string }) {
+/** Who is signed in to the console (stage 15): admins change things, auditors only read, the helpdesk sets people up. */
+export type Role = 'admin' | 'auditor' | 'helpdesk';
+export const RoleContext = createContext<Role>('admin');
+
+/** May this role do something meant for `need`? */
+export const allowed = (role: Role, need: 'admin' | 'helpdesk' = 'admin') => role === 'admin' || (role === 'helpdesk' && need === 'helpdesk');
+
+/** A button that runs something, shows it's busy and reports what went wrong. Hidden from roles that may not (`need`: who may). */
+export function Run({ children, run, kind, icon, confirm: ask, disabled, small, title, need }: { children?: ReactNode; run: () => Promise<unknown>; kind?: 'primary' | 'danger' | 'ghost'; icon?: IconName; confirm?: string; disabled?: boolean; small?: boolean; title?: string; need?: 'admin' | 'helpdesk' }) {
   const [busy, setBusy] = useState(false);
+  const role = useContext(RoleContext);
+  if (!allowed(role, need)) return null;
   return (
     <button
       className={`btn ${kind ?? ''} ${small ? 'small' : ''} ${children ? '' : 'icon-only'}`}

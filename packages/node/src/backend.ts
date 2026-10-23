@@ -646,7 +646,7 @@ export interface MemberInfo {
   /** Names of their agents seen acting in the space. */
   agents: string[];
   /** In a space with a company attestor: who the company says they are, until when (and from which company computer). */
-  attested?: { subject: string; email?: string; groups: string[]; until: string; device?: { subject: string; serial: string } };
+  attested?: { subject: string; email?: string; groups: string[]; until: string; device?: { subject: string; serial: string; validTo?: string } };
   /** A company-owned identity: its company's name. */
   company?: string;
 }
@@ -784,11 +784,16 @@ export interface CompanyInfo {
   /** You administer it (or are it). */
   admin: boolean;
   admins?: string;
+  /** Sign-in groups of the console's auditors (read everything) and helpdesk (set people up), stage 15. */
+  auditors?: string;
+  helpdesk?: string;
   links: boolean;
   /** What the company's accounts may do (published, so every node holds them to it). */
   policy: CompanyPolicy;
   /** How long company spaces keep things, in days. */
   retention: { minDays?: number; maxDays?: number };
+  /** Projects and groups with their own retention (stage 15): space id → days. */
+  spaceRetention: Record<string, { minDays?: number; maxDays?: number }>;
   /** Company chats between colleagues. */
   chats: Array<{ space: string; name: string; people: string[] }>;
   maps: Array<{ group: string; space: string; spaceName: string; role: 'member' | 'maintainer' }>;
@@ -796,6 +801,32 @@ export interface CompanyInfo {
   start: string[];
   spaces: Array<{ id: string; kind: SpaceKind; name: string }>;
   requests: Array<{ id: string; by: Did; byName?: string; time: string; action: string; done: boolean; error?: string }>;
+}
+
+/** What someone may do in the admin console (stage 15). */
+export type ConsoleRole = 'admin' | 'auditor' | 'helpdesk';
+
+/** An agent of one of the company's people, and where it may act (stage 15). */
+export interface CompanyAgentInfo {
+  did: Did;
+  name: string;
+  person: Did;
+  personName?: string;
+  spaces: Array<{ id: string; name: string; approved: boolean }>;
+}
+
+/** A person's company computer as the company last saw it (stage 15). */
+export interface CompanyDeviceInfo {
+  did: Did;
+  name?: string;
+  /** The company vouches only for sign-ins from its computers. */
+  required: boolean;
+  device?: { subject: string; serial: string; validTo?: string };
+  vouched: boolean;
+  vouchedUntil?: string;
+  /** Why their last sign-in wasn't vouched for. */
+  problem?: string;
+  problemTime?: string;
 }
 
 export interface HubGitHub {
@@ -991,7 +1022,7 @@ export interface Backend {
     company?: string;
   }): Promise<SpaceInfo>;
   /** A space's governance, oldest first: who joined, left or was removed, keys, settings, attestations, shreds, escrows opened. No content, no secrets. */
-  audit(input: { space: string; since?: string }): Promise<AuditLine[]>;
+  audit(input: { space: string; since?: string; until?: string }): Promise<AuditLine[]>;
   /** An employee: leave your recovery words with the company (sealed; only its key service opens them). */
   escrowRecovery(input: { space: string; words: string }): Promise<void>;
   /**

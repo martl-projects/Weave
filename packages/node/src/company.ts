@@ -110,7 +110,16 @@ export interface Retention {
 }
 
 export type CompanyAction =
-  | ({ action: 'settings'; admins?: string; retention?: { minDays?: number | null; maxDays?: number | null }; deviceCA?: string | null } & Partial<CompanyPolicy>)
+  | ({
+      action: 'settings';
+      admins?: string;
+      /** Sign-in groups for the console's other roles (stage 15): auditors read, the helpdesk sets people up. null: nobody. */
+      auditors?: string | null;
+      helpdesk?: string | null;
+      /** The company-wide retention, or with `space` one project's or group's own (both null: back to the company's). */
+      retention?: { space?: string; minDays?: number | null; maxDays?: number | null };
+      deviceCA?: string | null;
+    } & Partial<CompanyPolicy>)
   | { action: 'chat'; with: string }
   | { action: 'map'; group: string; space: string; role?: MapRole; on?: boolean }
   | { action: 'start'; contacts: string[] }
@@ -123,9 +132,13 @@ export const COMPANY_ACTIONS = ['settings', 'chat', 'map', 'start', 'space', 'ho
 
 export interface OrgState {
   admins?: string;
+  auditors?: string;
+  helpdesk?: string;
   links: boolean;
   policy: CompanyPolicy;
   retention: Retention;
+  /** Projects and groups with their own retention (stage 15): space id → retention. */
+  spaceRetention: Record<string, Retention>;
   /** The company's device certificate authority (PEM): only sign-ins from its computers are vouched for (stage 12). */
   deviceCA?: string;
   /** Where its people sign in (stage 13): the issuer and the app registration. */
@@ -143,7 +156,7 @@ type Opened = { id: string; event: { author: Did; time: string }; inner: Inner }
 
 /** A company group's settings: only what the company itself signed counts, except requests (anyone may ask; the company decides). */
 export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
-  const state: OrgState = { links: true, policy: OPEN_POLICY, retention: {}, chats: [], maps: [], requests: [], done: new Map() };
+  const state: OrgState = { links: true, policy: OPEN_POLICY, retention: {}, spaceRetention: {}, chats: [], maps: [], requests: [], done: new Map() };
   let known = false;
   const maps = new Map<string, { group: string; space: string; role: MapRole }>();
   for (const o of [...opened].sort((a, b) => a.event.time.localeCompare(b.event.time))) {
@@ -157,16 +170,28 @@ export function orgState(company: Did, opened: Opened[]): OrgState | undefined {
       case KIND_ORG_SETTINGS:
         known = true;
         if (typeof b.admins === 'string') state.admins = b.admins;
+        for (const role of ['auditors', 'helpdesk'] as const) {
+          if (typeof b[role] === 'string' && b[role]) state[role] = b[role] as string;
+          else if (b[role] === null) delete state[role];
+        }
         if (typeof b.deviceCA === 'string') state.deviceCA = b.deviceCA;
+        else if (b.deviceCA === null) state.deviceCA = undefined;
         const signIn = b.signIn as { issuer?: unknown; clientId?: unknown } | undefined;
         if (typeof signIn?.issuer === 'string' && typeof signIn.clientId === 'string') state.signIn = { issuer: signIn.issuer, clientId: signIn.clientId };
-        else if (b.deviceCA === null) state.deviceCA = undefined;
         state.policy = readPolicy(b, state.policy);
         state.links = state.policy.links;
         if (b.retention && typeof b.retention === 'object') {
           const r = b.retention as Record<string, unknown>;
           const days = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
           state.retention = { ...(days(r.minDays) ? { minDays: days(r.minDays) } : {}), ...(days(r.maxDays) ? { maxDays: days(r.maxDays) } : {}) };
+        }
+        if (b.spaceRetention && typeof b.spaceRetention === 'object') {
+          const days = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+          state.spaceRetention = {};
+          for (const [space, value] of Object.entries(b.spaceRetention as Record<string, Record<string, unknown>>)) {
+            const r = { ...(days(value?.minDays) ? { minDays: days(value.minDays) } : {}), ...(days(value?.maxDays) ? { maxDays: days(value.maxDays) } : {}) };
+            if (r.minDays || r.maxDays) state.spaceRetention[space] = r;
+          }
         }
         break;
       case KIND_ORG_CHAT:

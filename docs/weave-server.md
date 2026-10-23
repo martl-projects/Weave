@@ -56,6 +56,8 @@ Without containers: `apps/server/weave-server.service` is a systemd unit. On Win
 ## Then
 
 - In the console, an admin creates projects and groups, maps sign-in groups to them, and sets policy and retention.
+- **More people in the console**: in Policy, name a sign-in group for auditors (they read everything, change nothing) and one for the helpdesk (they invite people and set up new computers).
+- **Agents**: the company's people's agents act in its projects and groups only once approved (console → Agents).
 - **User management**: point Entra's (or Okta's) provisioning at `https://<scim address>/scim/v2` with the token.
 - **People**: an admin invites them by email from the console (or SCIM does, for everyone the user management adds). The email opens a page with **Open Weave**: Weave starts with the company's link filled in, and they sign in in the browser. Or they choose **My company uses Weave…** and paste an enrollment link (or IT sets it in the managed settings). That's all: no words to keep, and the sign-in renews by itself.
 - **IT**: installers and managed settings in `docs/managed-settings.md`.

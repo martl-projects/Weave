@@ -307,6 +307,10 @@ nav {
 .me-text a {
   color: var(--muted);
 }
+.me-text .role {
+  color: var(--warn);
+  font-size: 11px;
+}
 main {
   padding: 28px 36px 56px;
   max-width: 1180px;
@@ -620,6 +624,66 @@ td.end {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+fieldset.read-only {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+fieldset.read-only:disabled .segmented,
+fieldset.read-only:disabled input,
+fieldset.read-only:disabled textarea {
+  opacity: 0.7;
+}
+.device-status {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+}
+.warn-text {
+  color: var(--warn);
+}
+.chip.toggle {
+  padding-right: 2px;
+}
+.chip.toggle.on {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.chip.toggle .btn.small {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+.agent-avatar {
+  background: var(--chip);
+  color: var(--ink-2);
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin: -6px 0 16px;
+}
+.filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+}
+.search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.search-box .icon {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+}
+.search-box input.search {
+  padding-left: 30px;
 }
 a.open {
   display: inline-flex;

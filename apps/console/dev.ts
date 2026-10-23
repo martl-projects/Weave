@@ -1,6 +1,7 @@
 // A sample company for working on the admin console: stand-ins for Vault and
 // the company's sign-in, a company node with a few people, spaces and settings,
-// and the console on http://localhost:7730 (sign-in goes straight through as an admin).
+// and the console on http://localhost:7730. Signing in shows a page to pick who:
+// Lena (admin), Ada (auditor) or Sam (helpdesk).
 
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,14 +30,15 @@ await acme.companyAction({ action: 'map', group: 'engineering', space: id('Engin
 await acme.companyAction({ action: 'map', group: 'engineering', space: id('Firmware'), role: 'maintainer' });
 await acme.companyAction({ action: 'map', group: 'employees', space: id('Roadmap') });
 await acme.companyAction({ action: 'map', group: 'leadership', space: id('Leadership') });
-await acme.companyAction({ action: 'settings', directs: 'company', chats: true, public: false, retention: { minDays: 90, maxDays: 2555 } });
+await acme.companyAction({ action: 'settings', directs: 'company', chats: true, public: false, retention: { minDays: 90, maxDays: 2555 }, auditors: 'weave-auditors', helpdesk: 'weave-helpdesk' });
+await acme.companyAction({ action: 'settings', retention: { space: id('Roadmap'), maxDays: 365 } });
 
 const link = await acme.enrollLink();
 const people = [
   { name: 'Lena Brandt', sub: 'lena', groups: ['employees', 'engineering', 'weave-admins'] },
   { name: 'Kofi Mensah', sub: 'kofi', groups: ['employees', 'engineering'] },
-  { name: 'Ada Novak', sub: 'ada', groups: ['employees', 'leadership'] },
-  { name: 'Sam Ortiz', sub: 'sam', groups: ['employees'] },
+  { name: 'Ada Novak', sub: 'ada', groups: ['employees', 'leadership', 'weave-auditors'] },
+  { name: 'Sam Ortiz', sub: 'sam', groups: ['employees', 'weave-helpdesk'] },
 ];
 const nodes: WeaveNode[] = [];
 for (const p of people) nodes.push(await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: p.sub, email: `${p.sub}@acme.example`, groups: p.groups }), name: p.name }));
@@ -52,10 +54,15 @@ for (let i = 0; i < 2; i++) {
   sync(all);
 }
 await nodes[0].say({ space: 'Engineering', text: 'Welcome to the new Weave space!' });
+// Agents: Lena's is approved in Engineering; Kofi's waits.
+const lenaAgent = await nodes[0].addAgent('claude', ['weave.msg']);
+await nodes[1].addAgent('helper', ['weave.msg']);
+sync(all);
+await acme.approveAgent({ space: id('Engineering'), agent: lenaAgent.did });
 await acme.companyAction({ action: 'hold', space: id('Leadership'), until: '2027-06-30', reason: 'Board review' });
 sync(all);
 await acme.reconcile();
 
-oidc.loginAs = { sub: 'lena', email: 'lena@acme.example', name: 'Lena Brandt', groups: ['employees', 'engineering', 'weave-admins'] };
+oidc.people = people.slice(0, 1).concat(people.slice(2)).map((p) => ({ sub: p.sub, email: `${p.sub}@acme.example`, name: p.name, groups: p.groups }));
 const info = await acme.setConsole({ on: true, port: 7730, clientId: 'weave-console' });
-console.log(`admin console at ${info.url} (sign-in goes through as Lena, an admin)`);
+console.log(`admin console at ${info.url} (sign in as Lena, an admin; Ada, an auditor; or Sam, the helpdesk)`);

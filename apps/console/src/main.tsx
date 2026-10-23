@@ -1,7 +1,7 @@
-import { StrictMode, useEffect, useState, type ReactNode } from 'react';
+import { StrictMode, useContext, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { AuditLine, AuditSinkInput, AuditStreamInfo, CompanyAction, CompanyInfo, MemberInfo, ScimInfo, SpaceInfo } from '@weave/node/client';
-import { api, Avatar, Badge, CopyText, Empty, Faces, Header, Icon, Logo, Open, Problem, Run, useLoad, when, type IconName } from './ui.tsx';
+import type { AuditLine, AuditSinkInput, AuditStreamInfo, CompanyAction, CompanyAgentInfo, CompanyDeviceInfo, CompanyInfo, MemberInfo, ScimInfo, SpaceInfo } from '@weave/node/client';
+import { api, Avatar, Badge, CopyText, Empty, Faces, Header, Icon, Logo, Open, Problem, RoleContext, Run, useLoad, when, type IconName, type Role } from './ui.tsx';
 
 /*
  * The admin console for a company's Weave (stage 12): served by the company's
@@ -9,7 +9,7 @@ import { api, Avatar, Badge, CopyText, Empty, Faces, Header, Icon, Logo, Open, P
  * company's node, which records who did it (packages/node/src/console.ts).
  */
 
-type Me = { subject: string; email?: string; name?: string };
+type Me = { subject: string; email?: string; name?: string; role?: Role };
 type SpaceRow = SpaceInfo & { members: Array<{ did: string; name?: string; maintainer: boolean }> };
 type Line = AuditLine & { space: { id: string; name: string } };
 
@@ -33,9 +33,11 @@ function Stat({ icon, tone, label, value, sub, alert }: { icon: IconName; tone: 
 }
 
 function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void }) {
+  const role = useContext(RoleContext);
   const members = useLoad(() => api<MemberInfo[]>('/members'));
-  const scim = useLoad(() => api<ScimInfo>('/scim'));
-  const streams = useLoad(() => api<AuditStreamInfo[]>('/streams'));
+  // The helpdesk sees who's who and sets people up; the rest isn't theirs.
+  const scim = useLoad(() => (role === 'helpdesk' ? Promise.resolve(undefined) : api<ScimInfo>('/scim')));
+  const streams = useLoad(() => (role === 'helpdesk' ? Promise.resolve(undefined) : api<AuditStreamInfo[]>('/streams')));
   const [link, setLink] = useState<string>();
   const [email, setEmail] = useState('');
   const [invited, setInvited] = useState<string>();
@@ -56,16 +58,22 @@ function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void 
       <div className="cards">
         <Stat icon="people" tone="navy" label="People vouched for" value={members.data ? vouched : '…'} sub={members.data ? `${members.data.length} in the company group` : ''} />
         <Stat icon="projects" tone="teal" label="Projects and groups" value={company.spaces.length + 1} sub={`${company.maps.length} mapped from sign-in groups`} />
-        <Stat icon="directory" tone="gold" label="Directory (SCIM)" value={scim.data ? (scim.data.on ? 'On' : 'Off') : '…'} sub={scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'} />
-        <Stat icon="tools" tone="red" label="Audit streams" value={streams.data?.length ?? '…'} sub={!streams.data?.length ? 'none yet' : troubled ? 'a destination has a problem' : 'all delivering'} alert={troubled} />
+        {role !== 'helpdesk' && (
+          <>
+            <Stat icon="directory" tone="gold" label="Directory (SCIM)" value={scim.data ? (scim.data.on ? 'On' : 'Off') : '…'} sub={scim.data?.on ? `${scim.data.users.length} users, ${scim.data.groups.length} groups` : 'groups from sign-in tokens'} />
+            <Stat icon="tools" tone="red" label="Audit streams" value={streams.data?.length ?? '…'} sub={!streams.data?.length ? 'none yet' : troubled ? 'a destination has a problem' : 'all delivering'} alert={troubled} />
+          </>
+        )}
       </div>
       <div className="grid-2">
         <section className="panel">
           <div className="panel-head">
             <h2>Policy in effect</h2>
-            <button className="btn small ghost" onClick={() => go('Policy')}>
-              Change
-            </button>
+            {role === 'admin' && (
+              <button className="btn small ghost" onClick={() => go('Policy')}>
+                Change
+              </button>
+            )}
           </div>
           <ul className="rules">
             {rules.map(([icon, text, strict]) => (
@@ -86,6 +94,7 @@ function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void 
             <Run
               kind="primary"
               icon="new"
+              need="helpdesk"
               disabled={!email.includes('@')}
               run={async () => {
                 const sent = await api<{ to: string }>('/invite', { method: 'POST', body: { email: email.trim() } });
@@ -98,7 +107,7 @@ function Overview({ company, go }: { company: CompanyInfo; go(page: Page): void 
           </div>
           {invited && <p className="muted">Sent {invited} their invitation.</p>}
           <p className="muted">Or make an enrollment link to hand over yourself, or for your device management's settings.</p>
-          <Run icon="new" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
+          <Run icon="new" need="helpdesk" run={async () => setLink((await api<{ link: string }>('/enroll-link', { method: 'POST', body: { days: 30 } })).link)}>
             New enrollment link
           </Run>
           {link && <CopyText text={link} />}
@@ -151,6 +160,8 @@ function Requests({ company }: { company: CompanyInfo }) {
 
 function People({ company }: { company: CompanyInfo }) {
   const members = useLoad(() => api<MemberInfo[]>('/members'));
+  const devices = useLoad(() => api<CompanyDeviceInfo[]>('/devices'));
+  const deviceOf = (did: string) => devices.data?.find((d) => d.did === did);
   const [answer, setAnswer] = useState<{ name: string; answer: string }>();
   const [filter, setFilter] = useState('');
   const now = Date.now();
@@ -215,14 +226,7 @@ function People({ company }: { company: CompanyInfo }) {
                   </td>
                   <td className="nowrap">{isCompany ? '' : !m.attested ? <Badge tone="muted">not signed in</Badge> : live ? <Badge tone="good">until {when(m.attested.until)}</Badge> : <Badge tone="warn">lapsed</Badge>}</td>
                   <td className="muted small">
-                    {m.attested?.device ? (
-                      <span className="device">
-                        <Icon name="monitor" />
-                        {m.attested.device.subject.replace(/^CN=/, '')}
-                      </span>
-                    ) : (
-                      ''
-                    )}
+                    <DeviceStatus device={isCompany ? undefined : deviceOf(m.did)} />
                   </td>
                   <td>
                     {m.company && (
@@ -232,6 +236,7 @@ function People({ company }: { company: CompanyInfo }) {
                           kind="ghost"
                           icon="key"
                           title="Set up a new computer (recovery)"
+                          need="helpdesk"
                           run={async () => {
                             const request = window.prompt(`The recovery request from ${m.name}'s new computer (weave recover-request there):`);
                             if (request) setAnswer({ name: m.name ?? 'them', answer: (await api<{ answer: string }>('/recovery', { method: 'POST', body: { person: m.did, request } })).answer });
@@ -247,6 +252,100 @@ function People({ company }: { company: CompanyInfo }) {
           </tbody>
         </table>
         {members.data && !shown.length && <Empty icon="people">Nobody matches “{filter}”.</Empty>}
+      </section>
+    </>
+  );
+}
+
+/** A person's company computer (stage 15): its certificate and until when, or why their sign-in wasn't vouched for. */
+function DeviceStatus({ device }: { device?: CompanyDeviceInfo }) {
+  if (!device) return null;
+  const soon = device.device?.validTo && Date.parse(device.device.validTo) < Date.now() + 14 * 86_400_000;
+  return (
+    <div className="device-status">
+      {device.device && (
+        <span className="device" title={`serial ${device.device.serial}`}>
+          <Icon name="monitor" />
+          {device.device.subject.replace(/^CN=/, '')}
+        </span>
+      )}
+      {device.device?.validTo && <div className={soon ? 'warn-text' : ''}>certificate until {device.device.validTo.slice(0, 10)}</div>}
+      {device.problem ? (
+        <Badge tone="bad">refused: {device.problem}</Badge>
+      ) : device.required && !device.device ? (
+        <Badge tone="warn">no company computer yet</Badge>
+      ) : !device.required && !device.device ? (
+        <span>any computer</span>
+      ) : null}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ agents
+
+/** The agents of the company's people (stage 15): in the company's projects and groups an agent acts only once approved. */
+function Agents() {
+  const agents = useLoad(() => api<CompanyAgentInfo[]>('/agents'));
+  const [filter, setFilter] = useState('');
+  const shown = (agents.data ?? []).filter((a) => !filter || `${a.personName ?? ''} ${a.name}`.toLowerCase().includes(filter.toLowerCase()));
+  return (
+    <>
+      <Header icon="robot" title="Agents" lead="Agents act for their person, signed with their own key. In the company's projects and groups an agent acts only where it's approved.">
+        <input className="search" placeholder="Search people or agents" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      </Header>
+      <Problem error={agents.error} />
+      <section className="panel flush table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Approved in</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!agents.data && (
+              <tr>
+                <td colSpan={2} className="muted">
+                  Loading…
+                </td>
+              </tr>
+            )}
+            {shown.map((a) => (
+              <tr key={a.did}>
+                <td>
+                  <div className="who">
+                    <span className="avatar agent-avatar">
+                      <Icon name="robot" />
+                    </span>
+                    <div>
+                      <div className="name">{a.name}</div>
+                      <div className="muted small">for {a.personName ?? a.person.slice(8, 20)}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div className="row wrap">
+                    {a.spaces.map((s) => (
+                      <span key={s.id} className={`chip toggle ${s.approved ? 'on' : ''}`}>
+                        {s.approved ? <Icon name="check" size={12} /> : null}
+                        {s.name}
+                        <Run
+                          small
+                          kind="ghost"
+                          title={s.approved ? `Stop ${a.name} acting in ${s.name}` : `Let ${a.name} act in ${s.name}`}
+                          run={async () => (await api('/agent', { method: 'POST', body: { space: s.id, agent: a.did, on: !s.approved } }), agents.reload())}
+                        >
+                          {s.approved ? 'Revoke' : 'Approve'}
+                        </Run>
+                      </span>
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {agents.data && !shown.length && <Empty icon="robot">{filter ? `Nobody matches “${filter}”.` : "None of the company's people has an agent yet."}</Empty>}
       </section>
     </>
   );
@@ -271,13 +370,14 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
               <th>Project or group</th>
               <th>Members</th>
               <th>Keys</th>
+              <th>Kept</th>
               <th>Legal hold</th>
             </tr>
           </thead>
           <tbody>
             {!spaces.data && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   Loading…
                 </td>
               </tr>
@@ -305,6 +405,9 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
                 <td>{s.managed?.problem ? <Badge tone="bad">{s.managed.problem}</Badge> : <span title="Under the company's key service">
                       <Badge tone="good">key {s.epoch}</Badge>
                     </span>}</td>
+                <td>
+                  <Retention company={company} space={s} reload={reload} />
+                </td>
                 <td>
                   {s.hold ? (
                     <Badge tone="warn">until {s.hold.until.slice(0, 10)}</Badge>
@@ -412,6 +515,33 @@ function Spaces({ company, reload }: { company: CompanyInfo; reload(): void }) {
   );
 }
 
+/** How long a project or group keeps things: its own retention (stage 15), or the company's. */
+function Retention({ company, space, reload }: { company: CompanyInfo; space: SpaceRow; reload(): void }) {
+  const own = company.spaceRetention?.[space.id];
+  const r = own ?? company.retention;
+  const text = r.minDays && r.maxDays ? `${r.minDays}–${r.maxDays} days` : r.minDays ? `≥ ${r.minDays} days` : r.maxDays ? `≤ ${r.maxDays} days` : 'no limits';
+  return (
+    <div className="row">
+      <span className={`nowrap ${own ? '' : 'muted'}`} title={own ? 'Its own retention' : "The company's retention"}>
+        {text}
+      </span>
+      <Run
+        small
+        kind="ghost"
+        icon="clock"
+        title={`Retention for ${space.name}`}
+        run={async () => {
+          const answer = window.prompt(`${space.name} keeps things at least / at most how many days? E.g. "365 / 3650", "/ 90", or empty for the company's (${company.retention.minDays ?? '-'} / ${company.retention.maxDays ?? '-'}).`, own ? `${own.minDays ?? ''} / ${own.maxDays ?? ''}` : '');
+          if (answer === null) return;
+          const [min, max] = answer.split('/').map((v) => (v.trim() ? Number(v.trim()) : null));
+          await act({ action: 'settings', retention: { space: space.id, minDays: min ?? null, maxDays: max ?? null } });
+          reload();
+        }}
+      />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ policy
 
 function Toggle({ value, onChange, on, off }: { value: boolean; onChange(v: boolean): void; on: string; off: string }) {
@@ -432,6 +562,8 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
   const [min, setMin] = useState(String(company.retention.minDays ?? ''));
   const [max, setMax] = useState(String(company.retention.maxDays ?? ''));
   const [admins, setAdmins] = useState(company.admins ?? '');
+  const [auditors, setAuditors] = useState(company.auditors ?? '');
+  const [helpdesk, setHelpdesk] = useState(company.helpdesk ?? '');
   const [ca, setCa] = useState('');
   const days = (v: string) => (v.trim() ? Number(v) : null);
   return (
@@ -441,7 +573,7 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
           kind="primary"
           icon="check"
           run={async () => {
-            await act({ action: 'settings', ...p, admins, retention: { minDays: days(min), maxDays: days(max) }, ...(ca.trim() ? { deviceCA: ca.trim() } : {}) });
+            await act({ action: 'settings', ...p, admins, auditors: auditors.trim() || null, helpdesk: helpdesk.trim() || null, retention: { minDays: days(min), maxDays: days(max) }, ...(ca.trim() ? { deviceCA: ca.trim() } : {}) });
             setCa('');
             reload();
           }}
@@ -474,6 +606,10 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
           <Toggle value={p.links} onChange={(links) => setP({ ...p, links })} on="Allowed" off="Not allowed" />
           <label>Admins (sign-in group)</label>
           <input value={admins} onChange={(e) => setAdmins(e.target.value)} />
+          <label>Auditors (sign-in group)</label>
+          <input placeholder="nobody: they read everything, change nothing" value={auditors} onChange={(e) => setAuditors(e.target.value)} />
+          <label>Helpdesk (sign-in group)</label>
+          <input placeholder="nobody: they invite and set up people's computers" value={helpdesk} onChange={(e) => setHelpdesk(e.target.value)} />
         </div>
       </section>
       <section className="panel">
@@ -494,7 +630,7 @@ function Policy({ company, reload }: { company: CompanyInfo; reload(): void }) {
             <span>days</span>
           </div>
         </div>
-        <p className="muted small">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each project's page stay. A legal hold stops it.</p>
+        <p className="muted small">The maximum removes chat and posts older than it; pinned posts, issues, proposals, releases and each project's page stay. A legal hold stops it. A project or group can have its own (Projects and groups → Kept).</p>
       </section>
       <section className="panel">
         <div className="panel-head">
@@ -600,14 +736,25 @@ const kindIcon = (kind: string): IconName => KIND_ICONS.find(([re]) => re.test(k
 
 function Audit({ company }: { company: CompanyInfo }) {
   const [space, setSpace] = useState('');
-  const audit = useLoad(() => api<{ lines: Line[]; names: Record<string, string> }>(`/audit${space ? `?space=${space}` : ''}`), [space]);
+  const [person, setPerson] = useState('');
+  const [since, setSince] = useState(new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10));
+  const [until, setUntil] = useState('');
+  const [typed, setTyped] = useState('');
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const wait = setTimeout(() => setQ(typed), 300);
+    return () => clearTimeout(wait);
+  }, [typed]);
+  const members = useLoad(() => api<MemberInfo[]>('/members'));
+  const query = new URLSearchParams({ ...(space ? { space } : {}), ...(person ? { person } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(q.trim() ? { q: q.trim() } : {}) });
+  const audit = useLoad(() => api<{ lines: Line[]; names: Record<string, string> }>(`/audit?${query}`), [query.toString()]);
   const names = audit.data?.names ?? {};
   const named = (v: unknown) => (typeof v === 'string' ? (names[v] ?? (v.startsWith('did:key:') ? `${v.slice(8, 16)}…` : v)) : String(v));
   const spaces = [company.group, ...company.spaces];
   const kindOf = (id: string) => (id === company.group.id ? 'group' : company.spaces.find((s) => s.id === id)?.kind);
   const summary = (l: Line) => {
     const d = (l.detail ?? {}) as Record<string, unknown>;
-    if (l.kind === 'weave.org.console') return `${d.email ?? d.subject} in the console: ${d.action}${d.space ? ` (${named(d.space)})` : ''}${d.person ? ` (${named(d.person)})` : ''}`;
+    if (l.kind === 'weave.org.console') return `${d.email ?? d.subject}${d.role ? ` (${d.role})` : ''} in the console: ${d.action}${d.space ? ` (${named(d.space)})` : ''}${d.person ? ` (${named(d.person)})` : ''}${d.agent ? ` (${named(d.agent)})` : ''}`;
     return Object.entries(d)
       .filter(([, v]) => typeof v !== 'object' || v === null)
       .map(([k, v]) => `${k}: ${named(v)}`)
@@ -616,7 +763,7 @@ function Audit({ company }: { company: CompanyInfo }) {
   };
   return (
     <>
-      <Header icon="audit" title="Audit" lead="Who changed what in the company's projects and groups over the last 30 days. No content, no secrets.">
+      <Header icon="audit" title="Audit" lead="Who changed what in the company's projects and groups. No content, no secrets.">
         <select value={space} onChange={(e) => setSpace(e.target.value)}>
           <option value="">All projects and groups</option>
           {spaces.map((s) => (
@@ -632,6 +779,30 @@ function Audit({ company }: { company: CompanyInfo }) {
           </a>
         )}
       </Header>
+      <div className="filters">
+        <select value={person} onChange={(e) => setPerson(e.target.value)} aria-label="Person">
+          <option value="">Everyone</option>
+          {(members.data ?? [])
+            .filter((m) => m.did !== company.did)
+            .map((m) => (
+              <option key={m.did} value={m.did}>
+                {m.name ?? m.did.slice(8, 20)}
+                {m.attested?.email ? ` (${m.attested.email})` : ''}
+              </option>
+            ))}
+        </select>
+        <label>
+          From <input type="date" value={since} onChange={(e) => setSince(e.target.value)} />
+        </label>
+        <label>
+          to <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        </label>
+        <div className="search-box">
+          <Icon name="search" />
+          <input className="search" placeholder="Words: freeze, hold, an email…" value={typed} onChange={(e) => setTyped(e.target.value)} />
+        </div>
+        <span className="muted small">{audit.data ? `${audit.data.lines.length} line${audit.data.lines.length === 1 ? '' : 's'}` : ''}</span>
+      </div>
       <Problem error={audit.error} />
       <section className="panel flush table-wrap">
         <table>
@@ -810,9 +981,12 @@ function Streams() {
 
 // ------------------------------------------------------------------ the app
 
-const PAGES = ['Overview', 'People', 'Projects and groups', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
+const PAGES = ['Overview', 'People', 'Agents', 'Projects and groups', 'Policy', 'Directory', 'Audit', 'Security tools'] as const;
 type Page = (typeof PAGES)[number];
-const PAGE_ICONS: Record<Page, IconName> = { Overview: 'home', People: 'people', 'Projects and groups': 'projects', Policy: 'policy', Directory: 'directory', Audit: 'audit', 'Security tools': 'tools' };
+const PAGE_ICONS: Record<Page, IconName> = { Overview: 'home', People: 'people', Agents: 'robot', 'Projects and groups': 'projects', Policy: 'policy', Directory: 'directory', Audit: 'audit', 'Security tools': 'tools' };
+/** The pages a role sees (stage 15): the helpdesk only who's who; auditors everything, read-only. */
+const pagesFor = (role: Role): readonly Page[] => (role === 'helpdesk' ? ['Overview', 'People'] : PAGES);
+const ROLE_NAMES: Record<Role, string> = { admin: 'Admin', auditor: 'Auditor · read-only', helpdesk: 'Helpdesk' };
 
 type Theme = 'light' | 'dark' | 'system';
 function useTheme(): [Theme, (t: Theme) => void] {
@@ -833,6 +1007,16 @@ function useTheme(): [Theme, (t: Theme) => void] {
     }
   }, [theme]);
   return [theme, setTheme];
+}
+
+/** Settings pages for an auditor: shown as they are, nothing to change. */
+function ReadOnly({ children }: { children: ReactNode }) {
+  const role = useContext(RoleContext);
+  return (
+    <fieldset className="read-only" disabled={role === 'auditor'}>
+      {children}
+    </fieldset>
+  );
 }
 
 function SignIn() {
@@ -881,50 +1065,69 @@ function App() {
   if (!company.data) return <div className="signin">This node doesn't run a company yet (weave company create).</div>;
   const c = company.data;
   const who = me.data.name ?? me.data.email ?? me.data.subject;
+  const role = me.data.role ?? 'admin';
+  const pages = pagesFor(role);
+  const shown: Page = pages.includes(page) ? page : 'Overview';
   return (
-    <div className="shell">
-      <nav>
-        <div className="brand">
-          <Logo size={30} />
-          <div>
-            <div className="wordmark">Weave</div>
-            <div className="sub">Admin</div>
+    <RoleContext.Provider value={role}>
+      <div className="shell">
+        <nav>
+          <div className="brand">
+            <Logo size={30} />
+            <div>
+              <div className="wordmark">Weave</div>
+              <div className="sub">Admin</div>
+            </div>
           </div>
-        </div>
-        <div className="company">
-          <span className="company-name">{c.name}</span>
-        </div>
-        <div className="links">
-          {PAGES.map((p) => (
-            <button key={p} className={p === page ? 'on' : ''} onClick={() => setPage(p)}>
-              <Icon name={PAGE_ICONS[p]} />
-              <span>{p}</span>
+          <div className="company">
+            <span className="company-name">{c.name}</span>
+          </div>
+          <div className="links">
+            {pages.map((p) => (
+              <button key={p} className={p === shown ? 'on' : ''} onClick={() => setPage(p)}>
+                <Icon name={PAGE_ICONS[p]} />
+                <span>{p}</span>
+              </button>
+            ))}
+          </div>
+          <div className="me">
+            <Avatar name={who} id={me.data.subject} />
+            <div className="me-text">
+              <div className="name">{who}</div>
+              {role !== 'admin' && <div className="role">{ROLE_NAMES[role]}</div>}
+              <a href="/logout">
+                <Icon name="logout" size={12} /> Sign out
+              </a>
+            </div>
+            <button className="btn small ghost theme" title={`Theme: ${theme}`} onClick={() => setTheme(theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system')}>
+              <Icon name={theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor'} />
             </button>
-          ))}
-        </div>
-        <div className="me">
-          <Avatar name={who} id={me.data.subject} />
-          <div className="me-text">
-            <div className="name">{who}</div>
-            <a href="/logout">
-              <Icon name="logout" size={12} /> Sign out
-            </a>
           </div>
-          <button className="btn small ghost theme" title={`Theme: ${theme}`} onClick={() => setTheme(theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system')}>
-            <Icon name={theme === 'light' ? 'sun' : theme === 'dark' ? 'moon' : 'monitor'} />
-          </button>
-        </div>
-      </nav>
-      <main>
-        {page === 'Overview' && <Overview company={c} go={setPage} />}
-        {page === 'People' && <People company={c} />}
-        {page === 'Projects and groups' && <Spaces company={c} reload={company.reload} />}
-        {page === 'Policy' && <Policy key={JSON.stringify(c.policy) + JSON.stringify(c.retention)} company={c} reload={company.reload} />}
-        {page === 'Directory' && <Directory />}
-        {page === 'Audit' && <Audit company={c} />}
-        {page === 'Security tools' && <Streams />}
-      </main>
-    </div>
+        </nav>
+        <main>
+          {shown === 'Overview' && <Overview company={c} go={setPage} />}
+          {shown === 'People' && <People company={c} />}
+          {shown === 'Agents' && <Agents />}
+          {shown === 'Projects and groups' && <Spaces company={c} reload={company.reload} />}
+          {shown === 'Policy' && (
+            <ReadOnly>
+              <Policy key={JSON.stringify(c.policy) + JSON.stringify(c.retention) + c.auditors + c.helpdesk} company={c} reload={company.reload} />
+            </ReadOnly>
+          )}
+          {shown === 'Directory' && (
+            <ReadOnly>
+              <Directory />
+            </ReadOnly>
+          )}
+          {shown === 'Audit' && <Audit company={c} />}
+          {shown === 'Security tools' && (
+            <ReadOnly>
+              <Streams />
+            </ReadOnly>
+          )}
+        </main>
+      </div>
+    </RoleContext.Provider>
   );
 }
 

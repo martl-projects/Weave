@@ -25,18 +25,25 @@ export function deviceProof(certPem: string, keyPem: string, did: Did, idToken: 
 }
 
 /** Is this a company computer's proof for this sign-in? Its certificate from the company's authority, valid now, and signed. */
-export function checkDevice(proof: unknown, caPem: string, did: Did, idToken: string, now = Date.now()): { subject: string; serial: string } | undefined {
+export function checkDevice(proof: unknown, caPem: string, did: Did, idToken: string, now = Date.now()): { subject: string; serial: string; validTo: string } | undefined {
+  const checked = inspectDevice(proof, caPem, did, idToken, now);
+  return 'device' in checked ? checked.device : undefined;
+}
+
+/** The same check, saying what's wrong when it fails (the admin console shows it, stage 15). */
+export function inspectDevice(proof: unknown, caPem: string, did: Did, idToken: string, now = Date.now()): { device: { subject: string; serial: string; validTo: string } } | { problem: string } {
   const p = proof as Partial<DeviceProof> | undefined;
-  if (typeof p?.cert !== 'string' || typeof p.sig !== 'string') return undefined;
+  if (typeof p?.cert !== 'string' || typeof p.sig !== 'string') return { problem: 'no company computer certificate' };
   try {
     const cert = new X509Certificate(p.cert);
     const ca = new X509Certificate(caPem);
-    if (!cert.checkIssued(ca) || !cert.verify(ca.publicKey)) return undefined;
-    if (Date.parse(cert.validFrom) > now || Date.parse(cert.validTo) < now) return undefined;
-    if (!verify(algorithmOf(cert.publicKey.asymmetricKeyType), message(did, idToken), cert.publicKey, Buffer.from(p.sig, 'base64url'))) return undefined;
-    return { subject: cert.subject.replace(/\n/g, ', '), serial: cert.serialNumber };
+    if (!cert.checkIssued(ca) || !cert.verify(ca.publicKey)) return { problem: "a certificate from another authority than the company's" };
+    if (Date.parse(cert.validFrom) > now) return { problem: 'a certificate that isn’t valid yet' };
+    if (Date.parse(cert.validTo) < now) return { problem: `a certificate that expired ${new Date(cert.validTo).toISOString().slice(0, 10)}` };
+    if (!verify(algorithmOf(cert.publicKey.asymmetricKeyType), message(did, idToken), cert.publicKey, Buffer.from(p.sig, 'base64url'))) return { problem: 'a certificate whose key didn’t sign this sign-in' };
+    return { device: { subject: cert.subject.replace(/\n/g, ', '), serial: cert.serialNumber, validTo: new Date(cert.validTo).toISOString() } };
   } catch {
-    return undefined;
+    return { problem: "a certificate that couldn't be read" };
   }
 }
 

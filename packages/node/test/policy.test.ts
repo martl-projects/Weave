@@ -150,4 +150,40 @@ describe('company policy', { timeout: 120_000 }, () => {
     expect((await acme.audit({ space: 'Roadmap' })).some((l) => l.kind === 'weave.space.shred')).toBe(true);
     for (const node of all) await node.close();
   });
+
+  it('gives a project its own retention, and the rest keep the company’s', async () => {
+    const { acme, lena, kofi, all, round } = await company('acme-own-retention');
+    for (const name of ['Roadmap', 'Design']) await acme.companyAction({ action: 'space', kind: 'project', name });
+    await settle();
+    for (const space of ['Roadmap', 'Design']) await acme.companyAction({ action: 'map', group: 'employees', space });
+    await round();
+    const roadmap = (await acme.company())!.spaces.find((s) => s.name === 'Roadmap')!;
+
+    // The company keeps things at least 30 days; Roadmap at most one day, with no minimum.
+    await acme.companyAction({ action: 'settings', retention: { minDays: 30 } });
+    await acme.companyAction({ action: 'settings', retention: { space: 'Roadmap', minDays: null, maxDays: 1 } });
+    expect((await acme.company())!.retention).toEqual({ minDays: 30 });
+    expect((await acme.company())!.spaceRetention).toEqual({ [roadmap.id]: { maxDays: 1 } });
+    await expect(acme.companyAction({ action: 'settings', retention: { space: 'Design', minDays: 10, maxDays: 5 } })).rejects.toThrow(/minimum is longer/);
+    syncAll(all);
+    // Design keeps the company's minimum; Roadmap doesn't have one.
+    await expect(acme.shred({ space: 'Design', before: new Date().toISOString() })).rejects.toThrow(/at least 30 days/);
+
+    await lena.say({ space: 'Roadmap', text: 'roadmap long ago' });
+    await lena.say({ space: 'Design', text: 'design long ago' });
+    syncAll(all);
+    for (const space of ['Roadmap', 'Design']) await acme.removeMember(space, 'Kofi'); // new keys: the old ones have ended
+    syncAll(all);
+    acme.clock = () => Date.now() + 3 * day;
+    await acme.reconcile();
+    await acme.reconcile();
+    expect((await acme.messages('Roadmap')).map((m) => m.text)).not.toContain('roadmap long ago');
+    expect((await acme.messages('Design')).map((m) => m.text)).toContain('design long ago');
+
+    // Back to the company's.
+    await acme.companyAction({ action: 'settings', retention: { space: 'Roadmap', minDays: null, maxDays: null } });
+    expect((await acme.company())!.spaceRetention).toEqual({});
+    for (const node of all) await node.close();
+    void kofi;
+  });
 });
