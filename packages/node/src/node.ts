@@ -345,7 +345,7 @@ import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
-import { readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
+import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
@@ -5192,6 +5192,19 @@ export class WeaveNode implements Backend {
           ? "this backup carries the key that opens it (vault.json): keep it as safe as the server, or move the home key to the company's key service"
           : `this backup opens only on this computer, as this user (${keystore})`;
     return { to, files, bytes, keystore, ...(note ? { note } : {}) };
+  }
+
+  /** Where this computer can keep the home key (stage 17). */
+  async keystores(): Promise<Array<{ keystore: Keystore; name: string; ready: boolean; why?: string; current: boolean }>> {
+    const current = vaultOf(this.home).keystore;
+    const here = keystoresHere();
+    if (!here.some((k) => k.keystore === current)) here.unshift({ keystore: current, name: current, ready: true });
+    return here.map((k) => ({ ...k, current: k.keystore === current }));
+  }
+
+  /** Keep the home key somewhere else (stage 17): the same key, so nothing else changes. */
+  async moveHomeKey(input: { to: 'os' | Exclude<Keystore, 'kms'> }): Promise<{ from: Keystore; to: Keystore }> {
+    return moveHomeKey(this.home, input.to);
   }
 
   async consoleOperatorLink(): Promise<string> {

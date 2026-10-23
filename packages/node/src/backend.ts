@@ -128,11 +128,14 @@ export interface Status {
   pending: number;
   /** Events this node held back since it started: their authors were over their budget in that space (stage 8). */
   heldBack: number;
-  /** Where this home's keys are protected: the OS keystore (dpapi, keychain, secret-service) or nowhere (file). */
-  keystore: 'dpapi' | 'keychain' | 'secret-service' | 'file' | 'kms';
+  /** Where this home's keys are protected: the OS keystore (dpapi, keychain, secret-service), hardware (tpm, secure-enclave, yubikey), the company's key service, or nowhere (file). */
+  keystore: KeystoreKind;
   /** Said when the keys aren't protected by the operating system. */
   keystoreWarning?: string;
 }
+
+/** Where a home's key is kept (stage 2, 14, 17). */
+export type KeystoreKind = 'dpapi' | 'keychain' | 'secret-service' | 'file' | 'kms' | 'tpm' | 'secure-enclave' | 'yubikey';
 
 export interface PublishInput {
   kind: string;
@@ -1060,7 +1063,11 @@ export interface Backend {
   /** A company account: whether it's signed in, until when, and whether it renews by itself. */
   signInStatus(): Promise<SignInStatus>;
   /** A backup of this home into an empty folder: its files and a consistent copy of its database (stage 14). */
-  backup(input: { to: string }): Promise<{ to: string; files: number; bytes: number; keystore: 'dpapi' | 'keychain' | 'secret-service' | 'file' | 'kms'; note?: string }>;
+  backup(input: { to: string }): Promise<{ to: string; files: number; bytes: number; keystore: KeystoreKind; note?: string }>;
+  /** Where this computer can keep the home key (stage 17): the operating system's keystore and the hardware ones it has. */
+  keystores(): Promise<Array<{ keystore: KeystoreKind; name: string; ready: boolean; why?: string; current: boolean }>>;
+  /** Keep the home key somewhere else (stage 17): `os` for the operating system's keystore. */
+  moveHomeKey(input: { to: 'os' | Exclude<KeystoreKind, 'kms'> }): Promise<{ from: KeystoreKind; to: KeystoreKind }>;
   /** On the company's node: a new one-time link into the admin console, for an operator. */
   consoleOperatorLink(): Promise<string>;
   /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
@@ -1316,7 +1323,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',

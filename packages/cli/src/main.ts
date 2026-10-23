@@ -9,6 +9,7 @@ import {
   checkManifest,
   MANIFEST_EXAMPLE,
   MANIFEST_RULES,
+  KEYSTORE_NAMES,
   releaseWorkflow,
   loadConfig,
   parseBootstrap,
@@ -67,6 +68,7 @@ A company's own projects and groups are its company spaces.
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   status                     node status: peers, groups, projects, communities
+  keystore [os|tpm|secure-enclave|yubikey|file]   where this computer keeps the key to your keys (hardware: tpm, secure-enclave, yubikey)
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
   export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
@@ -747,10 +749,28 @@ async function main(): Promise<void> {
           `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.communities} communit${s.communities === 1 ? 'y' : 'ies'}`,
           `  ${s.events} events in ${s.logs} logs${s.pending ? `, ${s.pending} pending` : ''}`,
           ...(s.heldBack ? [`  ${s.heldBack} events held back: their authors were over their budget`] : []),
-          `  keys protected by ${{ dpapi: 'Windows (DPAPI)', keychain: 'the macOS Keychain', 'secret-service': 'the Secret Service', file: 'nothing', kms: "the company's key service" }[s.keystore]}`,
+          `  keys protected by ${KEYSTORE_NAMES[s.keystore]}`,
           ...(s.keystoreWarning ? [`  warning: ${s.keystoreWarning}`] : []),
         ].join('\n'),
       );
+    }
+
+    case 'keystore': {
+      const b = await backend();
+      const to = args[0];
+      if (!to) {
+        const all = await b.keystores();
+        return out(all, () =>
+          [
+            ...all.map((k) => `${k.current ? '*' : ' '} ${k.keystore.padEnd(15)} ${k.name}${k.ready ? '' : `  (not here: ${k.why})`}`),
+            '',
+            'weave keystore <name> moves the key there. Hardware keeps it on this computer or key only: lose it, and you set Weave up again from your recovery words (or your company does).',
+          ].join('\n'),
+        );
+      }
+      if (!['os', 'tpm', 'secure-enclave', 'yubikey', 'file', 'dpapi', 'keychain', 'secret-service'].includes(to)) throw new Error('usage: weave keystore [os|tpm|secure-enclave|yubikey|file]');
+      const moved = await b.moveHomeKey({ to: to as 'os' });
+      return out(moved, () => (moved.from === moved.to ? `the key is kept by ${KEYSTORE_NAMES[moved.to]} already` : `the key to your keys is now kept by ${KEYSTORE_NAMES[moved.to]} (was ${KEYSTORE_NAMES[moved.from]})`));
     }
 
     case 'post': {

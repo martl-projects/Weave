@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { build as bundle } from 'esbuild';
-import { build, type Configuration } from 'electron-builder';
+import { Arch, build, type Configuration } from 'electron-builder';
 
 const root = join(import.meta.dirname, '..', '..');
 const pkg = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
@@ -97,10 +97,12 @@ const config: Configuration = {
   electronVersion: pkg(join(root, 'node_modules', 'electron')).version,
   directories: { app: 'pack/app', output: 'release' },
   // Copied by hand: extraResources would leave out the daemon's node_modules.
-  afterPack: async ({ appOutDir, electronPlatformName, packager }) => {
+  afterPack: async ({ appOutDir, electronPlatformName, packager, arch }) => {
     const mac = electronPlatformName === 'darwin';
     const resources = mac ? join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources') : join(appOutDir, 'resources');
     cpSync('pack/daemon', join(resources, 'daemon'), { recursive: true });
+    // The Secure Enclave helper (stage 17): keeps the home key's key inside the Mac's Secure Enclave, if the person chooses it.
+    if (mac) execFileSync('swiftc', ['-O', '-target', `${arch === Arch.arm64 ? 'arm64' : 'x86_64'}-apple-macos11`, 'native/weave-se.swift', '-o', join(resources, 'weave-se')], { stdio: 'inherit' });
     // The app's executable, seen from resources/bin.
     const exe = mac ? `../../MacOS/${packager.appInfo.productFilename}` : electronPlatformName === 'win32' ? `../../${packager.appInfo.productFilename}.exe` : `../../${(packager as unknown as { executableName: string }).executableName}`;
     writeShims(join(resources, 'bin'), exe, electronPlatformName === 'win32');

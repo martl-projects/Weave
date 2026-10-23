@@ -352,7 +352,57 @@ function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: s
   );
 }
 
-const KEYSTORE_NAME: Record<Status['keystore'], string> = { dpapi: 'Windows (DPAPI)', keychain: 'the macOS Keychain', 'secret-service': 'your desktop’s Secret Service', file: 'nothing', kms: 'your company’s key service' };
+const KEYSTORE_NAME: Record<Status['keystore'], string> = {
+  dpapi: 'Windows (DPAPI)',
+  keychain: 'the macOS Keychain',
+  'secret-service': 'your desktop’s Secret Service',
+  file: 'nothing',
+  kms: 'your company’s key service',
+  tpm: 'this computer’s TPM chip',
+  'secure-enclave': 'this Mac’s Secure Enclave',
+  yubikey: 'your YubiKey',
+};
+
+type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boolean; why?: string; current: boolean };
+
+/** Where the key to your keys is kept, and moving it into hardware (stage 17). */
+function KeystoreChoice({ current }: { current: Status['keystore'] }) {
+  const { data: options } = useApi(() => api<KeystoreOption[]>('keystores'), []);
+  const [to, setTo] = useState('');
+  if (!options || current === 'kms') return null;
+  const others = options.filter((o) => !o.current && o.ready);
+  const missing = options.filter((o) => !o.ready);
+  if (!others.length) return null;
+  return (
+    <div className="field-row">
+      <label htmlFor="keystore">Keep it in</label>
+      <select id="keystore" value={to} onChange={(e) => setTo(e.target.value)}>
+        <option value="">{KEYSTORE_NAME[current]} (now)</option>
+        {others.map((o) => (
+          <option key={o.keystore} value={o.keystore}>
+            {KEYSTORE_NAME[o.keystore]}
+          </option>
+        ))}
+      </select>
+      {to && (
+        <AsyncButton
+          onClick={async () => {
+            const hardware = to === 'tpm' || to === 'secure-enclave' || to === 'yubikey';
+            if (hardware && !(await ask(`Keep the key to your keys in ${KEYSTORE_NAME[to as Status['keystore']]}? Weave then opens only with it${to === 'yubikey' ? ' plugged in (touch it if it blinks)' : ''}. If it's lost or replaced, you set Weave up again from your recovery words, or your company does.`, 'Move it')))
+              return;
+            if (await attempt(() => api('moveHomeKey', { to }), `The key is now kept by ${KEYSTORE_NAME[to as Status['keystore']]}`)) {
+              setTo('');
+              bump();
+            }
+          }}
+        >
+          Move
+        </AsyncButton>
+      )}
+      {missing.length > 0 && <span className="small muted"> Not here: {missing.map((o) => KEYSTORE_NAME[o.keystore]).join(', ')}.</span>}
+    </div>
+  );
+}
 
 export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
@@ -387,6 +437,7 @@ export function KeysView() {
               {company ? `To use Weave on another computer, ask ${company} to set it up.` : 'To use Weave on another computer, set it up from your recovery words.'}
             </p>
           )}
+          <KeystoreChoice current={status.keystore} />
         </fieldset>
       )}
       {keeping && (
