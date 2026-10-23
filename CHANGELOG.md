@@ -2,6 +2,14 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.17.0 · 2026-10-23
+
+- Stage 17: keys held in hardware (TPM, Secure Enclave, YubiKey)
+- Stage 16: AWS KMS and Google Cloud KMS as key services
+- Stage 15: console roles, approving agents, device status, audit search, retention per project
+- Undo the whole-file reformatting in the stage 14 commit
+- Stage 14: Azure delegated access, the server's home key in the key service, backups and standby, invitations
+
 ## v0.16.1 · 2026-10-22
 
 - Build the macOS installers one architecture at a time
