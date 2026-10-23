@@ -1,8 +1,9 @@
-import { rmSync } from 'node:fs';
-import { startApi } from './api.ts';
-import { connectDaemon, type DaemonInfo } from './client.ts';
-import { resolveHome, writeJson } from './home.ts';
-import { WeaveNode } from './node.ts';
+import { rmSync } from "node:fs";
+import { startApi } from "./api.ts";
+import { connectDaemon, type DaemonInfo } from "./client.ts";
+import { resolveHome, writeJson } from "./home.ts";
+import { WeaveNode } from "./node.ts";
+import { unlockHomeKey } from "./homekey.ts";
 
 export interface Daemon {
   node: WeaveNode;
@@ -11,16 +12,30 @@ export interface Daemon {
 }
 
 /** Open the node in `dir`, go online and serve the local API. One daemon per home. */
-export async function startDaemon(dir?: string, options: { port?: number } = {}): Promise<Daemon> {
+export async function startDaemon(
+  dir?: string,
+  options: { port?: number } = {},
+): Promise<Daemon> {
   const home = resolveHome(dir);
-  if (await connectDaemon(home)) throw new Error(`a daemon is already running for ${home.dir}`);
+  if (await connectDaemon(home))
+    throw new Error(`a daemon is already running for ${home.dir}`);
 
+  // A company server's home key may be in the company's key service: unlock it before anything opens the home.
+  await unlockHomeKey(home);
   const node = WeaveNode.open(home.dir);
   // Serve the API right away; joining the DHT can take a while (or never finish when offline).
   const api = await startApi(node, options.port);
-  const info: DaemonInfo = { pid: process.pid, port: api.port, token: api.token };
+  const info: DaemonInfo = {
+    pid: process.pid,
+    port: api.port,
+    token: api.token,
+  };
   writeJson(home.daemon, info);
-  const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
+  const online = node
+    .goOnline()
+    .catch((error: Error) =>
+      console.error(`weave: could not go online: ${error.message}`),
+    );
   // A company's node serves its user management and admins too (stage 12).
   await node.startServices();
 
@@ -28,7 +43,13 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   let timer: ReturnType<typeof setTimeout> | undefined;
   const reconcile = () => {
     clearTimeout(timer);
-    timer = setTimeout(() => node.reconcile().catch((error: Error) => console.error(`weave: ${error.message}`)), 500);
+    timer = setTimeout(
+      () =>
+        node
+          .reconcile()
+          .catch((error: Error) => console.error(`weave: ${error.message}`)),
+      500,
+    );
   };
   const unsubscribe = node.replica.onAppend(reconcile);
   reconcile();

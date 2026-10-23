@@ -62,24 +62,91 @@ export type {
   Status,
   ThreadInfo,
   Whoami,
-} from './backend.ts';
-export { noAgent, PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
-export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
-export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
-export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
-export { startApi, type ApiServer } from './api.ts';
-export { ApiClient, connectDaemon, followDaemon, type DaemonInfo } from './client.ts';
-export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';
-export { startDaemon, type Daemon } from './daemon.ts';
-export { FileStore } from './filestore.ts';
-export { closeOpenStores, openStore, readJsonlLogs, SqliteStore } from './sqlitestore.ts';
-export { loadSpaces, type StoredSpace } from './spacestore.ts';
-export { resolveHome, type Home } from './home.ts';
-export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT, WeaveNode, type Bundle } from './node.ts';
-export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';
-export { decodePhoneLink, PHONE_METHODS, type PairedPhone, type PairingOffer, type PhoneLink } from './remote.ts';
-export { connectTo, pairWith, type Dialer, type PairedNode, type RemoteSession } from './remote-client.ts';
-export type { CompanyAction } from './company.ts';
-export { machinePolicy, type MachinePolicy } from './machine.ts';
-export { browserSignIn, openInBrowser, refreshSignIn, type SignInConfig, type SignInTokens } from './signin.ts';
-export type { AuditSinkInput } from './auditsinks.ts';
+} from "./backend.ts";
+export { noAgent, PROJECT_STATUSES, RPC_METHODS } from "./backend.ts";
+export { releaseWorkflow, type ReleaseWorkflow } from "./releaseworkflow.ts";
+export {
+  checkManifest,
+  MANIFEST_EXAMPLE,
+  MANIFEST_RULES,
+  type ManifestCheck,
+} from "@weave/core";
+export {
+  checkGistProof,
+  DEFAULT_GITHUB_APP,
+  GITHUB_CLIENT_ID,
+  GitHub,
+  lookUpGitHubApp,
+  type GitHubApp,
+  finishDeviceFlow,
+  startDeviceFlow,
+  type DeviceCode,
+  type Fetch,
+} from "./github.ts";
+export { startApi, type ApiServer } from "./api.ts";
+export {
+  ApiClient,
+  connectDaemon,
+  followDaemon,
+  type DaemonInfo,
+} from "./client.ts";
+export {
+  loadConfig,
+  parseBootstrap,
+  saveConfig,
+  type Config,
+} from "./config.ts";
+export { startDaemon, type Daemon } from "./daemon.ts";
+export { FileStore } from "./filestore.ts";
+export {
+  closeOpenStores,
+  openStore,
+  readJsonlLogs,
+  SqliteStore,
+} from "./sqlitestore.ts";
+export { loadSpaces, type StoredSpace } from "./spacestore.ts";
+export { resolveHome, type Home } from "./home.ts";
+export {
+  KIND_PAGE,
+  KIND_PROFILE,
+  KIND_PUBLIC_PROJECT,
+  WeaveNode,
+  type Bundle,
+} from "./node.ts";
+export {
+  DEFAULT_THEME,
+  FONTS,
+  KIND_THEME,
+  PATTERNS,
+  sanitizeTheme,
+  type Theme,
+} from "./theme.ts";
+export {
+  decodePhoneLink,
+  PHONE_METHODS,
+  type PairedPhone,
+  type PairingOffer,
+  type PhoneLink,
+} from "./remote.ts";
+export {
+  connectTo,
+  pairWith,
+  type Dialer,
+  type PairedNode,
+  type RemoteSession,
+} from "./remote-client.ts";
+export type { CompanyAction } from "./company.ts";
+export { machinePolicy, type MachinePolicy } from "./machine.ts";
+export {
+  moveHomeKeyToKeyService,
+  serverCredentials,
+  unlockHomeKey,
+} from "./homekey.ts";
+export {
+  browserSignIn,
+  openInBrowser,
+  refreshSignIn,
+  type SignInConfig,
+  type SignInTokens,
+} from "./signin.ts";
+export type { AuditSinkInput } from "./auditsinks.ts";

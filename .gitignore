@@ -7,3 +7,6 @@ apps/*/dist/
 .claude/
 apps/*/pack/
 apps/*/release/
+
+# Weave Server settings for docker compose (secrets)
+apps/server/.env

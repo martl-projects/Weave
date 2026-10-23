@@ -1,11 +1,24 @@
-import type { CompanyAction, CompanyPolicy } from './company.ts';
-import type { AuditSinkInput } from './auditsinks.ts';
-import type { GumroadLink } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { CompanyAction, CompanyPolicy } from "./company.ts";
+import type { AuditSinkInput } from "./auditsinks.ts";
+import type { GumroadLink } from "@weave/core";
+import type {
+  AppManifest,
+  AppSetting,
+  BoardType,
+  Choice,
+  Did,
+  HistorySetting,
+  IssueStatus,
+  Json,
+  Lifetime,
+  PostSort,
+  SaveMode,
+  SpaceKind,
+} from "@weave/core";
 
-export type { AppManifest } from '@weave/core';
-import type { Theme } from './theme.ts';
-export { TEXT_LIMITS } from '@weave/core/limits';
+export type { AppManifest } from "@weave/core";
+import type { Theme } from "./theme.ts";
+export { TEXT_LIMITS } from "@weave/core/limits";
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
 export interface FeedItem {
@@ -35,7 +48,17 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission';
+  type:
+    | "dm"
+    | "mention"
+    | "reply"
+    | "coauthor"
+    | "knock"
+    | "membership"
+    | "post"
+    | "issue"
+    | "proposal"
+    | "permission";
   category: NoticeCategory;
   title: string;
   text: string;
@@ -43,7 +66,7 @@ export interface Notice {
   open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string };
 }
 
-export type NoticeCategory = 'messages' | 'requests' | 'activity';
+export type NoticeCategory = "messages" | "requests" | "activity";
 
 export interface SpaceRef {
   id: string;
@@ -60,7 +83,7 @@ export interface HarnessInfo {
   /** Its MCP config file. */
   file: string;
   /** Weave's entry there: none, this installation's, or another (an old or different setup). */
-  state: 'none' | 'ours' | 'other';
+  state: "none" | "ours" | "other";
   /** What to do so it notices a change. */
   restart: string;
 }
@@ -100,7 +123,7 @@ export interface IdentityInfo {
 /** One of your device or agent keys. */
 export interface KeyInfo {
   did: Did;
-  role: 'device' | 'agent';
+  role: "device" | "agent";
   name?: string;
   /** The key this node signs with. */
   current: boolean;
@@ -129,7 +152,7 @@ export interface Status {
   /** Events this node held back since it started: their authors were over their budget in that space (stage 8). */
   heldBack: number;
   /** Where this home's keys are protected: the OS keystore (dpapi, keychain, secret-service) or nowhere (file). */
-  keystore: 'dpapi' | 'keychain' | 'secret-service' | 'file';
+  keystore: "dpapi" | "keychain" | "secret-service" | "file" | "kms";
   /** Said when the keys aren't protected by the operating system. */
   keystoreWarning?: string;
 }
@@ -171,7 +194,15 @@ export interface SpaceInfo extends SpaceRef {
   /** A legal hold: nothing in it is shredded or forgotten until then. */
   hold?: { until: string; reason: string };
   /** A company's key service holds half of its keys: which one, and whether this computer has them unlocked; the agents approved there. */
-  managed?: { agents: string[]; provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
+  managed?: {
+    agents: string[];
+    provider: string;
+    unlocked: boolean;
+    ttlMinutes: number;
+    graceHours: number;
+    attestor?: Did;
+    problem?: string;
+  };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
 }
@@ -220,11 +251,19 @@ export interface SpaceRepos {
 
 /** What to say when someone acts as an agent this node doesn't have (often an MCP server started with an old --as). */
 export const noAgent = (name: string, agents: string[]): string =>
-  `this node has no agent named "${name}"${agents.length ? ` (its agents: ${agents.join(', ')})` : ' (it has no agents yet)'}. ` +
+  `this node has no agent named "${name}"${agents.length ? ` (its agents: ${agents.join(", ")})` : " (it has no agents yet)"}. ` +
   `Create it with: weave agent add ${name} --can weave.post,weave.reply` +
-  (agents.length ? `, or act as ${agents.length === 1 ? 'it' : 'one of them'}: start the MCP server with --as ${agents[0]}` : '');
+  (agents.length
+    ? `, or act as ${agents.length === 1 ? "it" : "one of them"}: start the MCP server with --as ${agents[0]}`
+    : "");
 
-export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
+export const PROJECT_STATUSES = [
+  "idea",
+  "active",
+  "paused",
+  "shipped",
+  "archived",
+] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 export interface ProjectPage {
@@ -246,7 +285,7 @@ export interface ProjectPage {
 }
 
 export interface ProjectInfo extends SpaceInfo {
-  kind: 'project';
+  kind: "project";
   page: ProjectPage;
   maintainers: Actor[];
   /** Groups invited as a whole, and whether their newcomers are admitted automatically. */
@@ -269,7 +308,7 @@ export interface PublicProject {
 }
 
 export interface CommunityInfo extends SpaceInfo {
-  kind: 'community';
+  kind: "community";
   description: string;
   moderators: Actor[];
   /** You may pin posts, remove members and appoint moderators. */
@@ -318,7 +357,12 @@ export interface BoardInfo {
   /** You may post, vote and chat here. */
   canWrite: boolean;
   /** How long posts stay here, and who set that when; absent: they stay for good. */
-  rule?: { keepDays: number | null; maxMB: number | null; by: Actor; time: string };
+  rule?: {
+    keepDays: number | null;
+    maxMB: number | null;
+    by: Actor;
+    time: string;
+  };
   /** Projects: you follow this board, so its posts come to your Home and notify you (releases and showcase by default). */
   following?: boolean;
 }
@@ -358,7 +402,7 @@ export interface InviteOptions {
 export interface PostInfo {
   id: string;
   short: string;
-  type: 'post' | 'project' | 'issue' | 'proposal';
+  type: "post" | "project" | "issue" | "proposal";
   /** Where it lives; undefined for public posts. */
   space?: SpaceRef;
   board?: string;
@@ -375,7 +419,7 @@ export interface PostInfo {
    * Co-authors: people and agents the post names. Everyone sees the confirmed
    * ones; its author also sees who was asked and who declined.
    */
-  coauthors?: Array<Actor & { state: 'asked' | 'confirmed' | 'declined' }>;
+  coauthors?: Array<Actor & { state: "asked" | "confirmed" | "declined" }>;
   /** Latest activity: the post or its chat. */
   active: string;
   score: number;
@@ -396,11 +440,26 @@ export interface PostInfo {
    * node knows: its author, 3 members by share, those who upvoted, everyone
    * online while it's recent; and whether this node holds it.
    */
-  heldBy?: { about: number; author: true; share: number; upvoters: number; recent: boolean; here: boolean };
+  heldBy?: {
+    about: number;
+    author: true;
+    share: number;
+    upvoters: number;
+    recent: boolean;
+    here: boolean;
+  };
   /** You saved it, or pinned it to the top of your home. */
   saved?: SaveMode;
   /** For projects and shared projects. */
-  project?: { id: string; name: string; description: string; status: string; icon?: string; participants?: number; member: boolean };
+  project?: {
+    id: string;
+    name: string;
+    description: string;
+    status: string;
+    icon?: string;
+    participants?: number;
+    member: boolean;
+  };
   /** For shared posts: where the original lives, and whether you can open it. */
   share?: { space?: SpaceRef; post: string; member: boolean };
   issue?: { status: IssueStatus; labels: string[]; assignee?: Actor };
@@ -408,7 +467,14 @@ export interface PostInfo {
 }
 
 /** Where Home's posts come from. */
-export const HOME_SOURCES = ['all', 'communities', 'projects', 'mine', 'friends', 'following'] as const;
+export const HOME_SOURCES = [
+  "all",
+  "communities",
+  "projects",
+  "mine",
+  "friends",
+  "following",
+] as const;
 export type HomeSource = (typeof HOME_SOURCES)[number];
 
 export interface PostsQuery {
@@ -473,7 +539,7 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox';
+  what: "link-repo" | "space" | "inbox";
   space?: SpaceRef;
   /** For link-repo: the repository to have chosen (owner/name). */
   repo?: string;
@@ -488,7 +554,7 @@ export interface PermissionRequest {
   /** What it wants to do with them, in its words. */
   reason: string;
   time: string;
-  state: 'pending' | 'allowed' | 'declined';
+  state: "pending" | "allowed" | "declined";
 }
 
 export interface CoauthorRequest {
@@ -513,7 +579,7 @@ export interface UpdateInfo {
     notes?: string;
     published?: string;
     /** weave: a release post signed by a maintainer of the Weave project; github: the repository's releases. */
-    source: 'weave' | 'github';
+    source: "weave" | "github";
   };
   newer: boolean;
 }
@@ -567,7 +633,11 @@ export interface AppLaunchInfo {
     /** The version Weave installed here (when the app folder is that install). */
     installed?: string;
     /** An install going on now. */
-    progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+    progress?: {
+      state: "downloading" | "unpacking";
+      done: number;
+      total?: number;
+    };
     /** Why the last install failed. */
     error?: string;
     /** For an agent, installing it by hand. */
@@ -629,7 +699,7 @@ export interface Admission {
   name?: string;
   group: SpaceRef;
   /** join: they joined an invited group · leave: they left the group they came through. */
-  change: 'join' | 'leave';
+  change: "join" | "leave";
 }
 
 export interface MemberInfo {
@@ -646,7 +716,13 @@ export interface MemberInfo {
   /** Names of their agents seen acting in the space. */
   agents: string[];
   /** In a space with a company attestor: who the company says they are, until when (and from which company computer). */
-  attested?: { subject: string; email?: string; groups: string[]; until: string; device?: { subject: string; serial: string } };
+  attested?: {
+    subject: string;
+    email?: string;
+    groups: string[];
+    until: string;
+    device?: { subject: string; serial: string };
+  };
   /** A company-owned identity: its company's name. */
   company?: string;
 }
@@ -685,7 +761,7 @@ export interface Profile {
 /** Where the company's node streams its audit (stage 12), without secrets. */
 export interface AuditStreamInfo {
   id: string;
-  kind: AuditSinkInput['kind'];
+  kind: AuditSinkInput["kind"];
   target: string;
   /** Lines sent so far (of the last 31 days). */
   sent: number;
@@ -738,9 +814,18 @@ export interface ConsoleInfo {
 export interface ScimInfo {
   on: boolean;
   port?: number;
+  /** People the user management adds get their invitation by email. */
+  invite?: boolean;
   /** Only right after turning it on: the bearer token for the user management's settings. */
   token?: string;
-  users: Array<{ userName: string; displayName?: string; active: boolean; groups: string[]; did?: Did; name?: string }>;
+  users: Array<{
+    userName: string;
+    displayName?: string;
+    active: boolean;
+    groups: string[];
+    did?: Did;
+    name?: string;
+  }>;
   groups: Array<{ name: string; members: number }>;
 }
 
@@ -749,7 +834,7 @@ export interface LinkInfo {
   did: Did;
   name?: string;
   /** linked: both say so · waiting: only this side so far · asked: only the other side · refused: a company doesn't allow it. */
-  state: 'linked' | 'waiting' | 'asked' | 'refused';
+  state: "linked" | "waiting" | "asked" | "refused";
   since: string;
   /** When it stopped counting going forward: the company froze one side (it stays as history). */
   until?: string;
@@ -761,7 +846,23 @@ export interface LinkInfo {
 
 export interface CreateCompanyInput {
   name: string;
-  provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+  provider:
+    | { kind: "local" }
+    | {
+        kind: "vault";
+        address: string;
+        key: string;
+        mount?: string;
+        jwt?: { mount?: string; role: string };
+      }
+    | {
+        kind: "azure";
+        vault: string;
+        key: string;
+        tenant?: string;
+        clientId?: string;
+        authority?: string;
+      };
   /** The company's sign-in (OIDC): the issuer, and the audience its tokens name. */
   issuer: string;
   audience: string;
@@ -789,11 +890,24 @@ export interface CompanyInfo {
   retention: { minDays?: number; maxDays?: number };
   /** Company chats between colleagues. */
   chats: Array<{ space: string; name: string; people: string[] }>;
-  maps: Array<{ group: string; space: string; spaceName: string; role: 'member' | 'maintainer' }>;
+  maps: Array<{
+    group: string;
+    space: string;
+    spaceName: string;
+    role: "member" | "maintainer";
+  }>;
   /** Contacts a new account starts with. */
   start: string[];
   spaces: Array<{ id: string; kind: SpaceKind; name: string }>;
-  requests: Array<{ id: string; by: Did; byName?: string; time: string; action: string; done: boolean; error?: string }>;
+  requests: Array<{
+    id: string;
+    by: Did;
+    byName?: string;
+    time: string;
+    action: string;
+    done: boolean;
+    error?: string;
+  }>;
 }
 
 export interface HubGitHub {
@@ -916,7 +1030,7 @@ export interface Social {
   muted: Person[];
 }
 
-export type Edge = 'follow' | 'block' | 'mute';
+export type Edge = "follow" | "block" | "mute";
 
 export interface EdgeInput {
   edge: Edge;
@@ -948,9 +1062,16 @@ export interface Backend {
   // groups and projects
   spaces(kind?: SpaceKind): Promise<SpaceInfo[]>;
   createGroup(name: string): Promise<SpaceInfo>;
-  createProject(input: { name: string; description?: string }): Promise<ProjectInfo>;
+  createProject(input: {
+    name: string;
+    description?: string;
+  }): Promise<ProjectInfo>;
   /** An invite link for a group (any member) or a project (maintainers), valid for `hours`. */
-  invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
+  invite(
+    space: string,
+    hours?: number,
+    options?: InviteOptions,
+  ): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
   joinSpace(invite: string, note?: string): Promise<SpaceInfo>;
   /** People asking to join with your links that need your OK. */
@@ -958,18 +1079,32 @@ export interface Backend {
   /** Let someone in (or turn them away) who asked with your link. */
   answerKnock(input: { knock: string; accept: boolean }): Promise<void>;
   /** Maintainers: limit who reads and writes a board, by name or did:key, and groups as "group:<name>"; null opens it to everyone. */
-  setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]>;
+  setBoardAccess(input: {
+    project: string;
+    board: string;
+    read?: string[] | null;
+    write?: string[] | null;
+  }): Promise<BoardInfo[]>;
   members(space: string): Promise<MemberInfo[]>;
   /** A pairing code (for a QR code) that lets a phone use this node; valid for ten minutes, once. Needs the node online. */
   pairPhone(): Promise<{ link: string; expires: string }>;
   /** Phones paired with this node, and whether each is connected right now. */
-  phones(): Promise<Array<{ key: string; name: string; paired: string; lastSeen?: string }>>;
+  phones(): Promise<
+    Array<{ key: string; name: string; paired: string; lastSeen?: string }>
+  >;
   /** Unpair a phone: it's disconnected at once and refused from then on. */
   unpairPhone(key: string): Promise<void>;
   /** Follow a project's board, or stop: its posts come to your Home and notify you. Private, like Home visibility. */
-  followBoard(input: { project: string; board: string; on: boolean }): Promise<BoardInfo[]>;
+  followBoard(input: {
+    project: string;
+    board: string;
+    on: boolean;
+  }): Promise<BoardInfo[]>;
   /** Show a community or project on your Home, or not. Private: sealed to you, it follows you to your other devices. */
-  setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo>;
+  setHomeVisibility(input: {
+    space: string;
+    visible: boolean;
+  }): Promise<SpaceInfo>;
   /** Leave a group, project or community: you stop receiving it, and its key rotates. The owner hands it over first. */
   leave(space: string): Promise<void>;
   /** The owner makes another member the owner (in projects and communities also a maintainer). */
@@ -977,11 +1112,32 @@ export interface Backend {
   /** Owner (groups) or maintainers: close a space (kept, read-only) or open it again. */
   closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo>;
   /** Maintainers or moderators: how long a board's posts stay after their last activity (keepDays), and how much it may hold (maxMB); null for no limit. */
-  setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]>;
+  setBoardRule(input: {
+    space: string;
+    board: string;
+    keepDays?: number | null;
+    maxMB?: number | null;
+  }): Promise<BoardInfo[]>;
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: {
     space: string;
-    provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+    provider:
+      | { kind: "local" }
+      | {
+          kind: "vault";
+          address: string;
+          key: string;
+          mount?: string;
+          jwt?: { mount?: string; role: string };
+        }
+      | {
+          kind: "azure";
+          vault: string;
+          key: string;
+          tenant?: string;
+          clientId?: string;
+          authority?: string;
+        };
     ttlMinutes?: number;
     graceHours?: number;
     attestor?: string;
@@ -997,7 +1153,11 @@ export interface Backend {
    * With `for` (a new computer's recovery request), the words are boxed to it and only it opens them: a recovery
    * answer. For a company-owned identity that's the only way.
    */
-  openEscrow(input: { space: string; person: string; for?: string }): Promise<string>;
+  openEscrow(input: {
+    space: string;
+    person: string;
+    for?: string;
+  }): Promise<string>;
   /** On the company's own node: create the company (its group, under its key service, vouching through its sign-in). */
   createCompany(input: CreateCompanyInput): Promise<CompanyInfo>;
   /** The company this node runs, or the one you belong to. */
@@ -1007,7 +1167,11 @@ export interface Backend {
   /** The company or an admin: a link that sets up a new company account (default: valid 30 days). */
   enrollLink(input?: { days?: number }): Promise<string>;
   /** Say this identity is also that one (a person, or a contact link); both have to. Public, or sealed into a space. `on: false` ends it. */
-  link(input: { who: string; space?: string; on?: boolean }): Promise<LinkInfo[]>;
+  link(input: {
+    who: string;
+    space?: string;
+    on?: boolean;
+  }): Promise<LinkInfo[]>;
   /** A person's links to other identities (yours by default), as this node can see them. */
   links(who?: string): Promise<LinkInfo[]>;
   /** On the company's node: send the audit of the company's spaces, as it happens, to the company's security tools. */
@@ -1015,26 +1179,64 @@ export interface Backend {
   removeAuditStream(id: string): Promise<AuditStreamInfo[]>;
   auditStreams(): Promise<AuditStreamInfo[]>;
   /** Those who manage a space: everything it holds, as JSON lines, deleted and edited posts included (marked): for legal searches. */
-  exportSpace(input: { space: string; since?: string; until?: string }): Promise<ExportLine[]>;
+  exportSpace(input: {
+    space: string;
+    since?: string;
+    until?: string;
+  }): Promise<ExportLine[]>;
   /** On the company's node: serve SCIM to the company's user management (the token is shown once), or stop. */
-  setScim(input: { on: boolean; port?: number }): Promise<ScimInfo>;
+  setScim(input: {
+    on: boolean;
+    port?: number;
+    invite?: boolean;
+  }): Promise<ScimInfo>;
+  /** On the company's node: send a new colleague their invitation by email (stage 14). */
+  inviteByEmail(input: {
+    to: string;
+    by?: string;
+    days?: number;
+  }): Promise<{ to: string; joinUrl: string }>;
   /** The company's directory as its user management provisioned it. */
   scim(): Promise<ScimInfo>;
   /** A company account: sign in with your company account again, in the browser (stage 13). */
   companySignIn(): Promise<SignInStatus>;
   /** A company account: whether it's signed in, until when, and whether it renews by itself. */
   signInStatus(): Promise<SignInStatus>;
+  /** A backup of this home into an empty folder: its files and a consistent copy of its database (stage 14). */
+  backup(input: {
+    to: string;
+  }): Promise<{
+    to: string;
+    files: number;
+    bytes: number;
+    keystore: "dpapi" | "keychain" | "secret-service" | "file" | "kms";
+    note?: string;
+  }>;
   /** On the company's node: a new one-time link into the admin console, for an operator. */
   consoleOperatorLink(): Promise<string>;
   /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
-  setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo>;
+  setConsole(input: {
+    on: boolean;
+    port?: number;
+    url?: string;
+    clientId?: string;
+    clientSecret?: string;
+  }): Promise<ConsoleInfo>;
   consoleInfo(): Promise<ConsoleInfo>;
   /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
-  approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
+  approveAgent(input: {
+    space: string;
+    agent: string;
+    on?: boolean;
+  }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
   agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>>;
   /** The owner: a legal hold until a date (nothing shredded or forgotten); a past date lifts it. */
-  setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo>;
+  setHold(input: {
+    space: string;
+    until: string;
+    reason?: string;
+  }): Promise<SpaceInfo>;
   /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
   signIn(input: { space: string; idToken: string }): Promise<void>;
   /** Unlock a managed space's keys with its key service now (they unlock by themselves too). */
@@ -1042,7 +1244,10 @@ export interface Backend {
   /** The owner: destroy the company key: every copy of everything sealed under it becomes unreadable. */
   destroyCompanyKey(space: string): Promise<void>;
   /** Whoever manages the space: carry forward what its rules still keep, then have everyone delete the keys of the epochs that ended before `before`. */
-  shred(input: { space: string; before: string }): Promise<{ epochs: number[]; carried: number }>;
+  shred(input: {
+    space: string;
+    before: string;
+  }): Promise<{ epochs: number[]; carried: number }>;
   /** "Keep this": counts as activity on the post, so its time starts again (its author, or those who manage the space). */
   keepPost(target: string): Promise<PostInfo>;
   /** Your posts that others will forget within the next 14 days. */
@@ -1050,9 +1255,15 @@ export interface Backend {
   /** Your small spaces and who keeps them (stage 5), and what you keep for others. */
   keepers(): Promise<KeepersInfo>;
   /** A space whose members hold its content between them: ask them for the 30 days before `before` (default: before the oldest post held). */
-  fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }>;
+  fetchOlder(input: {
+    space: string;
+    before?: string;
+  }): Promise<{ since: string; until: string }>;
   /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
-  setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo>;
+  setHistory(input: {
+    space: string;
+    history: HistorySetting;
+  }): Promise<SpaceInfo>;
   /** Group founder or project maintainer: remove someone and rotate the key. */
   removeMember(space: string, who: string): Promise<void>;
 
@@ -1070,18 +1281,38 @@ export interface Backend {
   /** A space's repositories, and whether you gave it your GitHub account. */
   spaceRepos(space: string): Promise<SpaceRepos>;
   /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
-  linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos>;
+  linkRepo(input: {
+    space: string;
+    repo: string;
+    board?: string;
+    on: boolean;
+    as?: string;
+  }): Promise<SpaceRepos>;
   /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
-  shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos>;
+  shareGithub(input: {
+    space: string;
+    on: boolean;
+    as?: string;
+  }): Promise<SpaceRepos>;
   /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
   showGithubOnHub(input: { on: boolean }): Promise<Profile>;
 
   // communities
-  createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
+  createCommunity(input: {
+    name: string;
+    description?: string;
+  }): Promise<CommunityInfo>;
   community(ref: string): Promise<CommunityInfo>;
   /** Moderators: change the description. */
-  setCommunity(input: { community: string; description: string }): Promise<CommunityInfo>;
-  setModerator(input: { community: string; who: string; on: boolean }): Promise<void>;
+  setCommunity(input: {
+    community: string;
+    description: string;
+  }): Promise<CommunityInfo>;
+  setModerator(input: {
+    community: string;
+    who: string;
+    on: boolean;
+  }): Promise<void>;
 
   // posts, boards and upvotes
   posts(query?: PostsQuery): Promise<PostInfo[]>;
@@ -1089,9 +1320,22 @@ export interface Backend {
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  submit(input: {
+    space: string;
+    board?: string;
+    title: string;
+    text?: string;
+    link?: string;
+    image?: string;
+    with?: string[];
+    as?: string;
+  }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
-  confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
+  confirmCoauthor(input: {
+    post: string;
+    on: boolean;
+    as?: string;
+  }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
   coauthorRequests(): Promise<CoauthorRequest[]>;
   /** Agent harnesses installed on this computer, and whether you've been asked once to connect them. */
@@ -1101,54 +1345,114 @@ export interface Backend {
    * running this installation's CLI as the harness's agent, which is created if missing (it may post,
    * reply, chat and react). The file is backed up first. Also marks the offer as answered.
    */
-  connectHarness(input: { harness: string; on: boolean }): Promise<{ offered: boolean; harnesses: HarnessInfo[] }>;
+  connectHarness(input: {
+    harness: string;
+    on: boolean;
+  }): Promise<{ offered: boolean; harnesses: HarnessInfo[] }>;
   /** Not now: don't offer connecting harnesses again (Keys & devices still can). */
   dismissHarnesses(): Promise<void>;
   /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships). */
-  updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
+  updateAgent(input: {
+    name: string;
+    permissions: string[];
+  }): Promise<AgentInfo>;
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
-  requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
+  requestPermission(input: {
+    as: string;
+    kinds: string[];
+    reason?: string;
+  }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen>;
+  openInApp(input: {
+    what: AppOpen["what"];
+    space?: string;
+    repo?: string;
+  }): Promise<AppOpen>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
-  answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
+  answerPermission(input: {
+    id: string;
+    allow: boolean;
+  }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  editPost(input: {
+    post: string;
+    title?: string;
+    text?: string;
+    link?: string;
+    image?: string;
+    with?: string[];
+    as?: string;
+  }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */
-  upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo>;
+  upvote(input: {
+    target: string;
+    value: number;
+    as?: string;
+  }): Promise<PostInfo>;
   /** Save a post for later, pin it to the top of your home, or (null) forget it. Only you can see this. */
   save(input: { target: string; mode: SaveMode | null }): Promise<void>;
   /** Share a post into a community or group you're in; projects can also go to your followers when their page is public. */
   share(input: { post: string; to: string; text?: string }): Promise<PostInfo>;
   boards(space: string): Promise<BoardInfo[]>;
   /** Maintainers: add, rename, re-sort, move (position) or drop (on: false) a board. */
-  setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]>;
+  setBoard(input: {
+    project: string;
+    name: string;
+    title?: string;
+    type?: BoardType;
+    sort?: PostSort;
+    position?: number;
+    on?: boolean;
+  }): Promise<BoardInfo[]>;
   /** Maintainers or moderators: pin posts to the top of a board, in this order (empty unpins all). */
-  curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]>;
+  curate(input: {
+    space: string;
+    board?: string;
+    pinned: string[];
+  }): Promise<BoardInfo[]>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
-  setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
+  setProjectPage(
+    input: { project: string; as?: string } & Partial<ProjectPage>,
+  ): Promise<ProjectInfo>;
   /** Store an image (base64) encrypted; returns its wblob: reference to put in a post or page. */
   putBlob(input: { data: string; type: string }): Promise<string>;
   /** An image by its wblob: reference, from disk or fetched from peers; base64. */
   blob(ref: string): Promise<{ data: string; type: string }>;
-  setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void>;
+  setMaintainer(input: {
+    project: string;
+    who: string;
+    on: boolean;
+  }): Promise<void>;
   /** Invite a whole group into a project; its current members take part right away. */
   inviteGroup(input: { project: string; group: string }): Promise<void>;
   /** Stop inviting a group's newcomers; people already in stay. */
   uninviteGroup(input: { project: string; group: string }): Promise<void>;
   /** Admit (or stop admitting) a group's newcomers without asking. */
-  setRule(input: { project: string; group: string; auto: boolean }): Promise<void>;
+  setRule(input: {
+    project: string;
+    group: string;
+    auto: boolean;
+  }): Promise<void>;
   /** People the maintainers are asked about: newcomers to invited groups, and those who left them. */
   admissions(project?: string): Promise<Admission[]>;
   /** Let a group newcomer in; `always` also admits the group's future newcomers, in every project you maintain that invited it. */
-  admit(input: { project: string; who: string; group: string; always?: boolean }): Promise<void>;
-  decline(input: { project: string; who: string; group: string }): Promise<void>;
+  admit(input: {
+    project: string;
+    who: string;
+    group: string;
+    always?: boolean;
+  }): Promise<void>;
+  decline(input: {
+    project: string;
+    who: string;
+    group: string;
+  }): Promise<void>;
 
   // people
   setEdge(input: EdgeInput): Promise<void>;
@@ -1173,16 +1477,28 @@ export interface Backend {
    * Devices need your recovery words; agents can be revoked from this device. Revoking this device's
    * own key gives this computer a fresh one.
    */
-  revokeKey(input: { key: string; since?: string; words?: string }): Promise<KeyInfo[]>;
+  revokeKey(input: {
+    key: string;
+    since?: string;
+    words?: string;
+  }): Promise<KeyInfo[]>;
   /** Rotate to the next root key from your recovery words; with `encryption`, also to a new encryption key. */
-  rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo>;
+  rotateRoot(input: {
+    words: string;
+    encryption?: boolean;
+  }): Promise<IdentityInfo>;
 
   // rooms and shared apps: live, never logged (except the room announcement)
   /** The app a project shares in its rooms, if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
   /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
   /** Maintainers: publish the app manifest; `folder` (from the CLI) is remembered as this computer's copy of the app. */
-  publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest>;
+  publishApp(input: {
+    project: string;
+    manifest: unknown;
+    folder?: string;
+    as?: string;
+  }): Promise<AppManifest>;
   /** Starting the app here: its command, your folder, whether you approved it, and whether it runs. */
   appLaunch(project: string): Promise<AppLaunchInfo>;
   /**
@@ -1190,21 +1506,52 @@ export interface Backend {
    * downloaded, checked against the SHA-256 in the manifest, and unpacked into Weave's apps folder,
    * which becomes the app's folder. `approve` also approves its start command there. Ask appLaunch for progress.
    */
-  installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
+  installApp(input: {
+    project: string;
+    approve?: boolean;
+  }): Promise<AppLaunchInfo>;
   /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
-  releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  releaseApp(input: {
+    project: string;
+    tag: string;
+    repo?: string;
+    assets?: Record<string, string>;
+    as?: string;
+  }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
-  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
+  appReleases(
+    project: string,
+  ): Promise<{
+    repo: string;
+    releases: Array<{
+      tag: string;
+      name: string;
+      published?: string;
+      files: number;
+      prerelease: boolean;
+    }>;
+    releaseWorkflow?: boolean;
+  }>;
   /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
-  setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
+  setAppFolder(input: {
+    project: string;
+    folder: string;
+  }): Promise<AppLaunchInfo>;
   /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
-  launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
+  launchApp(input: {
+    project: string;
+    approve?: boolean;
+  }): Promise<AppLaunchInfo>;
   stopApp(project: string): Promise<AppLaunchInfo>;
   /**
    * Fill in one of the settings the app's manifest asks for (value: null clears it). Kept on this computer only,
    * in app-settings.json, and handed to this app alone when Weave starts it; never synced, shown or given to agents.
    */
-  setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo>;
+  setAppSetting(input: {
+    project: string;
+    name: string;
+    value: string | null;
+  }): Promise<AppLaunchInfo>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
@@ -1215,7 +1562,11 @@ export interface Backend {
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo>;
+  hostRoom(input: {
+    project: string;
+    name: string;
+    invite?: string[];
+  }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1225,18 +1576,46 @@ export interface Backend {
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
-  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  createTier(input: {
+    name: string;
+    price?: number;
+    currency?: string;
+    description?: string;
+    benefits?: string[];
+    auto?: boolean;
+    gumroad?: GumroadLink | null;
+  }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
-  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  setTier(input: {
+    tier: string;
+    name?: string;
+    price?: number;
+    currency?: string;
+    description?: string;
+    benefits?: string[];
+    position?: number;
+    open?: boolean;
+    auto?: boolean;
+    hidden?: boolean;
+    gumroad?: GumroadLink | null;
+  }): Promise<TierInfo>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
   /** Ask to join a tier; for tiers sold through Gumroad, send the license key from your receipt and you're in as soon as the creator's node checked it. */
-  requestMembership(input: { tier: string; note?: string; license?: string }): Promise<void>;
+  requestMembership(input: {
+    tier: string;
+    note?: string;
+    license?: string;
+  }): Promise<void>;
   /** Requests waiting for you, as a creator. */
   membershipRequests(): Promise<MembershipRequestInfo[]>;
   /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
-  grantMembership(input: { tier: string; who: string; months: number }): Promise<TierInfo>;
+  grantMembership(input: {
+    tier: string;
+    who: string;
+    months: number;
+  }): Promise<TierInfo>;
   declineMembership(input: { tier: string; who: string }): Promise<void>;
   /** Tiers you're a member of, as a supporter. */
   memberships(): Promise<TierInfo[]>;
@@ -1249,25 +1628,71 @@ export interface Backend {
 
   // chat, in channels and in posts
   channels(space: string): Promise<ChannelInfo[]>;
-  createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
+  createChannel(
+    input: InSpace & { name: string; topic?: string },
+  ): Promise<ChannelInfo>;
   /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
-  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
-  say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo>;
+  messages(
+    space: string | undefined,
+    options?: { channel?: string; post?: string; limit?: number },
+  ): Promise<MessageInfo[]>;
+  say(input: {
+    space?: string;
+    as?: string;
+    text: string;
+    channel?: string;
+    post?: string;
+    replyTo?: string;
+  }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
-  react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void>;
+  react(input: {
+    target: string;
+    emoji: string;
+    on?: boolean;
+    as?: string;
+  }): Promise<void>;
 
   // working together, in projects
   threads(project: string): Promise<ThreadInfo[]>;
-  startThread(input: InProject & { title: string; text?: string }): Promise<ThreadInfo>;
+  startThread(
+    input: InProject & { title: string; text?: string },
+  ): Promise<ThreadInfo>;
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same project. */
-  reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
+  reply(input: {
+    target: string;
+    text: string;
+    as?: string;
+  }): Promise<ReplyInfo>;
   issues(project: string): Promise<IssueInfo[]>;
-  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo>;
+  openIssue(
+    input: InProject & {
+      title: string;
+      text?: string;
+      labels?: string[];
+      board?: string;
+    },
+  ): Promise<IssueInfo>;
   claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
-  setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
+  setIssueStatus(input: {
+    issue: string;
+    status: IssueStatus;
+    as?: string;
+  }): Promise<IssueInfo>;
   proposals(project: string): Promise<ProposalInfo[]>;
-  propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number; board?: string }): Promise<ProposalInfo>;
-  vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo>;
+  propose(
+    input: InProject & {
+      title: string;
+      text?: string;
+      hours?: number;
+      quorum?: number;
+      board?: string;
+    },
+  ): Promise<ProposalInfo>;
+  vote(input: {
+    proposal: string;
+    choice: Choice;
+    as?: string;
+  }): Promise<ProposalInfo>;
   /** Let someone's votes in this project count for you when you don't vote; `who` undefined clears it. */
   delegateVote(input: { project: string; who?: string }): Promise<void>;
   /** Whose votes count for yours in this project, if anyone's. */
@@ -1275,21 +1700,169 @@ export interface Backend {
 }
 
 /** Backend methods callable over the daemon's API (watch is a separate event stream). */
-export type RpcMethod = Exclude<keyof Backend, 'watch'>;
+export type RpcMethod = Exclude<keyof Backend, "watch">;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
-  'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
-  'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
-  'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
-  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
-  'chats', 'openChat',
-  'channels', 'createChannel', 'messages', 'say', 'react',
-  'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',
-  'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
+  "whoami",
+  "publish",
+  "feed",
+  "addAgent",
+  "updateAgent",
+  "join",
+  "status",
+  "spaces",
+  "createGroup",
+  "createProject",
+  "invite",
+  "joinSpace",
+  "pairPhone",
+  "phones",
+  "unpairPhone",
+  "setHomeVisibility",
+  "followBoard",
+  "leave",
+  "handOver",
+  "closeSpace",
+  "setHistory",
+  "setBoardRule",
+  "keepPost",
+  "fading",
+  "shred",
+  "fetchOlder",
+  "keepers",
+  "manageSpace",
+  "unlockSpace",
+  "destroyCompanyKey",
+  "signIn",
+  "setHold",
+  "approveAgent",
+  "agentBlocked",
+  "escrowRecovery",
+  "openEscrow",
+  "createCompany",
+  "company",
+  "companyAction",
+  "enrollLink",
+  "inviteByEmail",
+  "link",
+  "links",
+  "setScim",
+  "scim",
+  "setConsole",
+  "consoleInfo",
+  "companySignIn",
+  "signInStatus",
+  "consoleOperatorLink",
+  "backup",
+  "addAuditStream",
+  "removeAuditStream",
+  "auditStreams",
+  "exportSpace",
+  "audit",
+  "knocks",
+  "answerKnock",
+  "setBoardAccess",
+  "members",
+  "removeMember",
+  "github",
+  "connectGithub",
+  "disconnectGithub",
+  "setGithubApp",
+  "githubRepos",
+  "spaceRepos",
+  "linkRepo",
+  "shareGithub",
+  "showGithubOnHub",
+  "createCommunity",
+  "community",
+  "setCommunity",
+  "setModerator",
+  "posts",
+  "post",
+  "submit",
+  "confirmCoauthor",
+  "coauthorRequests",
+  "editPost",
+  "deletePost",
+  "upvote",
+  "save",
+  "share",
+  "boards",
+  "setBoard",
+  "curate",
+  "project",
+  "setProjectPage",
+  "putBlob",
+  "blob",
+  "setMaintainer",
+  "inviteGroup",
+  "uninviteGroup",
+  "setRule",
+  "admissions",
+  "admit",
+  "decline",
+  "setEdge",
+  "social",
+  "profile",
+  "setProfile",
+  "directory",
+  "contactLink",
+  "addContact",
+  "identityInfo",
+  "keys",
+  "revokeKey",
+  "rotateRoot",
+  "harnesses",
+  "connectHarness",
+  "dismissHarnesses",
+  "requestPermission",
+  "permissionRequests",
+  "answerPermission",
+  "openInApp",
+  "projectApp",
+  "publishApp",
+  "appLaunch",
+  "setAppFolder",
+  "installApp",
+  "releaseApp",
+  "appReleases",
+  "launchApp",
+  "stopApp",
+  "setAppSetting",
+  "appEnv",
+  "updateCheck",
+  "rooms",
+  "hostRoom",
+  "endRoom",
+  "joinRoom",
+  "leaveRoom",
+  "roomChat",
+  "sayInRoom",
+  "createTier",
+  "setTier",
+  "tiers",
+  "requestMembership",
+  "membershipRequests",
+  "grantMembership",
+  "declineMembership",
+  "memberships",
+  "chats",
+  "openChat",
+  "channels",
+  "createChannel",
+  "messages",
+  "say",
+  "react",
+  "threads",
+  "startThread",
+  "reply",
+  "issues",
+  "openIssue",
+  "claimIssue",
+  "setIssueStatus",
+  "proposals",
+  "propose",
+  "vote",
+  "delegateVote",
+  "votingDelegate",
 ];

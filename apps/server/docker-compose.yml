@@ -1,0 +1,40 @@
+# Weave Server with HTTPS, on one address: Caddy gets the certificate and
+# passes the admin console, the join page and SCIM (/scim/v2) to Weave Server.
+#
+#   cp .env.example .env          and fill it in (WEAVE_DOMAIN, the key service, the sign-in)
+#   docker compose run --rm weave init
+#   docker compose up -d
+#   docker compose exec weave node /app/weave-server.mjs operator
+#
+# Build the image from the repository root first:
+#   docker build -f apps/server/Dockerfile -t weave-server .
+
+services:
+  weave:
+    image: weave-server
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WEAVE_CONSOLE_URL: https://${WEAVE_DOMAIN}
+      WEAVE_PUBLIC_URL: https://${WEAVE_DOMAIN}
+    volumes:
+      - weave:/data
+    stdin_open: true
+    tty: true
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [weave]
+    environment:
+      WEAVE_DOMAIN: ${WEAVE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+
+volumes:
+  weave:
+  caddy:
