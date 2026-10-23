@@ -21,6 +21,7 @@ import {
   type Backend,
   type BoardInfo,
   type Bundle,
+  type CreateCompanyInput,
   type CommunityInfo,
   type FeedItem,
   type GitHubInfo,
@@ -121,7 +122,7 @@ projects — something being built; participants chat, discuss, vote and work on
   approve-agent <space> <person/agent> [off]  let an agent act in a company space (managers)
   escrow <space> <words> / escrow-open <space> <person> [--for <request>]  leave recovery words with the company / open them (managers)
   company                                your company: settings, mappings, spaces, requests
-  company create <name> vault|azure ... --issuer <url> --audience <id> --admins <sign-in group>   on the company's own node
+  company create <name> vault|azure|aws|gcp ... --issuer <url> --audience <id> --admins <sign-in group>   on the company's own node
   company link [--days n]                an enrollment link for new company accounts (the company, admins)
   company invite <email> [--days n]      send a new colleague their invitation (the company's node, with WEAVE_SMTP_URL)
   company map <sign-in group> <space> [maintainer] [--off]   everyone in that sign-in group belongs in that company space
@@ -600,6 +601,23 @@ function line(item: FeedItem): string {
   const kind = item.kind === 'weave.post' ? '' : `[${item.kind}] `;
   const place = item.space ? `${{ group: 'g', project: 'p', community: 'r', direct: '@' }[item.space.kind]}/${item.space.name} ` : item.private ? '(private) ' : '';
   return `${time}  ${who(item).padEnd(20)}  ${place}${kind}${body}`;
+}
+
+/** A key service, as the command line names it (stage 16: AWS KMS and Google Cloud KMS too). */
+const PROVIDER_USAGE = [
+  'vault <address> <transit key> [jwt role]',
+  'azure <key vault url> <key> <tenant> <client id>',
+  'aws <region> <key arn|alias/…> <role arn people take on>',
+  'gcp <projects/…/cryptoKeys/…> <projects/…/workloadIdentityPools/…/providers/…>',
+].join('\n     | ');
+
+function providerArgs(args: string[]): CreateCompanyInput['provider'] | undefined {
+  const [kind, a, b, c, d] = args;
+  if (kind === 'vault' && a && b) return { kind, address: a, key: b, ...(c ? { jwt: { role: c } } : {}) };
+  if (kind === 'azure' && a && b) return { kind, vault: a, key: b, ...(c ? { tenant: c } : {}), ...(d ? { clientId: d } : {}) };
+  if (kind === 'aws' && a && b) return { kind, region: a, key: b, ...(c ? { role: c } : {}) };
+  if (kind === 'gcp' && a) return { kind, key: a, ...(b ? { workload: b } : {}) };
+  return undefined;
 }
 
 async function main(): Promise<void> {
@@ -1200,10 +1218,9 @@ ${postLine(p)}`);
     }
 
     case 'manage': {
-      const [space, kind, address, key, a, b] = args;
-      if (!space || (kind !== 'vault' && kind !== 'azure') || !address || !key)
-        throw new Error('usage: weave manage <space> vault <address> <transit key> [jwt role]\n       weave manage <space> azure <key vault url> <key> <tenant> <client id>   (the owner; weave sso to sign in)');
-      const provider = kind === 'vault' ? { kind: 'vault' as const, address, key, ...(a ? { jwt: { role: a } } : {}) } : { kind: 'azure' as const, vault: address, key, ...(a ? { tenant: a } : {}), ...(b ? { clientId: b } : {}) };
+      const [space, ...rest] = args;
+      const provider = space ? providerArgs(rest) : undefined;
+      if (!space || !provider) throw new Error(`usage: weave manage <space> ${PROVIDER_USAGE}   (the owner; weave sso to sign in)`);
       const s = await (await backend()).manageSpace({ space, provider });
       return out(s, () => `${s.name}: from now on half of every key is held by ${s.managed?.provider}`);
     }
@@ -1316,10 +1333,9 @@ ${postLine(p)}`);
         case 'show':
           return show(await b.company());
         case 'create': {
-          const [name, kind, address, key, a, c] = rest;
-          if (!name || (kind !== 'vault' && kind !== 'azure') || !address || !key || !values.issuer || !values.audience || !values.admins)
-            throw new Error('usage: weave company create <name> vault <address> <transit key> [jwt role] --issuer <url> --audience <id> --admins <sign-in group>\n       weave company create <name> azure <key vault url> <key> <tenant> <client id> --issuer … --audience … --admins …');
-          const provider = kind === 'vault' ? { kind: 'vault' as const, address, key, ...(a ? { jwt: { role: a } } : {}) } : { kind: 'azure' as const, vault: address, key, ...(a ? { tenant: a } : {}), ...(c ? { clientId: c } : {}) };
+          const [name, ...spec] = rest;
+          const provider = providerArgs(spec);
+          if (!name || !provider || !values.issuer || !values.audience || !values.admins) throw new Error(`usage: weave company create <name> ${PROVIDER_USAGE}\n       --issuer <url> --audience <id> --admins <sign-in group>`);
           return show(await b.createCompany({ name, provider, issuer: values.issuer, audience: values.audience, admins: values.admins }));
         }
         case 'link': {

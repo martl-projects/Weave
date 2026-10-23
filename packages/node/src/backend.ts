@@ -763,7 +763,7 @@ export interface LinkInfo {
 
 export interface CreateCompanyInput {
   name: string;
-  provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+  provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string } | { kind: 'aws'; region: string; key: string; role?: string; endpoint?: string; sts?: string } | { kind: 'gcp'; key: string; workload?: string; endpoint?: string; sts?: string };
   /** The company's sign-in (OIDC): the issuer, and the audience its tokens name. */
   issuer: string;
   audience: string;
@@ -1014,7 +1014,7 @@ export interface Backend {
   /** The owner: from now on, a company's key service holds half of every key of this space (it rotates the key now). */
   manageSpace(input: {
     space: string;
-    provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string };
+    provider: { kind: 'local' } | { kind: 'vault'; address: string; key: string; mount?: string; jwt?: { mount?: string; role: string } } | { kind: 'azure'; vault: string; key: string; tenant?: string; clientId?: string; authority?: string } | { kind: 'aws'; region: string; key: string; role?: string; endpoint?: string; sts?: string } | { kind: 'gcp'; key: string; workload?: string; endpoint?: string; sts?: string };
     ttlMinutes?: number;
     graceHours?: number;
     attestor?: string;

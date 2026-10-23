@@ -1,6 +1,7 @@
 import { constants, createCipheriv, createDecipheriv, createHash, createHmac, createSign, createVerify, generateKeyPairSync, privateDecrypt, publicEncrypt, randomBytes, type KeyObject } from 'node:crypto';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { signV4 } from '../../src/keyproviders.ts';
 
 /*
  * Stand-ins for a company's services, for tests: a Vault with the Transit
@@ -389,5 +390,307 @@ export class SmtpStub {
 
   stop(): Promise<void> {
     return new Promise((resolve) => (this.#server ? this.#server.close(() => resolve()) : resolve()));
+  }
+}
+
+/** An ID token from the OIDC stand-in, checked as a cloud's federation would: signed, from it, for `audience`, current. */
+function federated(oidc: OidcStub | undefined, token: string, audience: string, disabled: Set<string>): { sub: string; email?: string } | undefined {
+  if (!oidc) return undefined;
+  const [h, b, sig] = token.split('.');
+  if (!h || !b || !sig || !createVerify('RSA-SHA256').update(`${h}.${b}`).verify(oidc.publicKey, Buffer.from(sig, 'base64url'))) return undefined;
+  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss: string; sub: string; email?: string; aud: string; exp: number };
+  if (claims.iss !== oidc.issuer || claims.aud !== audience || claims.exp * 1000 < Date.now() || disabled.has(claims.sub)) return undefined;
+  return claims;
+}
+
+/** A symmetric key's sealing, bound to `aad`: what a cloud KMS's encrypt and decrypt do. */
+function sealWith(key: Buffer, plaintext: Buffer, aad: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(Buffer.from(aad));
+  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), ct]).toString('base64');
+}
+function openWith(key: Buffer, sealed: Buffer, aad: string): Buffer | undefined {
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12)).setAAD(Buffer.from(aad));
+    decipher.setAuthTag(sealed.subarray(12, 28));
+    return Buffer.concat([decipher.update(sealed.subarray(28)), decipher.final()]);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * AWS: STS (AssumeRoleWithWebIdentity, trusting the OIDC stand-in for `audience`) and KMS with symmetric keys,
+ * on one address. Every KMS request's Signature Version 4 is checked against the caller's secret.
+ */
+export class AwsStub {
+  readonly region = 'eu-central-1';
+  readonly #users = new Map<string, { secret: string; principal: string; sessionToken?: string; until?: number }>();
+  readonly #roles = new Set<string>();
+  readonly #keys = new Map<string, { id: string; arn: string; key: Buffer; state: 'Enabled' | 'PendingDeletion' }>();
+  readonly #disabled = new Set<string>();
+  readonly log: Array<{ op: string; principal: string; context?: string }> = [];
+  audience = 'weave';
+  url = '';
+  #server?: Server;
+  readonly oidc?: OidcStub;
+
+  constructor(oidc?: OidcStub) {
+    this.oidc = oidc;
+  }
+
+  /** An IAM user's access keys (for the company's server). */
+  createUser(name: string): { accessKeyId: string; secretAccessKey: string } {
+    const accessKeyId = `AKIA${randomBytes(8).toString('hex').toUpperCase()}`;
+    const secretAccessKey = randomBytes(30).toString('base64');
+    this.#users.set(accessKeyId, { secret: secretAccessKey, principal: `user/${name}` });
+    return { accessKeyId, secretAccessKey };
+  }
+
+  /** A role people take on with their company sign-in. */
+  createRole(name: string): string {
+    const arn = `arn:aws:iam::123456789012:role/${name}`;
+    this.#roles.add(arn);
+    return arn;
+  }
+
+  createKey(alias: string): string {
+    const id = randomBytes(16).toString('hex');
+    const entry = { id, arn: `arn:aws:kms:${this.region}:123456789012:key/${id}`, key: randomBytes(32), state: 'Enabled' as const };
+    this.#keys.set(`alias/${alias}`, entry);
+    this.#keys.set(id, entry);
+    this.#keys.set(entry.arn, entry);
+    return `alias/${alias}`;
+  }
+
+  keyState(alias: string): string | undefined {
+    return this.#keys.get(alias)?.state;
+  }
+
+  /** Blocked in the sign-in: no new sessions. */
+  disable(sub: string): void {
+    this.#disabled.add(sub);
+  }
+
+  /** The caller of a signed request, if its signature holds. */
+  #caller(req: IncomingMessage, raw: string): { principal: string } | { error: string } {
+    const auth = String(req.headers.authorization ?? '');
+    const m = /^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/([^/]+)\/aws4_request, SignedHeaders=([^,]+), Signature=([0-9a-f]{64})$/.exec(auth);
+    if (!m) return { error: 'MissingAuthenticationTokenException' };
+    const [, accessKeyId, , region, service, signed] = m;
+    const user = this.#users.get(accessKeyId);
+    if (!user) return { error: 'UnrecognizedClientException' };
+    if (user.until && user.until < Date.now()) return { error: 'ExpiredTokenException' };
+    if (user.sessionToken && req.headers['x-amz-security-token'] !== user.sessionToken) return { error: 'UnrecognizedClientException' };
+    const amzDate = String(req.headers['x-amz-date'] ?? '');
+    const when = Date.parse(`${amzDate.slice(0, 4)}-${amzDate.slice(4, 6)}-${amzDate.slice(6, 8)}T${amzDate.slice(9, 11)}:${amzDate.slice(11, 13)}:${amzDate.slice(13, 15)}Z`);
+    if (!(Math.abs(Date.now() - when) < 5 * 60_000)) return { error: 'InvalidSignatureException' };
+    const headers: Record<string, string> = {};
+    for (const name of signed.split(';')) if (name !== 'host' && name !== 'x-amz-date' && name !== 'x-amz-security-token') headers[name] = String(req.headers[name] ?? '');
+    const expected = signV4({ method: req.method ?? 'POST', url: `${this.url}${req.url ?? '/'}`, headers, body: raw }, { accessKeyId, secretAccessKey: user.secret, ...(user.sessionToken ? { sessionToken: user.sessionToken } : {}) }, region, service, new Date(when));
+    if (expected.authorization !== auth || region !== this.region || service !== 'kms') return { error: 'InvalidSignatureException' };
+    return { principal: user.principal };
+  }
+
+  async start(): Promise<this> {
+    this.#server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const json = (status: number, body: unknown) => {
+          res.statusCode = status;
+          res.setHeader('content-type', 'application/x-amz-json-1.1');
+          res.end(JSON.stringify(body));
+        };
+        const target = String(req.headers['x-amz-target'] ?? '');
+        if (!target) {
+          // STS: a role for a company sign-in.
+          const form = new URLSearchParams(raw);
+          const xmlError = (status: number, code: string, message: string) => {
+            res.statusCode = status;
+            res.end(`<ErrorResponse><Error><Code>${code}</Code><Message>${message}</Message></Error></ErrorResponse>`);
+          };
+          if (form.get('Action') !== 'AssumeRoleWithWebIdentity') return xmlError(400, 'InvalidAction', 'not here');
+          const role = form.get('RoleArn') ?? '';
+          const claims = federated(this.oidc, form.get('WebIdentityToken') ?? '', this.audience, this.#disabled);
+          if (!claims) return xmlError(400, 'InvalidIdentityToken', 'the token is not valid');
+          if (!this.#roles.has(role)) return xmlError(403, 'AccessDenied', 'not authorized to perform sts:AssumeRoleWithWebIdentity');
+          const session = form.get('RoleSessionName') ?? '';
+          const accessKeyId = `ASIA${randomBytes(8).toString('hex').toUpperCase()}`;
+          const secret = randomBytes(30).toString('base64');
+          const sessionToken = randomBytes(48).toString('base64');
+          const until = Date.now() + Number(form.get('DurationSeconds') ?? 3600) * 1000;
+          this.#users.set(accessKeyId, { secret, principal: `assumed-role/${role.split('/').pop()}/${session}`, sessionToken, until });
+          this.log.push({ op: 'AssumeRoleWithWebIdentity', principal: `${claims.sub} as ${session}` });
+          res.setHeader('content-type', 'text/xml');
+          return void res.end(
+            `<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>${accessKeyId}</AccessKeyId><SecretAccessKey>${secret}</SecretAccessKey><SessionToken>${sessionToken}</SessionToken><Expiration>${new Date(until).toISOString()}</Expiration></Credentials><SubjectFromWebIdentityToken>${claims.sub}</SubjectFromWebIdentityToken></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>`,
+          );
+        }
+        const caller = this.#caller(req, raw);
+        if ('error' in caller) return json(400, { __type: caller.error, message: 'the request is not signed by a known caller' });
+        const op = target.replace(/^TrentService\./, '');
+        const body = JSON.parse(raw || '{}') as { KeyId?: string; Plaintext?: string; CiphertextBlob?: string; EncryptionContext?: Record<string, string> };
+        const context = body.EncryptionContext ? JSON.stringify(Object.entries(body.EncryptionContext).sort()) : '';
+        this.log.push({ op, principal: caller.principal, ...(body.EncryptionContext ? { context: Object.values(body.EncryptionContext).join(',') } : {}) });
+        const key = this.#keys.get(body.KeyId ?? '');
+        if (!key) return json(400, { __type: 'NotFoundException', message: `key ${body.KeyId} not found` });
+        if (op === 'DescribeKey') return json(200, { KeyMetadata: { KeyId: key.id, Arn: key.arn, KeyState: key.state } });
+        if (op === 'ScheduleKeyDeletion') {
+          if (body.KeyId !== key.arn && body.KeyId !== key.id) return json(400, { __type: 'NotFoundException', message: 'an alias is not a key' });
+          key.state = 'PendingDeletion';
+          return json(200, { KeyId: key.arn, KeyState: key.state });
+        }
+        if (key.state !== 'Enabled') return json(400, { __type: 'KMSInvalidStateException', message: `${key.arn} is pending deletion` });
+        if (op === 'Encrypt') return json(200, { KeyId: key.arn, CiphertextBlob: Buffer.from(`${key.id}.${sealWith(key.key, Buffer.from(body.Plaintext ?? '', 'base64'), context)}`).toString('base64') });
+        if (op === 'Decrypt') {
+          const [id, sealed] = Buffer.from(body.CiphertextBlob ?? '', 'base64').toString().split('.');
+          const plain = id === key.id && sealed ? openWith(key.key, Buffer.from(sealed, 'base64'), context) : undefined;
+          if (!plain) return json(400, { __type: 'InvalidCiphertextException', message: '' });
+          return json(200, { KeyId: key.arn, Plaintext: plain.toString('base64') });
+        }
+        return json(400, { __type: 'UnknownOperationException' });
+      });
+    });
+    await new Promise<void>((resolve) => this.#server!.listen(0, '127.0.0.1', resolve));
+    this.url = `http://127.0.0.1:${(this.#server.address() as AddressInfo).port}`;
+    return this;
+  }
+
+  async stop(): Promise<void> {
+    await new Promise((resolve) => this.#server?.close(resolve));
+  }
+}
+
+/**
+ * Google Cloud: STS (token exchange through a workload identity provider that trusts the OIDC stand-in for
+ * `audience`), OAuth for service accounts (a signed assertion), and Cloud KMS with symmetric keys and versions.
+ */
+export class GcpStub {
+  readonly workload = 'projects/123456/locations/global/workloadIdentityPools/acme/providers/acme-sign-in';
+  readonly #accounts = new Map<string, KeyObject>();
+  readonly #tokens = new Map<string, { principal: string; until: number }>();
+  readonly #keys = new Map<string, Array<{ name: string; key: Buffer; state: 'ENABLED' | 'DESTROY_SCHEDULED' }>>();
+  readonly #disabled = new Set<string>();
+  readonly log: Array<{ op: string; principal: string }> = [];
+  audience = 'weave';
+  url = '';
+  #server?: Server;
+  readonly oidc?: OidcStub;
+
+  constructor(oidc?: OidcStub) {
+    this.oidc = oidc;
+  }
+
+  /** A service account and its key, as the JSON file Google hands out. */
+  createServiceAccount(name: string): { client_email: string; private_key: string; private_key_id: string; token_uri: string } {
+    const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const email = `${name}@acme-weave.iam.gserviceaccount.com`;
+    this.#accounts.set(email, pair.publicKey);
+    return { client_email: email, private_key: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string, private_key_id: randomBytes(8).toString('hex'), token_uri: `${this.url}/token` };
+  }
+
+  createKey(name: string): string {
+    const path = `projects/acme-weave/locations/europe-west3/keyRings/weave/cryptoKeys/${name}`;
+    this.#keys.set(path, [{ name: `${path}/cryptoKeyVersions/1`, key: randomBytes(32), state: 'ENABLED' }]);
+    return path;
+  }
+
+  /** A new primary version: what a rotation does. Older versions still decrypt. */
+  rotate(path: string): void {
+    const versions = this.#keys.get(path)!;
+    versions.push({ name: `${path}/cryptoKeyVersions/${versions.length + 1}`, key: randomBytes(32), state: 'ENABLED' });
+  }
+
+  keyStates(path: string): string[] {
+    return (this.#keys.get(path) ?? []).map((v) => v.state);
+  }
+
+  disable(sub: string): void {
+    this.#disabled.add(sub);
+  }
+
+  #issue(principal: string): { access_token: string; expires_in: number; token_type: string } {
+    const token = `ya29.${randomBytes(16).toString('hex')}`;
+    this.#tokens.set(token, { principal, until: Date.now() + 3_600_000 });
+    return { access_token: token, expires_in: 3600, token_type: 'Bearer' };
+  }
+
+  async start(): Promise<this> {
+    this.#server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const send = (status: number, body: unknown) => {
+          res.statusCode = status;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(body));
+        };
+        const error = (status: number, code: string, message: string) => send(status, { error: { code: status, status: code, message } });
+        const url = new URL(req.url ?? '/', this.url);
+        if (url.pathname === '/v1/token') {
+          // STS: a company sign-in for a federated token.
+          const body = JSON.parse(raw || '{}') as { audience?: string; subjectToken?: string; subjectTokenType?: string; grantType?: string };
+          if (body.grantType !== 'urn:ietf:params:oauth:grant-type:token-exchange' || body.subjectTokenType !== 'urn:ietf:params:oauth:token-type:id_token') return send(400, { error: 'invalid_request' });
+          if (body.audience !== `//iam.googleapis.com/${this.workload}`) return send(400, { error: 'invalid_target', error_description: 'unknown workload identity provider' });
+          const claims = federated(this.oidc, body.subjectToken ?? '', this.audience, this.#disabled);
+          if (!claims) return send(400, { error: 'invalid_grant', error_description: 'the ID token is not valid' });
+          return send(200, { ...this.#issue(`principal://iam.googleapis.com/${this.workload.replace(/\/providers\/.*$/, '')}/subject/${claims.sub}`), issued_token_type: 'urn:ietf:params:oauth:token-type:access_token' });
+        }
+        if (url.pathname === '/token') {
+          // OAuth for a service account: its signed assertion.
+          const assertion = new URLSearchParams(raw).get('assertion') ?? '';
+          const [h, b, sig] = assertion.split('.');
+          const claims = b ? (JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss: string; aud: string; exp: number; scope: string }) : undefined;
+          const key = claims ? this.#accounts.get(claims.iss) : undefined;
+          if (!claims || !key || !createVerify('RSA-SHA256').update(`${h}.${b}`).verify(key, Buffer.from(sig ?? '', 'base64url')) || claims.aud !== `${this.url}/token` || claims.exp * 1000 < Date.now())
+            return send(400, { error: 'invalid_grant', error_description: 'Invalid JWT Signature.' });
+          return send(200, this.#issue(`serviceAccount:${claims.iss}`));
+        }
+        const bearer = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+        const who = this.#tokens.get(bearer);
+        if (!who || who.until < Date.now()) return error(401, 'UNAUTHENTICATED', 'Request had invalid authentication credentials.');
+        const m = /^\/v1\/(projects\/[^:]+?)(?::(encrypt|decrypt|destroy))?$/.exec(url.pathname);
+        if (!m) return error(404, 'NOT_FOUND', 'no such resource');
+        const [, path, verb] = m;
+        const body = JSON.parse(raw || '{}') as { plaintext?: string; ciphertext?: string; additionalAuthenticatedData?: string };
+        const aad = Buffer.from(body.additionalAuthenticatedData ?? '', 'base64').toString();
+        this.log.push({ op: verb ?? req.method ?? '', principal: who.principal });
+        if (!verb && path.endsWith('/cryptoKeyVersions') && req.method === 'GET') {
+          const versions = this.#keys.get(path.replace(/\/cryptoKeyVersions$/, ''));
+          return versions ? send(200, { cryptoKeyVersions: versions.map((v) => ({ name: v.name, state: v.state })) }) : error(404, 'NOT_FOUND', path);
+        }
+        if (verb === 'destroy') {
+          const version = [...this.#keys.values()].flat().find((v) => v.name === path);
+          if (!version) return error(404, 'NOT_FOUND', path);
+          version.state = 'DESTROY_SCHEDULED';
+          return send(200, { name: version.name, state: version.state });
+        }
+        const versions = this.#keys.get(path);
+        if (!versions) return error(404, 'NOT_FOUND', path);
+        if (verb === 'encrypt') {
+          const primary = versions.at(-1)!;
+          if (primary.state !== 'ENABLED') return error(400, 'FAILED_PRECONDITION', `${primary.name} is not enabled`);
+          return send(200, { name: primary.name, ciphertext: Buffer.from(`${versions.length - 1}.${sealWith(primary.key, Buffer.from(body.plaintext ?? '', 'base64'), aad)}`).toString('base64') });
+        }
+        if (verb === 'decrypt') {
+          const [index, sealed] = Buffer.from(body.ciphertext ?? '', 'base64').toString().split('.');
+          const version = versions[Number(index)];
+          if (!version || version.state !== 'ENABLED') return error(400, 'FAILED_PRECONDITION', 'the key version is not enabled');
+          const plain = sealed ? openWith(version.key, Buffer.from(sealed, 'base64'), aad) : undefined;
+          if (!plain) return error(400, 'INVALID_ARGUMENT', 'Decryption failed: the ciphertext is invalid.');
+          return send(200, { plaintext: plain.toString('base64') });
+        }
+        return error(400, 'INVALID_ARGUMENT', 'not supported');
+      });
+    });
+    await new Promise<void>((resolve) => this.#server!.listen(0, '127.0.0.1', resolve));
+    this.url = `http://127.0.0.1:${(this.#server.address() as AddressInfo).port}`;
+    return this;
+  }
+
+  async stop(): Promise<void> {
+    await new Promise((resolve) => this.#server?.close(resolve));
   }
 }

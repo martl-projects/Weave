@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AzureKeyVaultProvider, LocalProvider, VaultTransitProvider } from '../src/keyproviders.ts';
+import { AwsKmsProvider, AzureKeyVaultProvider, envCredentials, GcpKmsProvider, LocalProvider, signV4, VaultTransitProvider } from '../src/keyproviders.ts';
 import { resolveHome } from '../src/index.ts';
-import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
+import { AwsStub, AzureStub, GcpStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
 let oidc: OidcStub;
@@ -86,6 +86,89 @@ describe('key providers', () => {
       await expect(service.unwrap(wrapped, ctx)).rejects.toThrow();
     } finally {
       await azure.stop();
+    }
+  });
+
+  it('signs AWS requests as AWS’s own test suite does (Signature Version 4)', () => {
+    const credentials = { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' };
+    const at = new Date('2015-08-30T12:36:00Z');
+    // get-vanilla
+    expect(signV4({ method: 'GET', url: 'https://example.amazonaws.com/' }, credentials, 'us-east-1', 'service', at).authorization).toBe(
+      'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31',
+    );
+    // The IAM example from AWS's documentation: a query and a content type.
+    expect(
+      signV4({ method: 'GET', url: 'https://iam.amazonaws.com/?Action=ListUsers&Version=2010-05-08', headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' } }, credentials, 'us-east-1', 'iam', at).authorization,
+    ).toBe('AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/iam/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7');
+  });
+
+  it('aws: KMS with the space and epoch as encryption context, the server’s keys or a role taken on with the person’s sign-in, and deleting the key', async () => {
+    const aws = await new AwsStub(oidc).start();
+    try {
+      const alias = aws.createKey('weave');
+      const role = aws.createRole('weave-employees');
+      const spec = { kind: 'aws' as const, region: aws.region, key: alias, role, endpoint: aws.url, sts: aws.url };
+      const server = new AwsKmsProvider(spec, { aws: aws.createUser('weave-server') });
+      const wrapped = await server.wrap(key, ctx);
+      expect(wrapped).toMatch(/^aws:/);
+      expect(await server.unwrap(wrapped, ctx)).toEqual(key);
+      // Bound to its space and epoch.
+      await expect(server.unwrap(wrapped, { ...ctx, epoch: 3 })).rejects.toThrow(/refused: InvalidCiphertextException/);
+      // A wrong secret doesn't sign.
+      await expect(new AwsKmsProvider(spec, { aws: { accessKeyId: aws.createUser('x').accessKeyId, secretAccessKey: 'wrong' } }).wrap(key, ctx)).rejects.toThrow(/InvalidSignatureException/);
+
+      // A person: their company sign-in takes on the role, and KMS sees them by name.
+      const person = new AwsKmsProvider(spec, { idToken: () => oidc.token({ sub: 'kofi', email: 'kofi@acme.example' }) });
+      expect(await person.unwrap(wrapped, ctx)).toEqual(key);
+      expect(aws.log.filter((l) => l.op === 'Decrypt').map((l) => l.principal)).toContain('assumed-role/weave-employees/weave-kofi@acme.example');
+      expect(aws.log.find((l) => l.op === 'Encrypt')?.context).toBe('weave/kms/v1:project:abc:2');
+      // A token for another app, or no role: no.
+      await expect(new AwsKmsProvider(spec, { idToken: () => oidc.token({ sub: 'kofi', aud: 'something-else' }) }).unwrap(wrapped, ctx)).rejects.toThrow(/InvalidIdentityToken/);
+      await expect(new AwsKmsProvider({ ...spec, role: 'arn:aws:iam::123456789012:role/nope' }, { idToken: () => oidc.token({ sub: 'kofi' }) }).unwrap(wrapped, ctx)).rejects.toThrow(/AccessDenied/);
+      await expect(new AwsKmsProvider({ ...spec, role: undefined }, {}).unwrap(wrapped, ctx)).rejects.toThrow(/sign in with your company/);
+
+      // Shredding schedules the key's deletion: nothing opens from then on.
+      await server.destroy();
+      expect(aws.keyState(alias)).toBe('PendingDeletion');
+      await expect(server.unwrap(wrapped, ctx)).rejects.toThrow(/KMSInvalidStateException/);
+    } finally {
+      await aws.stop();
+    }
+  });
+
+  it('gcp: Cloud KMS with the space and epoch as authenticated data, a service account or the person’s sign-in through workload identity, and destroying every version', async () => {
+    const gcp = await new GcpStub(oidc).start();
+    try {
+      const path = gcp.createKey('weave');
+      const spec = { kind: 'gcp' as const, key: path, workload: gcp.workload, endpoint: gcp.url, sts: `${gcp.url}/v1/token` };
+      const account = gcp.createServiceAccount('weave-server');
+      const server = new GcpKmsProvider(spec, { gcpServiceAccount: account });
+      const wrapped = await server.wrap(key, ctx);
+      expect(wrapped).toMatch(/^gcp:/);
+      expect(await server.unwrap(wrapped, ctx)).toEqual(key);
+      await expect(server.unwrap(wrapped, { ...ctx, space: 'project:other' })).rejects.toThrow(/refused: INVALID_ARGUMENT/);
+      // The key file from the environment, as JSON or as a file.
+      expect(envCredentials({ WEAVE_GCP_SERVICE_ACCOUNT: JSON.stringify(account) }).gcpServiceAccount?.client_email).toBe(account.client_email);
+      // Another key signs nothing.
+      await expect(new GcpKmsProvider(spec, { gcpServiceAccount: { ...account, private_key: gcp.createServiceAccount('other').private_key } }).wrap(key, ctx)).rejects.toThrow(/Google refused the service account/);
+
+      // A person, through workload identity: their own principal.
+      const person = new GcpKmsProvider(spec, { idToken: () => oidc.token({ sub: 'lena' }) });
+      expect(await person.unwrap(wrapped, ctx)).toEqual(key);
+      expect(gcp.log.filter((l) => l.op === 'decrypt').map((l) => l.principal)).toContain('principal://iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/acme/subject/lena');
+      gcp.disable('lena');
+      await expect(new GcpKmsProvider(spec, { idToken: () => oidc.token({ sub: 'lena' }) }).unwrap(wrapped, ctx)).rejects.toThrow(/Google refused the sign-in/);
+
+      // A rotated key still opens what the older version wrapped; destroying takes every version.
+      gcp.rotate(path);
+      const newer = await server.wrap(key, ctx);
+      expect(await server.unwrap(wrapped, ctx)).toEqual(key);
+      expect(await server.unwrap(newer, ctx)).toEqual(key);
+      await server.destroy();
+      expect(gcp.keyStates(path)).toEqual(['DESTROY_SCHEDULED', 'DESTROY_SCHEDULED']);
+      await expect(server.unwrap(newer, ctx)).rejects.toThrow(/FAILED_PRECONDITION/);
+    } finally {
+      await gcp.stop();
     }
   });
 });

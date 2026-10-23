@@ -346,7 +346,7 @@ import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
-import { providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
+import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
@@ -4133,9 +4133,7 @@ export class WeaveNode implements Backend {
       setting.provider as unknown as ProviderSpec,
       this.home,
       this.kmsCredentials ?? {
-        ...(env.WEAVE_VAULT_TOKEN ? { token: env.WEAVE_VAULT_TOKEN } : {}),
-        ...(env.WEAVE_AZURE_CLIENT_SECRET ? { azureClientSecret: env.WEAVE_AZURE_CLIENT_SECRET } : {}),
-        ...(env.WEAVE_AZURE_TOKEN ? { azureToken: env.WEAVE_AZURE_TOKEN } : {}),
+        ...envCredentials(env),
         idToken: () => this.#ssoToken(),
         delegated: (scope) => this.#delegated(scope),
       },
@@ -5595,7 +5593,7 @@ export class WeaveNode implements Backend {
         const grant = this.replica.authority.grant(did);
         return grant ? `${this.nameOf(grant.author) ?? grant.author}/${grant.name ?? did.slice(8, 16)}` : did;
       }),
-      provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind === 'azure' ? `Azure Key Vault ${spec.vault} (${spec.key})` : spec.kind,
+      provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind === 'azure' ? `Azure Key Vault ${spec.vault} (${spec.key})` : spec.kind === 'aws' || spec.kind === 'gcp' ? providerFor(spec, this.home, {}).describe().keyRef : spec.kind,
       unlocked: current,
       ttlMinutes: setting.ttlMinutes,
       graceHours: setting.graceHours,

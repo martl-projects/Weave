@@ -7,8 +7,10 @@
 //   weave-server status      what it runs, and where
 //
 // Its home is WEAVE_HOME (/data in the container). The key service's secret
-// comes from WEAVE_VAULT_TOKEN, or WEAVE_AZURE_CLIENT_SECRET for Azure Key
-// Vault, never from a file. See docs/weave-server.md.
+// comes from its settings: WEAVE_VAULT_TOKEN, WEAVE_AZURE_CLIENT_SECRET for
+// Azure Key Vault, WEAVE_AWS_ACCESS_KEY_ID and WEAVE_AWS_SECRET_ACCESS_KEY for
+// AWS KMS, WEAVE_GCP_SERVICE_ACCOUNT (the key's JSON or its file, e.g. a
+// mounted secret) for Google Cloud KMS. See docs/weave-server.md.
 
 import { cpSync, existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -32,6 +34,11 @@ const { values, positionals } = parseArgs({
     'azure-key': { type: 'string' },
     'azure-tenant': { type: 'string' },
     'azure-client-id': { type: 'string' },
+    'aws-region': { type: 'string' },
+    'aws-key': { type: 'string' },
+    'aws-role': { type: 'string' },
+    'gcp-key': { type: 'string' },
+    'gcp-workload': { type: 'string' },
     issuer: { type: 'string' },
     'client-id': { type: 'string' },
     admins: { type: 'string' },
@@ -82,9 +89,32 @@ async function init(): Promise<void> {
   try {
     console.log(`Setting up a company's Weave in ${home.dir}\n`);
     const name = await answer(ask, "The company's name", values.name ?? env.WEAVE_COMPANY);
-    const kind = values.vault ? 'vault' : values['azure-vault'] ? 'azure' : await answer(ask, 'Its key service: vault or azure', env.WEAVE_KEY_SERVICE, 'vault');
+    const kind = values.vault
+      ? 'vault'
+      : values['azure-vault']
+        ? 'azure'
+        : values['aws-key']
+          ? 'aws'
+          : values['gcp-key']
+            ? 'gcp'
+            : await answer(ask, 'Its key service: vault, azure, aws or gcp', env.WEAVE_KEY_SERVICE, 'vault');
     let provider: CreateCompanyInput['provider'];
-    if (kind === 'azure') {
+    if (kind === 'aws') {
+      provider = {
+        kind: 'aws',
+        region: await answer(ask, 'AWS region', values['aws-region'] ?? env.WEAVE_AWS_REGION, 'eu-central-1'),
+        key: await answer(ask, 'Its KMS key (symmetric; ARN or alias/…)', values['aws-key'] ?? env.WEAVE_AWS_KEY, 'alias/weave'),
+        role: await answer(ask, "The IAM role employees take on with their company sign-in (its ARN)", values['aws-role'] ?? env.WEAVE_AWS_ROLE),
+      };
+      if (!env.WEAVE_AWS_ACCESS_KEY_ID || !env.WEAVE_AWS_SECRET_ACCESS_KEY) throw new Error("set WEAVE_AWS_ACCESS_KEY_ID and WEAVE_AWS_SECRET_ACCESS_KEY (this server's IAM keys) first");
+    } else if (kind === 'gcp') {
+      provider = {
+        kind: 'gcp',
+        key: await answer(ask, 'Its Cloud KMS key (projects/…/locations/…/keyRings/…/cryptoKeys/…)', values['gcp-key'] ?? env.WEAVE_GCP_KEY),
+        workload: await answer(ask, 'The workload identity provider employees sign in through (projects/<number>/locations/global/workloadIdentityPools/…/providers/…)', values['gcp-workload'] ?? env.WEAVE_GCP_WORKLOAD),
+      };
+      if (!env.WEAVE_GCP_SERVICE_ACCOUNT && !env.WEAVE_GCP_TOKEN) throw new Error("set WEAVE_GCP_SERVICE_ACCOUNT (this server's service account key: the JSON, or its file) first");
+    } else if (kind === 'azure') {
       provider = {
         kind: 'azure',
         vault: await answer(ask, 'Azure Key Vault address (https://….vault.azure.net)', values['azure-vault'] ?? env.WEAVE_AZURE_VAULT),
@@ -129,7 +159,7 @@ async function init(): Promise<void> {
           '',
           `  ${words}`,
           '',
-          `This server's own keys are sealed with a key held by ${kind === 'azure' ? 'Azure Key Vault' : 'Vault'}: it starts only with access to it.`,
+          `This server's own keys are sealed with a key held by ${{ azure: 'Azure Key Vault', aws: 'AWS KMS', gcp: 'Google Cloud KMS' }[kind] ?? 'Vault'}: it starts only with access to it.`,
           `Admin console: ${consoleInfo.url}  (admins in "${admins}" sign in with their company account)`,
           `  add ${consoleUrl}/callback as a redirect address of the app registration ${consoleClient}`,
           ...(scimInfo ? [`SCIM: port ${scimInfo.port}, path /scim/v2, bearer token (shown once): ${scimInfo.token}`] : []),

@@ -13,6 +13,9 @@ A company's own Weave node, for a server or a container: it owns the company's p
 - **A key service** for the company's half of every key:
   - **HashiCorp Vault**: a transit key created with `derived=true`, JWT auth bound to your sign-in's issuer, and a role for employees (encrypt and decrypt on the key). The server signs in with a token: `WEAVE_VAULT_TOKEN`.
   - **Azure Key Vault**: an RSA key, and an Entra app for the server with wrap, unwrap and delete on it. The server signs in with that app's secret: `WEAVE_AZURE_CLIENT_SECRET`. Employees act as themselves: give their group "Key Vault Crypto User" on the key, and Weave's app registration the delegated permission Azure Key Vault → `user_impersonation` (with admin consent).
+  - **AWS KMS**: a symmetric key, an IAM OIDC provider for your sign-in, and a role employees take on with it (Encrypt and Decrypt on the key). The server signs in with an IAM user's keys: `WEAVE_AWS_ACCESS_KEY_ID`, `WEAVE_AWS_SECRET_ACCESS_KEY`.
+  - **Google Cloud KMS**: a symmetric key, a workload identity pool with a provider for your sign-in (its principals may encrypt and decrypt with the key). The server signs in with a service account's key: `WEAVE_GCP_SERVICE_ACCOUNT` (the JSON, or its file).
+  - Setting each up, step by step: `docs/v2-stage16.md` (AWS, Google), `docs/v2-stage14.md` (Azure).
   - The server's own home key goes into the key service too, so a copied volume or backup opens nothing without it (`--home-key local` keeps it in the home instead).
 - **The company's sign-in** (Entra ID, Okta, Google), with an app registration for Weave:
   - Its client id is the audience of your people's sign-ins.
