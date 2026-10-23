@@ -317,6 +317,11 @@ export interface InviteOptions {
 export interface PostInfo {
   id: string;
   short: string;
+  /**
+   * Its web address, clickable anywhere: http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/title.
+   * Every Weave serves it on its own computer, so it opens for whoever can see the post.
+   */
+  url: string;
   type: 'post' | 'project' | 'issue' | 'proposal';
   /** Where it lives; undefined for public posts. */
   space?: SpaceRef;
@@ -420,10 +425,39 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox';
+  what: 'link-repo' | 'space' | 'inbox' | 'post';
   space?: SpaceRef;
+  /** For post: the post to show. */
+  post?: { id: string; title: string };
   /** For link-repo: the repository to have chosen (owner/name). */
   repo?: string;
+}
+
+/**
+ * A post an agent pointed you to: shown with weave_show, or written as a link in
+ * a Claude Code session Weave follows. Kept on this computer only, for the
+ * Mentions panel; never signed or sent anywhere.
+ */
+export interface MentionInfo {
+  id: string;
+  time: string;
+  post: Pick<PostInfo, 'id' | 'url' | 'title' | 'type' | 'text' | 'board' | 'space' | 'by' | 'issue' | 'chat' | 'score'>;
+  /** weave_show by an agent, or a link in a Claude Code session. */
+  source: 'agent' | 'claude-code';
+  /** The agent that showed it (weave_show). */
+  agent?: string;
+  /** For claude-code: the session, and the folder it works in. */
+  session?: { id: string; folder?: string };
+  /** What the agent said about it (weave_show). */
+  note?: string;
+}
+
+/** Whether Weave follows your Claude Code sessions for links to posts. */
+export interface ClaudeCodeFollow {
+  on: boolean;
+  /** Where Claude Code keeps its transcripts here, and whether it exists. */
+  dir: string;
+  found: boolean;
 }
 
 /** One of your agents asking to sign more kinds of events; you allow or decline it in the Inbox. */
@@ -839,7 +873,14 @@ export interface Backend {
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen>;
+  /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
+  showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
+  /** The Mentions panel: posts agents pointed to on this computer, newest first. */
+  mentions(): Promise<MentionInfo[]>;
+  /** Follow your Claude Code sessions for links to posts (reads the agent's answers in its transcripts, here only), or stop. */
+  followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow>;
+  claudeCode(): Promise<ClaudeCodeFollow>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
@@ -1010,7 +1051,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

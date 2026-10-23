@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
+import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
 import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
 
 export interface WeaveMcpOptions {
@@ -75,6 +76,8 @@ export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and thei
 
 Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
+Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
+
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
@@ -123,6 +126,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   backend
     .watch((item: FeedItem) => {
       if (item.signer === mySigner) return; // our own writes are not news
+      if (item.scope === 'live') return; // the app's own signals (rooms, opening, mentions), not events
       const text = textOf(item.body);
       if (!text && !item.kind.startsWith('weave.issue')) return;
       inbox.push({
@@ -280,7 +284,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
 
   server.registerTool(
     'weave_read_post',
-    { title: 'Read a post', description: 'A post with its chat. Id, its first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
+    { title: 'Read a post', description: 'A post with its chat. Its url, id, first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
     run(async ({ post, limit }: { post: string; limit?: number }) => {
       const p = await backend.post(post);
       const chat = p.space && p.type !== 'project' ? await backend.messages(undefined, { post: p.id, limit: limit ?? 50 }) : [];
@@ -523,13 +527,39 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox. Tell them what to do there.",
-      inputSchema: { what: z.enum(['link-repo', 'space', 'inbox']), space: z.string().optional().describe('Group, tier or project name or id'), repo: z.string().optional().describe('For link-repo: owner/name') },
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url). Tell them what to do there.",
+      inputSchema: {
+        what: z.enum(['link-repo', 'space', 'inbox', 'post']),
+        space: z.string().optional().describe('Group, tier or project name or id'),
+        repo: z.string().optional().describe('For link-repo: owner/name'),
+        post: z.string().optional().describe('For post: its id or url'),
+      },
     },
-    run(async ({ what, space, repo }: { what: 'link-repo' | 'space' | 'inbox'; space?: string; repo?: string }) => ({
-      ...(await backend.openInApp({ what, space, repo })),
+    run(async ({ what, space, repo, post }: { what: 'link-repo' | 'space' | 'inbox' | 'post'; space?: string; repo?: string; post?: string }) => ({
+      ...(await backend.openInApp({ what, space, repo, post })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
+  );
+
+  // Post cards in the chat, where the host renders MCP Apps (Claude chat does).
+  server.registerResource('post-cards', POST_CARD_URI, { title: 'Weave post cards', mimeType: MCP_APP_MIME }, async () => ({
+    contents: [{ uri: POST_CARD_URI, mimeType: MCP_APP_MIME, text: POST_CARD_HTML, _meta: { ui: { prefersBorder: false } } }],
+  }));
+
+  server.registerTool(
+    'weave_show',
+    {
+      title: 'Show posts in the Mentions panel',
+      description:
+        "Show posts to your person in Weave's Mentions panel, a small window beside their work: the posts you just created, updated or want them to look at, as cards they can open in Weave. Nothing is posted or sent; it stays on their computer. Also link the posts in your answer (their url).",
+      inputSchema: {
+        posts: z.array(z.string().min(4)).min(1).max(20).describe('Posts: url, id or weave:post: link'),
+        note: z.string().max(500).optional().describe('A short line on why, e.g. "Updated after our plan"'),
+      },
+      // Where the host can, the result shows as post cards right in the chat.
+      _meta: { ui: { resourceUri: POST_CARD_URI } },
+    },
+    run(async ({ posts, note }: { posts: string[]; note?: string }) => backend.showPosts({ posts, note, as })),
   );
 
   // ---------------------------------------------------------------- project pages

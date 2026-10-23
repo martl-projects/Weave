@@ -1,0 +1,93 @@
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { WeaveNode, type FeedItem, type MentionInfo } from '../src/index.ts';
+
+const dirs: string[] = [];
+const temp = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  dirs.push(dir);
+  return dir;
+};
+afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+/** Waits until `count` mentions arrived (or a few seconds passed). */
+function collect(node: WeaveNode, count: number): Promise<MentionInfo[]> {
+  const got: MentionInfo[] = [];
+  const watching = new AbortController();
+  return new Promise((resolve) => {
+    const done = () => {
+      watching.abort();
+      resolve(got);
+    };
+    const timer = setTimeout(done, 5000);
+    void node.watch((item: FeedItem) => {
+      if (item.kind !== 'weave.mention') return;
+      got.push(item.body as unknown as MentionInfo);
+      if (got.length >= count) {
+        clearTimeout(timer);
+        done();
+      }
+    }, watching.signal);
+  });
+}
+
+const line = (entry: object) => `${JSON.stringify(entry)}\n`;
+const answer = (text: string, extra: object = {}) =>
+  line({ type: 'assistant', sessionId: 'session-1', cwd: 'C:\\code\\weave', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text }] }, ...extra });
+
+describe('the Mentions panel', () => {
+  it('shows posts an agent points to, newest first, on this computer only', async () => {
+    const martin = WeaveNode.init('Martin', temp('weave-mentions-'));
+    await martin.addAgent('claude', ['weave.post']);
+    await martin.createProject({ name: 'Weave' });
+    const idea = await martin.submit({ space: 'Weave', board: 'ideas', title: 'KMS System' });
+    const arriving = collect(martin, 1);
+    const shown = await martin.showPosts({ posts: [idea.url], note: 'From our plan', as: 'claude' });
+    expect(shown).toMatchObject([{ source: 'agent', agent: 'claude', note: 'From our plan', post: { id: idea.id, title: 'KMS System', board: 'ideas', url: idea.url } }]);
+    expect(await arriving).toHaveLength(1);
+    expect((await martin.mentions()).map((m) => m.post.title)).toEqual(['KMS System']);
+    await expect(martin.showPosts({ posts: ['weave~zzzz/ideas/zzzz'] })).rejects.toThrow(/no post found/);
+    await expect(martin.showPosts({ posts: [idea.id], as: 'nobody' })).rejects.toThrow();
+  });
+
+  it("follows Claude Code sessions for links in the agent's answers, once switched on", async () => {
+    const claude = temp('weave-claude-');
+    const folder = join(claude, 'projects', 'C--code-weave');
+    mkdirSync(folder, { recursive: true });
+    const transcript = join(folder, 'session-1.jsonl');
+    const martin = WeaveNode.init('Martin', temp('weave-mentions-'));
+    await martin.createProject({ name: 'Weave' });
+    const idea = await martin.submit({ space: 'Weave', board: 'ideas', title: 'KMS System' });
+    const issue = await martin.submit({ space: 'Weave', board: 'issues', title: 'Keys rotate twice' });
+    // Written before following starts: never shown.
+    writeFileSync(transcript, answer(`Earlier: ${idea.url}`));
+
+    process.env.CLAUDE_CONFIG_DIR = claude;
+    try {
+      expect(await martin.followClaudeCode({ on: true })).toMatchObject({ on: true, found: true });
+      const arriving = collect(martin, 2);
+      appendFileSync(
+        transcript,
+        line({ type: 'user', message: { role: 'user', content: `look at ${idea.url}` } }) + // yours: not a mention
+          answer('A subagent found weave~x/y/zzzz', { isSidechain: true }) + // a subagent's: not shown in the chat
+          answer(`I've updated [KMS System](${idea.url}) and opened weave~${issue.space!.id.slice(0, 4)}/issues/${issue.id.slice(0, 4)}. Again: ${idea.url}`) +
+          '{ not json\n',
+      );
+      const mentions = await arriving;
+      expect(mentions.map((m) => [m.source, m.post.title, m.session])).toEqual([
+        ['claude-code', 'KMS System', { id: 'session-1', folder: 'weave' }],
+        ['claude-code', 'Keys rotate twice', { id: 'session-1', folder: 'weave' }],
+      ]);
+      // The same post again in the same session within the hour: not repeated.
+      appendFileSync(transcript, answer(`Still ${idea.url}`));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect((await martin.mentions()).length).toBe(2);
+      expect(await martin.followClaudeCode({ on: false })).toMatchObject({ on: false });
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+      await martin.close();
+    }
+  });
+});

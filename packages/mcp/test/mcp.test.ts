@@ -198,6 +198,21 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('shows posts in the Mentions panel, and as cards where the host renders MCP Apps', async () => {
+    const { node, client, call, close } = await setup(['weave.post']);
+    const idea = await node.submit({ space: 'Weave', board: 'ideas', title: 'KMS System' });
+    const tool = (await client.listTools()).tools.find((t) => t.name === 'weave_show');
+    expect(tool?._meta).toEqual({ ui: { resourceUri: 'ui://weave/post-cards' } });
+    const view = await client.readResource({ uri: 'ui://weave/post-cards' });
+    expect(view.contents[0]).toMatchObject({ uri: 'ui://weave/post-cards', mimeType: 'text/html;profile=mcp-app' });
+    expect((view.contents[0] as { text: string }).text).toContain("request('ui/initialize'");
+
+    const { data } = await call('weave_show', { posts: [idea.url], note: 'From our plan' });
+    expect(data).toMatchObject([{ source: 'agent', agent: 'forge', note: 'From our plan', post: { title: 'KMS System', url: idea.url } }]);
+    expect((await node.mentions()).length).toBe(1);
+    close();
+  });
+
   it('reports permission errors as tool errors', async () => {
     const { node, call, close } = await setup();
     const proposal = await node.propose({ project: 'Weave', title: 'Ship it' });

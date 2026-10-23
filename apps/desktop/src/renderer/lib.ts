@@ -190,8 +190,25 @@ const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob|weave):|[^a-z]|[a-z+.-]+(?
 export const POST_LINK = /weave:post:([A-Za-z0-9_-]+)/;
 export const postLink = (id: string) => `weave:post:${id}`;
 
-/** What renderMarkdown picks out of plain text: @mentions and post links. */
-const INLINE = /@[\w-]+|weave:post:[A-Za-z0-9_-]+/;
+/**
+ * A post's web address, http://weave.localhost:<any port>/project~id[/board/post[/title]]
+ * or /@author/post[/title] (made by postUrl in @weave/core). Inside the app it is
+ * the same link as weave:post:…, whatever the port.
+ */
+const POST_ADDRESS = /^https?:\/\/weave\.localhost(?::\d+)?\/(?:[a-z0-9-]*~[A-Za-z0-9_-]{4,}(?:\/[a-z0-9-]*\/[A-Za-z0-9_-]{4,})?|@[a-z0-9-]*\/[A-Za-z0-9_-]{4,})(?:\/[a-z0-9-]*)?\/?$/;
+/** An address as text, without the host: weave~NqgQ/ideas/aq1i[/title]. */
+const POST_PATH = /(?<![\w/~.@-])[a-z0-9-]*~[A-Za-z0-9_-]{4,}\/[a-z0-9-]+\/[A-Za-z0-9_-]{4,}(?:\/[a-z0-9-]*)?(?![\w~])/;
+const LINK_BASE = 'http://weave.localhost:7710/';
+
+/** What a link points to, if it is a post link in either form: what the 'post' call takes (an id or the address), else undefined. */
+export function postRefOfHref(href: string): string | undefined {
+  const link = POST_LINK.exec(href);
+  if (link?.[0] === href) return link[1];
+  return POST_ADDRESS.test(href) ? href : undefined;
+}
+
+/** What renderMarkdown picks out of plain text: @mentions, post links and post addresses as text. */
+const INLINE = new RegExp(`@[\\w-]+|weave:post:[A-Za-z0-9_-]+|${POST_PATH.source}`);
 
 /**
  * Markdown (bold, italics, code, links, lists, images) rendered safely: messages
@@ -220,8 +237,10 @@ export function renderMarkdown(text: string, rich = false): string {
     for (const match of node.data.matchAll(new RegExp(INLINE, 'g'))) {
       fragment.append(node.data.slice(last, match.index));
       const post = POST_LINK.exec(match[0]);
-      const chip = document.createElement(post ? 'a' : 'span');
+      const path = !post && POST_PATH.exec(match[0]);
+      const chip = document.createElement(post || path ? 'a' : 'span');
       if (post) chip.setAttribute('href', postLink(post[1]));
+      else if (path) chip.setAttribute('href', LINK_BASE + path[0]);
       else chip.className = 'mention';
       chip.textContent = match[0];
       fragment.append(chip);
@@ -244,15 +263,15 @@ function embedLonePostLinks(root: DocumentFragment): void {
     const meaningful = nodes.filter((n) => !(n.nodeType === Node.TEXT_NODE && !n.textContent?.trim()));
     const only = meaningful.length === 1 ? meaningful[0] : undefined;
     const href = only instanceof HTMLAnchorElement ? only.getAttribute('href') ?? '' : '';
-    return POST_LINK.exec(href)?.[0] === href ? POST_LINK.exec(href)![1] : undefined;
+    return postRefOfHref(href) && href;
   };
-  const embed = (id: string) => {
+  const embed = (href: string) => {
     const box = document.createElement('div');
     box.className = 'post-embed';
-    box.dataset.post = id;
+    box.dataset.post = postRefOfHref(href)!;
     const link = document.createElement('a');
-    link.setAttribute('href', postLink(id));
-    link.textContent = postLink(id);
+    link.setAttribute('href', href);
+    link.textContent = href;
     box.append(link);
     return box;
   };
@@ -265,9 +284,9 @@ function embedLonePostLinks(root: DocumentFragment): void {
     const out: Node[] = [];
     let text: HTMLParagraphElement | undefined;
     for (const line of lines) {
-      const id = lone(line);
-      if (id) {
-        out.push(embed(id));
+      const href = lone(line);
+      if (href) {
+        out.push(embed(href));
         text = undefined;
       } else if (line.some((n) => n.textContent?.trim() || n.nodeType === Node.ELEMENT_NODE)) {
         if (text) text.append(document.createElement('br'));

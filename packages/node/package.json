@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@weave/core": "*",
-    "@weave/net": "*"
+    "@weave/net": "*",
+    "marked": "^18.1.1"
   }
 }

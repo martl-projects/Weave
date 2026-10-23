@@ -568,3 +568,15 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .release-list { width: 100%; border-collapse: collapse; background: transparent; }
 .release-list td { padding: 4px 2px; border-bottom: 1px solid #c0c0c0; }
 .release-list td:last-child { text-align: right; white-space: nowrap; }
+
+/* The Mentions panel: its own small window beside the work (overlay.tsx). */
+.mentions-window { height: 100%; display: flex; flex-direction: column; margin: 0; }
+.mentions-drag { -webkit-app-region: drag; }
+.mentions-drag button { -webkit-app-region: no-drag; }
+.mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
+.mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
+.mentions { list-style: none; margin: 0; padding: 0 2px 0 0; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.mention-line { font-family: var(--content-font); font-size: 12px; margin-bottom: 4px; }
+.mention-when { display: block; color: #666; font-size: 11px; }
+.mention-note { font-family: var(--content-font); font-size: 12px; font-style: italic; margin-bottom: 4px; }
+.mentions-weave { align-self: flex-end; }

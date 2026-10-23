@@ -15,6 +15,8 @@ export interface Config {
   agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
   githubApp?: { clientId: string; slug: string; name: string; owner: string };
+  /** Follow Claude Code sessions for links to posts (the Mentions panel). */
+  followClaudeCode?: boolean;
 }
 
 export function loadConfig(home: Home): Config {
@@ -27,6 +29,7 @@ export function loadConfig(home: Home): Config {
     approvedLaunches: stored.approvedLaunches ?? {},
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
+    ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
   };
 }
 

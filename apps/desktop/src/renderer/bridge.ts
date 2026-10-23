@@ -18,6 +18,8 @@ interface Bridge {
   pickFolder(title: string): Promise<string | undefined>;
   /** Bring the app's window to the front (a notification was clicked). */
   show(): Promise<void>;
+  /** Show or hide the Mentions panel window; missing in a browser (open #/overlay there). */
+  mentions?(action: 'show' | 'hide'): Promise<void>;
   /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */
   platform?: string;
   /** The app's own title bar buttons; missing in a browser, which has its own window. */

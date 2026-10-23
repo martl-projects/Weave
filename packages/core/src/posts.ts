@@ -195,6 +195,123 @@ export const postLink = (id: string): string => POST_LINK_PREFIX + id;
 /** The post a link points to, also from inside a longer message; anything else is taken as an id as it is. */
 export const postRefOf = (text: string): string => POST_LINK_PATTERN.exec(text)?.[1] ?? text.trim();
 
+/*
+ * Post addresses: the same post as a web link every Weave serves on this
+ * computer, so it is clickable anywhere (Claude Code, a browser, other apps):
+ *
+ *   http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code
+ *                              project~id     board post  title (decoration)
+ *   http://weave.localhost:7710/@martl/aq1i/a-public-post
+ *   http://weave.localhost:7710/weave~NqgQ                 (the project itself)
+ *
+ * Only the two id prefixes find the post (each the shortest unique one, at
+ * least 4 characters); names and titles are for people and may change.
+ * Without the host, `weave~NqgQ/ideas/aq1i` is the same address as text.
+ * `*.localhost` always means this computer, so the link needs no setup and
+ * carries no token: it opens the post for whoever runs Weave and can see it.
+ */
+export const LINK_HOST = 'weave.localhost';
+export const LINK_PORT = 7710;
+
+/** Where a post is, for its address. */
+export interface PostPlace {
+  id: string;
+  title: string;
+  /** Its project or community; public posts have none. */
+  space?: { id: string; name: string };
+  board?: string;
+  /** The author's name, for public posts. */
+  author?: string;
+  /** The project itself (its post is the project). */
+  project?: boolean;
+}
+
+/** What an address points to: id prefixes (and whether it's a public post). */
+export interface PostTarget {
+  space?: string;
+  post?: string;
+  public?: boolean;
+}
+
+/** Lowercase words joined by dashes: "Links from Claude Code!" → "links-from-claude-code". */
+export function slugOf(text: string, max = 48): string {
+  const words = text
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  let slug = '';
+  for (const word of words) {
+    if (slug && slug.length + 1 + word.length > max) break;
+    slug = slug ? `${slug}-${word}` : word.slice(0, max);
+  }
+  return slug;
+}
+
+/** The shortest start of each id that no other id shares, at least `min` long (like git's short hashes). */
+export function shortPrefixes(ids: Iterable<string>, min = 4): Map<string, string> {
+  const sorted = [...new Set(ids)].sort();
+  const common = (a = '', b = '') => {
+    let i = 0;
+    while (i < a.length && a[i] === b[i]) i++;
+    return i;
+  };
+  const out = new Map<string, string>();
+  sorted.forEach((id, i) => out.set(id, id.slice(0, Math.max(min, common(id, sorted[i - 1]) + 1, common(id, sorted[i + 1]) + 1))));
+  return out;
+}
+
+/** A post's address as text, without the host: `weave~NqgQ/ideas/aq1i/title`. `prefix` gives the short ids to use. */
+export function postPath(place: PostPlace, prefix: (id: string) => string = (id) => id.slice(0, 8)): string {
+  const title = slugOf(place.title);
+  if (place.space) {
+    const project = `${slugOf(place.space.name, 32)}~${prefix(place.space.id)}`;
+    if (place.project) return project;
+    return [project, slugOf(place.board ?? '', 32) || 'posts', prefix(place.id), title].filter(Boolean).join('/');
+  }
+  return [`@${slugOf(place.author ?? '', 32)}`, prefix(place.id), title].filter(Boolean).join('/');
+}
+
+export const postUrl = (place: PostPlace, prefix?: (id: string) => string, port = LINK_PORT): string => `http://${LINK_HOST}:${port}/${postPath(place, prefix)}`;
+
+const ID = '[A-Za-z0-9_-]{4,}';
+const SLUG = '[a-z0-9-]*';
+/** An address path: project~id[/board/post[/title]], or @author/post[/title]. */
+const PATH = `(?:(${SLUG})~(${ID})(?:/${SLUG}/(${ID}))?|@${SLUG}/(${ID}))(?:/${SLUG})?`;
+const URL_PATTERN = new RegExp(`https?://${LINK_HOST.replace('.', '\\.')}(?::\\d+)?/${PATH}`);
+/** As text only the full project~id/board/post form counts, so ordinary words and @mentions stay as they are. */
+const TEXT_PATTERN = new RegExp(`(?<![\\w/~.@-])(${SLUG})~(${ID})/${SLUG}/(${ID})(?:/${SLUG})?(?![\\w~])`);
+
+/** The post a web address or its text form points to, also from inside a longer message. */
+export function postTargetOf(text: string): PostTarget | undefined {
+  const url = URL_PATTERN.exec(text);
+  if (url) return url[4] ? { post: url[4], public: true } : { space: url[2], ...(url[3] ? { post: url[3] } : {}) };
+  const path = TEXT_PATTERN.exec(text);
+  return path ? { space: path[2], post: path[3] } : undefined;
+}
+
+/** Address paths as they appear in text (`weave~NqgQ/ideas/aq1i`), for turning them into links. */
+export const POST_PATH_PATTERN = TEXT_PATTERN;
+
+/**
+ * Every post a text points to, in order, each once: addresses, their text form
+ * and weave:post: links. What each gives is what `post()` takes.
+ */
+export function postRefsIn(text: string): string[] {
+  const found: Array<{ at: number; ref: string }> = [];
+  const taken: Array<[number, number]> = [];
+  for (const m of text.matchAll(new RegExp(URL_PATTERN, 'g'))) {
+    found.push({ at: m.index, ref: m[0] });
+    taken.push([m.index, m.index + m[0].length]);
+  }
+  for (const m of text.matchAll(new RegExp(TEXT_PATTERN, 'g'))) {
+    if (!taken.some(([a, b]) => m.index >= a && m.index < b)) found.push({ at: m.index, ref: m[0] });
+  }
+  for (const m of text.matchAll(new RegExp(POST_LINK_PATTERN, 'g'))) found.push({ at: m.index, ref: m[1] });
+  return [...new Set(found.sort((a, b) => a.at - b.at).map((f) => f.ref))];
+}
+
 /** At most this many co-authors per post. */
 export const MAX_COAUTHORS = 10;
 

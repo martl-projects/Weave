@@ -108,6 +108,11 @@ import {
   coauthorsOf,
   MAX_COAUTHORS,
   postRefOf,
+  postRefsIn,
+  postTargetOf,
+  postUrl,
+  shortPrefixes,
+  type PostTarget,
   type KeyFacts,
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
@@ -221,6 +226,8 @@ import {
   type HarnessInfo,
   type PermissionRequest,
   type AppOpen,
+  type ClaudeCodeFollow,
+  type MentionInfo,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -267,6 +274,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
+import { TranscriptFollower, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
@@ -274,7 +282,7 @@ import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './a
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { basename, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
@@ -362,6 +370,11 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
+  /** Posts agents pointed to, newest first (the Mentions panel), and who's watching for more. */
+  #mentions: MentionInfo[] = [];
+  readonly #mentionListeners = new Set<(mention: MentionInfo) => void>();
+  /** Claude Code sessions followed for links to posts, while that's on (see followClaudeCode). */
+  #follower?: TranscriptFollower;
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -550,6 +563,7 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
+    this.#follower?.stop();
     await this.goOffline();
     this.#releaseLock();
   }
@@ -688,9 +702,13 @@ export class WeaveNode implements Backend {
     // Not an event either: the app comes to the front there; other watchers see no text and leave it.
     const onOpen = (open: AppOpen) => onItem({ id: `open-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.open', scope: 'live', body: open as unknown as Json, author: me, signer: me, seq: 0 });
     this.#openListeners.add(onOpen);
+    // Neither: a post an agent pointed to, for the Mentions panel.
+    const onMention = (mention: MentionInfo) => onItem({ id: mention.id, time: mention.time, kind: 'weave.mention', scope: 'live', body: mention as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#mentionListeners.add(onMention);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
+    this.#mentionListeners.delete(onMention);
     unsubscribe();
   }
 
@@ -975,6 +993,8 @@ export class WeaveNode implements Backend {
   }
 
   async post(ref: string): Promise<PostInfo> {
+    const target = postTargetOf(ref ?? '');
+    if (target) return this.#postAt(target);
     ref = postRefOf(ref ?? '');
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
@@ -1088,8 +1108,15 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox'].includes(input.what)) throw new Error('what is link-repo, space or inbox');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen> {
+    if (!['link-repo', 'space', 'inbox', 'post'].includes(input.what)) throw new Error('what is link-repo, space, inbox or post');
+    if (input.what === 'post') {
+      if (!input.post) throw new Error('say which post');
+      const post = await this.post(input.post);
+      const open: AppOpen = { what: 'post', post: { id: post.id, title: post.title }, ...(post.space ? { space: post.space } : {}) };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     const space = input.space ? this.#space(input.space) : undefined;
     if (input.what !== 'inbox' && !space) throw new Error('say which space');
     const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
@@ -1097,6 +1124,74 @@ export class WeaveNode implements Backend {
     const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}), ...(repo ? { repo } : {}) };
     for (const listener of this.#openListeners) listener(open);
     return open;
+  }
+
+  async showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]> {
+    if (input.as && !this.#agents.some((a) => a.name === input.as)) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (!input.posts?.length) throw new Error('say which posts to show');
+    const note = input.note?.trim().slice(0, 500) || undefined;
+    const shown: MentionInfo[] = [];
+    for (const ref of input.posts.slice(0, 20)) {
+      const post = await this.post(ref);
+      shown.push(this.#mention(post, { source: 'agent', ...(input.as ? { agent: input.as } : {}), ...(note ? { note } : {}) }));
+    }
+    return shown;
+  }
+
+  async mentions(): Promise<MentionInfo[]> {
+    return this.#mentions;
+  }
+
+  async followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow> {
+    this.config = { ...this.config, followClaudeCode: input.on || undefined };
+    saveConfig(this.home, this.config);
+    if (input.on) this.startFollowing();
+    else {
+      this.#follower?.stop();
+      this.#follower = undefined;
+    }
+    return this.claudeCode();
+  }
+
+  async claudeCode(): Promise<ClaudeCodeFollow> {
+    const follower = this.#follower ?? new TranscriptFollower(() => {});
+    return { on: !!this.config.followClaudeCode, dir: follower.dir, found: existsSync(follower.dir) };
+  }
+
+  /** Follow Claude Code sessions if the person turned that on (the daemon calls this when it starts). */
+  startFollowing(): void {
+    if (!this.config.followClaudeCode || this.#follower?.running) return;
+    this.#follower = new TranscriptFollower((said) => this.#mentionsIn(said));
+    this.#follower.start();
+  }
+
+  /** Links to posts in what an agent said in a Claude Code session: each post once per session and hour. */
+  #mentionsIn(said: SessionText): void {
+    for (const ref of postRefsIn(said.text)) {
+      let post: PostInfo;
+      try {
+        post = postTargetOf(ref) ? this.#postAt(postTargetOf(ref)!) : this.#allPosts().find((p) => p.id.startsWith(ref))!;
+      } catch {
+        continue; // not a post you can see here
+      }
+      if (!post) continue;
+      const hour = Date.now() - 60 * 60 * 1000;
+      if (this.#mentions.some((m) => m.post.id === post.id && m.session?.id === said.session && Date.parse(m.time) > hour)) continue;
+      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
+    }
+  }
+
+  #mention(post: PostInfo, how: Pick<MentionInfo, 'source'> & Partial<Pick<MentionInfo, 'agent' | 'session' | 'note'>>): MentionInfo {
+    const { id, url, title, type, text, board, space, by, issue, chat, score } = post;
+    const mention: MentionInfo = {
+      id: `mention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      time: new Date().toISOString(),
+      post: { id, url, title, type, text: text.slice(0, 600), ...(board ? { board } : {}), ...(space ? { space } : {}), by, ...(issue ? { issue } : {}), chat, score },
+      ...how,
+    };
+    this.#mentions = [mention, ...this.#mentions].slice(0, 100);
+    for (const listener of this.#mentionListeners) listener(mention);
+    return mention;
   }
 
   async permissionRequests(): Promise<PermissionRequest[]> {
@@ -3485,9 +3580,9 @@ export class WeaveNode implements Backend {
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
-    const posts = postsOf(space.kind, entries, state.maintainers)
-      .filter((p) => known.has(p.board)) // posts of dropped boards stay in the logs, out of sight
+    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
+    const posts = visible
       .map((p) => {
         const info = this.#postInfo(p, space, ctx);
         if (pinned.has(p.id)) info.pinned = true;
@@ -3514,6 +3609,7 @@ export class WeaveNode implements Backend {
     return {
       id: created.id,
       short: created.id.slice(0, 8),
+      url: postUrl({ id: created.id, title: project.name, space: project, project: true }, this.#prefix()),
       type: 'project',
       space: { id: project.id, kind: 'project', name: project.name },
       by: this.#actor(project.founder, project.founder),
@@ -3530,13 +3626,14 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[] }): PostInfo {
+  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[]; prefixes?: Map<string, string> }): PostInfo {
     const score = ctx.scores.get(p.id);
     const chat = ctx.chats.get(p.id);
     const saved = ctx.saves.get(p.id);
     const info: PostInfo = {
       id: p.id,
       short: p.id.slice(0, 8),
+      url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
       by: this.#actor(p.author, p.signer),
@@ -3579,10 +3676,9 @@ export class WeaveNode implements Backend {
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
       .map((d) => ({ id: eventId(d.event), event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries };
-    return postsOf(undefined, entries)
-      .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
-      .map((p) => this.#postInfo(p, undefined, ctx));
+    const posts = postsOf(undefined, entries).filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author));
+    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries, prefixes: shortPrefixes(posts.map((p) => p.id)) };
+    return posts.map((p) => this.#postInfo(p, undefined, ctx));
   }
 
   /**
@@ -3683,6 +3779,26 @@ export class WeaveNode implements Backend {
     const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
     // Posts of followed boards are on Home too: each post once.
     return [...new Map([...this.#homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
+  }
+
+  /**
+   * Short ids for addresses: a post's within its list (`posts`), a space's
+   * among your spaces. Anything else keeps 8 characters.
+   */
+  #prefix(posts?: Map<string, string>): (id: string) => string {
+    const spaces = shortPrefixes(this.#spaces.keys());
+    return (id) => posts?.get(id) ?? spaces.get(id) ?? id.slice(0, 8);
+  }
+
+  /** The post an address points to (see postTargetOf): its project or community by id prefix, then the post. */
+  #postAt(target: PostTarget): PostInfo {
+    const posts = this.#allPosts().filter((p) =>
+      target.public ? !p.space : !!target.space && !!p.space?.id.startsWith(target.space) && (target.post ? p.type !== 'project' : p.type === 'project'),
+    );
+    const matches = target.post ? posts.filter((p) => p.id.startsWith(target.post!)) : posts;
+    if (matches.length === 0) throw new Error(`no post found at that address (it may be in a project or community you're not in)`);
+    if (matches.length > 1) throw new Error(`that address fits ${matches.length} posts here: use more characters of the id`);
+    return matches[0];
   }
 
   /** Where a post's chat lives; a project's own chat is its channels. */

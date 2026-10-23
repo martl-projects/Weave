@@ -103,7 +103,7 @@ export function loadEmbeds(root: HTMLElement): void {
       () => {
         box.classList.add('missing');
         const link = document.createElement('a');
-        link.setAttribute('href', `weave:post:${id}`);
+        link.setAttribute('href', id.startsWith('http') ? id : `weave:post:${id}`);
         link.textContent = "A post you can't see here";
         box.replaceChildren(link);
       },

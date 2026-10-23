@@ -257,6 +257,39 @@ describe('posts, boards and communities', () => {
     await expect(ada.post(link)).rejects.toThrow(/no post found/); // not in Synths: the link shows her nothing
   });
 
+  it('gives every post a web address that names its place and finds it again', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const ada = person('Ada');
+    const weave = await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    sync(martin, lena);
+    const idea = await martin.submit({ space: 'Weave', board: 'ideas', title: 'Links from Claude Code!' });
+    const other = await martin.submit({ space: 'Weave', board: 'ideas', title: 'Another idea' });
+    sync(martin, lena);
+    sync(martin, ada);
+
+    const space = weave.id.slice(0, 4);
+    expect(idea.url).toBe(`http://weave.localhost:7710/weave~${space}/ideas/${idea.id.slice(0, 4)}/links-from-claude-code`);
+    expect(other.url).toContain(`/ideas/${other.id.slice(0, 4)}/another-idea`);
+    const project = (await martin.posts()).find((p) => p.type === 'project')!;
+    expect(project.url).toBe(`http://weave.localhost:7710/weave~${space}`);
+
+    // Anyone in the project finds it by its address, its text form, or with the names changed.
+    expect((await lena.post(idea.url)).id).toBe(idea.id);
+    expect((await lena.post(`see weave~${space}/ideas/${idea.id.slice(0, 4)} please`)).id).toBe(idea.id);
+    expect((await lena.post(`http://weave.localhost:1234/renamed~${space}/whatever/${idea.id.slice(0, 4)}`)).id).toBe(idea.id);
+    expect((await lena.post(project.url)).type).toBe('project');
+    // Outside the project the address shows nothing.
+    await expect(ada.post(idea.url)).rejects.toThrow(/no post found at that address/);
+
+    // Public posts: @author/post.
+    const hello = await martin.publish({ kind: 'weave.post', body: { title: 'Hello world', text: 'Hi everyone' } });
+    const pub = await martin.post(hello.id);
+    expect(pub.url).toBe(`http://weave.localhost:7710/@martin/${hello.id.slice(0, 4)}/hello-world`);
+    expect((await martin.post(pub.url)).id).toBe(hello.id);
+  });
+
   it('saves and pins posts privately, and shares projects into communities and to followers', async () => {
     const node = person('Martin');
     await node.createProject({ name: 'Weave', description: 'p2p' });

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('weave', {
   openApp: (url: string, title: string) => ipcRenderer.invoke('weave:open-app', url, title),
   pickFolder: (title: string) => ipcRenderer.invoke('weave:pick-folder', title),
   show: () => ipcRenderer.invoke('weave:show'),
+  mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
   platform: process.platform,
   windowControl: (action: string) => ipcRenderer.invoke('weave:window', action),
   onWindowState: (listener: (state: { maximized: boolean; focused: boolean }) => void) => {

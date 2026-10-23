@@ -9,8 +9,9 @@ import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
+import { MentionsPanel } from './overlay.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applyMode, applySkin, bridge, bump, isActive, isUnread, loadMode, loadSkin, MODES, navigate, POST_LINK, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
+import { api, applyMode, applySkin, bridge, bump, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
@@ -349,15 +350,19 @@ function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: Space
   return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
 
-/** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. */
+/** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. Post addresses open here, not in a browser. */
 function openLink(link: string): void {
-  const post = POST_LINK.exec(link);
-  if (post) navigate(`#/post/${post[1]}`);
-  else toast('Paste this link into “Join with an invite link…” or “Add someone”');
+  const ref = postRefOfHref(link);
+  if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
+  if (!ref.startsWith('http')) return navigate(`#/post/${ref}`);
+  api<PostInfo>('post', ref).then(
+    (post) => navigate(postHref(post)),
+    () => toast("This post isn't on this computer. It may be in a project or community you're not in.", 'error'),
+  );
 }
 bridge.onLink(openLink);
 document.addEventListener('click', (event) => {
-  const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"]');
+  const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"], a[href^="http://weave.localhost"]');
   if (!anchor) return;
   event.preventDefault();
   openLink(anchor.getAttribute('href')!);
@@ -481,6 +486,7 @@ function Shell() {
             { label: 'People', onClick: () => navigate('#/people') },
             { label: 'My hub', onClick: () => navigate('#/space') },
             { label: 'Keys & devices', onClick: () => navigate('#/keys') },
+            ...(bridge.mentions ? [{ label: 'Mentions panel', onClick: () => void bridge.mentions!('show') }] : []),
             'sep',
             { label: 'Refresh', onClick: bump },
             { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
@@ -573,7 +579,9 @@ function App() {
   };
   return (
     <>
-      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : (
+      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : location.hash.startsWith('#/overlay') ? (
+        <MentionsPanel />
+      ) : (
         <>
           <Shell />
           <AgentsOffer />

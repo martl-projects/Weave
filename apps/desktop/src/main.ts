@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
@@ -61,12 +61,24 @@ async function connect(): Promise<void> {
   const signal = watching.signal;
   daemon = await ensureDaemon(home);
   daemon.client
-    .watch((item) => window?.webContents.send('weave:event', item), signal)
+    .watch((item) => {
+      window?.webContents.send('weave:event', item);
+      mentions?.webContents.send('weave:event', item);
+      // An agent pointed to a post: the panel comes up beside the work.
+      if (item.kind === 'weave.mention') showMentions(false);
+    }, signal)
     .catch((error: Error) => console.error('weave: event stream ended:', error.message))
     .finally(() => {
       // The daemon went away (restarted, crashed): find or start it again, and tell the window to refresh.
       if (signal.aborted || quitting) return;
-      setTimeout(() => void connect().then(() => window?.webContents.send('weave:event', null), () => {}), 1000);
+      setTimeout(
+        () =>
+          void connect().then(() => {
+            window?.webContents.send('weave:event', null);
+            mentions?.webContents.send('weave:event', null);
+          }, () => {}),
+        1000,
+      );
     });
 }
 
@@ -110,6 +122,60 @@ function showWindow(): void {
 
 ipcMain.handle('weave:show', () => showWindow());
 
+let mentions: BrowserWindow | undefined;
+
+/**
+ * The Mentions panel: a small window that stays on top beside your work (Claude
+ * Code), with the posts agents point to. It comes up by itself, without taking
+ * the focus, when a new one arrives; closing it only hides it.
+ */
+function showMentions(focus = true): void {
+  if (mentions) {
+    if (focus) mentions.show();
+    else if (!mentions.isVisible()) mentions.showInactive();
+    return;
+  }
+  const area = screen.getPrimaryDisplay().workArea;
+  const panel = new BrowserWindow({
+    width: 380,
+    height: 600,
+    x: area.x + area.width - 380 - 16,
+    y: area.y + 16,
+    minWidth: 300,
+    minHeight: 240,
+    title: 'Weave · Mentions',
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c111d' : '#f4f5f7',
+    webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  mentions = panel;
+  panel.setAlwaysOnTop(true, 'floating');
+  panel.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    panel.hide();
+  });
+  panel.on('closed', () => (mentions = undefined));
+  // Links open in the browser, never inside the panel.
+  panel.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  panel.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file:')) event.preventDefault();
+  });
+  panel.once('ready-to-show', () => (focus ? panel.show() : panel.showInactive()));
+  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
+}
+
+ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' ? mentions?.hide() : showMentions()));
+
 /** The buttons of the app's own title bar. Close hides to the tray like the system's close would. */
 ipcMain.handle('weave:window', (_event, action: string) => {
   if (!window) return;
@@ -138,6 +204,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Open Weave', click: showWindow },
+      { label: 'Mentions panel', click: () => showMentions() },
       { type: 'separator' },
       { label: 'Quit Weave', click: () => app.quit() },
     ]),
