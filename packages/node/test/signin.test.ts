@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { WeaveNode, closeOpenStores } from "../src/index.ts";
-import { AzureStub, OidcStub, VaultStub } from "./helpers/stubs.ts";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
 let oidc: OidcStub;
@@ -20,16 +20,13 @@ afterAll(async () => {
 });
 
 function dir(): string {
-  const made = mkdtempSync(join(tmpdir(), "weave-signin-"));
+  const made = mkdtempSync(join(tmpdir(), 'weave-signin-'));
   dirs.push(made);
   return made;
 }
-const sync = (from: WeaveNode, to: WeaveNode) =>
-  from.replica.events().forEach((e) => to.replica.ingest(e));
+const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
 const syncAll = (all: WeaveNode[]) => {
-  for (let round = 0; round < 2; round++)
-    for (const from of all)
-      for (const to of all) if (from !== to) sync(from, to);
+  for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) sync(from, to);
 };
 const settle = () => new Promise((r) => setTimeout(r, 300));
 
@@ -37,53 +34,30 @@ const settle = () => new Promise((r) => setTimeout(r, 300));
 async function browser(url: string): Promise<void> {
   let next = url;
   for (let hop = 0; hop < 5; hop++) {
-    const res = await fetch(next, { redirect: "manual" });
-    const to = res.headers.get("location");
+    const res = await fetch(next, { redirect: 'manual' });
+    const to = res.headers.get('location');
     if (!to) return;
     next = new URL(to, next).toString();
   }
 }
 
-describe("signing in with a company account", { timeout: 120_000 }, () => {
-  it("enrolls through the browser, and stays signed in by itself: tokens renew, the company keeps vouching", async () => {
-    vault.createKey("acme-signin");
-    const acme = WeaveNode.init("Acme", dir());
+describe('signing in with a company account', { timeout: 120_000 }, () => {
+  it('enrolls through the browser, and stays signed in by itself: tokens renew, the company keeps vouching', async () => {
+    vault.createKey('acme-signin');
+    const acme = WeaveNode.init('Acme', dir());
     acme.kmsCredentials = { token: vault.rootToken };
-    await acme.createCompany({
-      name: "Acme",
-      provider: {
-        kind: "vault",
-        address: vault.address,
-        key: "acme-signin",
-        jwt: { role: "employees" },
-      },
-      issuer: oidc.issuer,
-      audience: "weave-app",
-      admins: "weave-admins",
-    });
+    await acme.createCompany({ name: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-signin', jwt: { role: 'employees' } }, issuer: oidc.issuer, audience: 'weave-app', admins: 'weave-admins' });
     await settle();
     // The company vouches for an hour at a time here, so renewing comes due.
-    acme.config = {
-      ...acme.config,
-      attestor: { ...acme.config.attestor!, hours: 1 },
-    };
+    acme.config = { ...acme.config, attestor: { ...acme.config.attestor!, hours: 1 } };
 
     // The link says where to sign in; the person signs in in the browser, no token by hand.
-    oidc.loginAs = {
-      sub: "lena-oid",
-      email: "lena@acme.example",
-      name: "Lena Brandt",
-      groups: ["employees"],
-    };
+    oidc.loginAs = { sub: 'lena-oid', email: 'lena@acme.example', name: 'Lena Brandt', groups: ['employees'] };
     const opened: string[] = [];
-    const lena = await WeaveNode.enroll(await acme.enrollLink(), dir(), {
-      open: (url) => (opened.push(url), browser(url)),
-    });
-    expect(new URL(opened[0]).searchParams.get("client_id")).toBe("weave-app");
-    expect(new URL(opened[0]).searchParams.get("code_challenge_method")).toBe(
-      "S256",
-    );
-    expect((await lena.whoami()).name).toBe("Lena Brandt");
+    const lena = await WeaveNode.enroll(await acme.enrollLink(), dir(), { open: (url) => (opened.push(url), browser(url)) });
+    expect(new URL(opened[0]).searchParams.get('client_id')).toBe('weave-app');
+    expect(new URL(opened[0]).searchParams.get('code_challenge_method')).toBe('S256');
+    expect((await lena.whoami()).name).toBe('Lena Brandt');
 
     const all = [acme, lena];
     syncAll(all);
@@ -93,20 +67,14 @@ describe("signing in with a company account", { timeout: 120_000 }, () => {
     await acme.reconcile();
     syncAll(all);
     const first = await lena.signInStatus();
-    expect(first).toMatchObject({
-      company: true,
-      name: "Acme",
-      account: "lena@acme.example",
-      renews: true,
-    });
+    expect(first).toMatchObject({ company: true, name: 'Acme', account: 'lena@acme.example', renews: true });
     expect(first.vouchedUntil).toBeDefined();
 
     // An hour on: the token has run out and the vouching nearly has. Lena's node renews both by itself.
     const later = () => Date.now() + 61 * 60_000;
     lena.clock = later;
     oidc.now = later;
-    const signIns = () =>
-      lena.replica.events((e) => e.author === lena.identity.author).length;
+    const signIns = () => lena.replica.events((e) => e.author === lena.identity.author).length;
     const before = signIns();
     await lena.reconcile();
     expect(oidc.refreshes).toBe(1);
@@ -117,47 +85,24 @@ describe("signing in with a company account", { timeout: 120_000 }, () => {
     syncAll(all);
     await acme.reconcile();
     syncAll(all);
-    expect(
-      (await acme.members("Acme")).find((m) => m.name === "Lena Brandt")
-        ?.attested?.subject,
-    ).toBe("lena-oid");
+    expect((await acme.members('Acme')).find((m) => m.name === 'Lena Brandt')?.attested?.subject).toBe('lena-oid');
     for (const node of all) await node.close();
   });
 
-  it("reaches Azure Key Vault as the person, with a token from their own sign-in, until Entra blocks them", async () => {
+  it('reaches Azure Key Vault as the person, with a token from their own sign-in, until Entra blocks them', async () => {
     const azure = await new AzureStub(oidc).start();
     try {
-      azure.createKey("acme");
-      const acme = WeaveNode.init("Acme", dir());
+      azure.createKey('acme');
+      const acme = WeaveNode.init('Acme', dir());
       // The company's server: its own app's secret.
       acme.kmsCredentials = { azureClientSecret: azure.secret };
-      await acme.createCompany({
-        name: "Acme",
-        provider: {
-          kind: "azure",
-          vault: azure.url,
-          key: "acme",
-          tenant: "acme",
-          clientId: "weave-server",
-          authority: azure.url,
-        },
-        issuer: oidc.issuer,
-        audience: "weave-app",
-        admins: "weave-admins",
-      });
+      await acme.createCompany({ name: 'Acme', provider: { kind: 'azure', vault: azure.url, key: 'acme', tenant: 'acme', clientId: 'weave-server', authority: azure.url }, issuer: oidc.issuer, audience: 'weave-app', admins: 'weave-admins' });
       await settle();
-      await acme.say({ space: "Acme", text: "welcome" });
+      await acme.say({ space: 'Acme', text: 'welcome' });
 
       // An employee signs in in the browser; their node gets Key Vault tokens issued to them, from that sign-in.
-      oidc.loginAs = {
-        sub: "kofi-oid",
-        email: "kofi@acme.example",
-        name: "Kofi Mensah",
-        groups: ["employees"],
-      };
-      const kofi = await WeaveNode.enroll(await acme.enrollLink(), dir(), {
-        open: browser,
-      });
+      oidc.loginAs = { sub: 'kofi-oid', email: 'kofi@acme.example', name: 'Kofi Mensah', groups: ['employees'] };
+      const kofi = await WeaveNode.enroll(await acme.enrollLink(), dir(), { open: browser });
       const all = [acme, kofi];
       syncAll(all);
       await kofi.reconcile();
@@ -167,24 +112,16 @@ describe("signing in with a company account", { timeout: 120_000 }, () => {
       syncAll(all);
       await kofi.reconcile();
       expect(oidc.delegations).toBeGreaterThan(0);
-      expect(
-        azure.log.some((l) => l.op === "unwrapkey" && l.sub === "kofi-oid"),
-      ).toBe(true);
-      expect((await kofi.messages("Acme")).map((m) => m.text)).toContain(
-        "welcome",
-      );
+      expect(azure.log.some((l) => l.op === 'unwrapkey' && l.sub === 'kofi-oid')).toBe(true);
+      expect((await kofi.messages('Acme')).map((m) => m.text)).toContain('welcome');
 
       // Blocked in Entra: no more tokens for Key Vault, so once the key's time and the offline allowance (8 hours) are up, nothing opens.
-      oidc.disabled.add("kofi-oid");
-      azure.disable("kofi-oid");
+      oidc.disabled.add('kofi-oid');
+      azure.disable('kofi-oid');
       kofi.clock = () => Date.now() + 9 * 3_600_000;
       await kofi.reconcile();
-      expect((await kofi.messages("Acme")).map((m) => m.text)).not.toContain(
-        "welcome",
-      );
-      expect((await kofi.spaces("group"))[0].managed?.problem).toMatch(
-        /sign in again|refused/,
-      );
+      expect((await kofi.messages('Acme')).map((m) => m.text)).not.toContain('welcome');
+      expect((await kofi.spaces('group'))[0].managed?.problem).toMatch(/sign in again|refused/);
       for (const node of all) await node.close();
     } finally {
       await azure.stop();

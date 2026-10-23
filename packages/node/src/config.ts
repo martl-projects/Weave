@@ -1,4 +1,4 @@
-import { readJson, writeJson, type Home } from "./home.ts";
+import { readJson, writeJson, type Home } from './home.ts';
 
 export interface Config {
   /** Topics this node joins on the DHT. */
@@ -40,53 +40,17 @@ export function loadConfig(home: Home): Config {
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
     // A company's node (stages 6 and 12): written by weave company create and friends, read back here.
-    ...(stored.attestor &&
-    typeof stored.attestor.issuer === "string" &&
-    typeof stored.attestor.audience === "string"
-      ? {
-          attestor: {
-            issuer: stored.attestor.issuer,
-            audience: stored.attestor.audience,
-            ...(typeof stored.attestor.hours === "number"
-              ? { hours: stored.attestor.hours }
-              : {}),
-          },
-        }
+    ...(stored.attestor && typeof stored.attestor.issuer === 'string' && typeof stored.attestor.audience === 'string'
+      ? { attestor: { issuer: stored.attestor.issuer, audience: stored.attestor.audience, ...(typeof stored.attestor.hours === 'number' ? { hours: stored.attestor.hours } : {}) } }
       : {}),
     ...(stored.archive === true ? { archive: true } : {}),
     ...(stored.standby === true ? { standby: true } : {}),
-    ...(stored.scim && Number.isInteger(stored.scim.port)
-      ? {
-          scim: {
-            port: stored.scim.port,
-            ...(stored.scim.invite === true ? { invite: true } : {}),
-          },
-        }
-      : {}),
+    ...(stored.scim && Number.isInteger(stored.scim.port) ? { scim: { port: stored.scim.port, ...(stored.scim.invite === true ? { invite: true } : {}) } } : {}),
     ...(stored.console && Number.isInteger(stored.console.port)
-      ? {
-          console: {
-            port: stored.console.port,
-            ...(typeof stored.console.url === "string"
-              ? { url: stored.console.url }
-              : {}),
-            ...(typeof stored.console.clientId === "string"
-              ? { clientId: stored.console.clientId }
-              : {}),
-          },
-        }
+      ? { console: { port: stored.console.port, ...(typeof stored.console.url === 'string' ? { url: stored.console.url } : {}), ...(typeof stored.console.clientId === 'string' ? { clientId: stored.console.clientId } : {}) } }
       : {}),
-    ...(stored.updates && typeof stored.updates === "object"
-      ? {
-          updates: {
-            ...(typeof stored.updates.project === "string"
-              ? { project: stored.updates.project }
-              : {}),
-            ...(typeof stored.updates.repo === "string"
-              ? { repo: stored.updates.repo }
-              : {}),
-          },
-        }
+    ...(stored.updates && typeof stored.updates === 'object'
+      ? { updates: { ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}), ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}) } }
       : {}),
   };
 }
@@ -97,8 +61,7 @@ export function saveConfig(home: Home, config: Config): void {
 
 /** Parses `host:port`. */
 export function parseBootstrap(value: string): { host: string; port: number } {
-  const [host, port] = value.split(":");
-  if (!host || !Number.isInteger(Number(port)))
-    throw new Error(`bootstrap must be host:port, got "${value}"`);
+  const [host, port] = value.split(':');
+  if (!host || !Number.isInteger(Number(port))) throw new Error(`bootstrap must be host:port, got "${value}"`);
   return { host, port: Number(port) };
 }

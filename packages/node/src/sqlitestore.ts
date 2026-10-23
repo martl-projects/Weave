@@ -1,26 +1,8 @@
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  eventId,
-  eventIdV2,
-  MemoryStore,
-  type ControlEventV2,
-  type Did,
-  type EventV2,
-  type Json,
-  type LogStore,
-  type StoredV2,
-  type WeaveEvent,
-} from "@weave/core";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
+import { eventId, eventIdV2, MemoryStore, type ControlEventV2, type Did, type EventV2, type Json, type LogStore, type StoredV2, type WeaveEvent } from '@weave/core';
 
 /*
  * The event store on SQLite (node:sqlite, built into Node 24 and Electron's
@@ -34,7 +16,7 @@ import {
  * logs.v1-imported/; on any doubt it leaves them as they are and says so.
  */
 
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = '2';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -76,17 +58,14 @@ CREATE TABLE IF NOT EXISTS keep (stream TEXT NOT NULL, tag TEXT NOT NULL, data T
 `;
 
 /** node:sqlite, without the "experimental" warning Node 24 prints for it (and only that one). */
-function sqlite(): typeof import("node:sqlite") {
+function sqlite(): typeof import('node:sqlite') {
   const emit = process.emitWarning;
   process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
-    if (/SQLite/i.test(typeof warning === "string" ? warning : warning.message))
-      return;
+    if (/SQLite/i.test(typeof warning === 'string' ? warning : warning.message)) return;
     return (emit as (...a: unknown[]) => void).call(process, warning, ...rest);
   }) as typeof process.emitWarning;
   try {
-    return createRequire(import.meta.url)(
-      "node:sqlite",
-    ) as typeof import("node:sqlite");
+    return createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
   } finally {
     process.emitWarning = emit;
   }
@@ -112,26 +91,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<
-    | "insert"
-    | "byId"
-    | "byNumber"
-    | "chainAt"
-    | "all"
-    | "bySigner"
-    | "inSpace"
-    | "body"
-    | "putBody"
-    | "drop"
-    | "forget"
-    | "forgotten"
-    | "keepPut"
-    | "keepTags"
-    | "keepItems"
-    | "keepBytes"
-    | "keepAll",
-    StatementSync
-  >;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -142,84 +102,39 @@ export class SqliteStore implements LogStore {
     const { DatabaseSync } = sqlite();
     this.#db = new DatabaseSync(path, { readOnly: !!options.readOnly });
     if (!options.readOnly) {
-      this.#db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
       this.#db.exec(SCHEMA);
-      this.#db
-        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-        .run("schema", SCHEMA_VERSION);
+      this.#db.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').run('schema', SCHEMA_VERSION);
     }
-    this.#get = this.#db.prepare(
-      "SELECT json FROM events WHERE signer = ? AND seq = ?",
-    );
-    this.#range = this.#db.prepare(
-      "SELECT json FROM events WHERE signer = ? AND seq BETWEEN ? AND ? ORDER BY seq",
-    );
-    this.#insert = this.#db.prepare(
-      "INSERT INTO events (id, signer, seq, author, time, kind, scope, v, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    const heads = this.#db
-      .prepare(
-        "SELECT e.json FROM events e JOIN (SELECT signer, MAX(seq) AS seq FROM events GROUP BY signer) h ON e.signer = h.signer AND e.seq = h.seq",
-      )
-      .all() as Array<{ json: string }>;
+    this.#get = this.#db.prepare('SELECT json FROM events WHERE signer = ? AND seq = ?');
+    this.#range = this.#db.prepare('SELECT json FROM events WHERE signer = ? AND seq BETWEEN ? AND ? ORDER BY seq');
+    this.#insert = this.#db.prepare('INSERT INTO events (id, signer, seq, author, time, kind, scope, v, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const heads = this.#db.prepare('SELECT e.json FROM events e JOIN (SELECT signer, MAX(seq) AS seq FROM events GROUP BY signer) h ON e.signer = h.signer AND e.seq = h.seq').all() as Array<{ json: string }>;
     for (const row of heads) {
       const event = JSON.parse(row.json) as WeaveEvent;
       this.#heads.set(event.signer, event);
     }
     this.#v2 = {
-      insert: this.#db.prepare(
-        "INSERT INTO events2 (id, v2id, class, author, signer, space, n, seq, time, kind, body, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ),
-      byId: this.#db.prepare("SELECT id, json FROM events2 WHERE id = ?"),
-      byNumber: this.#db.prepare(
-        "SELECT id, json FROM events2 WHERE signer = ? AND n = ?",
-      ),
-      chainAt: this.#db.prepare(
-        "SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?",
-      ),
-      all: this.#db.prepare(
-        "SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body",
-      ),
-      bySigner: this.#db.prepare(
-        "SELECT id, json FROM events2 WHERE signer = ? ORDER BY n",
-      ),
-      inSpace: this.#db.prepare(
-        "SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time",
-      ),
-      body: this.#db.prepare("SELECT json FROM bodies WHERE hash = ?"),
-      putBody: this.#db.prepare(
-        "INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)",
-      ),
-      drop: this.#db.prepare("DELETE FROM bodies WHERE hash = ?"),
-      forget: this.#db.prepare(
-        "INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)",
-      ),
-      forgotten: this.#db.prepare(
-        "SELECT 1 AS yes FROM forgotten WHERE hash = ?",
-      ),
-      keepPut: this.#db.prepare(
-        "INSERT OR REPLACE INTO keep (stream, tag, data, time) VALUES (?, ?, ?, ?)",
-      ),
-      keepTags: this.#db.prepare("SELECT tag FROM keep WHERE stream = ?"),
-      keepItems: this.#db.prepare(
-        "SELECT tag, data FROM keep WHERE stream = ?",
-      ),
-      keepBytes: this.#db.prepare(
-        "SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep WHERE stream = ?",
-      ),
-      keepAll: this.#db.prepare(
-        "SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep",
-      ),
+      insert: this.#db.prepare('INSERT INTO events2 (id, v2id, class, author, signer, space, n, seq, time, kind, body, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+      byId: this.#db.prepare('SELECT id, json FROM events2 WHERE id = ?'),
+      byNumber: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? AND n = ?'),
+      chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
+      all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
+      bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
+      inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time'),
+      body: this.#db.prepare('SELECT json FROM bodies WHERE hash = ?'),
+      putBody: this.#db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)'),
+      drop: this.#db.prepare('DELETE FROM bodies WHERE hash = ?'),
+      forget: this.#db.prepare('INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)'),
+      forgotten: this.#db.prepare('SELECT 1 AS yes FROM forgotten WHERE hash = ?'),
+      keepPut: this.#db.prepare('INSERT OR REPLACE INTO keep (stream, tag, data, time) VALUES (?, ?, ?, ?)'),
+      keepTags: this.#db.prepare('SELECT tag FROM keep WHERE stream = ?'),
+      keepItems: this.#db.prepare('SELECT tag, data FROM keep WHERE stream = ?'),
+      keepBytes: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep WHERE stream = ?'),
+      keepAll: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep'),
     };
-    for (const row of this.#db
-      .prepare("SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer")
-      .all() as Array<{ signer: Did; n: number }>)
-      this.#numbers.set(row.signer, row.n);
-    const chainHeads = this.#db
-      .prepare(
-        "SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq",
-      )
-      .all() as Array<{ json: string }>;
+    for (const row of this.#db.prepare('SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer').all() as Array<{ signer: Did; n: number }>) this.#numbers.set(row.signer, row.n);
+    const chainHeads = this.#db.prepare('SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq').all() as Array<{ json: string }>;
     for (const row of chainHeads) {
       const event = JSON.parse(row.json) as ControlEventV2;
       this.#chainHeads.set(`${event.signer} ${event.space}`, event);
@@ -239,28 +154,13 @@ export class SqliteStore implements LogStore {
   range(signer: Did, from: number, to?: number): WeaveEvent[] {
     const last = to ?? this.#heads.get(signer)?.seq ?? 0;
     if (last < from) return [];
-    return (
-      this.#range.all(signer, Math.max(1, from), last) as Array<{
-        json: string;
-      }>
-    ).map((row) => JSON.parse(row.json) as WeaveEvent);
+    return (this.#range.all(signer, Math.max(1, from), last) as Array<{ json: string }>).map((row) => JSON.parse(row.json) as WeaveEvent);
   }
 
   append(event: WeaveEvent): void {
     const head = this.#heads.get(event.signer)?.seq ?? 0;
-    if (event.seq !== head + 1)
-      throw new Error(`out-of-order append: seq ${event.seq} after ${head}`);
-    this.#insert.run(
-      eventId(event),
-      event.signer,
-      event.seq,
-      event.author,
-      event.time,
-      event.kind,
-      event.scope,
-      event.v,
-      JSON.stringify(event),
-    );
+    if (event.seq !== head + 1) throw new Error(`out-of-order append: seq ${event.seq} after ${head}`);
+    this.#insert.run(eventId(event), event.signer, event.seq, event.author, event.time, event.kind, event.scope, event.v, JSON.stringify(event));
     this.#heads.set(event.signer, event);
   }
 
@@ -271,30 +171,11 @@ export class SqliteStore implements LogStore {
   add2({ id, event }: StoredV2): void {
     const chainKey = `${event.signer} ${event.space}`;
     const chainHead = this.#chainHeads.get(chainKey)?.seq ?? 0;
-    if (event.class === "control" && event.seq !== chainHead + 1)
-      throw new Error(
-        `out-of-order control event: seq ${event.seq} after ${chainHead}`,
-      );
-    const seq = event.class === "control" ? event.seq : null;
-    this.#v2.insert.run(
-      id,
-      eventIdV2(event),
-      event.class,
-      event.author,
-      event.signer,
-      event.space,
-      event.n,
-      seq,
-      event.time,
-      event.kind,
-      event.class === "content" ? event.body : null,
-      JSON.stringify(event),
-    );
-    this.#numbers.set(
-      event.signer,
-      Math.max(this.#numbers.get(event.signer) ?? 0, event.n),
-    );
-    if (event.class === "control") this.#chainHeads.set(chainKey, event);
+    if (event.class === 'control' && event.seq !== chainHead + 1) throw new Error(`out-of-order control event: seq ${event.seq} after ${chainHead}`);
+    const seq = event.class === 'control' ? event.seq : null;
+    this.#v2.insert.run(id, eventIdV2(event), event.class, event.author, event.signer, event.space, event.n, seq, event.time, event.kind, event.class === 'content' ? event.body : null, JSON.stringify(event));
+    this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
+    if (event.class === 'control') this.#chainHeads.set(chainKey, event);
   }
 
   get2(id: string): StoredV2 | undefined {
@@ -310,8 +191,7 @@ export class SqliteStore implements LogStore {
   }
 
   chainAt(signer: Did, space: string, seq: number): ControlEventV2 | undefined {
-    const row = this.#v2.chainAt.get(signer, space, seq) as
-      { json: string } | undefined;
+    const row = this.#v2.chainAt.get(signer, space, seq) as { json: string } | undefined;
     return row ? (JSON.parse(row.json) as ControlEventV2) : undefined;
   }
 
@@ -320,36 +200,19 @@ export class SqliteStore implements LogStore {
   }
 
   all2(): StoredV2[] {
-    return (
-      this.#v2.all.all() as Array<{
-        id: string;
-        json: string;
-        body: string | null;
-      }>
-    ).map((row) =>
-      row.body === null
-        ? stored(row)!
-        : { ...stored(row)!, body: JSON.parse(row.body) as Json },
-    );
+    return (this.#v2.all.all() as Array<{ id: string; json: string; body: string | null }>).map((row) => (row.body === null ? stored(row)! : { ...stored(row)!, body: JSON.parse(row.body) as Json }));
   }
 
   signers2(): Did[] {
     return [...this.#numbers.keys()];
   }
 
-  inSpace2(space: string, since = "", until = "\uffff"): StoredV2[] {
-    return (
-      this.#v2.inSpace.all(space, since, until) as Array<{
-        id: string;
-        json: string;
-      }>
-    ).map((row) => stored(row)!);
+  inSpace2(space: string, since = '', until = '\uffff'): StoredV2[] {
+    return (this.#v2.inSpace.all(space, since, until) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }
 
   range2(signer: Did): StoredV2[] {
-    return (
-      this.#v2.bySigner.all(signer) as Array<{ id: string; json: string }>
-    ).map((row) => stored(row)!);
+    return (this.#v2.bySigner.all(signer) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }
 
   body(hash: string): Json | undefined {
@@ -379,46 +242,31 @@ export class SqliteStore implements LogStore {
   }
 
   keepTags(stream: string): string[] {
-    return (this.#v2.keepTags.all(stream) as Array<{ tag: string }>).map(
-      (r) => r.tag,
-    );
+    return (this.#v2.keepTags.all(stream) as Array<{ tag: string }>).map((r) => r.tag);
   }
 
   keepItems(stream: string): Array<{ tag: string; data: string }> {
-    return this.#v2.keepItems.all(stream) as Array<{
-      tag: string;
-      data: string;
-    }>;
+    return this.#v2.keepItems.all(stream) as Array<{ tag: string; data: string }>;
   }
 
   keepBytes(stream?: string): number {
-    const row = (
-      stream ? this.#v2.keepBytes.get(stream) : this.#v2.keepAll.get()
-    ) as { n: number };
+    const row = (stream ? this.#v2.keepBytes.get(stream) : this.#v2.keepAll.get()) as { n: number };
     return Number(row.n);
   }
 
   /** How many events each signer has, from the table itself (for checking an import). */
   counts(): Map<Did, number> {
-    const rows = this.#db
-      .prepare("SELECT signer, COUNT(*) AS n FROM events GROUP BY signer")
-      .all() as Array<{ signer: Did; n: number }>;
+    const rows = this.#db.prepare('SELECT signer, COUNT(*) AS n FROM events GROUP BY signer').all() as Array<{ signer: Did; n: number }>;
     return new Map(rows.map((r) => [r.signer, r.n]));
   }
 
   meta(key: string): string | undefined {
-    const row = this.#db
-      .prepare("SELECT value FROM meta WHERE key = ?")
-      .get(key) as { value: string } | undefined;
+    const row = this.#db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value;
   }
 
   setMeta(key: string, value: string): void {
-    this.#db
-      .prepare(
-        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-      )
-      .run(key, value);
+    this.#db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(key, value);
   }
 
   /**
@@ -426,23 +274,18 @@ export class SqliteStore implements LogStore {
    * the counts per signer, and mark the import done; all of it or nothing.
    */
   importEvents(events: WeaveEvent[]): void {
-    this.#db.exec("BEGIN");
+    this.#db.exec('BEGIN');
     const heads = new Map(this.#heads);
     try {
       for (const event of events) this.append(event);
       const expected = new Map<Did, number>();
-      for (const e of events)
-        expected.set(e.signer, (expected.get(e.signer) ?? 0) + 1);
+      for (const e of events) expected.set(e.signer, (expected.get(e.signer) ?? 0) + 1);
       const counts = this.counts();
-      for (const [signer, n] of expected)
-        if (counts.get(signer) !== n)
-          throw new Error(
-            `import of ${signer} stored ${counts.get(signer) ?? 0} of ${n} events`,
-          );
-      this.setMeta("imported", new Date().toISOString());
-      this.#db.exec("COMMIT");
+      for (const [signer, n] of expected) if (counts.get(signer) !== n) throw new Error(`import of ${signer} stored ${counts.get(signer) ?? 0} of ${n} events`);
+      this.setMeta('imported', new Date().toISOString());
+      this.#db.exec('COMMIT');
     } catch (error) {
-      this.#db.exec("ROLLBACK");
+      this.#db.exec('ROLLBACK');
       this.#heads.clear();
       for (const [signer, head] of heads) this.#heads.set(signer, head);
       throw error;
@@ -457,18 +300,14 @@ export class SqliteStore implements LogStore {
     const heads = new Map(this.#heads);
     const numbers = new Map(this.#numbers);
     const chainHeads = new Map(this.#chainHeads);
-    this.#db.exec("BEGIN");
+    this.#db.exec('BEGIN');
     try {
       const result = fn();
-      this.#db.exec("COMMIT");
+      this.#db.exec('COMMIT');
       return result;
     } catch (error) {
-      this.#db.exec("ROLLBACK");
-      for (const [map, saved] of [
-        [this.#heads, heads],
-        [this.#numbers, numbers],
-        [this.#chainHeads, chainHeads],
-      ] as Array<[Map<unknown, unknown>, Map<unknown, unknown>]>) {
+      this.#db.exec('ROLLBACK');
+      for (const [map, saved] of [[this.#heads, heads], [this.#numbers, numbers], [this.#chainHeads, chainHeads]] as Array<[Map<unknown, unknown>, Map<unknown, unknown>]>) {
         map.clear();
         for (const [k, v] of saved) map.set(k, v);
       }
@@ -478,7 +317,7 @@ export class SqliteStore implements LogStore {
 
   /** A consistent copy of the database, while it's open. */
   backupTo(path: string): void {
-    this.#db.prepare("VACUUM INTO ?").run(path);
+    this.#db.prepare('VACUUM INTO ?').run(path);
   }
 
   /** Write every log out as JSON lines, one file per signer, like homes before SQLite kept them. */
@@ -487,10 +326,7 @@ export class SqliteStore implements LogStore {
     let events = 0;
     for (const signer of this.signers()) {
       const log = this.range(signer, 1);
-      writeFileSync(
-        join(dir, jsonlName(signer)),
-        log.map((e) => JSON.stringify(e)).join("\n") + "\n",
-      );
+      writeFileSync(join(dir, jsonlName(signer)), log.map((e) => JSON.stringify(e)).join('\n') + '\n');
       events += log.length;
     }
     return { files: this.signers().length, events };
@@ -508,15 +344,14 @@ const stored = (row: unknown): StoredV2 | undefined => {
 };
 
 /** `did:key:z6Mk…` → `z6Mk….jsonl` (colons are not allowed in Windows file names). */
-export const jsonlName = (signer: Did): string =>
-  `${signer.slice("did:key:".length)}.jsonl`;
+export const jsonlName = (signer: Did): string => `${signer.slice('did:key:'.length)}.jsonl`;
 
 /** JSON-lines logs as homes before SQLite wrote them: per file, events up to the first torn or out-of-order line. */
 export function readJsonlLogs(dir: string): WeaveEvent[] {
   if (!existsSync(dir)) return [];
   const memory = new MemoryStore();
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".jsonl"))) {
-    for (const line of readFileSync(join(dir, file), "utf8").split("\n")) {
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.jsonl'))) {
+    for (const line of readFileSync(join(dir, file), 'utf8').split('\n')) {
       if (!line.trim()) continue;
       try {
         memory.append(JSON.parse(line) as WeaveEvent);
@@ -541,20 +376,16 @@ export interface OpenedStore {
  * older home once. Throws when an import fails; the logs are then untouched.
  */
 export function openStore(home: { dir: string; logs: string }): OpenedStore {
-  const store = new SqliteStore(join(home.dir, "weave.db"));
+  const store = new SqliteStore(join(home.dir, 'weave.db'));
   if (!existsSync(home.logs)) return { store };
   // Imported before, but stopped before the rename: finish it.
-  if (store.meta("imported")) {
+  if (store.meta('imported')) {
     renameSync(home.logs, nextFree(`${home.logs}.v1-imported`));
     return { store };
   }
   const events = readJsonlLogs(home.logs);
   // Both, never imported (someone copied files in by hand): keep the database, touch nothing, say so.
-  if (store.signers().length && events.length)
-    return {
-      store,
-      warning: `${home.dir} has weave.db and also logs/ that were never imported; using weave.db and leaving logs/ as it is`,
-    };
+  if (store.signers().length && events.length) return { store, warning: `${home.dir} has weave.db and also logs/ that were never imported; using weave.db and leaving logs/ as it is` };
   try {
     store.importEvents(events);
   } catch (error) {
