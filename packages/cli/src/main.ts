@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
+  daemonInfo,
+  stopDaemon,
   followDaemon,
   checkManifest,
   MANIFEST_EXAMPLE,
@@ -67,6 +70,7 @@ A company's own projects and groups are its company spaces.
   restore                    set up this computer as another device of your identity, from your recovery words
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
+  daemon stop | restart      stop the running daemon properly (or restart it, e.g. for new code)   [--force: end it hard if it won't]
   status                     node status: peers, groups, projects, communities
   keystore [os|tpm|secure-enclave|yubikey|file]   where this computer keeps the key to your keys (hardware: tpm, secure-enclave, yubikey)
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
@@ -296,6 +300,7 @@ const { values, positionals } = parseArgs({
     reply: { type: 'string' },
     off: { type: 'boolean', default: false },
     'send-invites': { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
     always: { type: 'boolean', default: false },
     project: { type: 'string', short: 'p' },
     group: { type: 'string', short: 'g' },
@@ -360,9 +365,17 @@ const home = resolveHome(values.home);
 const [command, ...args] = positionals;
 
 /** The running daemon if there is one; otherwise the node opened directly (offline). */
+/** A release build of this command, or the source (development). */
+const BUILD: 'release' | 'dev' = typeof WEAVE_VERSION === 'string' ? 'release' : 'dev';
+
 async function backend(options: { needsDaemon?: boolean } = {}): Promise<Backend> {
   const daemon = await connectDaemon(home);
-  if (daemon) return daemon as unknown as Backend;
+  if (daemon) {
+    // A released command talking to a released daemon of another version: say so (never in development, never acted on).
+    const info = daemonInfo(home);
+    if (BUILD === 'release' && info?.build === 'release' && info.version && info.version !== VERSION) console.error(`weave: note: the running daemon is Weave ${info.version}, this is ${VERSION} (weave daemon restart)`);
+    return daemon as unknown as Backend;
+  }
   if (options.needsDaemon) throw new Error('no daemon running for this home — start one with "weave daemon"');
   return WeaveNode.open(home.dir);
 }
@@ -697,7 +710,33 @@ async function main(): Promise<void> {
     }
 
     case 'daemon': {
-      const daemon = await startDaemon(home.dir);
+      if (args[0] === 'stop') {
+        const stopped = await stopDaemon(home, { force: !!values.force });
+        return out({ stopped }, () => (stopped ? `stopped the daemon for ${home.dir}` : `no daemon running for ${home.dir}`));
+      }
+      if (args[0] === 'restart') {
+        const before = daemonInfo(home);
+        await stopDaemon(home, { force: !!values.force });
+        // The same program, detached: it outlives this command. Who started it stays as it was.
+        spawn(process.execPath, [...process.execArgv, process.argv[1], '--home', home.dir, 'daemon'], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          env: { ...process.env, WEAVE_DAEMON_STARTED_BY: before?.startedBy ?? 'cli' },
+        }).unref();
+        const started = Date.now();
+        while (Date.now() - started < 30_000) {
+          if (await connectDaemon(home)) {
+            const info = daemonInfo(home);
+            return out(info ?? {}, () => `restarted the daemon for ${home.dir} (pid ${info?.pid}, Weave ${info?.version ?? VERSION})`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        throw new Error('the daemon did not come back within 30 seconds (start it with weave daemon to see why)');
+      }
+      if (args[0]) throw new Error('usage: weave daemon [stop|restart] [--force]');
+      let shutdown = async () => {};
+      const daemon = await startDaemon(home.dir, { version: VERSION, build: BUILD, startedBy: process.env.WEAVE_DAEMON_STARTED_BY === 'app' ? 'app' : 'cli', onStopRequest: () => void shutdown() });
       const status = await daemon.node.status();
       console.log(`weave daemon for ${status.name ?? status.did}`);
       console.log(`  home ${home.dir}\n  api  http://127.0.0.1:${daemon.port}\n  ${status.groups} groups, ${status.projects} projects, ${status.communities} communities`);
@@ -706,7 +745,7 @@ async function main(): Promise<void> {
         const item = daemon.node.itemFor(event);
         if (item && CONTENT_KINDS.includes(item.kind)) console.log(line(item));
       });
-      const shutdown = async () => {
+      shutdown = async () => {
         await daemon.stop();
         process.exit(0);
       };

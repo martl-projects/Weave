@@ -20,11 +20,12 @@ const MAX_BODY = 4 * 1024 * 1024;
  *
  *   POST /v1/rpc    {method, args}  calls one Backend method (allow-listed)
  *   GET  /v1/watch                  server-sent events: every new readable event
+ *   POST /v1/stop                   the daemon stops properly and exits (weave daemon stop, the app on quit)
  */
-export async function startApi(backend: Backend, port = 0): Promise<ApiServer> {
+export async function startApi(backend: Backend, port = 0, hooks: { stop?: () => void } = {}): Promise<ApiServer> {
   const token = randomBytes(24).toString('base64url');
   const server: Server = createServer((req, res) => {
-    handle(backend, token, req, res).catch((error: Error) => send(res, 400, { error: error.message }));
+    handle(backend, token, req, res, hooks).catch((error: Error) => send(res, 400, { error: error.message }));
   });
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   return {
@@ -38,7 +39,7 @@ export async function startApi(backend: Backend, port = 0): Promise<ApiServer> {
   };
 }
 
-async function handle(backend: Backend, token: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(backend: Backend, token: string, req: IncomingMessage, res: ServerResponse, hooks: { stop?: () => void }): Promise<void> {
   const host = (req.headers.host ?? '').split(':')[0];
   if (host !== '127.0.0.1' && host !== 'localhost') return send(res, 403, { error: 'forbidden host' });
   if (!authorized(req.headers.authorization, token)) return send(res, 401, { error: 'unauthorized' });
@@ -52,6 +53,11 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
     // JSON turns undefined arguments into null; turn them back so defaults apply.
     const params = (Array.isArray(args) ? args : []).map((a) => (a === null ? undefined : a));
     return send(res, 200, { result: (await fn.apply(backend, params)) ?? null });
+  }
+  if (route === 'POST /v1/stop' && hooks.stop) {
+    send(res, 200, { stopping: true });
+    // After the answer is out: stopping closes this server.
+    return void setImmediate(hooks.stop);
   }
   if (route === 'GET /v1/watch') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

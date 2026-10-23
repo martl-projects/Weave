@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { connectDaemon, type ApiClient, type Home } from '@weave/node/client';
+import { connectDaemon, daemonInfo, stopDaemon, type ApiClient, type Home } from '@weave/node/client';
 
 /*
  * The desktop app never loads the node itself: it talks to a daemon over the
@@ -56,11 +56,22 @@ export interface RunningDaemon {
   child?: ChildProcess;
 }
 
-export async function ensureDaemon(home: Home): Promise<RunningDaemon> {
+/**
+ * The daemon for this home: the one running, or a new one. A released app replaces a daemon another released app
+ * left running with another version (after an update); everything else is left alone: a daemon started by hand,
+ * and anything running from the source, so development is never interrupted.
+ */
+export async function ensureDaemon(home: Home, version: string): Promise<RunningDaemon> {
   const existing = await connectDaemon(home);
-  if (existing) return { client: existing };
+  if (existing) {
+    const info = daemonInfo(home);
+    const outdated = packaged && info?.build === 'release' && info.startedBy === 'app' && !!info.version && info.version !== version;
+    if (!outdated) return { client: existing };
+    console.log(`weave: replacing the daemon of Weave ${info!.version} with ${version}`);
+    await stopDaemon(home, { force: true });
+  }
 
-  const child = spawn(NODE, [CLI, '--home', home.dir, 'daemon'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, env: ENV });
+  const child = spawn(NODE, [CLI, '--home', home.dir, 'daemon'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, env: { ...ENV, WEAVE_DAEMON_STARTED_BY: 'app' } });
   const started = Date.now();
   while (Date.now() - started < 20_000) {
     if (child.exitCode !== null) throw new Error(`the Weave daemon exited (code ${child.exitCode})`);
@@ -70,4 +81,21 @@ export async function ensureDaemon(home: Home): Promise<RunningDaemon> {
   }
   child.kill();
   throw new Error('the Weave daemon did not start within 20 seconds');
+}
+
+/**
+ * Stop the daemon this app started, properly: it closes the node (unpublished keys, the database) before it exits.
+ * On Windows ending a process from outside skips all of that, so it's only the fallback.
+ */
+export async function stopOwnDaemon(daemon: RunningDaemon): Promise<void> {
+  const child = daemon.child;
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  try {
+    await daemon.client.stop();
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+  } catch {
+    // An older daemon, or not answering: end it.
+  }
+  if (child.exitCode === null) child.kill();
 }

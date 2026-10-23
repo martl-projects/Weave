@@ -11,8 +11,11 @@ export interface Daemon {
   stop(): Promise<void>;
 }
 
-/** Open the node in `dir`, go online and serve the local API. One daemon per home. */
-export async function startDaemon(dir?: string, options: { port?: number } = {}): Promise<Daemon> {
+/**
+ * Open the node in `dir`, go online and serve the local API. One daemon per home. `onStopRequest` runs when a
+ * client asks it to stop (POST /v1/stop); `version`, `build` and `startedBy` go into daemon.json for clients.
+ */
+export async function startDaemon(dir?: string, options: { port?: number; onStopRequest?: () => void } & Pick<DaemonInfo, 'version' | 'build' | 'startedBy'> = {}): Promise<Daemon> {
   const home = resolveHome(dir);
   if (await connectDaemon(home)) throw new Error(`a daemon is already running for ${home.dir}`);
 
@@ -20,8 +23,15 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
   await unlockHomeKey(home);
   const node = WeaveNode.open(home.dir);
   // Serve the API right away; joining the DHT can take a while (or never finish when offline).
-  const api = await startApi(node, options.port);
-  const info: DaemonInfo = { pid: process.pid, port: api.port, token: api.token };
+  const api = await startApi(node, options.port, { ...(options.onStopRequest ? { stop: options.onStopRequest } : {}) });
+  const info: DaemonInfo = {
+    pid: process.pid,
+    port: api.port,
+    token: api.token,
+    ...(options.version ? { version: options.version } : {}),
+    ...(options.build ? { build: options.build } : {}),
+    ...(options.startedBy ? { startedBy: options.startedBy } : {}),
+  };
   writeJson(home.daemon, info);
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
   // A company's node serves its user management and admins too (stage 12).
@@ -51,7 +61,8 @@ export async function startDaemon(dir?: string, options: { port?: number } = {})
       clearInterval(heartbeat);
       rmSync(home.daemon, { force: true });
       await api.close();
-      await online;
+      // Going online may never finish (no network, a bootstrap that doesn't answer): closing the node ends it anyway.
+      await Promise.race([online, new Promise((resolve) => setTimeout(resolve, 2000).unref())]);
       await node.close();
     },
   };

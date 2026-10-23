@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
 import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { hasCommand, macMenu } from './command.ts';
-import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
+import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
@@ -61,7 +61,7 @@ async function connect(): Promise<void> {
   watching.abort();
   watching = new AbortController();
   const signal = watching.signal;
-  daemon = await ensureDaemon(home);
+  daemon = await ensureDaemon(home, app.getVersion());
   daemon.client
     .watch((item) => window?.webContents.send('weave:event', item), signal)
     .catch((error: Error) => console.error('weave: event stream ended:', error.message))
@@ -292,8 +292,13 @@ app.on('before-quit', () => {
   quitting = true;
 });
 
-app.on('will-quit', () => {
+// The daemon this app started stops properly first (closing the node), then the app quits for real.
+let daemonStopped = false;
+app.on('will-quit', (event) => {
   quitting = true;
   watching.abort();
-  daemon?.child?.kill();
+  if (daemonStopped || !daemon?.child || daemon.child.exitCode !== null) return;
+  event.preventDefault();
+  daemonStopped = true;
+  void stopOwnDaemon(daemon).finally(() => app.quit());
 });
