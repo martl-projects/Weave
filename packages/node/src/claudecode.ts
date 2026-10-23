@@ -150,7 +150,8 @@ export function transcriptTitle(session: string, dir = claudeProjectsDir()): str
 
 /** Where the Claude desktop app writes its log (Windows, macOS). */
 export const claudeAppLog = (): string =>
-  process.platform === 'darwin' ? join(homedir(), 'Library', 'Logs', 'Claude', 'main.log') : join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Claude', 'logs', 'main.log');
+  process.env.WEAVE_CLAUDE_APP_LOG ??
+  (process.platform === 'darwin' ? join(homedir(), 'Library', 'Logs', 'Claude', 'main.log') : join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Claude', 'logs', 'main.log'));
 
 /** The session the Claude app shows: its own id, and the Claude Code session (transcript) it is, once known. */
 export interface FocusedSession {

@@ -981,6 +981,11 @@ export interface Backend {
   removeRoutine(input: { space?: string; id: string }): Promise<void>;
   /** Run a routine now: its item for today (or its first start), unless that exists already. */
   runRoutine(input: { space?: string; id: string }): Promise<PostInfo>;
+  /**
+   * A new session for this item is about to open in the Claude app (Ctrl+click): the next session you look at
+   * there that has no work items yet, within 15 minutes, gets it on its stack once the app says which session it is.
+   */
+  expectSession(input: { post: string; folder?: string }): Promise<void>;
   /** Remember a folder on this computer for a project (or community), for the next new session there. */
   rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
   /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
@@ -1155,7 +1160,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

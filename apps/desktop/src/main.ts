@@ -205,6 +205,8 @@ ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'se
     folder = picked.filePaths[0];
     if (target.post.space) await client.rememberFolder({ space: target.post.space.id, folder });
   }
+  // Weave gives the new session its item as soon as the Claude app says which session it is.
+  await client.expectSession({ post: target.post.id, folder });
   return { how: 'new', delivered: await newSession(folder, target.text), where: folder };
 });
 

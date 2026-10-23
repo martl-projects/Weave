@@ -52,6 +52,42 @@ describe('the Mentions panel', () => {
     await expect(martin.showPosts({ posts: [idea.id], as: 'nobody' })).rejects.toThrow();
   });
 
+  it('gives a session Ctrl+click opened its item, once the Claude app says which session it is', async () => {
+    const claude = temp('weave-claude-');
+    const log = join(temp('weave-claude-log-'), 'main.log');
+    writeFileSync(log, '2026-10-23 13:00:00 [info] [CCD] LocalSessions.setFocusedSession: sessionId=local_busy\n');
+    process.env.CLAUDE_CONFIG_DIR = claude;
+    process.env.WEAVE_CLAUDE_APP_LOG = log;
+    const martin = WeaveNode.init('Martin', temp('weave-mentions-'));
+    try {
+      await martin.createProject({ name: 'Desk' });
+      const entry = await martin.submit({ space: 'Desk', board: 'ideas', title: 'Friday, 23 October 2026' });
+      const other = await martin.submit({ space: 'Desk', board: 'ideas', title: 'Something else' });
+      await martin.workOn({ session: { id: 'busy-cli', host: 'local_busy' }, post: other.id });
+      await martin.followClaudeCode({ on: true });
+      await martin.expectSession({ post: entry.id, folder: 'C:\\desk' });
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 1500));
+
+      // Passing through a session that has work doesn't take the item.
+      appendFileSync(log, '2026-10-23 13:00:05 [info] Mapping internal session local_busy to CLI session busy-cli\n');
+      await settle();
+      expect((await martin.session({ id: 'busy-cli' })).stack.map((s) => s.post.id)).toEqual([other.id]);
+      // The new session shows up, but its id only comes with the first message.
+      appendFileSync(log, '2026-10-23 13:00:10 [info] [CCD] LocalSessions.setFocusedSession: sessionId=null\n2026-10-23 13:00:10 [info] [CCD] LocalSessions.setFocusedSession: sessionId=local_new\n');
+      await settle();
+      expect(await martin.sessions()).toHaveLength(1);
+      appendFileSync(log, '2026-10-23 13:00:30 [info] Mapping internal session local_new to CLI session new-cli\n');
+      await settle();
+      expect(await martin.session({ id: 'new-cli' })).toMatchObject({ host: 'local_new', folder: 'C:\\desk', stack: [{ post: { id: entry.id } }] });
+      expect((await martin.focusedSession())?.id).toBe('new-cli');
+    } finally {
+      await martin.followClaudeCode({ on: false });
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.WEAVE_CLAUDE_APP_LOG;
+      await martin.close();
+    }
+  });
+
   it("follows Claude Code sessions for links in the agent's answers, once switched on", async () => {
     const claude = temp('weave-claude-');
     const folder = join(claude, 'projects', 'C--code-weave');

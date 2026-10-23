@@ -460,6 +460,8 @@ export class WeaveNode implements Backend {
   /** The Claude app's log, for the session you're looking at, while that's on too. */
   #appLog?: AppLogFollower;
   readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
+  /** A session Ctrl+click is opening for an item (see expectSession). */
+  #expected?: { post: string; folder?: string; until: number };
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -1259,9 +1261,12 @@ export class WeaveNode implements Backend {
     this.#follower = new TranscriptFollower((said) => this.#mentionsIn(said));
     this.#follower.start();
     this.#appLog = new AppLogFollower(() => {
-      void this.focusedSession().then((session) => {
-        for (const listener of this.#focusListeners) listener(session);
-      });
+      void this.#attachExpected()
+        .catch(() => {})
+        .then(() => this.focusedSession())
+        .then((session) => {
+          for (const listener of this.#focusListeners) listener(session);
+        });
     });
     this.#appLog.start();
   }
@@ -1482,6 +1487,23 @@ export class WeaveNode implements Backend {
     const post = await this.post(id);
     this.#emitLive({ type: 'routine', category: 'activity', title: routine.name, text: `${post.title} is ready`, open: { post: post.id } });
     return post;
+  }
+
+  async expectSession(input: { post: string; folder?: string }): Promise<void> {
+    const post = await this.post(input.post);
+    this.#expected = { post: post.id, ...(input.folder ? { folder: input.folder } : {}), until: Date.now() + 15 * 60 * 1000 };
+  }
+
+  /** The session Ctrl+click opened has shown up in the Claude app, with its id: give it its item. */
+  async #attachExpected(): Promise<void> {
+    const expected = this.#expected;
+    const focus = this.#appLog?.current;
+    if (!expected || !focus?.id) return;
+    if (Date.now() > expected.until) return void (this.#expected = undefined);
+    // Only a session with nothing on it yet: not one you switched to on the way.
+    if (this.#sessionRecords().get(sessionKey('claude-code', focus.id))?.stack.length) return;
+    this.#expected = undefined;
+    await this.workOn({ session: { provider: 'claude-code', id: focus.id, host: focus.host, ...(expected.folder ? { folder: expected.folder } : {}) }, post: expected.post });
   }
 
   async workTarget(input: { post: string }): Promise<WorkTarget> {
