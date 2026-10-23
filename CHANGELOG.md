@@ -2,6 +2,11 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.17.1 · 2026-10-23
+
+- Add a dark mode to the Clean look
+- Make Clean the default look
+
 ## v0.17.0 · 2026-10-23
 
 - Stage 17: keys held in hardware (TPM, Secure Enclave, YubiKey)
