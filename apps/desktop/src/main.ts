@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
 import { resolveHome, type Backend } from '@weave/node/client';
-import { newSession, openSession, type Delivered } from './claudeapp.ts';
+import { newSession, openSession, showSession, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -209,6 +209,9 @@ ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'se
   await client.expectSession({ post: target.post.id, folder });
   return { how: 'new', delivered: await newSession(folder, target.text), where: folder };
 });
+
+/** From the sessions pane: bring a session to the front in the Claude app. */
+ipcMain.handle('weave:show-session', (_event, host: string) => showSession(String(host)));
 
 /** The panel's links open in the main window: Weave comes to the front there. */
 ipcMain.handle('weave:route', (_event, hash: string) => {

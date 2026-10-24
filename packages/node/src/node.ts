@@ -297,7 +297,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
-import { AppLogFollower, TranscriptFollower, transcriptTitle, type SessionText } from './claudecode.ts';
+import { AppLogFollower, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
@@ -1306,6 +1306,20 @@ export class WeaveNode implements Backend {
     return [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time)).map((r) => this.#sessionInfo(r, posts));
   }
 
+  async activeSessions(input: { hours?: number } = {}): Promise<SessionInfo[]> {
+    const hours = Math.min(Math.max(input.hours ?? 12, 1), 24 * 14);
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    const records = this.#sessionRecords();
+    const out = new Map([...records.values()].map((r) => [sessionKey(r.provider, r.id), this.#sessionInfo(r, posts)]));
+    for (const recent of recentSessions(Date.now() - hours * 3600 * 1000)) {
+      const key = sessionKey('claude-code', recent.id);
+      if (out.has(key)) continue;
+      out.set(key, this.#sessionInfo({ provider: 'claude-code', id: recent.id, ...(recent.folder ? { folder: recent.folder } : {}), stack: [], time: recent.active }, posts));
+    }
+    const when = (s: SessionInfo) => s.active ?? s.time;
+    return [...out.values()].sort((a, b) => when(b).localeCompare(when(a)));
+  }
+
   async focusedSession(): Promise<SessionInfo | null> {
     const focus = this.#appLog?.current;
     if (!focus) return null;
@@ -1582,10 +1596,13 @@ export class WeaveNode implements Backend {
       return p ?? { id: item.post, missing: true };
     };
     const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const active = record.provider === 'claude-code' ? transcriptActive(record.id) : undefined;
+    const host = record.host ?? (record.provider === 'claude-code' ? this.#appLog?.hostOf(record.id) : undefined);
     return {
       provider: record.provider,
       id: record.id,
-      ...(record.host ? { host: record.host } : {}),
+      ...(active ? { active } : {}),
+      ...(host ? { host } : {}),
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
       stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),

@@ -484,6 +484,8 @@ export interface SessionInfo {
   stack: Array<{ post: StackPost | { id: string; missing: true }; since: string }>;
   /** When its stack last changed. */
   time: string;
+  /** When the session last did something (its transcript was written), if Weave can tell. */
+  active?: string;
 }
 
 /** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
@@ -952,6 +954,11 @@ export interface Backend {
   claudeCode(): Promise<ClaudeCodeFollow>;
   /** Sessions with work items, the latest changed first. */
   sessions(): Promise<SessionInfo[]>;
+  /**
+   * The sessions pane: sessions with work items, and the ones that did something in the last `hours`
+   * (default 12) even without, the most recently active first.
+   */
+  activeSessions(input?: { hours?: number }): Promise<SessionInfo[]>;
   /** The session the Claude app shows right now (while Follow Claude Code is on), with its stack. */
   focusedSession(): Promise<SessionInfo | null>;
   /** One session and its stack (an empty stack if it has none yet). */
@@ -1160,7 +1167,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'chats', 'openChat',

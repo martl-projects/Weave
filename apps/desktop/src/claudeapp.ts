@@ -60,6 +60,12 @@ export async function openSession(host: string, text: string): Promise<Delivered
   return 'pasted';
 }
 
+/** Bring a session (the Claude app's own id, local_…) to the front, as it is. */
+export async function showSession(host: string): Promise<void> {
+  if (!/^local_[\w-]+$/.test(host)) throw new Error('not a Claude app session');
+  await shell.openExternal(`claude://claude.ai/epitaxy/${host}`);
+}
+
 /** Start a new Claude Code session in `folder` with `text` in its text box. */
 export async function newSession(folder: string, text: string): Promise<Delivered> {
   const url = `claude://code/new?folder=${encodeURIComponent(folder)}&q=${encodeURIComponent(text.slice(0, 4000))}`;

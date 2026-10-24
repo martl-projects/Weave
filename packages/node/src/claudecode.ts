@@ -121,6 +121,56 @@ export function transcriptOf(session: string, dir = claudeProjectsDir()): string
   return undefined;
 }
 
+/** A Claude Code session seen in its transcript: when it last wrote, and the folder it works in. */
+export interface RecentSession {
+  id: string;
+  /** When its transcript was last written: when it last did something. */
+  active: string;
+  folder?: string;
+}
+
+/** Claude Code sessions whose transcripts were written since `since` (ms), the latest first. */
+export function recentSessions(since: number, dir = claudeProjectsDir()): RecentSession[] {
+  if (!existsSync(dir)) return [];
+  const out: RecentSession[] = [];
+  for (const folder of readdirSync(dir, { withFileTypes: true })) {
+    if (!folder.isDirectory()) continue;
+    for (const name of readdirSync(join(dir, folder.name))) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = join(dir, folder.name, name);
+      const { mtimeMs } = statSync(file);
+      if (mtimeMs < since) continue;
+      out.push({ id: basename(name, '.jsonl'), active: new Date(mtimeMs).toISOString(), ...folderOf(file) });
+    }
+  }
+  return out.sort((a, b) => b.active.localeCompare(a.active));
+}
+
+/** The folder a session works in: the cwd of its first lines. */
+function folderOf(file: string): { folder?: string } {
+  const length = Math.min(statSync(file).size, 64 * 1024);
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(file, 'r');
+  try {
+    readSync(fd, buffer, 0, length, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const cwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buffer.toString('utf8'));
+  if (!cwd) return {};
+  try {
+    return { folder: JSON.parse(`"${cwd[1]}"`) as string };
+  } catch {
+    return {};
+  }
+}
+
+/** When a Claude Code session last wrote to its transcript. */
+export function transcriptActive(session: string, dir = claudeProjectsDir()): string | undefined {
+  const file = transcriptOf(session, dir);
+  return file ? statSync(file).mtime.toISOString() : undefined;
+}
+
 /** The title a Claude Code session goes by (the Claude app's sidebar name): its latest custom-title line. */
 export function transcriptTitle(session: string, dir = claudeProjectsDir()): string | undefined {
   const file = transcriptOf(session, dir);
@@ -200,6 +250,12 @@ export class AppLogFollower {
 
   get current(): FocusedSession | undefined {
     return this.#focus ? this.#resolve(this.#focus) : undefined;
+  }
+
+  /** The Claude app's own id for a Claude Code session, once its log has said. */
+  hostOf(id: string): string | undefined {
+    for (const [host, cli] of this.#ids) if (cli === id) return host;
+    return undefined;
   }
 
   #resolve(host: string): FocusedSession {

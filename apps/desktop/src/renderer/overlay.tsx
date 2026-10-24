@@ -1,17 +1,25 @@
-import { useEffect, useState, type MouseEvent } from 'react';
-import type { ClaudeCodeFollow, MentionInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import type { ClaudeCodeFollow, MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
-import { PostRow } from './posts.tsx';
+import { PostHeader, spaceLabel } from './posts.tsx';
 import { attempt } from './ui.tsx';
 
-/** Board names say what a post is: "ideas" → an idea. */
-const SINGULAR: Record<string, string> = { ideas: 'idea', issues: 'issue', proposals: 'proposal', releases: 'release', posts: 'post', showcase: 'showcase post' };
+/*
+ * The side panel: a small window that stays on top beside your work (Claude
+ * Code). It follows the session you're looking at in the Claude app and shows
+ * the work item it's on, in full (as Weave shows a post, without its chat).
+ * The rest of its stack and the posts agents mentioned are a click away; the
+ * sessions pane lists the sessions and what they're on. Nothing here is
+ * posted anywhere.
+ */
 
-/** "idea “KMS System” in project “Weave”" */
-function what(p: MentionInfo['post']): string {
-  const kind = p.type === 'project' ? 'project' : p.type === 'issue' || p.type === 'proposal' ? p.type : (SINGULAR[p.board ?? ''] ?? (p.board ? `post in ${p.board}` : 'post'));
-  if (p.type === 'project' || !p.space) return `${kind} “${p.title}”`;
-  return `${kind} “${p.title}” in ${p.space.kind} “${p.space.name}”`;
+/** Board names say what a post is: "ideas" → an idea. */
+const SINGULAR: Record<string, string> = { ideas: 'idea', issues: 'issue', proposals: 'proposal', releases: 'release', posts: 'post', showcase: 'showcase post', journal: 'journal entry' };
+
+/** "idea in p/Weave" */
+function kindOf(p: PostInfo): string {
+  const kind = p.type === 'project' ? 'project' : p.type === 'issue' || p.type === 'proposal' ? p.type : (SINGULAR[p.board ?? ''] ?? 'post');
+  return p.space && p.type !== 'project' ? `${kind} in ${spaceLabel(p.space)}` : kind;
 }
 
 /** Who pointed to it: an agent's weave_show, or a link in a Claude Code session. */
@@ -20,97 +28,158 @@ function source(m: MentionInfo): string {
   return `in Claude Code${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
 }
 
-/** What every post row needs to know: who you are and your spaces. */
+const folderName = (folder?: string) => folder?.split(/[\\/]/).filter(Boolean).pop();
+
+/** Running: the session wrote to its transcript in the last two minutes. */
+const running = (s: SessionInfo) => !!s.active && Date.now() - Date.parse(s.active) < 2 * 60 * 1000;
+
+/** What every post needs to know: who you are and your spaces. */
 interface Context {
   me: Profile;
   spaces: SpaceInfo[];
 }
 
-function MentionCard({ mention, ctx }: { mention: MentionInfo; ctx: Context }) {
+/** A post in one line, for what isn't current: kind and place, title, and a note. Click opens it in Weave. */
+function Line({ post, note }: { post: PostInfo | { id: string; missing: true }; note: ReactNode }) {
+  if ('missing' in post) return <li className="panel-line muted">A post you can't see here · {note}</li>;
   return (
-    <li className="mention">
-      <div className="mention-line">
-        Mentioned {what(mention.post)}
-        <span className="mention-when">
-          {source(mention)} · {ago(mention.time)}
-        </span>
-      </div>
-      {mention.note && <div className="mention-note">“{mention.note}”</div>}
-      <PostRow post={mention.post} meDid={ctx.me.did} spaces={ctx.spaces} />
-    </li>
-  );
-}
-
-type StackEntry = SessionInfo['stack'][number];
-
-/** One work item on the session's stack, shown like on a board: the top one is Now, the others wait. */
-function StackCard({ entry, now, ctx }: { entry: StackEntry; now: boolean; ctx: Context }) {
-  const p = entry.post;
-  if ('missing' in p) return <li className="stack-item missing">A post you can't see here</li>;
-  return (
-    <li className={`stack-item${now ? ' now' : ''}`}>
-      <span className="stack-state">
-        {now ? 'Now' : 'Waiting'} · since {ago(entry.since)}
+    <li className="panel-line" data-post={post.id} title="Click: open in Weave · Ctrl+click: work on it in Claude">
+      <a href={`#/post/${post.id}`}>{post.title}</a>
+      <span className="panel-line-note">
+        {kindOf(post)}
+        {post.issue ? ` · ${post.issue.status}` : ''} · {note}
       </span>
-      <PostRow post={p} meDid={ctx.me.did} spaces={ctx.spaces} />
-      {now && p.prompt && <p className="stack-prompt">{p.prompt.length > 300 ? `${p.prompt.slice(0, 300)}…` : p.prompt}</p>}
     </li>
   );
 }
 
-/** The session you're looking at in the Claude app: its name, folder and work items. */
-function SessionSection({ session, ctx }: { session: SessionInfo; ctx: Context }) {
-  const folder = session.folder?.split(/[\\/]/).filter(Boolean).pop();
+/** The work item a session is on, in full: as Weave shows a post, without its chat, and its starting prompt. */
+function CurrentItem({ post, since, ctx }: { post: PostInfo; since: string; ctx: Context }) {
   return (
-    <section className="panel-session">
-      <div className="panel-session-head">
-        <b>{session.title ?? 'Untitled session'}</b>
-        {folder && <span className="mention-when">in {folder}</span>}
-      </div>
-      {session.stack.length === 0 ? (
-        <p className="mention-when">No work items on this session.</p>
+    <section className="panel-current" data-post={post.id}>
+      <div className="stack-state now">Now · {kindOf(post)} · since {ago(since)}</div>
+      <PostHeader post={post} meDid={ctx.me.did} spaces={ctx.spaces} />
+      {post.prompt && (
+        <div className="stack-prompt">
+          <b>Starting prompt</b>
+          <p>{post.prompt}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** A session: its current item in full, then (on request) the rest of its stack and what was mentioned there. */
+function SessionView({ session, mentions, ctx }: { session: SessionInfo; mentions: MentionInfo[]; ctx: Context }) {
+  const [open, setOpen] = useState<'stack' | 'mentions'>();
+  const [top, ...waiting] = session.stack;
+  const here = mentions.filter((m) => m.session?.id === session.id);
+  const flip = (which: 'stack' | 'mentions') => setOpen((o) => (o === which ? undefined : which));
+  return (
+    <>
+      {top && !('missing' in top.post) ? (
+        <CurrentItem post={top.post} since={top.since} ctx={ctx} />
       ) : (
-        <ul className="mentions">
-          {session.stack.map((entry, i) => (
-            <StackCard key={'missing' in entry.post ? `${entry.post.id}-${i}` : entry.post.id} entry={entry} now={i === 0} ctx={ctx} />
+        <p className="empty">{top ? "This session is on a post you can't see here." : 'No work item on this session. Ctrl+click a post in Weave to bring one here.'}</p>
+      )}
+      <div className="panel-toggles">
+        <button className={open === 'stack' ? 'active' : ''} disabled={!waiting.length} onClick={() => flip('stack')}>
+          Stack ({waiting.length} waiting)
+        </button>
+        <button className={open === 'mentions' ? 'active' : ''} disabled={!here.length} onClick={() => flip('mentions')}>
+          Mentions ({here.length})
+        </button>
+      </div>
+      {open === 'stack' && (
+        <ul className="panel-lines">
+          {waiting.map((entry, i) => (
+            <Line key={`${entry.post.id}-${i}`} post={entry.post} note={`waiting since ${ago(entry.since)}`} />
           ))}
         </ul>
       )}
-    </section>
+      {open === 'mentions' && (
+        <ul className="panel-lines">
+          {here.map((m) => (
+            <Line key={m.id} post={m.post} note={`${source(m)} · ${ago(m.time)}${m.note ? ` · “${m.note}”` : ''}`} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** The sessions pane: sessions with work items and the ones active lately, what each is on; pick one to see it. */
+function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string): void }) {
+  const [sessions, setSessions] = useState<SessionInfo[]>();
+  useEffect(() => {
+    const load = () => void api<SessionInfo[]>('activeSessions', { hours: 12 }).then(setSessions, () => {});
+    load();
+    const timer = setInterval(load, 15_000);
+    const off = onItem((item) => {
+      if (!item || item.scope !== 'live' || item.kind === 'weave.focus') load();
+    });
+    return () => {
+      clearInterval(timer);
+      off();
+    };
+  }, []);
+  if (!sessions) return null;
+  if (!sessions.length) return <p className="empty">No Claude Code sessions in the last 12 hours.</p>;
+  return (
+    <ul className="panel-sessions">
+      {sessions.map((s) => {
+        const [top, ...waiting] = s.stack;
+        const state = s.id === focused ? 'open in Claude' : running(s) ? 'running' : s.active ? `active ${ago(s.active)}` : `changed ${ago(s.time)}`;
+        return (
+          <li key={`${s.provider}:${s.id}`} className={`panel-session${s.id === focused ? ' focused' : ''}${running(s) ? ' running' : ''}`}>
+            <button className="link panel-session-pick" onClick={() => onPick(s.id)} title="Show this session here">
+              <b>{s.title ?? 'Untitled session'}</b>
+              <span className="panel-line-note">
+                {[folderName(s.folder), state].filter(Boolean).join(' · ')}
+              </span>
+              <span className="panel-session-now">{top ? ('missing' in top.post ? 'on a post you can’t see' : `on: ${top.post.title}`) : 'no work items'}{waiting.length ? ` · ${waiting.length} waiting` : ''}</span>
+            </button>
+            {s.host && bridge.showSession && (
+              <button onClick={() => void attempt(() => bridge.showSession!(s.host!))} title="Bring it to the front in the Claude app">
+                Open in Claude
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 /** Links in the panel open in Weave's main window, not in the panel. */
 function openInWeave(event: MouseEvent): void {
   const link = (event.target as Element).closest?.('a[href^="#/"]');
-  if (!link) return;
+  if (!link || event.ctrlKey || event.metaKey) return;
   event.preventDefault();
   const route = link.getAttribute('href')!;
   if (bridge.route) void bridge.route(route);
   else navigate(route);
 }
 
-/**
- * The side panel: a small window that stays on top beside your work (Claude
- * Code). It follows the session you're looking at in the Claude app and shows
- * its work items, then the posts agents point to. A card opens the post in
- * Weave. Nothing here is posted anywhere.
- */
 export function MentionsPanel() {
   const [mentions, setMentions] = useState<MentionInfo[]>([]);
   const [follow, setFollow] = useState<ClaudeCodeFollow>();
   const [session, setSession] = useState<SessionInfo | null>(null);
+  const [focused, setFocused] = useState<string>();
   const [ctx, setCtx] = useState<Context>();
+  const [pane, setPane] = useState<'session' | 'sessions'>('session');
   // Which session to show: the one the Claude app shows (''), or one you picked (#/overlay?session=…).
   const [pinned, setPinned] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '');
-  const [recent, setRecent] = useState<SessionInfo[]>([]);
   useEffect(() => {
     void Promise.all([api<Profile>('profile'), api<SpaceInfo[]>('spaces')]).then(([me, spaces]) => setCtx({ me, spaces }), () => {});
   }, []);
   useEffect(() => {
     const refresh = () => {
-      void api<SessionInfo[]>('sessions').then(setRecent, () => {});
-      void (pinned ? api<SessionInfo>('session', { id: pinned }) : api<SessionInfo | null>('focusedSession')).then(setSession, () => {});
+      void api<SessionInfo | null>('focusedSession').then((s) => {
+        setFocused(s?.id);
+        if (!pinned) setSession(s);
+      }, () => {});
+      if (pinned) void api<SessionInfo>('session', { id: pinned }).then(setSession, () => {});
     };
     void api<MentionInfo[]>('mentions').then(setMentions, () => {});
     void api<ClaudeCodeFollow>('claudeCode').then(setFollow, () => {});
@@ -118,77 +187,84 @@ export function MentionsPanel() {
     return onItem((item) => {
       if (item?.kind === 'weave.mention') setMentions((list) => [item.body as unknown as MentionInfo, ...list.filter((m) => m.id !== item.id)].slice(0, 100));
       else if (item?.kind === 'weave.focus') {
-        if (!pinned) setSession(item.body as unknown as SessionInfo | null);
+        const s = item.body as unknown as SessionInfo | null;
+        setFocused(s?.id);
+        if (!pinned) setSession(s);
       }
-      // A stack may have changed (they're your own sealed events): look again.
+      // A stack or a post may have changed: look again.
       else if (!item || item.scope !== 'live') refresh();
     });
   }, [pinned]);
   // Ctrl+click on a work item: show the session it went to.
-  useEffect(() => bridge.onPanelSession?.(setPinned), []);
-  const here = session ? mentions.filter((m) => m.session?.id === session.id) : [];
-  const elsewhere = session ? mentions.filter((m) => m.session?.id !== session.id) : mentions;
-  const toggle = async () => {
+  useEffect(
+    () =>
+      bridge.onPanelSession?.((id) => {
+        setPinned(id);
+        setPane('session');
+      }),
+    [],
+  );
+  const toggleFollow = async () => {
     const next = await attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }));
     if (next) setFollow(next);
+  };
+  const pick = (id: string) => {
+    setPinned(id === focused ? '' : id);
+    setPane('session');
   };
   return (
     <div className="window mentions-window" onClickCapture={openInWeave}>
       <div className="title-bar mentions-drag">
-        <div className="title-bar-text">Weave · {session ? 'Session' : 'Mentions'}</div>
+        <div className="title-bar-text">Weave · {pane === 'sessions' ? 'Sessions' : (session?.title ?? 'Session')}</div>
         <div className="title-bar-controls">
           <button aria-label="Close" onClick={() => window.close()} />
         </div>
       </div>
       <div className="window-body mentions-body">
-        <select className="panel-pick" value={pinned} onChange={(e) => setPinned(e.target.value)} aria-label="Which session">
-          <option value="">The session open in the Claude app</option>
-          {recent.map((r) => (
-            <option key={`${r.provider}:${r.id}`} value={r.id}>
-              {r.title ?? r.id.slice(0, 8)} ({r.stack.length})
-            </option>
-          ))}
-        </select>
-        <div className="mentions-follow" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
-          <input id="follow-claude-code" type="checkbox" checked={!!follow?.on} onChange={() => void toggle()} disabled={!follow} />
-          <label htmlFor="follow-claude-code">Follow Claude Code{follow && !follow.found ? ' (not found on this computer)' : ''}</label>
+        <div className="panel-bar">
+          <button className={pane === 'sessions' ? 'active' : ''} onClick={() => setPane(pane === 'sessions' ? 'session' : 'sessions')}>
+            {pane === 'sessions' ? '← Back' : 'Sessions'}
+          </button>
+          {pane === 'session' && (
+            <span className="panel-bar-what">
+              {session ? (
+                <>
+                  <b>{session.title ?? 'Untitled session'}</b> {folderName(session.folder) ? `· ${folderName(session.folder)}` : ''}
+                  {pinned ? (
+                    <button className="link" onClick={() => setPinned('')} title="Follow the session open in the Claude app again">
+                      follow Claude
+                    </button>
+                  ) : (
+                    <span className="muted"> · open in Claude</span>
+                  )}
+                </>
+              ) : (
+                <span className="muted">No session</span>
+              )}
+            </span>
+          )}
         </div>
         <div className="mentions-scroll">
-          {session && ctx && <SessionSection session={session} ctx={ctx} />}
-          {here.length > 0 && (
-            <>
-              <h4 className="panel-heading">Mentioned in this session</h4>
-              <ul className="mentions">
-                {ctx &&
-                  here.map((m) => (
-                    <MentionCard key={m.id} mention={m} ctx={ctx} />
-                  ))}
-              </ul>
-            </>
-          )}
-          {elsewhere.length === 0 && here.length === 0 && !session?.stack.length ? (
+          {pane === 'sessions' ? (
+            <SessionsPane focused={focused} onPick={pick} />
+          ) : session && ctx ? (
+            <SessionView session={session} mentions={mentions} ctx={ctx} />
+          ) : (
             <p className="empty">
               {follow?.on
-                ? 'Switch to a session in the Claude app: its work items show here. Posts your agents point to (weave_show, or Weave links in their answers) show up too.'
-                : 'Turn on Follow Claude Code: this panel then follows the session you look at in the Claude app, with its work items, and collects the posts your agents point to.'}
+                ? 'Switch to a session in the Claude app, or pick one under Sessions: the work item it is on shows here.'
+                : 'Turn on Follow Claude Code: this panel then follows the session you look at in the Claude app and shows the work item it is on.'}
             </p>
-          ) : (
-            elsewhere.length > 0 && (
-              <>
-                {session && <h4 className="panel-heading">Elsewhere</h4>}
-                <ul className="mentions">
-                  {ctx &&
-                    elsewhere.map((m) => (
-                      <MentionCard key={m.id} mention={m} ctx={ctx} />
-                    ))}
-                </ul>
-              </>
-            )
           )}
         </div>
-        <button className="mentions-weave" onClick={() => void bridge.show()}>
-          Open Weave
-        </button>
+        <div className="panel-foot">
+          <input id="follow-claude-code" type="checkbox" checked={!!follow?.on} onChange={() => void toggleFollow()} disabled={!follow} />
+          <label htmlFor="follow-claude-code" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
+            Follow Claude Code{follow && !follow.found ? ' (not found)' : ''}
+          </label>
+          <span className="grow" />
+          <button onClick={() => void bridge.show()}>Open Weave</button>
+        </div>
       </div>
     </div>
   );
