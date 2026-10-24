@@ -458,6 +458,50 @@ export interface TierInfo {
   requested?: boolean;
 }
 
+/** A kind of badge a project gives: lasting recognition, never votes or access. */
+export interface BadgeSeriesInfo {
+  id: string;
+  /** The maintainer who started it and signs its badges. */
+  issuer: Person;
+  name: string;
+  /** A short symbol (an emoji) shown next to the name. */
+  symbol: string;
+  /** Its picture (wblob: reference), shown next to the holder's name instead of the symbol. */
+  image?: string;
+  description: string;
+  /** How many there can ever be; missing: no limit. Fixed when the series was started. */
+  limit?: number;
+  project?: { id: string; name: string };
+  /** Badges given so far. */
+  given: number;
+  /** The issuer signed more badges than the limit, or one number twice: provable from their own signatures. */
+  broken: boolean;
+  /** You started it. */
+  mine: boolean;
+  time: string;
+}
+
+/** One badge: number n of its series, signed by the issuer, passed on by its holders. */
+export interface BadgeInfo {
+  id: string;
+  series: { id: string; name: string; symbol: string; image?: string; limit?: number; broken: boolean; project?: { id: string; name: string } };
+  issuer: Person;
+  n: number;
+  holder: Person;
+  /** Everyone who held it, from the first to today's holder. */
+  holders: Person[];
+  note: string;
+  /** What it's for, e.g. the post an idea came from. */
+  ref?: string;
+  time: string;
+  /** Not valid: over the series' limit, or a number the issuer gave twice. */
+  invalid?: 'over-limit' | 'duplicate';
+  /** A holder passed it on twice from the same point; the earlier transfer counts. */
+  contested?: true;
+  /** You hold it. */
+  mine: boolean;
+}
+
 /** Someone asking to join one of your tiers. */
 export interface MembershipRequestInfo {
   id: string;
@@ -1295,6 +1339,20 @@ export interface Backend {
   /** Tiers you're a member of, as a supporter. */
   memberships(): Promise<TierInfo[]>;
 
+  // badges: lasting recognition from a project, checkable by anyone, never votes or access
+  /** Start a kind of badge for a project you maintain; `limit` (how many there can ever be) can never be raised. */
+  createBadgeSeries(input: { project: string; name: string; symbol?: string; image?: string; description?: string; limit?: number }): Promise<BadgeSeriesInfo>;
+  /** Change a series' name, symbol, picture ('' removes it) or description (never its limit). */
+  setBadgeSeries(input: { series: string; name?: string; symbol?: string; image?: string; description?: string }): Promise<BadgeSeriesInfo>;
+  /** The badge series of a project, or every one this node knows. */
+  badgeSeries(project?: string): Promise<BadgeSeriesInfo[]>;
+  /** Give someone the next free badge of one of your series; `ref` is what it's for (e.g. a post). */
+  giveBadge(input: { series: string; who: string; note?: string; ref?: string }): Promise<BadgeInfo>;
+  /** The badges someone holds (default: you). */
+  badges(who?: string): Promise<BadgeInfo[]>;
+  /** Pass a badge you hold on to someone else, e.g. your other account; it keeps its number. */
+  transferBadge(input: { badge: string; to: string }): Promise<BadgeInfo>;
+
   // direct chats between friends
   /** Your direct chats: every friend, and anyone you've written to, most recent first. */
   chats(): Promise<ChatInfo[]>;
@@ -1342,6 +1400,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

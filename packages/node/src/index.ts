@@ -14,6 +14,8 @@ export type {
   RoomInfo,
   MembershipRequestInfo,
   TierInfo,
+  BadgeInfo,
+  BadgeSeriesInfo,
   CommunityInfo,
   Edge,
   IdentityInfo,

@@ -75,6 +75,11 @@ class Weave {
     return this.#get(`/v1/access?${query}`);
   }
 
+  /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
+  badges(did) {
+    return this.#get(`/v1/badges?${new URLSearchParams({ did: String(did) })}`);
+  }
+
   /** The person in a request's X-Weave-Person, if Weave signed it with this app's token lately. */
   #vouched(from) {
     const headers = from && typeof from === 'object' ? from.headers : undefined;

@@ -73,6 +73,10 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.invite',
   'weave.membership',
   'weave.tier',
+  // badges: lasting recognition, checkable by anyone
+  'weave.badge.series',
+  'weave.badge',
+  'weave.badge.transfer',
   // project roles and rules
   'weave.project.admit',
   'weave.project.decline',

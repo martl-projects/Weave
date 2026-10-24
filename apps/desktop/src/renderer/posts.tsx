@@ -6,6 +6,7 @@ import { ago, api, bump, navigate, plain, postLink, shortDid, useApi } from './l
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast } from './ui.tsx';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
+import { NameBadges } from './badges.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -240,6 +241,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
             </>
           )}
           <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+          {!post.by.agent && <NameBadges did={post.by.did} project={post.space?.kind === 'project' ? post.space.id : undefined} />}
           {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
           <Coauthors post={post} />
           {' · '}
@@ -480,6 +482,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
               </>
             )}
             <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+            {!post.by.agent && <NameBadges did={post.by.did} project={post.space?.kind === 'project' ? post.space.id : undefined} />}
             {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
             <Coauthors post={post} /> · {ago(post.time)}
             {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}

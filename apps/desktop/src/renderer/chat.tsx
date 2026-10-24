@@ -8,6 +8,7 @@ import { CharCount } from './editor.tsx';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { attempt, Avatar, loadEmbeds } from './ui.tsx';
+import { NameBadges } from './badges.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -76,6 +77,7 @@ function Message({
   const author = (
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
       <a href={`#/space/${encodeURIComponent(m.by.did)}`}>{nameOf(m.by, meDid)}</a>
+      {!m.by.agent && <NameBadges did={m.by.did} />}
       {m.by.agent && (
         <span className="agent-tag" title={`${m.by.name ?? 'Someone'}'s agent, signing with its own key`}>
           {m.by.agent} · AGENT
