@@ -160,6 +160,12 @@ export class GitHub {
     return [...new Set(out)].sort();
   }
 
+  /** Who owns a repository: an organization, or a person (whose repositories can't have read-only collaborators). */
+  async owner(repo: string): Promise<'Organization' | 'User'> {
+    const { data } = await this.#call<{ owner?: { type?: string } }>('GET', `/repos/${repo}`);
+    return data.owner?.type === 'Organization' ? 'Organization' : 'User';
+  }
+
   /** Who has access now, and who was invited and hasn't accepted yet (lowercase logins). */
   async access(repo: string): Promise<{ collaborators: Set<string>; invited: Map<string, number> }> {
     const { data: people } = await this.#call<Array<{ login: string }>>('GET', `/repos/${repo}/collaborators?affiliation=direct&per_page=100`);

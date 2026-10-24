@@ -72,7 +72,7 @@ describe('Weave over MCP', () => {
       ...node.githubSetup,
       fetch: (async (input: string | URL | Request) => {
         const path = new URL(String(input)).pathname;
-        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : { message: 'Not Found' };
+        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : path === '/repos/martl/weave' ? { full_name: 'martl/weave', owner: { type: 'Organization' } } : { message: 'Not Found' };
         return new Response(JSON.stringify(body), { status: 'message' in body ? 404 : 200 });
       }) as typeof fetch,
     };

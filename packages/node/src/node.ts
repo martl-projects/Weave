@@ -531,6 +531,10 @@ const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', descripti
  * peers. The CLI uses it directly when no daemon runs; the daemon wraps it
  * with networking and the HTTP API.
  */
+/** Why a person's repository can't follow a space, and what to do about it. */
+const personalRepo = (repo: string) =>
+  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again`;
+
 export class WeaveNode implements Backend {
   readonly home: Home;
   #identity: SigningIdentity;
@@ -2232,6 +2236,16 @@ export class WeaveNode implements Backend {
     return this.github();
   }
 
+  /** Repositories known to belong to an organization (a person's are asked again: they may have moved). */
+  #organizationRepos = new Set<string>();
+
+  async #ownedByOrganization(client: GitHub, repo: string): Promise<boolean> {
+    if (this.#organizationRepos.has(repo.toLowerCase())) return true;
+    const organization = (await client.owner(repo)) === 'Organization';
+    if (organization) this.#organizationRepos.add(repo.toLowerCase());
+    return organization;
+  }
+
   async githubRepos(): Promise<string[]> {
     const auth = this.#githubAuth();
     if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
@@ -2290,6 +2304,8 @@ export class WeaveNode implements Backend {
       }
       const match = (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
       if (!match) throw new Error(`the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
+      // Members get read access; a person's repositories only have collaborators who can write.
+      if (!(await this.#ownedByOrganization(new GitHub(this.#githubAuth()!.token, this.githubSetup.fetch), match))) throw new Error(personalRepo(match));
       body.repo = match;
     }
     await this.publish({ kind: KIND_GITHUB_REPO, body, space: space.id, as: input.as });
@@ -2392,6 +2408,10 @@ export class WeaveNode implements Backend {
       try {
         const client = new GitHub(auth.token, this.githubSetup.fetch);
         const plan = planSync(want, await client.access(repo), gave);
+        // Linked before Weave checked: a person's repository can't take read-only collaborators (GitHub refuses with 422).
+        // Nobody new is invited there; what Weave gave is still taken back.
+        const personal = plan.invite.length > 0 && !(await this.#ownedByOrganization(client, repo));
+        if (personal) plan.invite = [];
         for (const login of plan.invite) {
           await client.invite(repo, login);
           this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
@@ -2403,7 +2423,7 @@ export class WeaveNode implements Backend {
           changed++;
         }
         const after = [...gave.filter((l) => !plan.remove.some((r) => r.login === l)), ...plan.invite].sort();
-        this.#githubSynced.set(key, { at: now, shape: JSON.stringify([[...want].sort(), after]) });
+        this.#githubSynced.set(key, { at: now, shape: personal ? shape : JSON.stringify([[...want].sort(), after]), ...(personal ? { problem: personalRepo(repo) } : {}) });
       } catch (error) {
         this.#githubSynced.set(key, { at: now, shape, problem: (error as Error).message });
       }

@@ -169,7 +169,7 @@ Everything the agent does is signed with its own key and shows up as "you · for
 
 ## GitHub
 
-Groups, tiers and projects can link GitHub repositories: members who give the space their GitHub account get read access, and lose it again when they leave. Projects can also point their app at a GitHub release, so hosts install it with one click (each file is checked against a SHA-256 a maintainer published in Weave).
+Groups, tiers and projects can link GitHub repositories: members who give the space their GitHub account get read access, and lose it again when they leave. The repository must belong to a GitHub organization (free to make): a personal account's repositories can't give anyone read-only access, only write. Projects can also point their app at a GitHub release, so hosts install it with one click (each file is checked against a SHA-256 a maintainer published in Weave).
 
 ```bash
 npx weave github connect                          # sign in with a code on github.com
