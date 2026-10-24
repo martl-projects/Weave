@@ -291,6 +291,7 @@ import {
   type ChatInfo,
   type CoauthorRequest,
   type GitHubInfo,
+  type GumroadInfo,
   type HarnessInfo,
   type PermissionRequest,
   type AppOpen,
@@ -400,7 +401,7 @@ import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
-import { checkGumroadLicense, createGumroadMembership, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
+import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
@@ -594,6 +595,10 @@ export class WeaveNode implements Backend {
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** How memberships are made on Gumroad (tests put a fake here). */
   makeGumroadMembership: typeof createGumroadMembership = createGumroadMembership;
+  /** How Gumroad gets connected: the Weave application, the browser sign-in and who's connected (tests put fakes here). */
+  gumroadSetup = { clientId: GUMROAD_CLIENT_ID, signIn: (clientId: string) => startGumroadSignIn(clientId), account: (token: string) => gumroadAccount(token) };
+  /** A Gumroad connection waiting for the person in the browser, or why the last one didn't work. */
+  #gumroadLogin?: { signIn?: GumroadSignIn; error?: string };
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
   #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
   /** Where harness configs live (your user folder; tests use a temporary one). */
@@ -686,7 +691,7 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
+    for (const file of [this.#githubFile, this.#gumroadFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -3657,10 +3662,58 @@ export class WeaveNode implements Backend {
     return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id));
   }
 
-  async sellTierOnGumroad(input: { tier: string; token: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }> {
+  get #gumroadFile(): string {
+    return joinPath(this.home.dir, 'gumroad.json');
+  }
+
+  /** The Gumroad connection on this device (kept in the home, never in a log). */
+  #gumroadAuth(): { token: string; account: string } | undefined {
+    const saved = readSecretJson<{ token?: string; account?: string }>(this.home, this.#gumroadFile);
+    return saved?.token ? { token: saved.token, account: saved.account ?? 'your Gumroad account' } : undefined;
+  }
+
+  async gumroad(): Promise<GumroadInfo> {
+    const auth = this.#gumroadAuth();
+    const login = this.#gumroadLogin;
+    return {
+      available: !!this.gumroadSetup.clientId,
+      ...(auth ? { account: auth.account } : {}),
+      ...(login?.signIn ? { pending: { url: login.signIn.url } } : {}),
+      ...(login?.error ? { error: login.error } : {}),
+    };
+  }
+
+  async connectGumroad(): Promise<GumroadInfo> {
+    this.#gumroadLogin?.signIn?.cancel();
+    const signIn = await this.gumroadSetup.signIn(this.gumroadSetup.clientId);
+    const login = { signIn };
+    this.#gumroadLogin = login;
+    // Wait for the person to allow Weave in the browser, in the background; gumroad() tells how it went.
+    void signIn.token
+      .then(async (token) => {
+        const account = await this.gumroadSetup.account(token);
+        writeSecretJson(this.home, this.#gumroadFile, { token, account, connected: new Date(this.clock()).toISOString() });
+        if (this.#gumroadLogin === login) this.#gumroadLogin = undefined;
+      })
+      .catch((error: Error) => {
+        if (this.#gumroadLogin === login) this.#gumroadLogin = error.message === 'cancelled' ? undefined : { error: error.message };
+      });
+    return this.gumroad();
+  }
+
+  async disconnectGumroad(): Promise<GumroadInfo> {
+    this.#gumroadLogin?.signIn?.cancel();
+    this.#gumroadLogin = undefined;
+    rmSync(this.#gumroadFile, { force: true });
+    return this.gumroad();
+  }
+
+  async sellTierOnGumroad(input: { tier: string; token?: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }> {
     const t = this.#tierOffer(input.tier);
     if (t.creator !== this.identity.author) throw new Error('only its creator can sell a tier');
-    const made = await this.makeGumroadMembership(input.token, { name: t.name, price: t.price, currency: t.currency, description: t.description || undefined });
+    const token = input.token?.trim() || this.#gumroadAuth()?.token;
+    if (!token) throw new Error('connect Gumroad first (weave gumroad connect), or give an access token');
+    const made = await this.makeGumroadMembership(token, { name: t.name, price: t.price, currency: t.currency, description: t.description || undefined });
     const tier = await this.setTier({ tier: t.id, gumroad: made.link, auto: false });
     return { tier, published: made.published, ...(made.warning ? { warning: made.warning } : {}) };
   }

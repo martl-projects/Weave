@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createGumroadMembership, judgePurchase } from '../src/gumroad.ts';
+import { createHash } from 'node:crypto';
+import { createGumroadMembership, judgePurchase, startGumroadSignIn } from '../src/gumroad.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -179,5 +180,71 @@ describe('selling a tier on Gumroad in one step', () => {
     const lena = person('Lena');
     lena.replica.ingest(martin.replica.events()[0]!);
     await expect(lena.sellTierOnGumroad({ tier: tier.id, token: 'tok' })).rejects.toThrow();
+  });
+});
+
+describe('connecting Gumroad', () => {
+  it('signs in in the browser with PKCE and a loopback redirect', async () => {
+    let exchanged: URLSearchParams | undefined;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      expect(url).toBe('https://api.gumroad.com/oauth/token');
+      exchanged = new URLSearchParams(String(init.body));
+      return new Response(JSON.stringify({ access_token: 'gum-token', token_type: 'Bearer' }));
+    }) as typeof fetch;
+    const signIn = await startGumroadSignIn('weave-app', fetchImpl);
+    const asked = new URL(signIn.url);
+    expect(asked.origin + asked.pathname).toBe('https://gumroad.com/oauth/authorize');
+    const redirect = asked.searchParams.get('redirect_uri')!;
+    expect(redirect).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+    expect(asked.searchParams.get('client_id')).toBe('weave-app');
+    expect(asked.searchParams.get('scope')).toBe('edit_products view_profile');
+    expect(asked.searchParams.get('code_challenge_method')).toBe('S256');
+
+    // Someone else's redirect (wrong state) doesn't count.
+    expect((await fetch(`${redirect}?code=evil&state=nope`)).status).toBe(400);
+    const back = await fetch(`${redirect}?code=the-code&state=${asked.searchParams.get('state')}`);
+    expect(back.status).toBe(200);
+    expect(await back.text()).toContain('Gumroad is connected');
+    expect(await signIn.token).toBe('gum-token');
+    expect(exchanged?.get('code')).toBe('the-code');
+    expect(exchanged?.get('redirect_uri')).toBe(redirect);
+    expect(createHash('sha256').update(exchanged!.get('code_verifier')!).digest('base64url')).toBe(asked.searchParams.get('code_challenge'));
+  });
+
+  it('tells when the creator declines, and needs the Weave application', async () => {
+    const signIn = await startGumroadSignIn('weave-app', (async () => new Response('{}')) as typeof fetch);
+    const asked = new URL(signIn.url);
+    await fetch(`${asked.searchParams.get('redirect_uri')}?error=access_denied&state=${asked.searchParams.get('state')}`);
+    await expect(signIn.token).rejects.toThrow(/access_denied/);
+    await expect(startGumroadSignIn('')).rejects.toThrow(/access token/);
+  });
+
+  it('keeps the connection on this device and sells tiers through it', async () => {
+    const martin = person('Martin');
+    let finish!: (token: string) => void;
+    martin.gumroadSetup = {
+      clientId: 'weave-app',
+      signIn: async () => ({ url: 'https://gumroad.com/oauth/authorize?x', token: new Promise<string>((r) => (finish = r)), cancel: () => undefined }),
+      account: async (token) => (token === 'gum-token' ? 'Martin S' : 'nobody'),
+    };
+    const used: string[] = [];
+    martin.makeGumroadMembership = async (token) => {
+      used.push(token);
+      return { link: { product: 'A-m3CDDC5dlrSdKZp0RFhA==', url: 'https://martin.gumroad.com/l/editors' }, published: true };
+    };
+    const tier = await martin.createTier({ name: 'Editors', price: 500 });
+    expect(await martin.gumroad()).toEqual({ available: true });
+    await expect(martin.sellTierOnGumroad({ tier: tier.id })).rejects.toThrow(/connect Gumroad first/);
+
+    expect(await martin.connectGumroad()).toEqual({ available: true, pending: { url: 'https://gumroad.com/oauth/authorize?x' } });
+    finish('gum-token');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await martin.gumroad()).toEqual({ available: true, account: 'Martin S' });
+
+    await martin.sellTierOnGumroad({ tier: tier.id });
+    await martin.sellTierOnGumroad({ tier: tier.id, token: 'pasted' });
+    expect(used).toEqual(['gum-token', 'pasted']);
+
+    expect(await martin.disconnectGumroad()).toEqual({ available: true });
   });
 });

@@ -194,6 +194,17 @@ export interface GitHubInfo {
   error?: string;
 }
 
+export interface GumroadInfo {
+  /** This copy of Weave knows the Weave application on Gumroad (it has its client ID), so it can connect in the browser. */
+  available: boolean;
+  /** The Gumroad account connected on this device. */
+  account?: string;
+  /** A connection waiting for the person to allow Weave on Gumroad: open this. */
+  pending?: { url: string };
+  /** Why the last connection didn't work. */
+  error?: string;
+}
+
 export interface RepoInfo {
   /** owner/name */
   repo: string;
@@ -1327,12 +1338,19 @@ export interface Backend {
   createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
   setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  /** Your Gumroad connection on this device, and one waiting for you to allow Weave. */
+  gumroad(): Promise<GumroadInfo>;
+  /** Start connecting Gumroad: open pending.url, allow Weave there, and ask gumroad() until it's done. */
+  connectGumroad(): Promise<GumroadInfo>;
+  /** Forget the Gumroad connection on this device. Tiers stay sold there; license keys don't need it. */
+  disconnectGumroad(): Promise<GumroadInfo>;
   /**
    * Sell a tier through Gumroad without setting it up there by hand: makes a
-   * monthly membership with license keys for it with your Gumroad access token
-   * (scope edit_products; used once, not kept), publishes it and links the tier.
+   * monthly membership with license keys for it, publishes it and links the
+   * tier. Through your Gumroad connection, or an access token (scope
+   * edit_products) used once and not kept.
    */
-  sellTierOnGumroad(input: { tier: string; token: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }>;
+  sellTierOnGumroad(input: { tier: string; token?: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
@@ -1406,7 +1424,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
-  'createTier', 'setTier', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

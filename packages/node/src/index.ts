@@ -33,6 +33,7 @@ export type {
   FeedItem,
   FeedQuery,
   GitHubInfo,
+  GumroadInfo,
   HarnessInfo,
   PermissionRequest,
   AppOpen,
@@ -68,7 +69,7 @@ export type {
 export { noAgent, PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
 export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
 export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
-export { checkGumroadLicense, createGumroadMembership, type CreatedGumroadMembership, type NewGumroadMembership } from './gumroad.ts';
+export { checkGumroadLicense, createGumroadMembership, startGumroadSignIn, type CreatedGumroadMembership, type GumroadSignIn, type NewGumroadMembership } from './gumroad.ts';
 export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { ApiClient, connectDaemon, daemonInfo, followDaemon, stopDaemon, type DaemonInfo } from './client.ts';

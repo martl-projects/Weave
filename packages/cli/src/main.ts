@@ -30,6 +30,7 @@ import {
   type CommunityInfo,
   type FeedItem,
   type GitHubInfo,
+  type GumroadInfo,
   type SpaceRepos,
   type IssueInfo,
   type MemberInfo,
@@ -171,6 +172,9 @@ communities — boards of posts that people join, each post with its own chat:
   community moderator <community> <who>  make someone a moderator; --off to undo
 
 github — repositories that follow a group, tier or project (members who give their account get read access):
+  gumroad                    your Gumroad connection on this device (for tier … --gumroad new)
+  gumroad connect            connect Gumroad in the browser (through the Weave application on Gumroad)
+  gumroad disconnect         forget the connection on this device
   github                     your GitHub sign-in on this device
   github connect             sign in to GitHub with a code (through the Weave GitHub app)
   github disconnect          forget the sign-in on this device
@@ -212,7 +216,7 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
                              sell it through Gumroad: --gumroad new makes the membership there, with license keys,
-                             and publishes it (needs GUMROAD_ACCESS_TOKEN; works on tier create too)
+                             and publishes it (weave gumroad connect first, or GUMROAD_ACCESS_TOKEN; tier create too)
                              or link one you made: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
                              your node lets buyers in and renews monthly; --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
@@ -462,15 +466,24 @@ function gumroadLink(): TierInfo['gumroad'] | null {
   return { url: values.gumroad, product: values['gumroad-product'], ...(values['gumroad-variant'] ? { variant: values['gumroad-variant'] } : {}) };
 }
 
-/** The access token for --gumroad new: --gumroad-token, or GUMROAD_ACCESS_TOKEN (keeps it out of the shell history). */
-function gumroadToken(): string {
+/**
+ * For --gumroad new: an access token given (--gumroad-token, or GUMROAD_ACCESS_TOKEN to keep it out of the
+ * shell history), or none to go through the Gumroad connection. Checked before the tier is made.
+ */
+async function gumroadToken(b: Backend): Promise<string | undefined> {
   const token = values['gumroad-token'] ?? process.env.GUMROAD_ACCESS_TOKEN;
-  if (!token) throw new Error('--gumroad new needs a Gumroad access token: set GUMROAD_ACCESS_TOKEN (or --gumroad-token).\n  Gumroad → Settings → Advanced → Applications: create an application, then "Generate access token".');
-  return token;
+  if (token) return token;
+  const g = await b.gumroad();
+  if (g.account) return undefined;
+  throw new Error(
+    g.available
+      ? '--gumroad new needs Gumroad connected: weave gumroad connect'
+      : '--gumroad new needs a Gumroad access token: set GUMROAD_ACCESS_TOKEN (or --gumroad-token).\n  Gumroad → Settings → Advanced → Applications: create an application, then "Generate access token".',
+  );
 }
 
 /** --gumroad new: make the membership on Gumroad for the tier, publish it and link the tier to it. */
-async function sellOnGumroad(b: Backend, t: TierInfo, token: string): Promise<{ tier: TierInfo; note: string }> {
+async function sellOnGumroad(b: Backend, t: TierInfo, token: string | undefined): Promise<{ tier: TierInfo; note: string }> {
   try {
     const sold = await b.sellTierOnGumroad({ tier: t.id, token });
     return { tier: sold.tier, note: sold.published ? `on sale on Gumroad: ${sold.tier.gumroad?.url}` : `made on Gumroad, not published yet: ${sold.warning}` };
@@ -1121,6 +1134,33 @@ async function main(): Promise<void> {
       return out(posts, () => posts.map(postLine).join('\n') || '(no posts yet)');
     }
 
+    case 'gumroad': {
+      const [sub] = args;
+      const b = await backend();
+      const status = (g: GumroadInfo) =>
+        g.account ? `Gumroad connected: ${g.account}` : g.available ? 'Gumroad not connected (weave gumroad connect)' : "this copy of Weave can't connect Gumroad (no Gumroad application client ID); use GUMROAD_ACCESS_TOKEN";
+      if (!sub) {
+        const g = await b.gumroad();
+        return out(g, () => status(g));
+      }
+      if (sub === 'connect') {
+        const started = await b.connectGumroad();
+        console.error(`Allow Weave on Gumroad in your browser; if it didn't open:\n  ${started.pending!.url}`);
+        openInBrowser(started.pending!.url);
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const g = await b.gumroad();
+          if (g.error) throw new Error(g.error);
+          if (!g.pending && g.account) return out(g, () => status(g));
+        }
+      }
+      if (sub === 'disconnect') {
+        const g = await b.disconnectGumroad();
+        return out(g, () => 'Gumroad connection forgotten on this device');
+      }
+      throw new Error('usage: weave gumroad [connect|disconnect]');
+    }
+
     case 'github': {
       const [sub, ref] = args;
       const b = await backend();
@@ -1730,9 +1770,10 @@ ${postLine(p)}`);
       const [sub, ref] = args;
       const b = await backend();
       if (sub === 'create' && ref) {
-        const token = values.gumroad === 'new' ? gumroadToken() : undefined;
+        const selling = values.gumroad === 'new';
+        const token = selling ? await gumroadToken(b) : undefined;
         let t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined });
-        const sold = token ? await sellOnGumroad(b, t, token) : undefined;
+        const sold = selling ? await sellOnGumroad(b, t, token) : undefined;
         if (sold) t = sold.tier;
         return out(t, () => `offered ${t.name}\n${tierLine(t)}${sold ? `\n${sold.note}` : ''}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
       }
@@ -1741,9 +1782,10 @@ ${postLine(p)}`);
         return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(no tiers)');
       }
       if (sub === 'set' && ref) {
-        const token = values.gumroad === 'new' ? gumroadToken() : undefined;
+        const selling = values.gumroad === 'new';
+        const token = selling ? await gumroadToken(b) : undefined;
         let t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() });
-        const sold = token ? await sellOnGumroad(b, t, token) : undefined;
+        const sold = selling ? await sellOnGumroad(b, t, token) : undefined;
         if (sold) t = sold.tier;
         return out(t, () => `${tierLine(t)}${sold ? `\n${sold.note}` : ''}`);
       }
