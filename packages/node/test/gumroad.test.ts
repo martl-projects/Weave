@@ -162,3 +162,22 @@ describe('making the Gumroad product', () => {
     await expect(createGumroadMembership('tok', { name: 'Free', price: 0 }, broken.fetchImpl)).rejects.toThrow(/needs a price/);
   });
 });
+
+describe('selling a tier on Gumroad in one step', () => {
+  it('makes the product with the tier as it is and links it', async () => {
+    const martin = person('Martin');
+    const asked: unknown[] = [];
+    martin.makeGumroadMembership = async (token, input) => {
+      asked.push({ token, input });
+      return { link: { product: 'A-m3CDDC5dlrSdKZp0RFhA==', url: 'https://martin.gumroad.com/l/editors' }, published: true };
+    };
+    const tier = await martin.createTier({ name: 'Editors', price: 500, currency: 'USD', description: 'Edit with us', auto: true });
+    const sold = await martin.sellTierOnGumroad({ tier: tier.id, token: 'tok' });
+    expect(asked).toEqual([{ token: 'tok', input: { name: 'Editors', price: 500, currency: 'USD', description: 'Edit with us' } }]);
+    expect(sold).toMatchObject({ published: true, tier: { id: tier.id, auto: false, gumroad: { product: 'A-m3CDDC5dlrSdKZp0RFhA==', url: 'https://martin.gumroad.com/l/editors' } } });
+
+    const lena = person('Lena');
+    lena.replica.ingest(martin.replica.events()[0]!);
+    await expect(lena.sellTierOnGumroad({ tier: tier.id, token: 'tok' })).rejects.toThrow();
+  });
+});

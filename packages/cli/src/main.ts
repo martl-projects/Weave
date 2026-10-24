@@ -21,7 +21,6 @@ import {
   saveConfig,
   startDaemon,
   WeaveNode,
-  createGumroadMembership,
   type Actor,
   type Admission,
   type Backend,
@@ -473,9 +472,8 @@ function gumroadToken(): string {
 /** --gumroad new: make the membership on Gumroad for the tier, publish it and link the tier to it. */
 async function sellOnGumroad(b: Backend, t: TierInfo, token: string): Promise<{ tier: TierInfo; note: string }> {
   try {
-    const made = await createGumroadMembership(token, { name: t.name, price: t.price, currency: t.currency, description: t.description || undefined });
-    const tier = await b.setTier({ tier: t.id, gumroad: made.link, auto: false });
-    return { tier, note: made.published ? `on sale on Gumroad: ${made.link.url}` : `made on Gumroad, not published yet: ${made.warning}` };
+    const sold = await b.sellTierOnGumroad({ tier: t.id, token });
+    return { tier: sold.tier, note: sold.published ? `on sale on Gumroad: ${sold.tier.gumroad?.url}` : `made on Gumroad, not published yet: ${sold.warning}` };
   } catch (e) {
     throw new Error(`${(e as Error).message}\n  the tier is there; try again with: weave tier set ${t.id} --gumroad new`);
   }

@@ -1327,6 +1327,12 @@ export interface Backend {
   createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
   setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  /**
+   * Sell a tier through Gumroad without setting it up there by hand: makes a
+   * monthly membership with license keys for it with your Gumroad access token
+   * (scope edit_products; used once, not kept), publishes it and links the tier.
+   */
+  sellTierOnGumroad(input: { tier: string; token: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
@@ -1400,7 +1406,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
-  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  'createTier', 'setTier', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',

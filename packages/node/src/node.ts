@@ -400,7 +400,7 @@ import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
-import { checkGumroadLicense, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
+import { checkGumroadLicense, createGumroadMembership, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 
@@ -592,6 +592,8 @@ export class WeaveNode implements Backend {
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
   checkLicense: LicenseChecker = checkGumroadLicense;
+  /** How memberships are made on Gumroad (tests put a fake here). */
+  makeGumroadMembership: typeof createGumroadMembership = createGumroadMembership;
   /** Gumroad's answers for requests, so each key is checked once per run (request id → answer). */
   #licenseChecks = new Map<string, LicenseCheck | 'checking'>();
   /** Where harness configs live (your user folder; tests use a temporary one). */
@@ -3653,6 +3655,14 @@ export class WeaveNode implements Backend {
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
     return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id));
+  }
+
+  async sellTierOnGumroad(input: { tier: string; token: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }> {
+    const t = this.#tierOffer(input.tier);
+    if (t.creator !== this.identity.author) throw new Error('only its creator can sell a tier');
+    const made = await this.makeGumroadMembership(input.token, { name: t.name, price: t.price, currency: t.currency, description: t.description || undefined });
+    const tier = await this.setTier({ tier: t.id, gumroad: made.link, auto: false });
+    return { tier, published: made.published, ...(made.warning ? { warning: made.warning } : {}) };
   }
 
   async tiers(who?: string): Promise<TierInfo[]> {

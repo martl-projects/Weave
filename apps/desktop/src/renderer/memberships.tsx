@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { MembershipRequestInfo, TierInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
@@ -146,13 +146,27 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const [product, setProduct] = useState(tier?.gumroad?.product ?? '');
   const [url, setUrl] = useState(tier?.gumroad?.url ?? '');
   const [variant, setVariant] = useState(tier?.gumroad?.variant ?? '');
-  // A new Gumroad link, null to stop selling there, or nothing to leave it as it is.
-  const gumroad = onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
-  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open, auto: onGumroad ? false : auto, gumroad });
+  // Make the product on Gumroad (with the creator's access token, used once) instead of linking one made by hand.
+  const [makeIt, setMakeIt] = useState(!tier?.gumroad);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const making = onGumroad && makeIt;
+  // A new Gumroad link, null to stop selling there, or nothing to leave it as it is (or until the made product links it).
+  const gumroad = making ? undefined : onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
+  const cents = Math.round(Number(price.replace(',', '.')) * 100);
+  const input = () => ({ name, price: cents, currency, description, benefits: benefits.split('\n'), open, auto: onGumroad ? false : auto, gumroad });
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your hub`);
-    if (done) {
+    if (making && !(cents > 0)) return toast('A tier sold on Gumroad needs a price', 'error');
+    setBusy(true);
+    const saved = await attempt(() => (tier ? api<TierInfo>('setTier', { tier: tier.id, ...input() }) : api<TierInfo>('createTier', input())), making ? undefined : tier ? 'Tier saved' : `${name} is on your hub`);
+    if (saved && making) {
+      const sold = await attempt(() => api<{ published: boolean; warning?: string }>('sellTierOnGumroad', { tier: saved.id, token }));
+      if (!sold) toast(`${name} is saved, but not on Gumroad yet: Edit it to try again`, 'error');
+      else toast(sold.published ? `${name} is on sale on Gumroad` : `${name} is on Gumroad, not published yet: ${sold.warning}`, sold.published ? 'ok' : 'error');
+    }
+    setBusy(false);
+    if (saved) {
       bump();
       onClose();
     }
@@ -194,7 +208,29 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <legend>
             <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad">Sell it through Gumroad</label>
           </legend>
-          {onGumroad ? (
+          {onGumroad && (
+            <>
+              <div className="field-row">
+                <input id="gumroad-make" type="radio" checked={makeIt} onChange={() => setMakeIt(true)} />
+                <label htmlFor="gumroad-make">{tier?.gumroad ? 'Make a new product on Gumroad' : 'Make the product on Gumroad for me'}</label>
+              </div>
+              <div className="field-row">
+                <input id="gumroad-link" type="radio" checked={!makeIt} onChange={() => setMakeIt(false)} />
+                <label htmlFor="gumroad-link">{tier?.gumroad ? 'Keep the product it is linked to, or link another' : 'Link a product I made'}</label>
+              </div>
+            </>
+          )}
+          {making ? (
+            <>
+              <div className="field-row-stacked">
+                <label htmlFor="gumroad-token">Gumroad access token</label>
+                <input id="gumroad-token" required type="password" autoComplete="off" spellCheck={false} value={token} onChange={(e) => setToken(e.target.value.trim())} />
+              </div>
+              <p className="small">
+                In Gumroad: <b>Settings → Advanced → Applications</b>, create an application (any name and redirect URI), then <b>Generate access token</b>. Weave uses it once to make a monthly membership at this price, with license keys, and publish it; it doesn't keep it. Supporters buy there and send you the key from their receipt; your Weave lets them in and renews each month while they pay. Keep Weave running so it can.
+              </p>
+            </>
+          ) : onGumroad ? (
             <>
               <div className="field-row-stacked">
                 <label htmlFor="gumroad-url">Product page</label>
@@ -234,7 +270,9 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default">{tier ? 'Save' : 'Offer tier'}</button>
+          <button className="default" disabled={busy}>
+            {busy && making ? 'Making it on Gumroad…' : tier ? 'Save' : 'Offer tier'}
+          </button>
         </div>
       </form>
     </Modal>
