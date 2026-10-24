@@ -2,6 +2,11 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.17.2 · 2026-10-24
+
+- Stop and restart the daemon properly; replace an outdated one only between release builds
+- Say who sees your GitHub name before you give it to a space
+
 ## v0.17.1 · 2026-10-23
 
 - Add a dark mode to the Clean look
