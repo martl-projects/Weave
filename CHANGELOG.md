@@ -2,6 +2,12 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.18.0 · 2026-10-24
+
+- Always-on nodes: a server, NAS or cluster that keeps your spaces and hosts your rooms
+- Apps from a container image, and X-Weave-Person for who is who
+- Link only repositories of a GitHub organization
+
 ## v0.17.2 · 2026-10-24
 
 - Stop and restart the daemon properly; replace an outdated one only between release builds
