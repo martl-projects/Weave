@@ -74,8 +74,10 @@ if (web) {
 await fetchBareKit();
 
 // Pack the worker per platform; its addons are linked into the native projects, not carried in the bundle.
+// The bundle's base is the repository root: npm hoists the worker's modules to its node_modules, and
+// from apps/mobile they would be packed as /../../node_modules/…, which the phone can't load.
 for (const platform of ['android', 'ios']) {
-  run('bare-pack', ['--preset', platform, '--linked', '--out', `dist/web/worklet.${platform}.bundle`, 'dist/worklet/main.cjs']);
+  run('bare-pack', ['--preset', platform, '--linked', '--base', '../..', '--out', `dist/web/worklet.${platform}.bundle`, 'dist/worklet/main.cjs']);
   run('bare-link', ['--preset', platform, '--out', `plugin/${platform}/addons`, 'dist/worklet/main.cjs']);
 }
 console.log('mobile app built');
