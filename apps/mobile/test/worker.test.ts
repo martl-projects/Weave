@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo } from '@weave/node';
 
@@ -115,7 +115,8 @@ describe('the phone app worker on Bare', () => {
     // The app is closed and opened again: paired still, no new code.
     phone.stop();
     phone = await worker(phoneDir);
-    expect(await phone.ask('state')).toEqual({ paired: true, name: 'Tester', connected: true });
+    // Reconnecting takes a moment (longer on a busy machine): wait for it rather than expect it at once.
+    await vi.waitFor(async () => expect(await phone.ask('state')).toEqual({ paired: true, name: 'Tester', connected: true }), { timeout: 20_000, interval: 200 });
     expect((await phone.ask<PostInfo[]>('call', { method: 'posts', args: [{ space: 'Weave', board: 'ideas' }] })).map((p) => p.title)).toEqual(['From the phone app']);
 
     // Unpaired on the computer: the phone hears the connection go and can't get back in.
