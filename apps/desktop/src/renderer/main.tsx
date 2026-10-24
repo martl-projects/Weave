@@ -636,7 +636,8 @@ function App() {
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
-          <UpdatePrompt />
+          {/* A phone app is updated with the app itself, not from Weave's desktop releases. */}
+          {!bridge.phone && <UpdatePrompt />}
         </>
       )}
       <Toasts />

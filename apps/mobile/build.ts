@@ -37,7 +37,8 @@ if (test) {
   process.exit(0);
 }
 
-const version = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version;
+// The screens are the desktop's, so the phone shows Weave's version (the repository's), not this package's.
+const version = (JSON.parse(readFileSync('../../package.json', 'utf8')) as { version: string }).version;
 mkdirSync('dist/web', { recursive: true });
 await Promise.all([
   worker('worklet/main.ts', 'dist/worklet/main.cjs'),
