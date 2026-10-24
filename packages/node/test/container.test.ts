@@ -25,6 +25,7 @@ afterAll(() => {
 afterEach(() => {
   delete process.env.FAKE_DOCKER_DOWN;
   delete process.env.FAKE_DOCKER_DIR;
+  delete process.env.FAKE_DOCKER_PORT;
 });
 
 const freePort = () =>
@@ -102,6 +103,8 @@ describe('apps from a container image', { timeout: 60_000 }, () => {
     // Lena's computer has Docker: the app starts from the container, no copy of it needed.
     const dockerDir = tempDir('weave-fake-docker-');
     process.env.FAKE_DOCKER_DIR = dockerDir;
+    // On Linux the container shares the host's network (no -p): the stand-in needs to know the app's port.
+    process.env.FAKE_DOCKER_PORT = String(port);
     const before = await lena.appLaunch('Gameshow');
     expect(before.container).toEqual({ image: 'ghcr.io/martl/gameshow', tag: '1.4', digest: DIGEST, docker: true, active: true });
     const run = before.command!.slice(2);
