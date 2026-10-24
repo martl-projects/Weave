@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { b64u } from '@weave/core';
 import { readLine, roomKeyPair, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
-import { RPC_METHODS, type FeedItem, type RpcMethod } from './backend.ts';
+import type { FeedItem, RpcMethod } from './backend.ts';
 import type { Home } from './home.ts';
 import { encodePhoneLink } from './phone-link.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
@@ -42,10 +42,32 @@ export interface PairingOffer {
   expires: string;
 }
 
-/** What a phone may call: what the desktop app may, minus key management, agents, local programs and phone pairing. */
-export const PHONE_METHODS: readonly RpcMethod[] = RPC_METHODS.filter(
-  (m) => !['addAgent', 'join', 'revokeKey', 'rotateRoot', 'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'pairPhone', 'phones', 'unpairPhone', 'connectHarness', 'requestPermission'].includes(m),
-);
+/**
+ * What a phone may call: everyday use of your spaces, listed one by one, so a
+ * new method stays off phones until it's added here on purpose. Not on a
+ * phone: keys and recovery, data export and backups, agents and their
+ * permissions, company and server setup, publishing or running apps, your
+ * GitHub account, and pairing phones. A lost phone can be unpaired; what it
+ * can't do, it can't do before that either.
+ */
+export const PHONE_METHODS: readonly RpcMethod[] = [
+  // You and your node
+  'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
+  // Spaces and their members
+  'spaces', 'createGroup', 'createProject', 'createCommunity', 'community', 'setCommunity', 'setModerator', 'project', 'setProjectPage', 'setMaintainer', 'invite', 'inviteGroup', 'uninviteGroup', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setRule', 'members', 'removeMember', 'admissions', 'admit', 'decline', 'knocks', 'answerKnock', 'audit',
+  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  // Home, boards and posts
+  'feed', 'publish', 'setHomeVisibility', 'followBoard', 'boards', 'setBoard', 'setBoardRule', 'setBoardAccess', 'curate', 'posts', 'post', 'submit', 'editPost', 'deletePost', 'confirmCoauthor', 'coauthorRequests', 'upvote', 'save', 'share', 'putBlob', 'blob',
+  'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers',
+  // Chat
+  'chats', 'openChat', 'channels', 'createChannel', 'messages', 'say', 'react', 'threads', 'startThread', 'reply',
+  // Issues and proposals
+  'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
+  // Rooms and project apps (joining; hosting needs the computer)
+  'rooms', 'joinRoom', 'leaveRoom', 'endRoom', 'roomChat', 'sayInRoom', 'projectApp', 'appLaunch', 'appReleases',
+  // GitHub, to look only
+  'github', 'githubRepos', 'spaceRepos',
+];
 
 export { decodePhoneLink, encodePhoneLink, type PhoneLink } from './phone-link.ts';
 
