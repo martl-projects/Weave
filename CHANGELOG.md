@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.1 · 2026-10-24
+
+- Let Bare run on Linux and macOS: set the execute bit npm leaves off
+
 ## v0.19.0 · 2026-10-24
 
 - Let the phone worker test wait for the reconnect after a restart
