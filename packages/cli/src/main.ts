@@ -21,6 +21,7 @@ import {
   saveConfig,
   startDaemon,
   WeaveNode,
+  createGumroadMembership,
   type Actor,
   type Admission,
   type Backend,
@@ -211,8 +212,10 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"] [--auto: let people in without asking]
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
-                             sell it through Gumroad: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
-                             (license keys on; your node lets buyers in and renews monthly); --gumroad off stops
+                             sell it through Gumroad: --gumroad new makes the membership there, with license keys,
+                             and publishes it (needs GUMROAD_ACCESS_TOKEN; works on tier create too)
+                             or link one you made: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
+                             your node lets buyers in and renews monthly; --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
   support <tier>             ask to join a tier               [--text "how I paid"] [--license <key from your Gumroad receipt>]
   requests                   people asking to join your tiers
@@ -351,6 +354,7 @@ const { values, positionals } = parseArgs({
     gumroad: { type: 'string' },
     'gumroad-product': { type: 'string' },
     'gumroad-variant': { type: 'string' },
+    'gumroad-token': { type: 'string' },
     license: { type: 'string' },
     months: { type: 'string' },
     limit: { type: 'string' },
@@ -429,7 +433,7 @@ const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
   const count = s.limit ? `${s.given} of ${s.limit}` : `${s.given} given`;
   const broken = s.broken ? '  BROKEN: more than the limit, or a number twice' : '';
-  const where = `${s.project ? `  — ${s.project.name}` : ''}${s.mine ? '' : `, by ${s.issuer.name ?? s.issuer.did}`}`;
+  const where = `${s.project ? `  — ${s.project.name}${s.project.checked === false ? ' (says so; not checked: you are not in it)' : ''}` : ''}${s.mine ? '' : `, by ${s.issuer.name ?? s.issuer.did}`}`;
   return [`${name.padEnd(24)} ${count}${broken}${where}`, `  ${s.id}`, ...(s.description ? [`  ${s.description}`] : [])].join('\n');
 };
 
@@ -437,7 +441,7 @@ const badgeLine = (b: BadgeInfo) => {
   const name = `${b.series.symbol ? `${b.series.symbol} ` : ''}${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}`;
   const problem = b.invalid ? `  NOT VALID (${b.invalid === 'duplicate' ? 'its number was given twice' : 'over the limit'})` : b.contested ? '  contested: passed on twice' : '';
   return [
-    `${name}${b.series.project ? `  — ${b.series.project.name}` : ''}, from ${b.issuer.name ?? b.issuer.did}${problem}`,
+    `${name}${b.series.project ? `  — ${b.series.project.name}${b.series.project.checked === false ? ' (not checked)' : ''}` : ''}, from ${b.issuer.name ?? b.issuer.did}${problem}`,
     `  ${b.id}`,
     ...(b.note ? [`  "${b.note}"`] : []),
     ...(b.ref ? [`  for ${b.ref}`] : []),
@@ -451,12 +455,30 @@ const tierLine = (t: TierInfo) => {
   return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}${gumroad}`;
 };
 
-/** --gumroad options as a tier's Gumroad link: undefined leaves it, null removes it. */
+/** --gumroad options as a tier's Gumroad link: undefined leaves it (and for "new"), null removes it. */
 function gumroadLink(): TierInfo['gumroad'] | null {
-  if (values.gumroad === undefined) return undefined;
+  if (values.gumroad === undefined || values.gumroad === 'new') return undefined;
   if (values.gumroad === 'off') return null;
   if (!values['gumroad-product']) throw new Error('add the product id: --gumroad-product <id> (from the product in Gumroad)');
   return { url: values.gumroad, product: values['gumroad-product'], ...(values['gumroad-variant'] ? { variant: values['gumroad-variant'] } : {}) };
+}
+
+/** The access token for --gumroad new: --gumroad-token, or GUMROAD_ACCESS_TOKEN (keeps it out of the shell history). */
+function gumroadToken(): string {
+  const token = values['gumroad-token'] ?? process.env.GUMROAD_ACCESS_TOKEN;
+  if (!token) throw new Error('--gumroad new needs a Gumroad access token: set GUMROAD_ACCESS_TOKEN (or --gumroad-token).\n  Gumroad → Settings → Advanced → Applications: create an application, then "Generate access token".');
+  return token;
+}
+
+/** --gumroad new: make the membership on Gumroad for the tier, publish it and link the tier to it. */
+async function sellOnGumroad(b: Backend, t: TierInfo, token: string): Promise<{ tier: TierInfo; note: string }> {
+  try {
+    const made = await createGumroadMembership(token, { name: t.name, price: t.price, currency: t.currency, description: t.description || undefined });
+    const tier = await b.setTier({ tier: t.id, gumroad: made.link, auto: false });
+    return { tier, note: made.published ? `on sale on Gumroad: ${made.link.url}` : `made on Gumroad, not published yet: ${made.warning}` };
+  } catch (e) {
+    throw new Error(`${(e as Error).message}\n  the tier is there; try again with: weave tier set ${t.id} --gumroad new`);
+  }
 }
 /** "5" or "5.50" (in the currency's main unit) → cents. */
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
@@ -1710,16 +1732,22 @@ ${postLine(p)}`);
       const [sub, ref] = args;
       const b = await backend();
       if (sub === 'create' && ref) {
-        const t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined });
-        return out(t, () => `offered ${t.name}\n${tierLine(t)}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
+        const token = values.gumroad === 'new' ? gumroadToken() : undefined;
+        let t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined });
+        const sold = token ? await sellOnGumroad(b, t, token) : undefined;
+        if (sold) t = sold.tier;
+        return out(t, () => `offered ${t.name}\n${tierLine(t)}${sold ? `\n${sold.note}` : ''}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
       }
       if (sub === 'list') {
         const tiers = await b.tiers(ref);
         return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(no tiers)');
       }
       if (sub === 'set' && ref) {
-        const t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() });
-        return out(t, () => tierLine(t));
+        const token = values.gumroad === 'new' ? gumroadToken() : undefined;
+        let t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() });
+        const sold = token ? await sellOnGumroad(b, t, token) : undefined;
+        if (sold) t = sold.tier;
+        return out(t, () => `${tierLine(t)}${sold ? `\n${sold.note}` : ''}`);
       }
       if ((sub === 'open' || sub === 'close' || sub === 'hide') && ref) {
         const t = await b.setTier({ tier: ref, open: sub === 'open', hidden: sub === 'hide' || undefined });

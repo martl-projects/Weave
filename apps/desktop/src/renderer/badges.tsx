@@ -6,7 +6,8 @@ import { api, onItem, useBlobUrl } from './lib.ts';
  * Badges next to people's names: lasting recognition from a project, like
  * "Super Supporter #7 of 20". Each shows as the series' picture, or its symbol
  * when it has none. Only valid badges show: a series whose issuer cheated
- * (more than its limit, a number twice) shows none of its badges.
+ * (more than its limit, a number twice) shows none of its badges, and neither
+ * does one claiming a project its issuer doesn't maintain (the node leaves it out).
  */
 
 /** How many badges show next to a name; the rest are on the person's hub. */
@@ -45,7 +46,7 @@ function useHeldBadges(did: string): BadgeInfo[] {
 }
 
 export const badgeTitle = (b: BadgeInfo) =>
-  `${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}${b.series.project ? ` · ${b.series.project.name}` : ''}, from ${b.issuer.name ?? 'its issuer'}${b.note ? `\n“${b.note}”` : ''}`;
+  `${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}${b.series.project ? ` · ${b.series.project.name}${b.series.project.checked === false ? ' (not checked: you are not in it)' : ''}` : ''}, from ${b.issuer.name ?? 'its issuer'}${b.note ? `\n“${b.note}”` : ''}`;
 
 /** One badge: its picture, else its symbol, else its initial. */
 export function BadgeMark({ badge, size = 16 }: { badge: BadgeInfo; size?: number }) {

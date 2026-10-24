@@ -2987,7 +2987,7 @@ export class WeaveNode implements Backend {
       const did = params.get('did') ?? '';
       if (!did.startsWith('did:')) throw new Error('did: whose badges to look up');
       const { series, badges } = this.#allBadges();
-      const ours = new Map(series.filter((s) => s.project?.id === projectId && !s.broken).map((s) => [s.id, s]));
+      const ours = new Map(series.filter((s) => s.project?.id === projectId && s.project.checked && !s.broken).map((s) => [s.id, s]));
       return badges
         .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
         .map((b) => {
@@ -4052,9 +4052,24 @@ export class WeaveNode implements Backend {
     this.replica.write(this.identity, { kind: KIND_BADGE_SERIES, body });
   }
 
-  /** Every badge series and badge this node holds the events of, checked against each other. */
+  /**
+   * Every badge series and badge this node holds the events of, checked against each other.
+   * A series counts for a project only if its issuer maintains it: in projects this node is in,
+   * one whose issuer doesn't is a false claim and left out with its badges; elsewhere the claim
+   * shows as unchecked.
+   */
   #allBadges(): { series: BadgeSeries[]; badges: Badge[] } {
-    return badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER));
+    const all = badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER));
+    const claimed = new Set<string>();
+    const series = all.series.flatMap((s): BadgeSeries[] => {
+      if (!s.project) return [s];
+      const project = this.#spaces.get(s.project.id);
+      if (project?.kind !== 'project') return [{ ...s, project: { ...s.project, checked: false } }];
+      if (this.#state(project).maintainers.has(s.issuer)) return [{ ...s, project: { id: project.id, name: project.name, checked: true } }];
+      claimed.add(s.id);
+      return [];
+    });
+    return { series, badges: claimed.size ? all.badges.filter((b) => !claimed.has(b.series)) : all.badges };
   }
 
   /** A series by id, or by name (yours first). */

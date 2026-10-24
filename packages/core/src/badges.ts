@@ -43,7 +43,11 @@ export interface BadgeSeries {
   description: string;
   /** How many there can ever be; undefined: no limit. */
   limit?: number;
-  project?: { id: string; name: string };
+  /**
+   * The project it claims to be from. Only a node in that project can check
+   * that the issuer maintains it: `checked` says it did; false means it can't.
+   */
+  project?: { id: string; name: string; checked?: boolean };
   /** Badges given so far (valid ones). */
   given: number;
   /** The issuer signed more than the limit, or one number twice. */

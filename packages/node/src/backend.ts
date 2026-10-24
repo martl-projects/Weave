@@ -471,7 +471,8 @@ export interface BadgeSeriesInfo {
   description: string;
   /** How many there can ever be; missing: no limit. Fixed when the series was started. */
   limit?: number;
-  project?: { id: string; name: string };
+  /** checked: this node is in the project and its issuer maintains it; false: claimed, this node can't check. */
+  project?: { id: string; name: string; checked?: boolean };
   /** Badges given so far. */
   given: number;
   /** The issuer signed more badges than the limit, or one number twice: provable from their own signatures. */
@@ -484,7 +485,7 @@ export interface BadgeSeriesInfo {
 /** One badge: number n of its series, signed by the issuer, passed on by its holders. */
 export interface BadgeInfo {
   id: string;
-  series: { id: string; name: string; symbol: string; image?: string; limit?: number; broken: boolean; project?: { id: string; name: string } };
+  series: { id: string; name: string; symbol: string; image?: string; limit?: number; broken: boolean; project?: { id: string; name: string; checked?: boolean } };
   issuer: Person;
   n: number;
   holder: Person;
