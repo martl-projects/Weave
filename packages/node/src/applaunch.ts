@@ -27,7 +27,7 @@ export const launchFingerprint = (command: string[], folder: string): string => 
 const cmdQuote = (arg: string) => `"${arg.replace(/"/g, '""')}"`;
 
 export class AppProcesses {
-  #runs = new Map<string, AppRun & { child?: ChildProcess; stopping?: true }>();
+  #runs = new Map<string, AppRun & { child?: ChildProcess; stopping?: true; onStop?: () => void }>();
   readonly #changed: () => void;
 
   constructor(changed: () => void = () => {}) {
@@ -44,8 +44,11 @@ export class AppProcesses {
     return !!run && !run.exit;
   }
 
-  /** `extraEnv`: what the app gets on top of Weave's own environment (the app API, see appapi.ts). */
-  start(key: string, command: string[], folder: string, extraEnv: Record<string, string> = {}): void {
+  /**
+   * `extraEnv`: what the app gets on top of Weave's own environment (the app API, see appapi.ts). `onStop` runs
+   * before the process is ended: a container is stopped through Docker, since ending its docker client wouldn't.
+   */
+  start(key: string, command: string[], folder: string, extraEnv: Record<string, string> = {}, onStop?: () => void): void {
     if (this.running(key)) throw new Error('the app is running already');
     const [named, ...args] = command;
     // A program in the app's own folder ("band-ab.exe" or "./band-ab"): Windows wouldn't look there by itself.
@@ -57,7 +60,7 @@ export class AppProcesses {
     const child = batch
       ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${[program, ...args].map(cmdQuote).join(' ')}"`], { cwd: folder, env, windowsHide: true, windowsVerbatimArguments: true })
       : spawn(program, args, { cwd: folder, env, windowsHide: true, detached: process.platform !== 'win32' });
-    const run: AppRun & { child?: ChildProcess; stopping?: true } = { started: new Date().toISOString(), log: [], child };
+    const run: AppRun & { child?: ChildProcess; stopping?: true; onStop?: () => void } = { started: new Date().toISOString(), log: [], child, ...(onStop ? { onStop } : {}) };
     this.#runs.set(key, run);
     const add = (chunk: Buffer) => {
       for (const line of chunk.toString('utf8').split(/\r?\n/)) if (line.trim()) run.log.push(line.slice(0, 500));
@@ -85,6 +88,7 @@ export class AppProcesses {
     const child = run?.child;
     if (!run || !child?.pid) return;
     run.stopping = true;
+    run.onStop?.();
     if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
     else {
       try {

@@ -120,14 +120,27 @@ function ApproveLaunch({ app, launch, onApprove, onClose }: { app: AppManifest; 
     <Modal title={`Start ${app.name}?`} onClose={onClose}>
       <div className="approve-launch">
         <Icon name="warning" size={32} />
-        <div>
-          <p>Weave will run this program on your computer, as you:</p>
-          <pre className="launch-command">{launch.command!.join(' ')}</pre>
-          <p className="small">
-            in <code>{launch.folder}</code>
-          </p>
-          <p className="small">It comes from the project's app manifest. Only run it if you trust the people who maintain {app.name}. Weave asks again whenever the command or the folder changes.</p>
-        </div>
+        {launch.container?.active ? (
+          <div>
+            <p>
+              Weave will run {app.name} in a container, from the image the project released ({launch.container.image}:{launch.container.tag}):
+            </p>
+            <pre className="launch-command">{launch.command!.join(' ')}</pre>
+            <p className="small">
+              It's sealed off from your computer: it gets only its own ports (on this computer, for the room), the settings you filled in, and none of your files. Weave asks again when a new release
+              brings another image.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <p>Weave will run this program on your computer, as you:</p>
+            <pre className="launch-command">{launch.command!.join(' ')}</pre>
+            <p className="small">
+              in <code>{launch.folder}</code>
+            </p>
+            <p className="small">It comes from the project's app manifest. Only run it if you trust the people who maintain {app.name}. Weave asks again whenever the command or the folder changes.</p>
+          </div>
+        )}
       </div>
       <div className="buttons">
         <button onClick={onClose}>Cancel</button>
@@ -481,7 +494,7 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
       <AppSettings project={project} app={app} launch={launch} />
       {!launch.command ? (
         launch.hint && <p className="small">To host, start {app.name} yourself: {launch.hint}</p>
-      ) : launch.install?.progress ? null : !launch.folder ? (
+      ) : launch.install?.progress ? null : !launch.folder && !launch.container?.active ? (
         launch.install?.asset ? null : (
         <div className="field-row">
           <span className="grow small">To host a room, Weave can start {app.name} for you. Where is it on this computer?</span>
@@ -509,18 +522,27 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
             )}
             {launch.log.length > 0 && <button onClick={() => setShowLog(!showLog)}>{showLog ? 'Hide output' : 'Output'}</button>}
           </div>
-          <div className="small muted">
-            {launch.command.join(' ')} · in {launch.install?.installed ? `${app.name} ${launch.install.installed}, installed by Weave` : launch.folder}{' '}
-            <a
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                void pick();
-              }}
-            >
-              change
-            </a>
-          </div>
+          {launch.container?.active ? (
+            <div className="small muted">
+              In a container: {launch.container.image}:{launch.container.tag}, sealed off from this computer (Docker)
+            </div>
+          ) : (
+            <div className="small muted">
+              {launch.command.join(' ')} · in {launch.install?.installed ? `${app.name} ${launch.install.installed}, installed by Weave` : launch.folder}{' '}
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void pick();
+                }}
+              >
+                change
+              </a>
+            </div>
+          )}
+          {launch.container && !launch.container.docker && (
+            <div className="small muted">{app.name} also comes as a container image: with Docker running on this computer, Weave runs it sealed off from your files.</div>
+          )}
           {showLog && <pre className="app-log sunken">{launch.log.slice(-60).join('\n')}</pre>}
         </>
       )}

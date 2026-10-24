@@ -1706,7 +1706,7 @@ ${postLine(p)}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
-        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start ? `\n  start: ${app.start.hint}` : ''}` : '(no app published)'));
+        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.github ? ` (${app.install.github})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
       }
       if (sub === 'folder') {
         const info = await b.setAppFolder({ project: needProject(), folder: args[1] === undefined ? (process.env.INIT_CWD ?? process.cwd()) : args[1] && resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1]) });

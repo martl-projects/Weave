@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   accessOf,
   accountsOf,
@@ -178,6 +179,8 @@ import {
   parseManifest,
   startCommand,
   type AppAsset,
+  type AppImage,
+  type AppInstall,
   parseScope,
   permits,
   POST_SORTS,
@@ -350,7 +353,7 @@ import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type 
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createPublicKey, createVerify, hkdfSync } from 'node:crypto';
+import { createHash, createPublicKey, createVerify, hkdfSync, createHmac } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
@@ -362,6 +365,7 @@ import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
 import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
+import { imageDigest, imageLocation } from './registry.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -561,6 +565,7 @@ export class WeaveNode implements Backend {
     },
     mayJoin: (room, person) => this.#mayJoin(room, person),
     servicePort: (room) => this.#roomService(room)?.port,
+    personHeader: (room, person) => this.#personHeader(room, person),
     seed: (roomId) => this.#roomSeed(roomId),
     nameOf: (did) => this.nameOf(did),
     changed: () => this.#emitLive(),
@@ -582,6 +587,14 @@ export class WeaveNode implements Backend {
   });
   /** How this node reaches GitHub (tests put a stand-in here). */
   githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+  /**
+   * Containers (Weave and Docker): the registry API is reached with `fetch`; `docker` is the Docker command line
+   * (WEAVE_DOCKER: a path, or a JSON list of a program and its first arguments). Tests use stand-ins.
+   */
+  containerSetup: { fetch: Fetch; docker: string[] } = {
+    fetch: (...args) => fetch(...args),
+    docker: process.env.WEAVE_DOCKER?.trim().startsWith('[') ? (JSON.parse(process.env.WEAVE_DOCKER) as string[]) : [process.env.WEAVE_DOCKER || 'docker'],
+  };
   #githubLogin?: GitHubLogin;
   /** Apps being installed (or failed to), by project id. */
   #installs = new Map<string, InstallJob>();
@@ -2575,9 +2588,64 @@ export class WeaveNode implements Backend {
     return manifest;
   }
 
-  /** The command this computer starts a project's app with: its release build's when Weave installed one. */
+  /** The command this computer starts a project's app with: its container when there's one and Docker runs, else its release build's when Weave installed one. */
   #startCommand(project: StoredSpace, app: AppManifest | undefined): string[] | undefined {
+    if (this.#containerOf(app)) return this.#containerCommand(project, app!);
     return startCommand(app, platformKey(), !!this.#installed(project.id));
+  }
+
+  // ---------------------------------------------------------------- apps in containers (Weave and Docker)
+
+  /** Whether Docker answers on this computer: asked at most every 30 seconds. */
+  #dockerSeen?: { at: number; up: boolean };
+
+  #dockerUp(): boolean {
+    if (this.#dockerSeen && Date.now() - this.#dockerSeen.at < 30_000) return this.#dockerSeen.up;
+    const [program, ...first] = this.containerSetup.docker;
+    const probe = spawnSync(program, [...first, 'version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+    const up = probe.status === 0 && !!probe.stdout.trim();
+    this.#dockerSeen = { at: Date.now(), up };
+    return up;
+  }
+
+  /** The release's image, when it has one and Docker runs here. */
+  #containerOf(app: AppManifest | undefined): AppImage | undefined {
+    const image = app?.install?.image;
+    return image && app?.start?.image && this.#dockerUp() ? image : undefined;
+  }
+
+  /** The container's name: one per project on this computer. */
+  #containerName(project: StoredSpace): string {
+    return `weave-${project.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`;
+  }
+
+  /**
+   * How the app's container runs: by its digest, with only the services' ports (on 127.0.0.1; on Linux in the
+   * host's network, so tunnel ports stay as they are), no extra privileges, nothing of the computer mounted, and its
+   * settings and Weave's variables by name only (their values come from the environment, not the command line).
+   */
+  #containerCommand(project: StoredSpace, app: AppManifest): string[] {
+    const image = app.install!.image!;
+    const linux = process.platform === 'linux';
+    const network = linux ? ['--network', 'host'] : app.services.flatMap((s) => ['-p', `127.0.0.1:${s.port}:${s.port}${s.protocol === 'tcp' ? '/tcp' : ''}`]);
+    const names = [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT'];
+    return [
+      ...this.containerSetup.docker,
+      'run',
+      '--rm',
+      '--name',
+      this.#containerName(project),
+      '--cap-drop',
+      'ALL',
+      '--cap-add',
+      'NET_BIND_SERVICE',
+      '--security-opt',
+      'no-new-privileges',
+      ...(linux ? [] : ['--add-host', 'host.docker.internal:host-gateway']),
+      ...network,
+      ...names.flatMap((n) => ['-e', n]),
+      `${image.ref}@${image.digest}`,
+    ];
   }
 
   async appLaunch(ref: string): Promise<AppLaunchInfo> {
@@ -2599,6 +2667,9 @@ export class WeaveNode implements Backend {
       ...(app?.env ? { settings: app.env.map((e) => ({ ...e, set: !!this.#appSettings()[project.id]?.[e.name] })) } : {}),
       ...(app ? { release: this.#releaseInfo(project, app) } : {}),
       ...(install ? { install } : {}),
+      ...(app?.start?.image && app.install?.image
+        ? { container: { image: app.install.image.ref, tag: app.install.image.tag, digest: app.install.image.digest, docker: this.#dockerUp(), active: !!this.#containerOf(app) } }
+        : {}),
     };
   }
 
@@ -2674,9 +2745,12 @@ export class WeaveNode implements Backend {
     const app = this.#app(project);
     const command = this.#startCommand(project, app);
     if (!app || !command) throw new Error(`${project.name}'s app has no start command; start it yourself${app?.start?.hint ? `: ${app.start.hint}` : ''}`);
-    const folder = this.config.appFolders[project.id];
+    const container = this.#containerOf(app);
+    // A container needs no copy of the app: it runs in Weave's own folder for the project.
+    const folder = container ? this.#appsDir(project.id) : this.config.appFolders[project.id];
     if (!folder) throw new Error(`choose where ${app.name} is on this computer first (the folder with its weave.app.json)`);
-    this.#checkAppFolder(project.id, folder);
+    if (container) mkdirSync(folder, { recursive: true });
+    else this.#checkAppFolder(project.id, folder);
     const fingerprint = launchFingerprint(command, folder);
     if (this.config.approvedLaunches[project.id] !== fingerprint) {
       if (!input.approve) throw new Error(`approve the command first: Weave would run "${command.join(' ')}" in ${folder}`);
@@ -2688,7 +2762,18 @@ export class WeaveNode implements Backend {
     if (missing.length) throw new Error(`${app.name} needs ${missing.map((e) => e.label).join(', ')} first: fill ${missing.length === 1 ? 'it' : 'them'} in under Live (or weave app set ${missing[0].name} -p ${project.name})`);
     // Only the settings this manifest names, and Weave's own variables last, so a setting can't stand in for them.
     const settings = Object.fromEntries((app.env ?? []).filter((e) => values[e.name]).map((e) => [e.name, values[e.name]]));
-    this.#apps.start(project.id, command, folder, { ...settings, ...(await this.appEnv(project.id)) });
+    const weave = await this.appEnv(project.id);
+    if (!container) {
+      this.#apps.start(project.id, command, folder, { ...settings, ...weave });
+      return this.appLaunch(project.id);
+    }
+    // In a container, Weave's app API is the host's: reached as host.docker.internal (on Linux the host's network is shared).
+    const api = process.platform === 'linux' ? weave.WEAVE_API : weave.WEAVE_API.replace('127.0.0.1', 'host.docker.internal');
+    const [docker, ...first] = this.containerSetup.docker;
+    const name = this.#containerName(project);
+    // One left from before (a crash, a stop that didn't reach Docker) would block the name.
+    spawnSync(docker, [...first, 'rm', '-f', name], { windowsHide: true, timeout: 20_000 });
+    this.#apps.start(project.id, command, folder, { ...settings, ...weave, WEAVE_API: api }, () => void spawnSync(docker, [...first, 'stop', '-t', '5', name], { windowsHide: true, timeout: 20_000 }));
     return this.appLaunch(project.id);
   }
 
@@ -2772,6 +2857,20 @@ export class WeaveNode implements Backend {
       };
     }
     throw new AppApiError(404, `no route ${route}`);
+  }
+
+  /**
+   * X-Weave-Person for a room's http service (Weave and Docker): who this player is, as the app API would say,
+   * the room, and the time, signed with the app's own token (HMAC-SHA256), which only Weave and the app know.
+   * Only for apps Weave gave a token (it started them, or weave app env): otherwise nobody could check it.
+   */
+  #personHeader(room: Room, person: Did): string | undefined {
+    if (this.#roomService(room)?.protocol !== 'http') return undefined;
+    const found = this.#allRooms().find((r) => r.room.id === room.id);
+    const token = found && this.#appTokens.get(found.project.id);
+    if (!found || !token) return undefined;
+    const payload = Buffer.from(JSON.stringify({ ...this.#appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.clock() / 1000) })).toString('base64url');
+    return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
   }
 
   /** A person as an app sees them: who they are and their place in the project. */
@@ -2901,10 +3000,6 @@ export class WeaveNode implements Backend {
     const auth = this.#githubAuth();
     const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
     const release = await client.release(repo, input.tag.trim());
-    if (!release.assets.length)
-      throw new Error(
-        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com`,
-      );
     // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
     const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
     let app: AppManifest;
@@ -2917,6 +3012,19 @@ export class WeaveNode implements Backend {
       if (published && published.app !== app.app) throw new Error(`${repo} at ${release.tag} holds the app "${app.app}", but ${project.name}'s app is "${published.app}"`);
     } else if (published) app = published;
     else throw new Error(`${repo} has no weave.app.json at ${release.tag}: add one (app, name, services, start), tag again, and release`);
+    if (!release.assets.length && !app.start?.image)
+      throw new Error(
+        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com (or name a container image in weave.app.json: start.image)`,
+      );
+    // The release's container image, pinned by its digest: tagged like the release (v1.2.0, or 1.2.0).
+    let image: AppImage | undefined;
+    if (app.start?.image) {
+      const ref = app.start.image;
+      const tags = [...new Set([release.tag, release.tag.replace(/^v(?=\d)/, '')])];
+      const credentials = auth && imageLocation(ref).host === 'ghcr.io' ? { user: auth.login, token: auth.token } : undefined;
+      const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
+      image = { ref, tag: found.tag, digest: found.digest };
+    }
     // Which file is for which platform: as given, or guessed from the names.
     const chosen = new Map<string, ReleaseAsset>();
     if (input.assets && Object.keys(input.assets).length) {
@@ -2931,7 +3039,7 @@ export class WeaveNode implements Backend {
         if (platform && !chosen.has(platform)) chosen.set(platform, asset);
       }
     }
-    if (!chosen.size) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
+    if (!chosen.size && release.assets.length && !image) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
     // Fingerprint each file once, so every host's node can check what it downloads.
     const assets: Record<string, AppAsset> = {};
     for (const [platform, asset] of chosen) {
@@ -2948,7 +3056,8 @@ export class WeaveNode implements Backend {
     // Members download through the app the maintainer uses, when it's their own.
     const own = this.config.githubApp?.slug;
     const { app: _app, ...before } = { ...published?.install, ...app.install };
-    const manifest = parseManifest({ ...app, install: { ...before, github: repo, tag: release.tag, assets, ...(own ? { app: own } : {}) } });
+    const { image: _image, assets: _assets, ...kept } = before as AppInstall;
+    const manifest = parseManifest({ ...app, install: { ...kept, github: repo, tag: release.tag, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}), ...(own ? { app: own } : {}) } });
     await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
     return manifest;
   }

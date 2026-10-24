@@ -557,6 +557,11 @@ export interface AppLaunchInfo {
   settings?: Array<AppSetting & { set: boolean }>;
   /** You may point the app at a GitHub release (a maintainer), and the repository its releases come from. */
   release?: { canRelease: boolean; repo?: string };
+  /**
+   * The release's container image (Weave and Docker): when Docker runs on this computer, Weave starts the app
+   * from it, sealed off from the computer (`active`). Without Docker, `docker` is false and it starts as before.
+   */
+  container?: { image: string; tag: string; digest: string; docker: boolean; active: boolean };
   /** Getting the app: its release, the file for this computer, and steps for an agent. */
   install?: {
     /** The release's tag. */

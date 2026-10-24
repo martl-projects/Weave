@@ -53,6 +53,12 @@ export interface AppManifest {
      * {"win32-x64": ["./band-ab.exe"], "linux-x64": ["./band-ab"]}. `command` stays for source checkouts.
      */
     release?: Record<string, string[]>;
+    /**
+     * A container image (stage: Weave and Docker), like "ghcr.io/martldennl/gameshow", without tag or digest:
+     * weave app release pins the release's image by its digest (install.image), and hosts with Docker run it
+     * sealed off from their computer, with only the services' ports.
+     */
+    image?: string;
   };
   /** How hosts get the app onto their computer. */
   install?: AppInstall;
@@ -100,7 +106,23 @@ export interface AppInstall {
   steps?: string[];
   /** The GitHub App (its slug) the release is reached through, when not Weave's default: a private repo's files only download through an app installed on it. */
   app?: string;
+  /** The release's container image, pinned by its digest (weave app release reads it from the registry). */
+  image?: AppImage;
 }
+
+export interface AppImage {
+  /** The image without tag or digest, like ghcr.io/martldennl/gameshow. */
+  ref: string;
+  /** The tag it was released under, for people. */
+  tag: string;
+  /** What runs: sha256:… of the image's manifest (or index). A tag can move; this can't. */
+  digest: string;
+}
+
+/** A container image reference without tag or digest: [registry[:port]/]path, lowercase. */
+export const IMAGE_REF = /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$/;
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const IMAGE_TAG = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
 export interface AppAsset {
   /** The file's name in the release. */
@@ -129,14 +151,29 @@ export function parseInstall(input: unknown): AppInstall | undefined {
       assets[platform] = { file, sha256, ...(Number.isInteger(size) && size > 0 ? { size } : {}) };
     }
   }
+  let image: AppImage | undefined;
+  if (i.image !== undefined) {
+    const raw = (i.image && typeof i.image === 'object' ? i.image : {}) as Record<string, unknown>;
+    const ref = text(raw.ref, 255);
+    const imageTag = text(raw.tag, 128);
+    const digest = text(raw.digest, 80);
+    if (!IMAGE_REF.test(ref) || !IMAGE_TAG.test(imageTag) || !DIGEST.test(digest)) throw new Error('"install.image" needs the image ("ref"), its "tag" and its "digest" (sha256:…): weave app release writes it');
+    image = { ref, tag: imageTag, digest };
+  }
   const has = Object.keys(assets).length > 0;
   const github = text(i.github, 140);
   const tag = text(i.tag, 100);
-  if (has && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
-  if (has && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
-  if (!has && !steps.length) return undefined;
+  if ((has || image) && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
+  if ((has || image) && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
+  if (!has && !image && !steps.length) return undefined;
   const app = text(i.app, 100);
-  return { ...(has ? { github, tag, assets } : {}), ...(steps.length ? { steps } : {}), ...(has && /^[a-z0-9][a-z0-9-]{0,99}$/.test(app) ? { app } : {}) };
+  return {
+    ...(has || image ? { github, tag } : {}),
+    ...(has ? { assets } : {}),
+    ...(image ? { image } : {}),
+    ...(steps.length ? { steps } : {}),
+    ...((has || image) && /^[a-z0-9][a-z0-9-]{0,99}$/.test(app) ? { app } : {}),
+  };
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -220,10 +257,19 @@ export function checkManifest(input: unknown): ManifestCheck {
       }
     }
   }
-  if (rawStart.command === undefined && rawStart.release === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release for release builds)');
-  if (rawStart.release !== undefined && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
+  let image: string | undefined;
+  if (rawStart.image !== undefined) {
+    const ref = text(rawStart.image, 255);
+    if (/[@]|:[^/]*$/.test(ref)) problems.push('"start.image" is the image without tag or digest, like "ghcr.io/you/app": weave app release pins the release\'s image by its digest');
+    else if (!IMAGE_REF.test(ref)) problems.push(`"start.image" isn't an image name: lowercase, like "ghcr.io/you/app" or "you/app" on Docker Hub`);
+    else image = ref;
+  }
+  if (rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
+  if ((rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
   const start =
-    hint || command || release ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}) } : undefined;
+    hint || command || release || image
+      ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}), ...(image ? { image } : {}) }
+      : undefined;
 
   let install: AppInstall | undefined;
   try {
@@ -287,6 +333,7 @@ export const MANIFEST_RULES = [
   'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label. Without open, everyone opens "/". Either way anyone can type any path: to tell host and players apart for real, ask Weave with @weave/sdk.',
   'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after the host approves it once.',
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
+  'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Each host types it in Weave (Live tab, or weave app set), it stays on their computer, and Weave hands it to this app alone when it starts it. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',

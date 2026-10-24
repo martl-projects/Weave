@@ -56,7 +56,8 @@ export async function startAppApi(projectOf: (token: string) => string | undefin
 
 function handle(projectOf: (token: string) => string | undefined, answer: AppApiAnswer, req: IncomingMessage, res: ServerResponse): void {
   const host = (req.headers.host ?? '').split(':')[0];
-  if (host !== '127.0.0.1' && host !== 'localhost') return send(res, 403, { error: 'forbidden host' });
+  // host.docker.internal: an app in a container reaching the host (Weave and Docker). The token is needed either way.
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== 'host.docker.internal') return send(res, 403, { error: 'forbidden host' });
   const given = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
   const project = given ? projectOf(given) : undefined;
   if (!project) return send(res, 401, { error: 'unauthorized' });

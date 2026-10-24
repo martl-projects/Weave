@@ -18,7 +18,7 @@ http.createServer(async (req, res) => {
 });
 ```
 
-With WebSockets, ask once on the upgrade request: `weave.who(req)` there tells you who the socket belongs to for as long as it's open. With `Bun.serve`, pass `server.requestIP(req)`.
+For http services, Weave also puts the player in every request as `X-Weave-Person`, signed with the app's token: `weave.who(req)` reads it first, without asking Weave, so it works in a container or behind a proxy too (pass the request, not just its socket). With WebSockets, ask once on the upgrade request: `weave.who(req)` there tells you who the socket belongs to for as long as it's open. With `Bun.serve`, pass `server.requestIP(req)`.
 
 ## What you get
 
