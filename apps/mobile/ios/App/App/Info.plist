@@ -68,5 +68,7 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Weave uses the camera to scan the pairing code your computer shows.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>When your phone and computer are on the same network, Weave connects to your computer directly. It doesn't look for other devices.</string>
 </dict>
 </plist>
