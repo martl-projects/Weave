@@ -493,6 +493,11 @@ export interface BadgeInfo {
   note: string;
   /** What it's for, e.g. the post an idea came from. */
   ref?: string;
+  /**
+   * A personal note from the issuer. `text` when it's public, or when you can open it (you were given the
+   * badge, or gave it); `mayPublish`: you were given it, so you decide whether everyone reads it.
+   */
+  personal?: { text?: string; published: boolean; mayPublish: boolean };
   time: string;
   /** Not valid: over the series' limit, or a number the issuer gave twice. */
   invalid?: 'over-limit' | 'duplicate';
@@ -1346,8 +1351,13 @@ export interface Backend {
   setBadgeSeries(input: { series: string; name?: string; symbol?: string; image?: string; description?: string }): Promise<BadgeSeriesInfo>;
   /** The badge series of a project, or every one this node knows. */
   badgeSeries(project?: string): Promise<BadgeSeriesInfo[]>;
-  /** Give someone the next free badge of one of your series; `ref` is what it's for (e.g. a post). */
-  giveBadge(input: { series: string; who: string; note?: string; ref?: string }): Promise<BadgeInfo>;
+  /**
+   * Give someone the next free badge of one of your series; `ref` is what it's for (e.g. a post). `personal`
+   * is a note only they (and you) can read, until they publish it.
+   */
+  giveBadge(input: { series: string; who: string; note?: string; ref?: string; personal?: string }): Promise<BadgeInfo>;
+  /** Make the personal note on a badge you were given public, or (on: false) take it back. */
+  publishBadgeNote(input: { badge: string; on?: boolean }): Promise<BadgeInfo>;
   /** The badges someone holds (default: you). */
   badges(who?: string): Promise<BadgeInfo[]>;
   /** Pass a badge you hold on to someone else, e.g. your other account; it keeps its number. */
@@ -1402,7 +1412,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
-  'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
+  'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

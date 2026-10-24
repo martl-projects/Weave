@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { KIND_BADGE, KIND_BADGE_TRANSFER } from '@weave/core';
+import { KIND_BADGE, KIND_BADGE_NOTE, KIND_BADGE_TRANSFER } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const sdk = createRequire(import.meta.url)('../../sdk/src/index.cjs') as typeof import('../../sdk/src/index.d.cts');
@@ -159,5 +159,40 @@ describe('badges', () => {
       expect.objectContaining({ series: expect.objectContaining({ name: 'Quizmaster', symbol: '🎤' }), n: 1, ref: 'post:abc', issuer: { did: martin.identity.author, name: 'Martin' } }),
     ]);
     expect(await weave.badges(martin.identity.author)).toEqual([]);
+  });
+
+  it("seals a personal note to the one given the badge, until they publish it in words provably the issuer's", async () => {
+    const { martin, lena, ada } = await setup();
+    const words = 'Lena, you believed in Weave before there was anything to see.\nThank you.';
+    const badge = await martin.giveBadge({ series: 'Super Supporter', who: 'Lena', note: 'Backed Weave in its first week', personal: words });
+    sync(martin, lena);
+    sync(martin, ada);
+
+    // Lena and Martin read it; Ada sees only that there is one. Its text is in no public event.
+    expect((await lena.badges())[0].personal).toEqual({ text: words, published: false, mayPublish: true });
+    expect((await martin.badges('Lena'))[0].personal).toEqual({ text: words, published: false, mayPublish: false });
+    expect((await ada.badges('Lena'))[0].personal).toEqual({ published: false, mayPublish: false });
+    expect(JSON.stringify(martin.replica.events())).not.toContain('believed in Weave');
+    await expect(ada.publishBadgeNote({ badge: badge.id })).rejects.toThrow(/only the one a badge was given to/);
+
+    // Lena publishes it: everyone reads it, and it's checked against Martin's signed hash.
+    await lena.publishBadgeNote({ badge: badge.id });
+    sync(lena, ada);
+    expect((await ada.badges('Lena'))[0].personal).toEqual({ text: words, published: true, mayPublish: false });
+
+    // Words she makes up don't count: they don't match what Martin signed.
+    lena.replica.write(lena.identity, { kind: KIND_BADGE_NOTE, body: { badge: badge.id, text: 'Martin says Lena is the best', salt: 'AAAAAAAAAAAAAAAAAAAAAA', on: true } });
+    sync(lena, ada);
+    expect((await ada.badges('Lena'))[0].personal).toEqual({ text: words, published: true, mayPublish: false });
+
+    // She can take it back too.
+    await lena.publishBadgeNote({ badge: badge.id, on: false });
+    sync(lena, ada);
+    expect((await ada.badges('Lena'))[0].personal).toEqual({ published: false, mayPublish: false });
+    expect((await lena.badges())[0].personal?.text).toBe(words);
+
+    // A badge without one has none; a note too long is refused.
+    expect((await martin.giveBadge({ series: 'Super Supporter', who: 'Ada' })).personal).toBeUndefined();
+    await expect(martin.giveBadge({ series: 'Super Supporter', who: 'Ada', personal: 'x'.repeat(2001) })).rejects.toThrow(/at most 2000/);
   });
 });

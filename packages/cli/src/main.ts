@@ -225,7 +225,8 @@ badges: lasting recognition from a project, signed and checkable by anyone, neve
                              [--limit 20: how many there can ever be, never raised later]
   badge list [-p <project>]  badge series (default: every one this node knows)
   badge set <series>         change it                        [--name] [--symbol] [--image <file>, "" removes it] [--text]
-  badge give <series> <who>  give them the next free number   [--text <what for>] [--ref <post id>]
+  badge give <series> <who>  give them the next free number   [--text <what for>] [--ref <post id>] [--personal <a note only they read>]
+  badge publish <badge>      make the personal note on a badge you were given public; --off to take it back
   badge pass <badge> <who>   pass a badge you hold on, e.g. to your other account; it keeps its number
   badges [who]               the badges someone holds (default: yours)
 
@@ -357,6 +358,7 @@ const { values, positionals } = parseArgs({
     limit: { type: 'string' },
     symbol: { type: 'string' },
     ref: { type: 'string' },
+    personal: { type: 'string' },
     name: { type: 'string' },
     'id-token': { type: 'string' },
     'client-id': { type: 'string' },
@@ -442,6 +444,7 @@ const badgeLine = (b: BadgeInfo) => {
     `  ${b.id}`,
     ...(b.note ? [`  "${b.note}"`] : []),
     ...(b.ref ? [`  for ${b.ref}`] : []),
+    ...(b.personal ? [b.personal.text !== undefined ? `  personal note${b.personal.published ? ' (public)' : ' (private)'}: "${b.personal.text}"` : '  a personal note, sealed'] : []),
     ...(b.holders.length > 1 ? [`  held by ${b.holders.map((h) => h.name ?? h.did).join(' → ')}`] : []),
   ].join('\n');
 };
@@ -1772,14 +1775,18 @@ ${postLine(p)}`);
         return out(s, () => badgeSeriesLine(s));
       }
       if (sub === 'give' && ref && who) {
-        const badge = await b.giveBadge({ series: ref, who, note: values.text, ref: values.ref });
+        const badge = await b.giveBadge({ series: ref, who, note: values.text, ref: values.ref, personal: values.personal });
         return out(badge, () => `gave ${badge.holder.name ?? badge.holder.did} ${badgeLine(badge)}`);
+      }
+      if (sub === 'publish' && ref) {
+        const badge = await b.publishBadgeNote({ badge: ref, on: !values.off });
+        return out(badge, () => `${values.off ? 'took back the personal note' : 'published the personal note'}: ${badgeLine(badge)}`);
       }
       if (sub === 'pass' && ref && who) {
         const badge = await b.transferBadge({ badge: ref, to: who });
         return out(badge, () => `passed on to ${badge.holder.name ?? badge.holder.did}: ${badgeLine(badge)}`);
       }
-      throw new Error('usage: weave badge create|list|set|give|pass — see "weave --help"');
+      throw new Error('usage: weave badge create|list|set|give|publish|pass — see "weave --help"');
     }
 
     case 'badges': {

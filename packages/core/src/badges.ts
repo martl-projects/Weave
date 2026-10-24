@@ -1,4 +1,7 @@
+import { sha256 } from '@noble/hashes/sha2.js';
 import { parseBlobRef } from './blobs.ts';
+import { b64u, utf8 } from './bytes.ts';
+import type { Box } from './crypto.ts';
 import { isDid, type Did } from './keys.ts';
 import { recordOrder, type WeaveRecord } from './records.ts';
 
@@ -11,9 +14,15 @@ import { recordOrder, type WeaveRecord } from './records.ts';
  *                         uploaded picture (wblob: reference) shown next to the holder's name. The first
  *                         event of a series fixes its limit (how many there can ever be); later
  *                         ones may change the name, symbol and description, never the limit.
- *   weave.badge           {series, n, to, note, ref}
+ *   weave.badge           {series, n, to, note, ref, personal}
  *                         public, by the series' issuer: badge number n of the series, given to
- *                         `to`; `ref` is what it's for (e.g. the post an idea came from)
+ *                         `to`; `ref` is what it's for (e.g. the post an idea came from).
+ *                         `personal` {hash, boxes}: a personal note, boxed to `to` (and the issuer)
+ *                         as {text, salt}; the public hash commits to it (badgeNoteHash)
+ *   weave.badge.note      {badge, text, salt, on}
+ *                         public, by the one the badge was given to: publishes its personal note,
+ *                         or (on: false) takes it back; the latest counts. It shows only if text and
+ *                         salt match the hash the issuer signed, so the words are provably theirs.
  *   weave.badge.transfer  {badge, from, to}
  *                         public, by the badge's current holder: passes it on. `from` is the
  *                         badge's id for its first transfer, else the previous transfer's id.
@@ -28,6 +37,13 @@ import { recordOrder, type WeaveRecord } from './records.ts';
 export const KIND_BADGE_SERIES = 'weave.badge.series';
 export const KIND_BADGE = 'weave.badge';
 export const KIND_BADGE_TRANSFER = 'weave.badge.transfer';
+export const KIND_BADGE_NOTE = 'weave.badge.note';
+
+/** How long a personal note can be. */
+export const BADGE_NOTE_MAX = 2000;
+
+/** What the issuer commits to in a badge's personal note: its text, with a random salt so the hash gives nothing away. */
+export const badgeNoteHash = (text: string, salt: string): string => b64u.encode(sha256(new Uint8Array([...utf8('weave/badge-note/v1'), ...b64u.decode(salt), ...utf8(text)])));
 
 /** The most badges a limited series can have. */
 export const BADGE_LIMIT_MAX = 100_000;
@@ -66,6 +82,8 @@ export interface Badge {
   head: string;
   note: string;
   ref?: string;
+  /** A personal note from the issuer: boxed to the one it was given to; `published` once they made it public. */
+  personal?: { hash: string; boxes: Box[]; published?: string };
   time: string;
   /** Not valid: over the limit, or a number the issuer gave twice. */
   invalid?: 'over-limit' | 'duplicate';
@@ -76,6 +94,15 @@ export interface Badge {
 const str = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
 const bodyOf = (event: WeaveRecord): Record<string, unknown> => (event.body && typeof event.body === 'object' ? (event.body as Record<string, unknown>) : {});
 
+/** A personal note's public part from untrusted input: its hash and the boxes holding it. */
+function personalOf(value: unknown): { hash: string; boxes: Box[] } | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { hash, boxes } = value as Record<string, unknown>;
+  if (typeof hash !== 'string' || !hash || !Array.isArray(boxes)) return undefined;
+  const valid = boxes.filter((b): b is Box => !!b && typeof b === 'object' && ['epk', 'nonce', 'ct'].every((k) => typeof (b as Record<string, unknown>)[k] === 'string')).slice(0, 4);
+  return { hash: hash.slice(0, 100), boxes: valid };
+}
+
 /** A limit from untrusted input: a whole number from 1 to BADGE_LIMIT_MAX, or undefined. */
 export function parseBadgeLimit(value: unknown): number | undefined {
   const n = Number(value);
@@ -84,7 +111,7 @@ export function parseBadgeLimit(value: unknown): number | undefined {
 
 /** All series and badges in these events, checked against each other. */
 export function badgesOf(events: WeaveRecord[]): { series: BadgeSeries[]; badges: Badge[] } {
-  const sorted = events.filter((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER).sort(recordOrder);
+  const sorted = events.filter((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER || e.kind === KIND_BADGE_NOTE).sort(recordOrder);
 
   const series = new Map<string, BadgeSeries>();
   for (const event of sorted) {
@@ -121,7 +148,8 @@ export function badgesOf(events: WeaveRecord[]): { series: BadgeSeries[]; badges
     const n = Number(body.n);
     if (!s || s.issuer !== event.author || !Number.isInteger(n) || !isDid(body.to)) continue;
     const ref = str(body.ref, 200);
-    const badge: Badge = { id: event.id, series: s.id, issuer: s.issuer, n, to: body.to, holder: body.to, holders: [body.to], head: event.id, note: str(body.note, 500), ...(ref ? { ref } : {}), time: event.time };
+    const personal = personalOf(body.personal);
+    const badge: Badge = { id: event.id, series: s.id, issuer: s.issuer, n, to: body.to, holder: body.to, holders: [body.to], head: event.id, note: str(body.note, 500), ...(ref ? { ref } : {}), ...(personal ? { personal } : {}), time: event.time };
     if (n < 1 || (s.limit && n > s.limit)) {
       badge.invalid = 'over-limit';
       s.broken = true;
@@ -154,6 +182,21 @@ export function badgesOf(events: WeaveRecord[]): { series: BadgeSeries[]; badges
     badge.head = event.id;
     badge.holder = body.to;
     badge.holders.push(body.to);
+  }
+
+  // Personal notes made public (or taken back) by the one the badge was given to, if they match what the issuer signed.
+  for (const event of sorted) {
+    if (event.kind !== KIND_BADGE_NOTE) continue;
+    const body = bodyOf(event);
+    const badge = badges.get(str(body.badge, 100));
+    if (!badge?.personal || event.author !== badge.to) continue;
+    if (body.on === false) {
+      delete badge.personal.published;
+      continue;
+    }
+    const text = typeof body.text === 'string' ? body.text : '';
+    const salt = typeof body.salt === 'string' ? body.salt : '';
+    if (text && salt && text.length <= BADGE_NOTE_MAX && badgeNoteHash(text, salt) === badge.personal.hash) badge.personal.published = text;
   }
 
   for (const badge of badges.values()) if (!badge.invalid) series.get(badge.series)!.given++;

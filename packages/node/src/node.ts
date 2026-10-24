@@ -168,6 +168,9 @@ import {
   KIND_BADGE,
   KIND_BADGE_SERIES,
   KIND_BADGE_TRANSFER,
+  KIND_BADGE_NOTE,
+  BADGE_NOTE_MAX,
+  badgeNoteHash,
   parseBadgeLimit,
   type Badge,
   type BadgeSeries,
@@ -2992,7 +2995,7 @@ export class WeaveNode implements Backend {
         .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
         .map((b) => {
           const s = ours.get(b.series)!;
-          return { id: b.id, series: { id: s.id, name: s.name, symbol: s.symbol, ...(s.image ? { image: s.image } : {}), ...(s.limit ? { limit: s.limit } : {}) }, n: b.n, issuer: { did: b.issuer, name: this.nameOf(b.issuer) }, note: b.note, ...(b.ref ? { ref: b.ref } : {}), time: b.time };
+          return { id: b.id, series: { id: s.id, name: s.name, symbol: s.symbol, ...(s.image ? { image: s.image } : {}), ...(s.limit ? { limit: s.limit } : {}) }, n: b.n, issuer: { did: b.issuer, name: this.nameOf(b.issuer) }, note: b.note, ...(b.ref ? { ref: b.ref } : {}), ...(b.personal?.published ? { personal: b.personal.published } : {}), time: b.time };
         });
     }
     throw new AppApiError(404, `no route ${route}`);
@@ -4006,7 +4009,7 @@ export class WeaveNode implements Backend {
       .map((s) => this.#badgeSeriesInfo(s));
   }
 
-  async giveBadge(input: { series: string; who: string; note?: string; ref?: string }): Promise<BadgeInfo> {
+  async giveBadge(input: { series: string; who: string; note?: string; ref?: string; personal?: string }): Promise<BadgeInfo> {
     const series = this.#badgeSeriesRef(input.series);
     if (series.issuer !== this.identity.author) throw new Error(`only ${this.nameOf(series.issuer) ?? 'its issuer'} can give ${series.name}`);
     if (series.broken) throw new Error(`${series.name} is broken: it has more badges than its limit, or a number twice`);
@@ -4017,7 +4020,14 @@ export class WeaveNode implements Backend {
     while (taken.has(n)) n++;
     const note = input.note?.trim().slice(0, 500) ?? '';
     const ref = input.ref?.trim().slice(0, 200) ?? '';
-    const event = this.replica.write(this.identity, { kind: KIND_BADGE, body: { series: series.id, n, to, ...(note ? { note } : {}), ...(ref ? { ref } : {}) } });
+    // A personal note: boxed to them (and to us, to read it again); only its hash is public, so they can prove our words if they publish it.
+    const text = input.personal?.trim() ?? '';
+    if (text.length > BADGE_NOTE_MAX) throw new Error(`a personal note is at most ${BADGE_NOTE_MAX} characters`);
+    const salt = b64u.encode(randomBytes(16));
+    const personal = text
+      ? { hash: badgeNoteHash(text, salt), boxes: [...new Set([to, this.identity.author])].map((did) => boxTo(this.#encryptionKeyOf(did), { text, salt })) as unknown as Json[] }
+      : undefined;
+    const event = this.replica.write(this.identity, { kind: KIND_BADGE, body: { series: series.id, n, to, ...(note ? { note } : {}), ...(ref ? { ref } : {}), ...(personal ? { personal } : {}) } });
     return this.#badgeInfo(this.#badgeRef(event.id));
   }
 
@@ -4039,6 +4049,36 @@ export class WeaveNode implements Backend {
     return this.#badgeInfo(this.#badgeRef(badge.id));
   }
 
+  /** Make the personal note on a badge you were given public, or (on: false) take it back. */
+  async publishBadgeNote(input: { badge: string; on?: boolean }): Promise<BadgeInfo> {
+    const badge = this.#badgeRef(input.badge);
+    if (badge.to !== this.identity.author) throw new Error('only the one a badge was given to can publish its personal note');
+    if (!badge.personal) throw new Error('that badge has no personal note');
+    if (input.on === false) {
+      this.replica.write(this.identity, { kind: KIND_BADGE_NOTE, body: { badge: badge.id, on: false } });
+    } else {
+      const opened = this.#openBadgeNote(badge);
+      if (!opened) throw new Error("this node can't open the personal note");
+      this.replica.write(this.identity, { kind: KIND_BADGE_NOTE, body: { badge: badge.id, text: opened.text, salt: opened.salt, on: true } });
+    }
+    return this.#badgeInfo(this.#badgeRef(badge.id));
+  }
+
+  /** A badge's personal note, if one of its boxes is ours and it matches the hash its issuer signed. */
+  #openBadgeNote(badge: Badge): { text: string; salt: string } | undefined {
+    for (const box of badge.personal?.boxes ?? []) {
+      const opened = this.#tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, box) as { text?: unknown; salt?: unknown };
+        } catch {
+          return undefined;
+        }
+      });
+      if (typeof opened?.text === 'string' && typeof opened.salt === 'string' && badgeNoteHash(opened.text, opened.salt) === badge.personal!.hash) return { text: opened.text, salt: opened.salt };
+    }
+    return undefined;
+  }
+
   #publishBadgeSeries(id: string, fields: { name: string; symbol: string; image: string; description: string }, first: { project?: { id: string; name: string }; limit?: number }): void {
     const name = fields.name.trim();
     if (!name || name.length > 40) throw new Error('badge names are 1 to 40 characters');
@@ -4054,7 +4094,7 @@ export class WeaveNode implements Backend {
 
   /** Every badge series and badge this node holds the events of, checked against each other. */
   #allBadges(): { series: BadgeSeries[]; badges: Badge[] } {
-    return badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER));
+    return badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER || e.kind === KIND_BADGE_NOTE));
   }
 
   /** A series by id, or by name (yours first). */
@@ -4077,6 +4117,12 @@ export class WeaveNode implements Backend {
     throw new Error(match.length ? `several badges start with "${ref}" — use more of its id` : `no badge "${ref}" is known`);
   }
 
+  #personalInfo(badge: Badge): NonNullable<BadgeInfo['personal']> {
+    const published = badge.personal?.published;
+    const text = published ?? this.#openBadgeNote(badge)?.text;
+    return { ...(text !== undefined ? { text } : {}), published: published !== undefined, mayPublish: badge.to === this.identity.author };
+  }
+
   #badgeSeriesInfo(series: BadgeSeries): BadgeSeriesInfo {
     return { ...series, issuer: { did: series.issuer, name: this.nameOf(series.issuer) }, mine: series.issuer === this.identity.author };
   }
@@ -4093,6 +4139,7 @@ export class WeaveNode implements Backend {
       holders: badge.holders.map(person),
       note: badge.note,
       ...(badge.ref ? { ref: badge.ref } : {}),
+      ...(badge.personal ? { personal: this.#personalInfo(badge) } : {}),
       time: badge.time,
       ...(badge.invalid ? { invalid: badge.invalid } : {}),
       ...(badge.contested ? { contested: true as const } : {}),
