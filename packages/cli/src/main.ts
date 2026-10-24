@@ -256,6 +256,7 @@ direct chats with friends (people you follow who follow you back):
 chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
   chat                       recent messages            [-c <channel>] [-n <count>]
   say <text...>              send a message             [-c <channel>] [--reply <id>]
+  unsay <id>                 take a message down: yours, or any where you moderate (it stays in the logs)
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
   react <id> <emoji>         react to a message, post, thread or issue; --off to take it back
 
@@ -1979,6 +1980,12 @@ ${postLine(p)}`);
       }
       const channels = await b.channels(needSpace());
       return out(channels, () => channels.map((c) => `#${c.name}${c.topic ? `  — ${c.topic}` : ''}`).join('\n'));
+    }
+
+    case 'unsay': {
+      if (!args[0]) throw new Error('usage: weave unsay <id>');
+      await (await backend()).deleteMessage({ message: args[0], as: values.as });
+      return out({ deleted: args[0] }, () => 'deleted: out of sight for everyone; it stays in the logs');
     }
 
     case 'react': {

@@ -99,3 +99,44 @@ describe('editing and deleting posts', () => {
     await expect(martin.editPost({ post: issue.id, title: 'x' })).rejects.toThrow(/only posts/);
   });
 });
+
+describe('deleting chat messages', () => {
+  it('lets authors or maintainers take a message down, for everyone, and keeps it in the logs', async () => {
+    const martin = person('Martin');
+    const nic = person('Nic');
+    const lena = person('Lena');
+    const all = [martin, nic, lena];
+    await martin.createProject({ name: 'Weave' });
+    await nic.joinSpace(await martin.invite('Weave'));
+    await lena.joinSpace(await martin.invite('Weave'));
+    syncAll(all);
+
+    const rude = await nic.say({ space: 'Weave', text: 'a rude remark' });
+    syncAll(all);
+    const answer = await lena.say({ space: 'Weave', text: 'hey, not nice', replyTo: rude.id });
+    syncAll(all);
+    expect((await martin.messages('Weave')).map((m) => m.text)).toEqual(['a rude remark', 'hey, not nice']);
+
+    // Other members can't, and a delete forged by hand is ignored everywhere.
+    await expect(lena.deleteMessage({ message: rude.id })).rejects.toThrow(/author or the maintainers/);
+    await lena.publish({ kind: 'weave.post.delete', body: { target: rude.id }, space: 'Weave' });
+    syncAll(all);
+    for (const node of all) expect((await node.messages('Weave')).map((m) => m.text)).toContain('a rude remark');
+
+    // The maintainer takes it down: gone for everyone, and the reply no longer quotes it.
+    await martin.deleteMessage({ message: rude.short });
+    syncAll(all);
+    for (const node of all) {
+      const messages = await node.messages('Weave');
+      expect(messages.map((m) => m.text)).toEqual(['hey, not nice']);
+      expect(messages[0]).not.toHaveProperty('replyTo');
+    }
+    // Out of sight, but in the logs.
+    const exported = await martin.exportSpace({ space: 'Weave' });
+    expect(exported.find((l) => l.id === rude.id)).toMatchObject({ deleted: expect.any(String) });
+
+    // Authors delete their own.
+    await lena.deleteMessage({ message: answer.id });
+    expect(await lena.messages('Weave')).toEqual([]);
+  });
+});

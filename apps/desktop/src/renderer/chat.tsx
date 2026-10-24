@@ -7,7 +7,7 @@ import { TEXT_LIMITS } from '@weave/core/limits';
 import { CharCount } from './editor.tsx';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
-import { attempt, Avatar, loadEmbeds } from './ui.tsx';
+import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
 import { NameBadges } from './badges.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
@@ -57,11 +57,14 @@ function Message({
   meDid,
   mentionNames,
   onReply,
+  moderating,
 }: {
   row: Extract<Row, { kind: 'msg' }>;
   meDid: string;
   mentionNames: string[];
   onReply(m: MessageInfo): void;
+  /** You maintain or moderate the space: you may take down anyone's message. */
+  moderating: boolean;
 }) {
   const { m, compact } = row;
   const [picking, setPicking] = useState(false);
@@ -74,6 +77,11 @@ function Message({
   }, [html]);
   const mentionsMe = mentionNames.some((name) => new RegExp(`@${name}\\b`, 'i').test(m.text));
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));
+  const mayDelete = m.by.did === meDid || moderating;
+  const remove = async () => {
+    if (await ask(m.by.did === meDid ? 'Delete your message? It disappears for everyone but stays in the logs.' : `Delete ${m.by.name ? `${m.by.name}'s` : 'this'} message? It disappears for everyone but stays in the logs.`, 'Delete'))
+      await attempt(() => api('deleteMessage', { message: m.id }), 'Deleted');
+  };
   const author = (
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
       <a href={`#/space/${encodeURIComponent(m.by.did)}`}>{nameOf(m.by, meDid)}</a>
@@ -132,6 +140,11 @@ function Message({
         <button title="Reply" onClick={() => onReply(m)}>
           ↩
         </button>
+        {mayDelete && (
+          <button title="Delete" onClick={() => void remove()}>
+            🗑
+          </button>
+        )}
       </div>
       {picking && (
         <EmojiPicker
@@ -284,6 +297,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
     const mine = members.find((m) => m.did === meDid);
     return [meName, ...(mine?.agents ?? [])].filter((n): n is string => !!n);
   }, [members, meDid, meName]);
+  const moderating = space.kind !== 'direct' && !!members.find((m) => m.did === meDid)?.maintainer;
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -343,7 +357,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
                     <span>{row.label}</span>
                   </div>
                 ) : (
-                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} />
+                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} />
                 )}
               </div>
             );

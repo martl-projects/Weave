@@ -141,6 +141,7 @@ export {
   KIND_VOTE,
   KIND_VOTE_DELEGATE,
   messagesOf,
+  deletedMessages,
   proposalsOf,
   reactionsOf,
   tally,

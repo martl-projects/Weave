@@ -1366,6 +1366,8 @@ export interface Backend {
   messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
   say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
+  /** Take a chat message down: yours, or any in a space you maintain or moderate. */
+  deleteMessage(input: { message: string; as?: string }): Promise<void>;
   react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void>;
 
   // working together, in projects
@@ -1402,7 +1404,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
   'chats', 'openChat',
-  'channels', 'createChannel', 'messages', 'say', 'react',
+  'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',
   'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
 ];

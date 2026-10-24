@@ -10,7 +10,8 @@ import type { Did } from './keys.ts';
  *
  *   weave.thread        {title, text}                     start a discussion
  *   weave.reply         {target, text}                    reply to a thread, issue or proposal
- *   weave.msg           {text, channel, post, replyTo}    chat message in a channel (default "general") or in a post's chat, optionally replying to one
+ *   weave.msg           {text, channel, post, replyTo}    chat message in a channel (default "general") or in a post's chat, optionally replying to one;
+ *                                                         weave.post.delete {target} takes it down too (its author, or the space's maintainers or moderators)
  *   weave.channel       {name, topic}                     create a chat channel
  *   weave.react         {target, emoji, on}               add or remove an emoji reaction on any event
  *   weave.issue         {title, text, labels}             open an issue
@@ -26,6 +27,8 @@ export const KIND_MSG = 'weave.msg';
 export const KIND_CHANNEL = 'weave.channel';
 export const KIND_REACT = 'weave.react';
 export const DEFAULT_CHANNEL = 'general';
+/** The same delete as a post's (posts.ts), here for chat messages. */
+const KIND_DELETE = 'weave.post.delete';
 export const KIND_ISSUE = 'weave.issue';
 export const KIND_ISSUE_CLAIM = 'weave.issue.claim';
 export const KIND_ISSUE_STATUS = 'weave.issue.status';
@@ -199,14 +202,28 @@ export function threadsOf(entries: Entry[]): Thread[] {
     .sort((a, b) => b.active.localeCompare(a.active));
 }
 
+/** Chat messages taken down: by their author, or by the space's maintainers or moderators. */
+export function deletedMessages(entries: Entry[], maintainers: ReadonlySet<Did> = new Set()): Set<string> {
+  const authors = new Map(entries.filter((e) => e.kind === KIND_MSG || e.kind === KIND_REPLY).map((e) => [e.id, e.event.author]));
+  const deleted = new Set<string>();
+  for (const e of entries.filter((x) => x.kind === KIND_DELETE)) {
+    const target = str(e.body, 'target', 200);
+    const author = authors.get(target);
+    if (author && (author === e.event.author || maintainers.has(e.event.author))) deleted.add(target);
+  }
+  return deleted;
+}
+
 /**
  * Chat messages, oldest first: in one channel, or in one post's chat. Replies
  * (weave.reply, from before posts had chats) show up in their target's chat.
+ * Those taken down (see deletedMessages) are left out.
  */
-export function messagesOf(entries: Entry[], where: { channel?: string; post?: string } = {}): Message[] {
+export function messagesOf(entries: Entry[], where: { channel?: string; post?: string } = {}, maintainers: ReadonlySet<Did> = new Set()): Message[] {
   const reactions = reactionsOf(entries);
+  const deleted = deletedMessages(entries, maintainers);
   return entries
-    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && str(e.body, 'text'))
+    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && str(e.body, 'text') && !deleted.has(e.id))
     .map((e) => {
       const replyTo = str(e.body, 'replyTo', 200);
       const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);

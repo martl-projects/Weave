@@ -60,7 +60,7 @@ export const PHONE_METHODS: readonly RpcMethod[] = [
   'feed', 'publish', 'setHomeVisibility', 'followBoard', 'boards', 'setBoard', 'setBoardRule', 'setBoardAccess', 'curate', 'posts', 'post', 'submit', 'editPost', 'deletePost', 'confirmCoauthor', 'coauthorRequests', 'upvote', 'save', 'share', 'putBlob', 'blob',
   'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers',
   // Chat
-  'chats', 'openChat', 'channels', 'createChannel', 'messages', 'say', 'react', 'threads', 'startThread', 'reply',
+  'chats', 'openChat', 'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react', 'threads', 'startThread', 'reply',
   // Issues and proposals
   'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
   // Rooms and project apps (joining; hosting needs the computer)

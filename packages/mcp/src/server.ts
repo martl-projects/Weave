@@ -483,6 +483,20 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_delete_message',
+    {
+      title: 'Delete a chat message',
+      description: 'Take down your own chat message, or one in a space you maintain or moderate. It disappears for everyone but stays in the logs.',
+      inputSchema: { message: z.string().min(6) },
+      annotations: { destructiveHint: true },
+    },
+    run(async ({ message }: { message: string }) => {
+      await backend.deleteMessage({ message, as });
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
     'weave_react',
     {
       title: 'React with an emoji',

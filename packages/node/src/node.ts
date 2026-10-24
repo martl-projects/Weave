@@ -4149,9 +4149,10 @@ export class WeaveNode implements Backend {
     const chat = options.post ? await this.#chatOf(options.post) : undefined;
     const space = chat?.space ?? this.#space(ref ?? '');
     const entries = this.#entries(space);
-    const byId = new Map(messagesOf(entries, {}).concat(chat?.post ? messagesOf(entries, { post: chat.post }) : []).map((m) => [m.id, m]));
+    const maintainers = this.#state(space).maintainers;
+    const byId = new Map(messagesOf(entries, {}, maintainers).concat(chat?.post ? messagesOf(entries, { post: chat.post }, maintainers) : []).map((m) => [m.id, m]));
     const channel = options.channel ? (channelName(options.channel) ?? DEFAULT_CHANNEL) : undefined;
-    return messagesOf(entries, chat?.post ? { post: chat.post } : { channel })
+    return messagesOf(entries, chat?.post ? { post: chat.post } : { channel }, maintainers)
       .slice(-(options.limit ?? 200))
       .map((m) => this.#messageInfo(m, byId));
   }
@@ -4173,6 +4174,16 @@ export class WeaveNode implements Backend {
     if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
     const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
     return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
+  }
+
+  /** Take a chat message down: yours, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
+  async deleteMessage(input: { message: string; as?: string }): Promise<void> {
+    const message = this.#find(input.message, [KIND_MSG, KIND_REPLY]);
+    const space = message.space && this.#spaces.get(message.space.id);
+    const mine = message.event.author === this.identity.author;
+    if (!mine && !(space && space.kind !== 'direct' && this.#state(space).maintainers.has(this.identity.author)))
+      throw new Error(`only its author${space && space.kind !== 'direct' ? ` or the ${space.kind === 'community' ? 'moderators' : space.kind === 'project' ? 'maintainers' : 'owner'}` : ''} can delete a message`);
+    await this.publish({ kind: KIND_POST_DELETE, body: { target: message.id }, space: space?.id, as: input.as });
   }
 
   async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {

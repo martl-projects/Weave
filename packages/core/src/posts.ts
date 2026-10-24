@@ -20,7 +20,7 @@ import type { SpaceKind } from './spaces.ts';
  *   weave.post.edit   {target, title, text, link, image}
  *                                                      the post's author changes it; the latest edit counts
  *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
- *                                                      take it down; it stays in the logs, out of sight
+ *                                                      take it down; it stays in the logs, out of sight (chat messages too, see collab.ts)
  *   weave.upvote   {target, value}                     1, 0 or -1; the latest per person counts
  *   weave.board    {name, title, type, sort, position, on}
  *                                                      project maintainers add, change or drop a board
