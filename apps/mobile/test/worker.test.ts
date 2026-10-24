@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,8 @@ import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo } from '@
 const app = join(import.meta.dirname, '..');
 /** The Bare binary itself, not its npm wrapper, so stopping it stops the worker. */
 const bare = (createRequire(join(app, 'package.json'))('bare-runtime') as () => string)();
+// npm unpacks it without the execute bit on Linux and macOS (spawn fails with EACCES there).
+if (process.platform !== 'win32') chmodSync(bare, 0o755);
 const dirs: string[] = [];
 const temp = (prefix: string) => {
   const dir = mkdtempSync(join(tmpdir(), prefix));

@@ -6,7 +6,7 @@
 //   npm run web -w @weave/mobile -- --data .dev/phone --port 8780
 
 import { spawn } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
@@ -21,6 +21,8 @@ const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javas
 
 // The worker, connected back to us over local TCP (see worklet/test.ts).
 const bare = (createRequire(import.meta.url)('bare-runtime') as () => string)();
+// npm unpacks it without the execute bit on Linux and macOS (spawn fails with EACCES there).
+if (process.platform !== 'win32') chmodSync(bare, 0o755);
 const listener = createServer();
 await new Promise<void>((done) => listener.listen(0, '127.0.0.1', done));
 const child = spawn(bare, [join(import.meta.dirname, 'dist/worklet/test.cjs'), String((listener.address() as AddressInfo).port)], { stdio: ['ignore', 'inherit', 'inherit'] });
