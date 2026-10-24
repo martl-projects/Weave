@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.18.1 · 2026-10-24
+
+- Fix the container test on Linux: tell the Docker stand-in the app's port
+
 ## v0.18.0 · 2026-10-24
 
 - Always-on nodes: a server, NAS or cluster that keeps your spaces and hosts your rooms
