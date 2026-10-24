@@ -20,7 +20,8 @@ import to.holepunch.bare.kit.Worklet;
  * Runs the phone app's worker (worklet/main.ts, packed into
  * public/worklet.android.bundle) on Bare and carries its lines: post() sends
  * one to it, and each line it writes arrives in the WebView as a "message"
- * event. Pausing the app suspends the worker; coming back resumes it.
+ * event. Pausing the app suspends the worker; coming back resumes it. While
+ * held (a room's app is open in a browser tab over the app), it keeps running.
  */
 @CapacitorPlugin(name = "WeaveWorker")
 public class WeaveWorkerPlugin extends Plugin {
@@ -28,6 +29,8 @@ public class WeaveWorkerPlugin extends Plugin {
 
     private Worklet worklet;
     private IPC ipc;
+    private boolean held;
+    private boolean suspended;
     private final ByteArrayOutputStream partial = new ByteArrayOutputStream();
     private final ArrayDeque<ByteBuffer> outbox = new ArrayDeque<>();
     private boolean writing = false;
@@ -71,14 +74,25 @@ public class WeaveWorkerPlugin extends Plugin {
         call.resolve();
     }
 
+    /** Keep the worker running while the app is paused: it carries a room's app to the browser tab in front. */
+    @PluginMethod
+    public void hold(PluginCall call) {
+        held = Boolean.TRUE.equals(call.getBoolean("on", false));
+        call.resolve();
+    }
+
     @Override
     protected void handleOnPause() {
-        if (worklet != null) worklet.suspend();
+        if (worklet == null || held) return;
+        worklet.suspend();
+        suspended = true;
     }
 
     @Override
     protected void handleOnResume() {
-        if (worklet != null) worklet.resume();
+        if (worklet == null || !suspended) return;
+        worklet.resume();
+        suspended = false;
     }
 
     @Override

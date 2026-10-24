@@ -43,6 +43,8 @@ interface Bridge {
     scan(): Promise<string | undefined>;
     /** Forget the computer on this phone, to pair again. */
     forget(): Promise<void>;
+    /** Open a room's app (its address on the computer) on the phone, through the computer. */
+    openRoom(room: string, url: string): Promise<void>;
   };
 }
 

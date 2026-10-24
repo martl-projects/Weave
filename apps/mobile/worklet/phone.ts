@@ -1,4 +1,4 @@
-import { connectTo, decodePhoneLink, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+import { connectTo, decodePhoneLink, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
 
 /*
  * The phone app's worker: it keeps the phone's key pair and the computer it
@@ -10,10 +10,16 @@ import { connectTo, decodePhoneLink, pairWith, type Dialer, type FeedItem, type 
  *                    {id, op: 'pair', link, phoneName}    → {name?}
  *                    {id, op: 'call', method, args}       → the node's answer
  *                    {id, op: 'forget'}                   unpair on this side
+ *                    {id, op: 'openRoom', room, url}      → the room's app on this phone (a local address)
  *                    {op: 'wake'}                         the app is in front again
  *   worker → screen  {id, result} | {id, error}
  *                    {event}                              the node's live events
  *                    {connected}                          the connection came or went
+ *
+ * Rooms: the computer joins a room and reaches its app on a local port (the
+ * room's url). For the phone's browser the worker listens on a local port of
+ * its own, and sends each connection made to it through its own encrypted
+ * connection to the computer, which passes it on to that port (remote.ts).
  *
  * The native side sends {op: 'start', dir} first: where the worker may keep
  * its file. This file only decides; main.ts gives it a DHT, storage and the
@@ -21,6 +27,19 @@ import { connectTo, decodePhoneLink, pairWith, type Dialer, type FeedItem, type 
  */
 
 type KeyPair = { publicKey: Buffer; secretKey: Buffer };
+
+/** A connection's two directions, Node's or Bare's streams alike. */
+export interface Pipe {
+  pipe(destination: Pipe): unknown;
+  on(event: 'error' | 'close', listener: () => void): unknown;
+  destroy(): void;
+}
+
+/** A local TCP server on 127.0.0.1. */
+export interface Listener {
+  port: number;
+  close(): void;
+}
 
 /** What the phone remembers, in its app's private storage. */
 export interface Saved {
@@ -36,6 +55,8 @@ export interface PhoneDeps {
   load(dir: string): Saved | undefined;
   save(dir: string, saved: Saved): void;
   send(message: unknown): void;
+  /** Listen on 127.0.0.1, on this port if it's free (else any). */
+  listen(port: number, onConnection: (socket: Pipe) => void): Promise<Listener>;
 }
 
 const RETRY_MS = [1000, 2000, 5000, 10_000, 30_000];
@@ -50,6 +71,10 @@ export class Phone {
   #connecting?: Promise<RemoteSession>;
   #retries = 0;
   #retry?: ReturnType<typeof setTimeout>;
+  /** The local port of each room this phone has opened, by room id. */
+  #rooms = new Map<string, Promise<Listener>>();
+  /** The browser's connections to them, open now. */
+  #open = new Set<Pipe>();
 
   constructor(deps: PhoneDeps) {
     this.#deps = deps;
@@ -68,6 +93,13 @@ export class Phone {
 
   close(): void {
     this.#drop();
+    this.#closeRooms();
+  }
+
+  #closeRooms(): void {
+    for (const listener of this.#rooms.values()) void listener.then((l) => l.close(), () => {});
+    this.#rooms.clear();
+    for (const socket of this.#open) socket.destroy();
   }
 
   /** Close the connection without trying again. */
@@ -115,7 +147,22 @@ export class Phone {
         delete saved.node;
         this.#deps.save(this.#dir!, saved);
         this.#drop();
+        this.#closeRooms();
         return;
+      }
+      case 'openRoom': {
+        const room = String(message.room);
+        // The computer's address of the room's app: its port (so the app's origin stays the same) and the path to open.
+        const at = /^https?:\/\/[^/:]+(?::(\d+))?(\/.*)?$/.exec(String(message.url ?? ''));
+        if (!room || !at) throw new Error("this room's app has no address yet");
+        await this.#connect();
+        let listening = this.#rooms.get(room);
+        if (!listening) {
+          listening = this.#deps.listen(Number(at[1] ?? 0), (local) => this.#tunnel(room, local));
+          this.#rooms.set(room, listening);
+          listening.catch(() => this.#rooms.delete(room));
+        }
+        return `http://127.0.0.1:${(await listening).port}${at[2] ?? '/'}`;
       }
       case 'wake': {
         // Back in front: try at once instead of waiting for the next retry.
@@ -126,6 +173,25 @@ export class Phone {
       default:
         throw new Error(`unknown request: ${String(op)}`);
     }
+  }
+
+  /** One connection of the phone's browser, through to the room's app on the computer. */
+  #tunnel(room: string, local: Pipe): void {
+    const node = this.#saved?.node;
+    if (!node) return local.destroy();
+    const remote = openTunnel(this.#deps.dht(node.bootstrap), node, this.#keyPair(), room) as unknown as Pipe;
+    this.#open.add(local);
+    const end = () => {
+      this.#open.delete(local);
+      local.destroy();
+      remote.destroy();
+    };
+    for (const socket of [local, remote]) {
+      socket.on('error', end);
+      socket.on('close', end);
+    }
+    local.pipe(remote);
+    remote.pipe(local);
   }
 
   #keyPair(): KeyPair {

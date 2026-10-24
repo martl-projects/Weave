@@ -2,12 +2,14 @@
 import 'bare-encoding/global';
 import DHT from 'hyperdht';
 import fs from 'bare-fs';
-import { Phone, type PhoneDeps, type Saved } from './phone.ts';
+import tcp from 'bare-tcp';
+import { Phone, type Pipe, type PhoneDeps, type Saved } from './phone.ts';
 
 /*
  * The worker's entry on Bare (bare-kit runs it inside the app): one DHT per
- * network, the phone's file in the app's private storage, and the IPC line
- * transport to the native side, which passes the lines on to the screen.
+ * network, the phone's file in the app's private storage, local TCP for rooms'
+ * apps, and the IPC line transport to the native side, which passes the lines
+ * on to the screen.
  */
 
 declare const BareKit: { IPC: { on(event: 'data', listener: (chunk: Buffer) => void): void; write(data: string): void } };
@@ -45,6 +47,16 @@ const deps: PhoneDeps = {
     fs.renameSync(`${file(dir)}.tmp`, file(dir));
   },
   send,
+  listen(port, onConnection) {
+    const attempt = (at: number) =>
+      new Promise<{ port: number; close(): void }>((resolve, reject) => {
+        const server = tcp.createServer((socket) => onConnection(socket as unknown as Pipe));
+        server.once('error', reject);
+        server.listen(at, '127.0.0.1', () => resolve({ port: server.address()!.port, close: () => server.close() }));
+      });
+    // The computer's port for the room, so the app keeps its origin (and saved data); any port if it's taken.
+    return attempt(port).catch(() => attempt(0));
+  },
 };
 
 const phone = new Phone(deps);

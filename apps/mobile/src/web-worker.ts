@@ -15,4 +15,7 @@ export class WeaveWorkerWeb extends WebPlugin {
     const res = await fetch('/worker', { method: 'POST', body: message });
     if (!res.ok) throw new Error(`the worker didn't take it: ${res.status}`);
   }
+
+  // A browser doesn't suspend the worker.
+  async hold(): Promise<void> {}
 }
