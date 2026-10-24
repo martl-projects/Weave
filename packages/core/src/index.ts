@@ -211,6 +211,7 @@ export {
   type MembershipRequest,
   type Tier,
 } from './memberships.ts';
+export { badgesOf, BADGE_LIMIT_MAX, KIND_BADGE, KIND_BADGE_SERIES, KIND_BADGE_TRANSFER, parseBadgeLimit, type Badge, type BadgeSeries } from './badges.ts';
 export {
   findIndex as findRecoveryIndex,
   newRecoveryWords,

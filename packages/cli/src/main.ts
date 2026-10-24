@@ -43,6 +43,8 @@ import {
   type SpaceInfo,
   type ThreadInfo,
   type TierInfo,
+  type BadgeInfo,
+  type BadgeSeriesInfo,
   type RoomInfo,
   type LinkInfo,
   SqliteStore,
@@ -218,6 +220,15 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   decline <tier> <who>       turn a request down
   memberships                tiers you support
 
+badges: lasting recognition from a project, signed and checkable by anyone, never votes or access:
+  badge create <name> -p <project>   start a kind of badge (maintainers)  [--symbol 🏅] [--image <png/jpg>] [--text <description>]
+                             [--limit 20: how many there can ever be, never raised later]
+  badge list [-p <project>]  badge series (default: every one this node knows)
+  badge set <series>         change it                        [--name] [--symbol] [--image <file>, "" removes it] [--text]
+  badge give <series> <who>  give them the next free number   [--text <what for>] [--ref <post id>]
+  badge pass <badge> <who>   pass a badge you hold on, e.g. to your other account; it keeps its number
+  badges [who]               the badges someone holds (default: yours)
+
 rooms: share a project's app live with its participants (needs a running daemon):
   app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
   app show -p <project>      the project's app: ports it shares, buttons
@@ -342,6 +353,9 @@ const { values, positionals } = parseArgs({
     'gumroad-variant': { type: 'string' },
     license: { type: 'string' },
     months: { type: 'string' },
+    limit: { type: 'string' },
+    symbol: { type: 'string' },
+    ref: { type: 'string' },
     name: { type: 'string' },
     'id-token': { type: 'string' },
     'client-id': { type: 'string' },
@@ -411,6 +425,26 @@ function needSpace(): string {
 }
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
+const badgeSeriesLine = (s: BadgeSeriesInfo) => {
+  const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
+  const count = s.limit ? `${s.given} of ${s.limit}` : `${s.given} given`;
+  const broken = s.broken ? '  BROKEN: more than the limit, or a number twice' : '';
+  const where = `${s.project ? `  — ${s.project.name}` : ''}${s.mine ? '' : `, by ${s.issuer.name ?? s.issuer.did}`}`;
+  return [`${name.padEnd(24)} ${count}${broken}${where}`, `  ${s.id}`, ...(s.description ? [`  ${s.description}`] : [])].join('\n');
+};
+
+const badgeLine = (b: BadgeInfo) => {
+  const name = `${b.series.symbol ? `${b.series.symbol} ` : ''}${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}`;
+  const problem = b.invalid ? `  NOT VALID (${b.invalid === 'duplicate' ? 'its number was given twice' : 'over the limit'})` : b.contested ? '  contested: passed on twice' : '';
+  return [
+    `${name}${b.series.project ? `  — ${b.series.project.name}` : ''}, from ${b.issuer.name ?? b.issuer.did}${problem}`,
+    `  ${b.id}`,
+    ...(b.note ? [`  "${b.note}"`] : []),
+    ...(b.ref ? [`  for ${b.ref}`] : []),
+    ...(b.holders.length > 1 ? [`  held by ${b.holders.map((h) => h.name ?? h.did).join(' → ')}`] : []),
+  ].join('\n');
+};
+
 const tierLine = (t: TierInfo) => {
   const state = t.mine ? `${t.members ?? 0} member${t.members === 1 ? '' : 's'}${t.open ? '' : ', closed'}` : t.membership ? (t.membership.active ? `member until ${new Date(t.membership.until).toLocaleDateString()}` : 'membership ended') : t.requested ? 'asked to join' : t.open ? 'open' : 'closed';
   const gumroad = t.gumroad ? `\n  sold on Gumroad: ${t.gumroad.url}${t.gumroad.variant ? ` (${t.gumroad.variant})` : ''}${t.mine ? '' : ` — then: weave support ${t.id} --license <key>`}` : '';
@@ -1718,6 +1752,38 @@ ${postLine(p)}`);
     case 'memberships': {
       const tiers = await (await backend()).memberships();
       return out(tiers, () => tiers.map(tierLine).join('\n\n') || '(you support nobody yet)');
+    }
+
+    case 'badge': {
+      const [sub, ref, who] = args;
+      const b = await backend();
+      if (sub === 'create' && ref) {
+        const s = await b.createBadgeSeries({ project: needProject(), name: args.slice(1).join(' '), symbol: values.symbol, image: values.image ? await uploadImage(b, values.image) : undefined, description: values.text, limit: values.limit ? Number(values.limit) : undefined });
+        return out(s, () => `started ${badgeSeriesLine(s)}\n\ngive one:  weave badge give "${s.name}" <who>`);
+      }
+      if (sub === 'list') {
+        const list = await b.badgeSeries(values.project);
+        return out(list, () => list.map(badgeSeriesLine).join('\n\n') || '(no badges)');
+      }
+      if (sub === 'set' && ref) {
+        const image = values.image === undefined ? undefined : values.image === '' ? '' : await uploadImage(b, values.image);
+        const s = await b.setBadgeSeries({ series: ref, name: values.name, symbol: values.symbol, image, description: values.text });
+        return out(s, () => badgeSeriesLine(s));
+      }
+      if (sub === 'give' && ref && who) {
+        const badge = await b.giveBadge({ series: ref, who, note: values.text, ref: values.ref });
+        return out(badge, () => `gave ${badge.holder.name ?? badge.holder.did} ${badgeLine(badge)}`);
+      }
+      if (sub === 'pass' && ref && who) {
+        const badge = await b.transferBadge({ badge: ref, to: who });
+        return out(badge, () => `passed on to ${badge.holder.name ?? badge.holder.did}: ${badgeLine(badge)}`);
+      }
+      throw new Error('usage: weave badge create|list|set|give|pass — see "weave --help"');
+    }
+
+    case 'badges': {
+      const list = await (await backend()).badges(args[0]);
+      return out(list, () => list.map(badgeLine).join('\n\n') || '(no badges)');
     }
 
     case 'app': {

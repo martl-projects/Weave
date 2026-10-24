@@ -163,6 +163,14 @@ import {
   KIND_SPACE_CREATE,
   KIND_THREAD,
   KIND_TIER,
+  badgesOf,
+  BADGE_LIMIT_MAX,
+  KIND_BADGE,
+  KIND_BADGE_SERIES,
+  KIND_BADGE_TRANSFER,
+  parseBadgeLimit,
+  type Badge,
+  type BadgeSeries,
   KIND_UPVOTE,
   KIND_VOTE,
   KIND_VOTE_DELEGATE,
@@ -290,6 +298,8 @@ import {
   type RepoInfo,
   type SpaceRepos,
   type MembershipRequestInfo,
+  type BadgeInfo,
+  type BadgeSeriesInfo,
   type ChannelInfo,
   type CommunityInfo,
   type EdgeInput,
@@ -2164,6 +2174,13 @@ export class WeaveNode implements Backend {
         missing.push(ref.hash);
       }
     }
+    // Badge pictures are public: holders show them next to their name.
+    for (const series of this.#allBadges().series) {
+      const ref = parseBlobRef(series.image);
+      if (!ref || this.#prefetched.has(ref.hash) || this.blobs.has(ref.hash)) continue;
+      this.#prefetched.add(ref.hash);
+      missing.push(ref.hash);
+    }
     for (const hash of missing.slice(0, 64)) {
       this.blobs.fetch(hash, (hashes) => this.#swarm?.want(hashes), 120_000).catch(() => this.#prefetched.delete(hash));
     }
@@ -2965,6 +2982,18 @@ export class WeaveNode implements Backend {
         ...this.#appPerson(project, did as Did),
         groups: asked.filter(({ state }) => state.members.has(did as Did)).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
       };
+    }
+    if (route === '/v1/badges') {
+      const did = params.get('did') ?? '';
+      if (!did.startsWith('did:')) throw new Error('did: whose badges to look up');
+      const { series, badges } = this.#allBadges();
+      const ours = new Map(series.filter((s) => s.project?.id === projectId && !s.broken).map((s) => [s.id, s]));
+      return badges
+        .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
+        .map((b) => {
+          const s = ours.get(b.series)!;
+          return { id: b.id, series: { id: s.id, name: s.name, symbol: s.symbol, ...(s.image ? { image: s.image } : {}), ...(s.limit ? { limit: s.limit } : {}) }, n: b.n, issuer: { did: b.issuer, name: this.nameOf(b.issuer) }, note: b.note, ...(b.ref ? { ref: b.ref } : {}), time: b.time };
+        });
     }
     throw new AppApiError(404, `no route ${route}`);
   }
@@ -3948,6 +3977,127 @@ export class WeaveNode implements Backend {
         .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
         .map((d) => d.inner.body as Record<string, unknown>),
     );
+  }
+
+  // ---------------------------------------------------------------- badges
+
+  async createBadgeSeries(input: { project: string; name: string; symbol?: string; image?: string; description?: string; limit?: number }): Promise<BadgeSeriesInfo> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const limit = input.limit === undefined ? undefined : parseBadgeLimit(input.limit);
+    if (input.limit !== undefined && !limit) throw new Error(`a limit is a whole number from 1 to ${BADGE_LIMIT_MAX}`);
+    const id = b64u.encode(randomBytes(16));
+    this.#publishBadgeSeries(id, { name: input.name, symbol: input.symbol ?? '', image: input.image ?? '', description: input.description ?? '' }, { project: { id: project.id, name: project.name }, ...(limit ? { limit } : {}) });
+    return this.#badgeSeriesInfo(this.#badgeSeriesRef(id));
+  }
+
+  async setBadgeSeries(input: { series: string; name?: string; symbol?: string; image?: string; description?: string }): Promise<BadgeSeriesInfo> {
+    const before = this.#badgeSeriesRef(input.series);
+    if (before.issuer !== this.identity.author) throw new Error(`only ${this.nameOf(before.issuer) ?? 'its issuer'} can change ${before.name}`);
+    this.#publishBadgeSeries(before.id, { name: input.name ?? before.name, symbol: input.symbol ?? before.symbol, image: input.image ?? before.image ?? '', description: input.description ?? before.description }, {});
+    return this.#badgeSeriesInfo(this.#badgeSeriesRef(before.id));
+  }
+
+  async badgeSeries(project?: string): Promise<BadgeSeriesInfo[]> {
+    const id = project === undefined ? undefined : this.#project(project).id;
+    return this.#allBadges()
+      .series.filter((s) => !id || s.project?.id === id)
+      .sort((a, b) => a.time.localeCompare(b.time))
+      .map((s) => this.#badgeSeriesInfo(s));
+  }
+
+  async giveBadge(input: { series: string; who: string; note?: string; ref?: string }): Promise<BadgeInfo> {
+    const series = this.#badgeSeriesRef(input.series);
+    if (series.issuer !== this.identity.author) throw new Error(`only ${this.nameOf(series.issuer) ?? 'its issuer'} can give ${series.name}`);
+    if (series.broken) throw new Error(`${series.name} is broken: it has more badges than its limit, or a number twice`);
+    if (series.limit && series.given >= series.limit) throw new Error(`all ${series.limit} of ${series.name} are given`);
+    const to = this.resolve(input.who);
+    const taken = new Set(this.#allBadges().badges.filter((b) => b.series === series.id).map((b) => b.n));
+    let n = 1;
+    while (taken.has(n)) n++;
+    const note = input.note?.trim().slice(0, 500) ?? '';
+    const ref = input.ref?.trim().slice(0, 200) ?? '';
+    const event = this.replica.write(this.identity, { kind: KIND_BADGE, body: { series: series.id, n, to, ...(note ? { note } : {}), ...(ref ? { ref } : {}) } });
+    return this.#badgeInfo(this.#badgeRef(event.id));
+  }
+
+  async badges(who?: string): Promise<BadgeInfo[]> {
+    const holder = who ? this.resolve(who) : this.identity.author;
+    return this.#allBadges()
+      .badges.filter((b) => b.holder === holder)
+      .sort((a, b) => a.time.localeCompare(b.time))
+      .map((b) => this.#badgeInfo(b));
+  }
+
+  async transferBadge(input: { badge: string; to: string }): Promise<BadgeInfo> {
+    const badge = this.#badgeRef(input.badge);
+    if (badge.holder !== this.identity.author) throw new Error("you don't hold that badge");
+    if (badge.invalid) throw new Error("that badge isn't valid: its issuer gave more than the limit, or its number twice");
+    const to = this.resolve(input.to);
+    if (to === this.identity.author) throw new Error('you hold it already');
+    this.replica.write(this.identity, { kind: KIND_BADGE_TRANSFER, body: { badge: badge.id, from: badge.head, to } });
+    return this.#badgeInfo(this.#badgeRef(badge.id));
+  }
+
+  #publishBadgeSeries(id: string, fields: { name: string; symbol: string; image: string; description: string }, first: { project?: { id: string; name: string }; limit?: number }): void {
+    const name = fields.name.trim();
+    if (!name || name.length > 40) throw new Error('badge names are 1 to 40 characters');
+    const symbol = fields.symbol.trim();
+    if (symbol.length > 8) throw new Error('a badge symbol is short: an emoji or two');
+    if (fields.image && !parseBlobRef(fields.image)) throw new Error('a badge picture is an uploaded image (wblob: reference)');
+    const body: Record<string, Json> = { series: id, name, symbol, description: fields.description.trim().slice(0, 1000) };
+    if (fields.image) body.image = fields.image;
+    if (first.project) body.project = first.project;
+    if (first.limit) body.limit = first.limit;
+    this.replica.write(this.identity, { kind: KIND_BADGE_SERIES, body });
+  }
+
+  /** Every badge series and badge this node holds the events of, checked against each other. */
+  #allBadges(): { series: BadgeSeries[]; badges: Badge[] } {
+    return badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER));
+  }
+
+  /** A series by id, or by name (yours first). */
+  #badgeSeriesRef(ref: string): BadgeSeries {
+    const all = this.#allBadges().series;
+    const byId = all.find((s) => s.id === ref);
+    if (byId) return byId;
+    const named = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
+    const mine = named.filter((s) => s.issuer === this.identity.author);
+    const match = mine.length ? mine : named;
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several badges are named "${ref}" — use its id` : `no badge "${ref}" is known`);
+  }
+
+  /** A badge by id or the start of it. */
+  #badgeRef(ref: string): Badge {
+    const all = this.#allBadges().badges;
+    const match = all.filter((b) => b.id === ref || (ref.length >= 6 && b.id.startsWith(ref)));
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several badges start with "${ref}" — use more of its id` : `no badge "${ref}" is known`);
+  }
+
+  #badgeSeriesInfo(series: BadgeSeries): BadgeSeriesInfo {
+    return { ...series, issuer: { did: series.issuer, name: this.nameOf(series.issuer) }, mine: series.issuer === this.identity.author };
+  }
+
+  #badgeInfo(badge: Badge): BadgeInfo {
+    const series = this.#badgeSeriesRef(badge.series);
+    const person = (did: Did) => ({ did, name: this.nameOf(did) });
+    return {
+      id: badge.id,
+      series: { id: series.id, name: series.name, symbol: series.symbol, ...(series.image ? { image: series.image } : {}), ...(series.limit ? { limit: series.limit } : {}), broken: series.broken, ...(series.project ? { project: series.project } : {}) },
+      issuer: person(badge.issuer),
+      n: badge.n,
+      holder: person(badge.holder),
+      holders: badge.holders.map(person),
+      note: badge.note,
+      ...(badge.ref ? { ref: badge.ref } : {}),
+      time: badge.time,
+      ...(badge.invalid ? { invalid: badge.invalid } : {}),
+      ...(badge.contested ? { contested: true as const } : {}),
+      mine: badge.holder === this.identity.author,
+    };
   }
 
   // ---------------------------------------------------------------- direct chats between friends
