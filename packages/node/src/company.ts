@@ -72,6 +72,31 @@ export function decodeRecoveryAnswer(text: string): { person: Did; box: Json } {
   return { person: r.person, box: r.box };
 }
 
+/*
+ * Always-on nodes (stage 18): a server, a NAS or a cluster that keeps your
+ * spaces and hosts your rooms while your computers are off. It asks with its
+ * own key; one of your devices answers with a key for it (an agent's, only for
+ * rooms), your encryption keys and your spaces, boxed to that key.
+ */
+const NODE_REQUEST_PREFIX = 'weave:node-request:';
+const NODE_ANSWER_PREFIX = 'weave:node-answer:';
+
+export const encodeNodeRequest = (key: Did, name: string): string => encode(NODE_REQUEST_PREFIX, { v: 1, key, name });
+
+export function decodeNodeRequest(text: string): { key: Did; name: string } {
+  const r = decode<{ v: number; key: unknown; name: unknown }>(NODE_REQUEST_PREFIX, text, 'node request');
+  if (r?.v !== 1 || !isDid(r.key) || typeof r.name !== 'string') throw new Error('node request is damaged');
+  return { key: r.key, name: r.name };
+}
+
+export const encodeNodeAnswer = (person: Did, box: Json): string => encode(NODE_ANSWER_PREFIX, { v: 1, person, box });
+
+export function decodeNodeAnswer(text: string): { person: Did; box: Json } {
+  const r = decode<{ v: number; person: unknown; box: Json }>(NODE_ANSWER_PREFIX, text, 'node answer');
+  if (r?.v !== 1 || !isDid(r.person) || !r.box) throw new Error('node answer is damaged');
+  return { person: r.person, box: r.box };
+}
+
 export type MapRole = 'member' | 'maintainer';
 
 /** What an admin may ask the company for (and the company does itself). */

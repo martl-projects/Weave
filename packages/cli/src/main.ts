@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
+import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
 import {
   connectDaemon,
@@ -73,6 +74,9 @@ A company's own projects and groups are its company spaces.
   daemon stop | restart      stop the running daemon properly (or restart it, e.g. for new code)   [--force: end it hard if it won't]
   status                     node status: peers, groups, projects, communities
   keystore [os|tpm|secure-enclave|yubikey|file]   where this computer keeps the key to your keys (hardware: tpm, secure-enclave, yubikey)
+  node pair [name]           on an always-on node (server, NAS, cluster), in an empty home: a request for one of your computers
+  node add <request>         on your computer: answer it (the node keeps your spaces and hosts your rooms; weave revoke node:<name> ends it)
+  node join <answer>         on the always-on node: finish with the answer, then run weave daemon
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
   export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
@@ -792,6 +796,27 @@ async function main(): Promise<void> {
           ...(s.keystoreWarning ? [`  warning: ${s.keystoreWarning}`] : []),
         ].join('\n'),
       );
+    }
+
+    case 'node': {
+      const [sub, value] = args;
+      if (sub === 'pair') {
+        const request = WeaveNode.nodeRequest(home.dir, value ?? hostname());
+        return out({ request }, () => `On one of your computers, run (or paste it in Weave: Keys & devices → Always-on nodes):\n  weave node add ${request}\nThen here: weave node join <answer>`);
+      }
+      if (sub === 'add') {
+        if (!value) throw new Error('usage: weave node add <request from the node>');
+        const linked = await (await backend()).linkNode({ request: value });
+        return out(linked, () => `Linked the always-on node "${linked.name}". On the node, run:\n  weave node join ${linked.answer}\nIt can keep your spaces and host your rooms, nothing else. Revoke it any time: weave revoke node:${linked.name}`);
+      }
+      if (sub === 'join') {
+        if (!value) throw new Error('usage: weave node join <answer from your computer>');
+        const node = await WeaveNode.completeNodeLink(value, home.dir);
+        const spaces = await node.spaces();
+        await node.close();
+        return out({ spaces: spaces.length }, () => `This is now ${node.nameOf(node.identity.author) ?? 'your'} always-on node, with ${spaces.length} spaces to keep. Start it: weave daemon`);
+      }
+      throw new Error('usage: weave node pair [name] | node add <request> | node join <answer>');
     }
 
     case 'keystore': {

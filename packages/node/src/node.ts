@@ -365,6 +365,7 @@ import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
 import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
+import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLocation } from './registry.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
@@ -466,6 +467,12 @@ const KEEP_QUOTA = 500 * 1024 * 1024;
 const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
 /** Our kept spaces and their keys, in our own space, for recovery. */
 const KIND_KEEP_INDEX = 'weave.keep.index';
+/** Every space of ours (but direct chats) and its keys, in our own space, for our always-on nodes (stage 18). */
+const KIND_NODE_INDEX = 'weave.node.index';
+/** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
+export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
+/** Always-on nodes' keys are named "node:<name>" among your keys. */
+const NODE_PREFIX = 'node:';
 interface KeepState {
   spaces: Record<string, Did[]>;
   seen: Record<string, string>;
@@ -821,6 +828,104 @@ export class WeaveNode implements Backend {
     return encodeRecoveryRequest(didFromPublicKey(keys.publicKey));
   }
 
+  /**
+   * An always-on node's request (stage 18), made on the server, NAS or cluster in an empty home: a key of its own,
+   * kept sealed here. One of your devices answers it (linkNode); then completeNodeLink sets this home up.
+   */
+  static nodeRequest(dir: string | undefined, name: string): string {
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const clean = name.trim().replace(/\s+/g, '-').slice(0, 32) || 'always-on';
+    const keys = generateKeyPair();
+    writeSecretJson(home, joinPath(home.dir, 'node-link.json'), { secretKey: b64u.encode(keys.secretKey), publicKey: b64u.encode(keys.publicKey), name: clean });
+    return encodeNodeRequest(didFromPublicKey(keys.publicKey), clean);
+  }
+
+  /**
+   * Answer an always-on node's request (stage 18), on one of your devices: its key may host your rooms and nothing
+   * else, and it gets your encryption keys and your spaces (but direct chats) boxed to that key, so it can keep them
+   * and host while your computers are off. Revoke it like an agent, in Keys & devices.
+   */
+  async linkNode(input: { request: string }): Promise<{ answer: string; key: Did; name: string }> {
+    const me = this.identity.author;
+    const mine = this.replica.authority.grant(this.identity.did);
+    if (this.identity.did !== me && mine?.role !== 'device') throw new Error('link always-on nodes from one of your own computers');
+    const { key, name } = decodeNodeRequest(input.request);
+    if (this.replica.authority.grant(key)) throw new Error('that node is linked already');
+    this.replica.write(this.identity, delegation(key, 'agent', NODE_PERMISSIONS, `${NODE_PREFIX}${name}`));
+    this.#writeNodeIndex(true);
+    // Who you are (and what you're called) and who signs for you: the node checks its own key against them from the start.
+    const authority = new Set(['weave.identity', 'weave.rotate', 'weave.delegate', 'weave.revoke', KIND_PROFILE]);
+    const payload = {
+      person: me,
+      name: this.nameOf(me) ?? null,
+      encryption: this.#encryption.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })),
+      events: this.replica.events().filter((e) => e.author === me && authority.has(canonicalKind(e.kind))) as unknown as Json[],
+      spaces: this.#nodeSpaces() as unknown as Json[],
+      bootstrap: this.config.bootstrap as unknown as Json,
+    };
+    return { answer: encodeNodeAnswer(me, boxTo(key, payload as unknown as Json) as unknown as Json), key, name };
+  }
+
+  /** Set up this home as your always-on node from a device's answer (stage 18). It keeps everything (archive) and hosts your rooms. */
+  static async completeNodeLink(answer: string, dir?: string): Promise<WeaveNode> {
+    const home = resolveHome(dir);
+    const file = joinPath(home.dir, 'node-link.json');
+    const kept = readSecretJson<{ secretKey: string; publicKey: string; name: string }>(home, file);
+    if (!kept) throw new Error('no node request in this home: run weave node pair first');
+    const { person } = decodeNodeAnswer(answer);
+    let payload: { person: Did; encryption: Array<{ did: Did; publicKey: string; secretKey: string }>; events: unknown[]; spaces: StoredSpace[]; bootstrap?: Array<{ host: string; port: number }> };
+    try {
+      payload = openBox(b64u.decode(kept.secretKey), b64u.decode(kept.publicKey), decodeNodeAnswer(answer).box as unknown as Box) as unknown as typeof payload;
+    } catch {
+      throw new Error("this answer is for another node's request");
+    }
+    if (payload.person !== person) throw new Error('node answer is damaged');
+    const keys = { publicKey: b64u.decode(kept.publicKey), secretKey: b64u.decode(kept.secretKey) };
+    saveEncryptionKeys(home, payload.encryption.map((k) => ({ did: k.did, keys: { publicKey: b64u.decode(k.publicKey), secretKey: b64u.decode(k.secretKey) } })));
+    saveDevice(home, { author: person, did: didFromPublicKey(keys.publicKey), keys });
+    const config = loadConfig(home);
+    saveConfig(home, { ...config, archive: true, ...(payload.bootstrap?.length && !config.bootstrap.length ? { bootstrap: payload.bootstrap } : {}) });
+    const node = WeaveNode.open(home.dir);
+    for (const event of payload.events) node.replica.ingest(event);
+    if (node.replica.authority.grant(node.identity.did)?.author !== person) {
+      await node.close();
+      throw new Error("the answer doesn't vouch for this node's key: link it again");
+    }
+    for (const space of payload.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#addSpace({ ...space, entry: { topics: [person], bootstrap: [] } });
+    await node.join(person);
+    rmSync(file, { force: true });
+    return node;
+  }
+
+  /** This node is someone's always-on node (stage 18): it signs with a node key, not a device's. */
+  get #isLinkedNode(): boolean {
+    return this.replica.authority.grant(this.identity.did)?.name?.startsWith(NODE_PREFIX) === true;
+  }
+
+  /** Our spaces for our always-on nodes: all but direct chats, with their keys. */
+  #nodeSpaces(): unknown[] {
+    return [...this.#spaces.values()]
+      .filter((s) => s.kind !== 'direct' && !this.#directs.has(s.id))
+      .map((s) => ({ ...this.#keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
+  }
+
+  /** Written by our devices while we have always-on nodes: every space of ours they should keep and host. When it changes. */
+  #writeNodeIndex(force = false): number {
+    if (this.#isLinkedNode) return 0;
+    const me = this.identity.author;
+    const linked = this.replica.authority.grantsOf(me).some((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    if (!linked) return 0;
+    const body = { spaces: this.#nodeSpaces() };
+    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    if (!force && hash === this.#nodeIndexHash) return 0;
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
+    this.#nodeIndexHash = hash;
+    return 1;
+  }
+
+  #nodeIndexHash?: string;
+
   /** Set up this computer from the company's answer to its recovery request: the words open here and are never shown. */
   static async recover(answer: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number } = {}): Promise<WeaveNode> {
     const home = resolveHome(dir);
@@ -913,6 +1018,8 @@ export class WeaveNode implements Backend {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
     if (!signer) throw new Error(noAgent(input.as!, this.#agents.map((a) => a.name)));
     if (input.as) this.#agentMay(input.as, input.kind);
+    // An always-on node hosts its person's rooms; everyone else would drop anything else it signed (stage 18).
+    if (!input.as && this.#isLinkedNode && !permits(NODE_PERMISSIONS, input.kind)) throw new Error(`this is ${this.nameOf(this.identity.author) ?? 'your'} always-on node: it keeps spaces and hosts rooms, and doesn't post or change anything for them (${input.kind})`);
     // Readers would cut anything longer: refuse instead, so nothing is shortened without the author knowing.
     checkTextFields(input.body);
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
@@ -2154,8 +2261,11 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#streamAudit();
     await Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id)));
-    // Bookkeeping for keepers, not a change to anyone's spaces.
-    this.#writeKeepIndex();
+    // Bookkeeping for keepers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
+    if (!this.#isLinkedNode) {
+      this.#writeKeepIndex();
+      this.#writeNodeIndex();
+    }
     this.#recoverSpaces();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
@@ -5864,11 +5974,14 @@ export class WeaveNode implements Backend {
     return 1;
   }
 
-  /** Spaces our latest keep index lists that this node doesn't have (after restoring from the recovery words). */
+  /** Spaces our latest keep index (and, on an always-on node, node index) lists that this node doesn't have. */
   #recoverSpaces(): void {
-    const index = this.#selfBodies(KIND_KEEP_INDEX).at(-1) as { spaces?: unknown } | undefined;
-    if (!Array.isArray(index?.spaces)) return;
-    for (const space of index.spaces as StoredSpace[]) {
+    const lists = [this.#selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.#isLinkedNode ? [this.#selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
+    for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
+  }
+
+  #adoptSpaces(spaces: StoredSpace[]): void {
+    for (const space of spaces) {
       if (!space || typeof space.id !== 'string' || this.#spaces.has(space.id)) continue;
       void this.#addSpace({ ...space, entry: { topics: [this.identity.author], bootstrap: [] } });
     }

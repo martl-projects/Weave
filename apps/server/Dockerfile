@@ -20,6 +20,7 @@ RUN mkdir -p /data && chown node:node /data
 VOLUME /data
 USER node
 EXPOSE 7730 7720
-HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.WEAVE_CONSOLE_PORT||7730)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+# Healthy while the node answers on its local API: a company's server or someone's always-on node alike.
+HEALTHCHECK --interval=30s --timeout=10s CMD ["node", "/app/weave-server.mjs", "status"]
 ENTRYPOINT ["node", "/app/weave-server.mjs"]
 CMD ["run"]

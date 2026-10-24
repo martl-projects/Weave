@@ -365,6 +365,74 @@ const KEYSTORE_NAME: Record<Status['keystore'], string> = {
 
 type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boolean; why?: string; current: boolean };
 
+/**
+ * Always-on nodes (stage 18): a server, NAS or cluster that keeps your spaces and hosts your rooms while your
+ * computers are off. It shows a request (weave-server pair); this answers it, and the answer goes back to it.
+ */
+function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
+  const nodes = keys.filter((k) => k.name?.startsWith('node:'));
+  const [request, setRequest] = useState('');
+  const [answer, setAnswer] = useState<{ answer: string; name: string }>();
+  return (
+    <fieldset>
+      <legend>Always-on nodes</legend>
+      {nodes.map((n) => (
+        <div className="field-row" key={n.did}>
+          <Icon name="community" />
+          <span className="grow">
+            <b>{n.name!.slice(5)}</b>{' '}
+            <span className="small muted">
+              {n.revokedAfter !== undefined ? 'revoked' : n.lastTime ? `last heard ${ago(n.lastTime)}` : 'not heard from yet'} · {n.events} events
+            </span>
+          </span>
+          {n.revokedAfter === undefined && (
+            <AsyncButton
+              onClick={async () =>
+                (await ask(`Revoke the always-on node ${n.name!.slice(5)}? It stops hosting your rooms, and what it signs from now on counts nowhere.`, 'Revoke')) &&
+                attempt(() => api('revokeKey', { key: n.did }).then(bump), 'Revoked')
+              }
+            >
+              Revoke
+            </AsyncButton>
+          )}
+        </div>
+      ))}
+      <p className="small">
+        A server, NAS or home cluster that keeps your spaces and hosts your rooms while your computers are off. It gets a key of its own that only hosts rooms (it can't post or change anything for
+        you), and your spaces' keys, but not your direct chats. On it, run <code>weave-server pair</code> and paste its request here.
+      </p>
+      {answer ? (
+        <div className="field-row-stacked">
+          <p className="small">
+            Linked <b>{answer.name}</b>. On the node, run <code>weave-server join</code> with this answer:
+          </p>
+          <textarea className="wide" rows={3} readOnly value={answer.answer} onFocus={(e) => e.currentTarget.select()} />
+          <div className="buttons">
+            <button onClick={() => void navigator.clipboard.writeText(answer.answer)}>Copy</button>
+            <button onClick={() => setAnswer(undefined)}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <div className="field-row">
+          <input className="grow" placeholder="weave:node-request:…" value={request} onChange={(e) => setRequest(e.target.value)} spellCheck={false} />
+          <AsyncButton
+            onClick={async () => {
+              const linked = await attempt(() => api<{ answer: string; name: string }>('linkNode', { request: request.trim() }));
+              if (linked) {
+                setAnswer(linked);
+                setRequest('');
+                bump();
+              }
+            }}
+          >
+            Link node
+          </AsyncButton>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 /** Where the key to your keys is kept, and moving it into hardware (stage 17). */
 function KeystoreChoice({ current }: { current: Status['keystore'] }) {
   const { data: options } = useApi(() => api<KeystoreOption[]>('keystores'), []);
@@ -522,6 +590,7 @@ export function KeysView() {
         </p>
       </fieldset>
       <PhonesBox />
+      <AlwaysOnNodes keys={keys} />
       <AgentAppsBox />
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (

@@ -64,6 +64,10 @@ const HELP = `weave-server ${VERSION}: a company's own Weave node
   weave-server operator    a one-time link into the admin console
   weave-server status      what it runs, and where
 
+  For your own always-on node (no company): keeps your spaces and hosts your rooms while your computers are off
+  weave-server pair [name]                  a request: paste it on one of your computers (weave node add, or Keys & devices)
+  weave-server join <answer>                finish with the answer from your computer, then: weave-server run
+
   weave-server backup <folder>              a consistent copy of this server's home, while it runs
   weave-server restore <folder> [--standby] set this home up from a backup (--standby: follow the active one, write nothing)
   weave-server promote                      a standby takes over (only once the active server is gone for good)
@@ -207,12 +211,17 @@ async function promote(): Promise<void> {
 }
 
 async function run(): Promise<void> {
-  const daemon = await startDaemon(home.dir);
+  let stopping = async () => {};
+  const daemon = await startDaemon(home.dir, { version: VERSION, build: VERSION === 'dev' ? 'dev' : 'release', startedBy: 'cli', onStopRequest: () => void stopping() });
   const company = await daemon.node.company();
-  if (!company) console.warn('weave-server: no company here yet (weave-server init first)');
+  // Someone's always-on node (weave-server pair / join) has no company, and needs none.
+  const grant = daemon.node.replica.authority.grant(daemon.node.identity.did);
+  const alwaysOn = grant?.name?.startsWith('node:') ? daemon.node.nameOf(daemon.node.identity.author) ?? 'someone' : undefined;
+  if (!company && !alwaysOn) console.warn('weave-server: no company here yet (weave-server init first, or weave-server pair for your own always-on node)');
   const consoleInfo = await daemon.node.consoleInfo();
   const scim = await daemon.node.scim();
-  console.log(`weave-server ${VERSION} for ${company?.name ?? '(no company)'}${daemon.node.config.standby ? ' — STANDBY: following the active server, writing nothing' : ''}`);
+  const what = company ? company.name : alwaysOn ? `${alwaysOn}'s always-on node (${grant!.name!.slice(5)})` : '(no company)';
+  console.log(`weave-server ${VERSION} for ${what}${daemon.node.config.standby ? ' — STANDBY: following the active server, writing nothing' : ''}`);
   console.log(`  home ${home.dir}`);
   if (consoleInfo.on) console.log(`  admin console ${consoleInfo.url} (health: /healthz)`);
   if (scim.on) console.log(`  SCIM port ${scim.port}, /scim/v2`);
@@ -220,6 +229,7 @@ async function run(): Promise<void> {
     await daemon.stop();
     process.exit(0);
   };
+  stopping = stop;
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   await new Promise(() => {}); // until stopped
@@ -248,13 +258,33 @@ async function main(): Promise<void> {
       return restore(positionals[1]);
     case 'promote':
       return promote();
+    case 'pair': {
+      const request = WeaveNode.nodeRequest(home.dir, positionals[1] ?? 'always-on');
+      return void console.log(
+        [`Paste this on one of your computers (weave node add <request>, or in Weave: Keys & devices → Always-on nodes):`, '', `  ${request}`, '', 'Then here: weave-server join <answer>'].join('\n'),
+      );
+    }
+    case 'join': {
+      if (!positionals[1]) throw new Error('usage: weave-server join <answer from your computer>');
+      const node = await WeaveNode.completeNodeLink(positionals[1], home.dir);
+      const spaces = await node.spaces();
+      const name = node.nameOf(node.identity.author);
+      await node.close();
+      return void console.log(`This is now ${name ? `${name}'s` : 'your'} always-on node, keeping ${spaces.length} spaces. Start it: weave-server run`);
+    }
     case 'link':
       return void console.log(await (await client()).enrollLink({ days: 30 }));
     case 'operator':
       return void console.log(await (await client()).consoleOperatorLink());
     case 'status': {
       const c = await client();
-      const [company, consoleInfo, scim] = await Promise.all([c.company(), c.consoleInfo(), c.scim()]);
+      const company = await c.company();
+      if (!company) {
+        // Someone's always-on node: what it keeps, and whether it's reachable.
+        const s = await c.status();
+        return void console.log(`${s.name ?? s.did}'s always-on node: ${s.online ? `online, ${s.peers} peer${s.peers === 1 ? '' : 's'}` : 'offline'} · ${s.groups} groups, ${s.projects} projects, ${s.communities} communities · ${s.events} events`);
+      }
+      const [consoleInfo, scim] = await Promise.all([c.consoleInfo(), c.scim()]);
       return void console.log(
         [
           `${company?.name ?? '(no company)'}: ${company?.spaces.length ?? 0} projects and groups, ${company?.maps.length ?? 0} mappings`,
