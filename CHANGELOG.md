@@ -2,6 +2,14 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.0 · 2026-10-24
+
+- Let the phone worker test wait for the reconnect after a restart
+- Badges: lasting, verifiable recognition from a project
+- Let phones call only an allow list of methods
+- Pack the phone worker from the repository root so it finds hoisted modules
+- Add the companion phone app
+
 ## v0.18.1 · 2026-10-24
 
 - Fix the container test on Linux: tell the Docker stand-in the app's port
