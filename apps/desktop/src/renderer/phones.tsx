@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import QRCode from 'qrcode';
 import { Icon } from './icons.tsx';
-import { ago, api, bump, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
+import { ago, api, bridge, bump, useApi } from './lib.ts';
+import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 
 /*
  * Phones that use this computer's Weave remotely: the companion app scans a
@@ -116,5 +116,105 @@ export function PhonesBox() {
         />
       )}
     </fieldset>
+  );
+}
+
+/** The phone app's own window, like the first-start one: centered, with a title bar. */
+function PhoneWindow({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="desktop">
+      <div className="window welcome">
+        <div className="title-bar">
+          <div className="title-bar-text">{title}</div>
+        </div>
+        <div className="window-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** First start on the phone: pair with your computer by scanning its code (or pasting it). */
+export function PhonePairing({ onDone }: { onDone(): void }) {
+  const phone = bridge.phone!;
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const pair = async (link: string) => {
+    setBusy(true);
+    const ok = await attempt(() => phone.pair(link).then(() => true), 'Paired with your computer');
+    setBusy(false);
+    if (ok) onDone();
+  };
+  const scan = async () => {
+    const link = await attempt(() => phone.scan());
+    if (link) await pair(link);
+  };
+  return (
+    <PhoneWindow title="Pair with your computer">
+      <div className="welcome-head">
+        <WeaveMark size={48} />
+        <p>This app uses Weave on your computer: your hub, your keys and your friends stay there. The two talk end-to-end encrypted, with no server in between.</p>
+      </div>
+      <ol className="steps">
+        <li>
+          On your computer, open Weave, then <b>Keys &amp; devices</b> and <b>Add a phone…</b>
+        </li>
+        <li>Scan the code it shows.</li>
+      </ol>
+      {busy ? (
+        <p className="small">Connecting to your computer…</p>
+      ) : (
+        <>
+          <div className="buttons">
+            <button className="default" onClick={scan}>
+              Scan the code
+            </button>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void pair(code);
+            }}
+          >
+            <div className="field-row-stacked">
+              <label htmlFor="pair-code">Or paste the code (weave:phone:…)</label>
+              <input id="pair-code" required spellCheck={false} autoCapitalize="off" autoCorrect="off" value={code} onChange={(e) => setCode(e.target.value)} />
+            </div>
+            <div className="buttons">
+              <button disabled={!code.trim()}>Pair</button>
+            </div>
+          </form>
+        </>
+      )}
+    </PhoneWindow>
+  );
+}
+
+/** While the phone looks for its computer at start (up to some seconds over the DHT). */
+export function PhoneConnecting() {
+  return (
+    <PhoneWindow title="Weave">
+      <p className="small">Connecting to your computer…</p>
+    </PhoneWindow>
+  );
+}
+
+/** The phone can't reach its computer right now. */
+export function PhoneNotConnected({ name, onRetry }: { name?: string; onRetry(): void }) {
+  const forget = async () => {
+    if (!(await ask("Forget your computer on this phone? You'll need a new code from it to pair again. Unpair this phone on the computer too, under Keys & devices.", 'Forget'))) return;
+    if (await attempt(() => bridge.phone!.forget().then(() => true))) onRetry();
+  };
+  return (
+    <PhoneWindow title="Weave">
+      <p>
+        <Icon name="info" /> Can't reach {name ? `${name}'s computer` : 'your computer'}. This app works through Weave on it, so Weave has to be running there, and both need to be online.
+      </p>
+      <div className="buttons">
+        <button onClick={forget}>Pair again…</button>
+        <button className="default" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    </PhoneWindow>
   );
 }

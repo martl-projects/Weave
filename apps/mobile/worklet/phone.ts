@@ -1,0 +1,179 @@
+import { connectTo, decodePhoneLink, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+
+/*
+ * The phone app's worker: it keeps the phone's key pair and the computer it
+ * is paired with, holds the connection to that computer's node (see
+ * packages/node/src/remote.ts) and reconnects when it drops. The app's screen
+ * (a WebView) talks to it with one JSON message per line:
+ *
+ *   screen → worker  {id, op: 'state'}                    → {paired, name?, connected}
+ *                    {id, op: 'pair', link, phoneName}    → {name?}
+ *                    {id, op: 'call', method, args}       → the node's answer
+ *                    {id, op: 'forget'}                   unpair on this side
+ *                    {op: 'wake'}                         the app is in front again
+ *   worker → screen  {id, result} | {id, error}
+ *                    {event}                              the node's live events
+ *                    {connected}                          the connection came or went
+ *
+ * The native side sends {op: 'start', dir} first: where the worker may keep
+ * its file. This file only decides; main.ts gives it a DHT, storage and the
+ * line transport, so tests run it in Node.
+ */
+
+type KeyPair = { publicKey: Buffer; secretKey: Buffer };
+
+/** What the phone remembers, in its app's private storage. */
+export interface Saved {
+  publicKey: string;
+  secretKey: string;
+  node?: PairedNode;
+}
+
+export interface PhoneDeps {
+  /** A DHT to connect through (one with these bootstrap nodes, when the pairing link names some). */
+  dht(bootstrap?: PairedNode['bootstrap']): Dialer;
+  newKeyPair(): KeyPair;
+  load(dir: string): Saved | undefined;
+  save(dir: string, saved: Saved): void;
+  send(message: unknown): void;
+}
+
+const RETRY_MS = [1000, 2000, 5000, 10_000, 30_000];
+/** How long the first look at the state waits for the computer, so the app opens connected when it can. */
+const STATE_WAIT_MS = 15_000;
+
+export class Phone {
+  #deps: PhoneDeps;
+  #dir?: string;
+  #saved?: Saved;
+  #session?: RemoteSession;
+  #connecting?: Promise<RemoteSession>;
+  #retries = 0;
+  #retry?: ReturnType<typeof setTimeout>;
+
+  constructor(deps: PhoneDeps) {
+    this.#deps = deps;
+  }
+
+  /** Handle one message from the screen or the native side. */
+  async handle(message: { id?: number; op?: string; [key: string]: unknown }): Promise<void> {
+    const { id, op } = message;
+    try {
+      const result = await this.#do(op, message);
+      if (id !== undefined) this.#deps.send({ id, result: result ?? null });
+    } catch (error) {
+      if (id !== undefined) this.#deps.send({ id, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  close(): void {
+    this.#drop();
+  }
+
+  /** Close the connection without trying again. */
+  #drop(): void {
+    clearTimeout(this.#retry);
+    this.#retry = undefined;
+    const session = this.#session;
+    this.#session = undefined;
+    session?.close();
+  }
+
+  async #do(op: unknown, message: Record<string, unknown>): Promise<unknown> {
+    if (op === 'start') {
+      this.#dir = String(message.dir);
+      this.#saved = this.#deps.load(this.#dir);
+      if (!this.#saved) {
+        const keys = this.#deps.newKeyPair();
+        this.#saved = { publicKey: keys.publicKey.toString('hex'), secretKey: keys.secretKey.toString('hex') };
+        this.#deps.save(this.#dir, this.#saved);
+      }
+      if (this.#saved.node) void this.#connect().catch(() => {});
+      return;
+    }
+    const saved = this.#saved;
+    if (!saved) throw new Error('the worker has not started');
+    switch (op) {
+      case 'state': {
+        if (saved.node && !this.#session) await Promise.race([this.#connect().catch(() => {}), new Promise((r) => setTimeout(r, STATE_WAIT_MS))]);
+        return { paired: !!saved.node, ...(saved.node?.name ? { name: saved.node.name } : {}), connected: !!this.#session };
+      }
+      case 'pair': {
+        const link = String(message.link);
+        const { node, session } = await pairWith(this.#deps.dht(decodePhoneLink(link).bootstrap), link, this.#keyPair(), String(message.phoneName || 'Phone'));
+        this.#drop();
+        saved.node = node;
+        this.#deps.save(this.#dir!, saved);
+        this.#adopt(session);
+        return { ...(node.name ? { name: node.name } : {}) };
+      }
+      case 'call': {
+        const session = await this.#connect();
+        return session.call(message.method as RpcMethod, ...((message.args as unknown[]) ?? []));
+      }
+      case 'forget': {
+        delete saved.node;
+        this.#deps.save(this.#dir!, saved);
+        this.#drop();
+        return;
+      }
+      case 'wake': {
+        // Back in front: try at once instead of waiting for the next retry.
+        this.#retries = 0;
+        if (saved.node && !this.#session) void this.#connect().catch(() => {});
+        return;
+      }
+      default:
+        throw new Error(`unknown request: ${String(op)}`);
+    }
+  }
+
+  #keyPair(): KeyPair {
+    return { publicKey: Buffer.from(this.#saved!.publicKey, 'hex'), secretKey: Buffer.from(this.#saved!.secretKey, 'hex') };
+  }
+
+  /** The open session, or a new one; one attempt at a time. */
+  #connect(): Promise<RemoteSession> {
+    if (this.#session) return Promise.resolve(this.#session);
+    const node = this.#saved?.node;
+    if (!node) return Promise.reject(new Error('this phone is not paired with a computer'));
+    this.#connecting ??= connectTo(this.#deps.dht(node.bootstrap), node, this.#keyPair()).then(
+      (session) => {
+        this.#connecting = undefined;
+        this.#adopt(session);
+        return session;
+      },
+      (error: Error) => {
+        this.#connecting = undefined;
+        this.#later();
+        throw error;
+      },
+    );
+    return this.#connecting;
+  }
+
+  #adopt(session: RemoteSession): void {
+    clearTimeout(this.#retry);
+    this.#retry = undefined;
+    this.#retries = 0;
+    this.#session = session;
+    session.onEvent((event: FeedItem) => this.#deps.send({ event }));
+    session.onClose(() => {
+      if (this.#session !== session) return;
+      this.#session = undefined;
+      this.#deps.send({ connected: false });
+      this.#later();
+    });
+    this.#deps.send({ connected: true });
+  }
+
+  /** Try again after a while, longer each time, while the phone is still paired. */
+  #later(): void {
+    if (this.#retry || !this.#saved?.node) return;
+    const wait = RETRY_MS[Math.min(this.#retries++, RETRY_MS.length - 1)];
+    this.#retry = setTimeout(() => {
+      this.#retry = undefined;
+      void this.#connect().catch(() => {});
+    }, wait);
+  }
+}

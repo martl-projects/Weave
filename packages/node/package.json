@@ -1,12 +1,13 @@
 {
   "name": "@weave/node",
-  "version": "0.18.1",
+  "version": "0.19.1",
   "license": "MIT",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./src/client-entry.ts"
+    "./client": "./src/client-entry.ts",
+    "./phone": "./src/phone-entry.ts"
   },
   "dependencies": {
     "@weave/core": "*",

@@ -1,6 +1,6 @@
 import type { DhtSocket } from '@weave/net';
 import type { FeedItem, RpcMethod } from './backend.ts';
-import { decodePhoneLink } from './remote.ts';
+import { decodePhoneLink } from './phone-link.ts';
 
 /*
  * The phone's side of remote access (see remote.ts): pair with a node from

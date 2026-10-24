@@ -1,0 +1,7 @@
+# Native libraries, fetched (fetch-bare-kit.ts) or linked (build.ts), not kept in git.
+/.cache/
+/android/libs/
+/android/addons/
+/android/build/
+/ios/BareKit.xcframework/
+/ios/addons/

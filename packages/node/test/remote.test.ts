@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
-import { connectTo, loadConfig, pairWith, resolveHome, saveConfig, WeaveNode, type Dialer, type PostInfo, closeOpenStores } from '../src/index.ts';
+import { connectTo, loadConfig, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -65,6 +65,8 @@ describe('phones using a node remotely', () => {
     await until(() => seen.length > 0);
     await expect(session.call('revokeKey', { key: 'x' })).rejects.toThrow(/a phone can't do revokeKey/);
     await expect(session.call('pairPhone')).rejects.toThrow(/a phone can't do pairPhone/);
+    await expect(session.call('destroyCompanyKey', {})).rejects.toThrow(/a phone can't do destroyCompanyKey/);
+    await expect(session.call('appEnv', {})).rejects.toThrow(/a phone can't do appEnv/);
 
     // A code works once; a stranger's key is turned away at the door.
     await expect(pairWith(dialer, link, HyperDHT.keyPair(), 'Thief')).rejects.toThrow();
@@ -82,4 +84,19 @@ describe('phones using a node remotely', () => {
     expect(await node.phones()).toEqual([]);
     await expect(connectTo(dialer, paired, phoneKeys)).rejects.toThrow();
   }, 60_000);
+});
+
+describe('what a phone may call', () => {
+  it('is a list of known methods, and leaves keys, exports, agents, company setup, apps and GitHub to the computer', () => {
+    for (const method of PHONE_METHODS) expect(RPC_METHODS).toContain(method);
+    const computerOnly: RpcMethod[] = [
+      'addAgent', 'updateAgent', 'approveAgent', 'answerPermission', 'requestPermission', 'connectHarness', 'join', 'revokeKey', 'rotateRoot',
+      'moveHomeKey', 'keystores', 'destroyCompanyKey', 'escrowRecovery', 'openEscrow', 'manageSpace', 'unlockSpace', 'link', 'signIn', 'companySignIn',
+      'backup', 'exportSpace', 'createCompany', 'companyAction', 'enrollLink', 'inviteByEmail', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'consoleOperatorLink',
+      'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'setAppSetting', 'appEnv', 'hostRoom',
+      'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'openInApp', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'linkRepo', 'shareGithub',
+      'showGithubOnHub', 'pairPhone', 'phones', 'unpairPhone',
+    ];
+    for (const method of computerOnly) expect(PHONE_METHODS).not.toContain(method);
+  });
 });
