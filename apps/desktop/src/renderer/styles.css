@@ -537,6 +537,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
+  .project-sections { flex: none; gap: 2px; padding: 2px 4px; overflow-x: auto; }
+  .project-sections .tree-link { flex: none; }
   /* Fingers, not mouse pointers. */
   .tree-link { min-height: 36px; padding: 4px 6px; font-size: 14px; }
   .tree-head { font-size: 13px; padding: 6px; }
