@@ -573,15 +573,25 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
 
 function HostDialog({ project, members, meDid, app, groups, shows, forShow, onClose }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; app: AppManifest; groups: ProjectInfo['groups']; shows: ShowInfo[]; forShow?: string; onClose(): void }) {
   const [name, setName] = useState(shows.find((s) => s.id === forShow)?.name ?? '');
-  const [who, setWho] = useState<'everyone' | 'people' | 'paid'>(forShow ? 'paid' : 'everyone');
+  const [who, setWho] = useState<'everyone' | 'people' | 'tickets' | 'tiers'>(forShow ? 'tickets' : 'everyone');
   const everyone = who === 'everyone';
   const [picked, setPicked] = useState<string[]>([]);
   const mine = shows.filter((s) => s.mine && !s.cancelled && Date.parse(s.ends) > Date.now());
-  // A show the room is for: one set up already, or a new one ('new') set up with it.
-  const [show, setShow] = useState(forShow ?? '');
+  // The show the room is for: one set up already, or a new one ('new') set up with the room.
+  const [show, setShow] = useState(forShow ?? mine[0]?.id ?? 'new');
   const [tiers, setTiers] = useState<string[]>([]);
   const payments = usePayments(project);
   const newShow = useShowForm(project, members);
+  const tierBoxes = (
+    <>
+      {groups.map((g) => (
+        <div className="field-row indent" key={g.id}>
+          <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+          <label htmlFor={`who-tier-${g.id}`}>{who === 'tickets' ? 'also ' : ''}members of {g.name}</label>
+        </div>
+      ))}
+    </>
+  );
   return (
     <Modal title={`Host a room · ${app.name}`} onClose={onClose}>
       <form
@@ -589,13 +599,15 @@ function HostDialog({ project, members, meDid, app, groups, shows, forShow, onCl
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           // A new show is set up first; if the room then fails, it's picked, not set up twice.
-          const made = who === 'paid' && show === 'new' ? await newShow.create(name) : show;
+          const made = who === 'tickets' && show === 'new' ? await newShow.create(name) : show;
           if (made === undefined) return;
           if (made !== show) {
             setShow(made);
+            // Selling tickets turns the project's payments on: its treasury and split show in Settings.
+            if (!payments.on) payments.turn(true);
             bump();
           }
-          const access = who === 'people' ? { invite: picked } : who === 'paid' ? { ...(made ? { show: made } : {}), ...(tiers.length ? { groups: tiers } : {}) } : {};
+          const access = who === 'people' ? { invite: picked } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
           const room = await attempt(() => api<RoomInfo>('hostRoom', { project: project.id, name, ...access }), 'Room is open');
           if (room) {
             bump();
@@ -629,44 +641,41 @@ function HostDialog({ project, members, meDid, app, groups, shows, forShow, onCl
                   <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
                 </div>
               ))}
-          {(mine.length > 0 || groups.length > 0 || payments.on) && (
-            <div className="field-row">
-              <input id="who-paid" type="radio" checked={who === 'paid'} onChange={() => setWho('paid')} />
-              <label htmlFor="who-paid">Ticket holders, or members of tiers</label>
-            </div>
-          )}
-          {who === 'paid' && (
+          <div className="field-row">
+            <input id="who-tickets" type="radio" checked={who === 'tickets'} onChange={() => setWho('tickets')} />
+            <label htmlFor="who-tickets">Ticket holders of a show</label>
+          </div>
+          {who === 'tickets' && (
             <>
-              {(mine.length > 0 || payments.on) && (
-                <div className="field-row indent">
-                  <label htmlFor="who-show">Show</label>
-                  <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
-                    <option value="">none</option>
-                    {mine.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                    {payments.on && <option value="new">A new show, with tickets…</option>}
-                  </select>
-                  <span className="small">its ticket holders, while it's on</span>
-                </div>
-              )}
+              <div className="field-row indent">
+                <label htmlFor="who-show">Show</label>
+                <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                  {mine.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                  <option value="new">A new show…</option>
+                </select>
+                <span className="small">they get in from an hour before it starts until it ends</span>
+              </div>
               {show === 'new' && <div className="indent">{newShow.fields}</div>}
-              {groups.map((g) => (
-                <div className="field-row indent" key={g.id}>
-                  <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
-                  <label htmlFor={`who-tier-${g.id}`}>members of {g.name}</label>
-                </div>
-              ))}
+              {tierBoxes}
             </>
           )}
+          {groups.length > 0 && (
+            <div className="field-row">
+              <input id="who-tiers" type="radio" checked={who === 'tiers'} onChange={() => setWho('tiers')} />
+              <label htmlFor="who-tiers">Members of tiers</label>
+            </div>
+          )}
+          {who === 'tiers' && tierBoxes}
         </fieldset>
         <div className="buttons">
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default" disabled={(who === 'people' && picked.length === 0) || (who === 'paid' && !show && tiers.length === 0)}>
+          <button className="default" disabled={(who === 'people' && picked.length === 0) || (who === 'tiers' && tiers.length === 0)}>
             Open room
           </button>
         </div>
