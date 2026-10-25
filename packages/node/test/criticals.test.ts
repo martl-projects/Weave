@@ -466,3 +466,35 @@ describe("history 'joining' holds when a plain member would invite (T3a83nLy)", 
     expect(texts).not.toContain('before Kofi');
   });
 });
+
+describe('a carried post is forgotten when it comes due (7I92Kk20)', () => {
+  it('carried by a shred, due later: gone for the others, kept by its author', async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 3; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    await kofi.joinSpace(await martin.invite('Weave'));
+    syncAll();
+    await martin.setBoardRule({ space: 'Weave', board: 'ideas', keepDays: 40 });
+    await lena.submit({ space: 'Weave', title: 'Lena old' });
+    syncAll();
+    martin.clock = () => Date.now() + 31 * day;
+    await martin.reconcile(); // a new key: the space has a rule
+    syncAll();
+    expect((await martin.shred({ space: 'Weave', before: new Date(Date.now() + 32 * day).toISOString() })).epochs).toEqual([0]);
+    syncAll();
+    for (const node of all) await node.reconcile();
+    syncAll();
+    const titles = async (node: WeaveNode) => (await node.posts({ space: 'Weave' })).map((p) => p.title);
+    expect(await titles(kofi)).toContain('Lena old');
+    kofi.clock = () => Date.now() + 45 * day;
+    await kofi.reconcile();
+    expect(await titles(kofi)).not.toContain('Lena old');
+    lena.clock = () => Date.now() + 45 * day;
+    await lena.reconcile();
+    expect(await titles(lena)).toContain('Lena old');
+  });
+});
