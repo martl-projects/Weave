@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { gift, isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
+import { decodeInvite, gift, isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
 import { loadSpaces, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 /* Regression tests from Julian's pre-release review: each one reproduces an issue and checks it stays fixed. */
@@ -247,5 +247,68 @@ describe("a gift can't poison a space's future epochs (8R9bN-yO)", () => {
     expect((await martin.spaces('project'))[0].epoch).toBe(1);
     expect(lenas().keys['1']).not.toBe(garbage);
     expect((await lena.messages('Weave')).map((m) => m.text)).toContain('after Noah');
+  });
+});
+
+describe('board rights come only with a link or a group one really holds (99ZpCdH6, xQ0as76W)', () => {
+  it("a plain member can't admit an outsider 'via' an auto-admitted group", async () => {
+    const [martin, lena, kofi, eve] = [person('Martin'), person('Lena'), person('Kofi'), person('Eve')];
+    const all = [martin, lena, kofi, eve];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Core');
+    await lena.joinSpace(await martin.invite('Core'));
+    syncAll();
+    await martin.createProject({ name: 'Weave' });
+    await martin.inviteGroup({ project: 'Weave', group: 'Core' });
+    await martin.setRule({ project: 'Weave', group: 'Core', auto: true });
+    await kofi.joinSpace(await martin.invite('Weave'));
+    syncAll();
+    await martin.setBoard({ project: 'Weave', name: 'core-notes', title: 'Core notes' });
+    await martin.setBoardAccess({ project: 'Weave', board: 'core-notes', read: ['group:Core'] });
+    await martin.submit({ space: 'Weave', board: 'core-notes', title: 'Budget' });
+    await martin.reconcile();
+    syncAll();
+    await kofi.createGroup('Chess');
+    await eve.joinSpace(await kofi.invite('Chess'));
+    syncAll();
+    const project = stored(kofi, 'Weave');
+    const coreId = (await martin.spaces('group')).find((s) => s.name === 'Core')!.id;
+    kofi.replica.write(kofi.identity, sealFor(project, { kind: 'weave.project.admit', body: { member: eve.identity.author, via: coreId } }));
+    kofi.replica.write(kofi.identity, gift(project, [eve.identity.author], spaceScope(stored(kofi, 'Chess')), { topics: [], bootstrap: [] }, (d) => kofi.replica.authority.encryptionKey(d)));
+    syncAll();
+    expect((await martin.members('Weave')).find((m) => m.name === 'Eve')).toBeUndefined();
+    await martin.reconcile();
+    syncAll();
+    const read = await eve.posts({ space: 'Weave', board: 'core-notes' }).then((p) => p.map((x) => x.title), () => []);
+    expect(read).toEqual([]);
+  });
+
+  it("a member can't take another link's board rights by leaving and joining with its id", async () => {
+    const [martin, kofi] = [person('Martin'), person('Kofi')];
+    const all = [martin, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createProject({ name: 'Weave' });
+    await kofi.joinSpace(await martin.invite('Weave'));
+    syncAll();
+    await martin.setBoard({ project: 'Weave', name: 'core-notes', title: 'Core notes' });
+    await martin.setBoardAccess({ project: 'Weave', board: 'core-notes', read: ['Martin'] });
+    await martin.submit({ space: 'Weave', board: 'core-notes', title: 'Budget' });
+    await martin.reconcile();
+    const link = await martin.invite('Weave', 24, { access: [{ board: 'core-notes', read: true }] }); // meant for someone else
+    const inviteId = decodeInvite(link).invite;
+    syncAll();
+    const space = stored(kofi, 'Weave');
+    kofi.replica.write(kofi.identity, sealFor(space, { kind: 'weave.space.leave', body: {} }));
+    kofi.replica.write(kofi.identity, sealFor(space, { kind: 'weave.space.join', body: { invite: inviteId } }));
+    syncAll();
+    await martin.reconcile();
+    syncAll();
+    expect((await martin.members('Weave')).map((m) => m.name)).toEqual(['Martin']);
+    const read = await kofi.posts({ space: 'Weave', board: 'core-notes' }).then((p) => p.map((x) => x.title), () => []);
+    expect(read).toEqual([]);
   });
 });

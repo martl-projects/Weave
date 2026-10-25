@@ -256,6 +256,8 @@ export function nameFromToken(idToken: string | undefined): string | undefined {
 export interface Enrolling {
   group: string;
   invite: string;
+  /** The join's proof that it holds the link (joinProof). */
+  proof?: string;
   joined?: true;
   words?: string;
   idToken?: string;
