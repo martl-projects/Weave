@@ -756,6 +756,12 @@ function withoutSecrets(value: Json): Json {
   return value;
 }
 
+/** A space's managed setting and its wrapped company halves, by epoch and by who published them. */
+interface ManagedRaw {
+  setting?: ManagedSetting;
+  parts: Map<number, Map<Did, string>>;
+}
+
 /** An escrow's key: its key service part and its company part, both needed. */
 const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
 
@@ -1024,6 +1030,7 @@ export class WeaveNode implements Backend {
     rmSync(joinPath(home.dir, 'github.json'), { force: true });
     for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
+    this.#loadHalves();
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
@@ -1391,7 +1398,7 @@ export class WeaveNode implements Backend {
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
     if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
-    const fields: EventFields = space ? sealFor(this.#cipher(space), inner) : inner;
+    const fields: EventFields = space ? sealFor(await this.#cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
     return this.itemFor(event)!;
   }
@@ -2124,7 +2131,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
     if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
+    this.replica.write(this.identity, sealFor(await this.#cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
@@ -5985,7 +5992,7 @@ export class WeaveNode implements Backend {
   }
 
   /** Per space, its managed setting and halves: built once, kept up to date as events come, dropped when its keys change. */
-  #rawCache = new Map<string, { setting?: ManagedSetting; parts: Map<number, string> }>();
+  #rawCache = new Map<string, ManagedRaw>();
 
   /**
    * A space's managed setting and wrapped company halves, read straight from
@@ -5993,29 +6000,45 @@ export class WeaveNode implements Backend {
    * unlocks a space can't need the space unlocked, nor decoding, which needs
    * this. Kept until the next event arrives.
    */
-  #managedRaw(space: StoredSpace): { setting?: ManagedSetting; parts: Map<number, string> } {
+  #managedRaw(space: StoredSpace): ManagedRaw {
     const kept = this.#rawCache.get(space.id);
     if (kept) return kept;
     const scope = spaceScope(space);
-    const out: { setting?: ManagedSetting; parts: Map<number, string> } = { parts: new Map() };
+    const out: ManagedRaw = { parts: new Map() };
     for (const r of this.replica.events((e) => e.scope === scope && e.kind === KIND_SEALED && !e.missing)) this.#takeRaw(space, out, r);
     this.#rawCache.set(space.id, out);
     return out;
   }
 
   /** One event of a space, for its managed setting and halves (only those sealed with the Weave half open here). */
-  #takeRaw(space: StoredSpace, into: { setting?: ManagedSetting; parts: Map<number, string> }, r: WeaveRecord): boolean {
+  #takeRaw(space: StoredSpace, into: ManagedRaw, r: WeaveRecord): boolean {
     const inner = openIn(space, r);
     if (!inner || (inner.kind !== KIND_MANAGED && inner.kind !== KIND_KMS)) return false;
     const b = inner.body as Record<string, unknown> | null;
     if (inner.kind === KIND_MANAGED && r.author === space.founder && b?.provider && Number(b.ttlMinutes) > 0 && Number(b.graceHours) >= 0 && (!into.setting || r.time >= into.setting.time))
-      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), by: r.author, time: r.time };
-    if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string' && !into.parts.has(b.epoch as number)) into.parts.set(b.epoch as number, b.wrapped);
+      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), ...(Number.isSafeInteger(b.from) ? { from: b.from as number } : {}), by: r.author, time: r.time };
+    if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string') {
+      // Every author's part kept apart: which counts is decided by whose rekey we seal with (#kmsParts).
+      let byAuthor = into.parts.get(b.epoch as number);
+      if (!byAuthor) into.parts.set(b.epoch as number, (byAuthor = new Map()));
+      if (!byAuthor.has(r.author)) byAuthor.set(r.author, b.wrapped);
+    }
     return true;
   }
 
+  /**
+   * Each epoch's company half (WUCPqIBs): the one by whoever made the rekey we
+   * seal with, else the owner's, else the first. A part from anyone else (any
+   * member can seal one with the Weave half) never stands in for it.
+   */
   #kmsParts(space: StoredSpace): Map<number, string> {
-    return this.#managedRaw(space).parts;
+    const out = new Map<number, string>();
+    for (const [epoch, byAuthor] of this.#managedRaw(space).parts) {
+      const rekeyer = space.rekeyers?.[String(epoch)];
+      const part = rekeyer ? byAuthor.get(rekeyer) : (byAuthor.get(space.founder) ?? byAuthor.values().next().value);
+      if (part) out.set(epoch, part);
+    }
+    return out;
   }
 
   /** One epoch's key, from both halves. */
@@ -6053,6 +6076,8 @@ export class WeaveNode implements Backend {
     const grace = parts.size ? this.#graceCache() : {};
     const keys: Record<string, string> = {};
     let locked = false;
+    // From which epoch on the company's half is needed (yHsKySEi): the setting says, or (settings from before) the first epoch with one.
+    const from = setting.from ?? (parts.size ? Math.min(...parts.keys()) : Infinity);
     for (const [epoch, weavePart] of Object.entries(space.keys)) {
       const id = `${space.id}:${epoch}`;
       const memory = this.#managedKeys.get(id);
@@ -6064,11 +6089,22 @@ export class WeaveNode implements Backend {
           keys[epoch] = grace[id].key;
           this.#decodedValidUntil = Math.min(this.#decodedValidUntil, grace[id].until);
         } else locked = true;
-      } else if (!memory) keys[epoch] = weavePart; // from before the space was managed
+      } else if (!memory && Number(epoch) < from) keys[epoch] = weavePart; // from before the space was managed
       else locked = true;
     }
     if (locked) void this.#unlock(space);
+    // The newest epoch locked: it stays the newest, without a key, so writing waits for it (sealFor refuses) instead of using an older one.
+    const newest = String(currentEpoch(space));
+    if (!(newest in keys)) keys[newest] = undefined as unknown as string;
     return { ...space, keys };
+  }
+
+  /** A space's keys to write with: a managed space's newest epoch unlocked first, if it can be (else sealFor refuses to write). */
+  async #cipherReady(space: StoredSpace): Promise<StoredSpace> {
+    const cipher = this.#cipher(space);
+    if (cipher.keys[String(currentEpoch(cipher))]) return cipher;
+    await this.#unlock(space);
+    return this.#cipher(space);
   }
 
   /** Unlock the company halves this node doesn't hold (or whose time ran out). */
@@ -6087,6 +6123,7 @@ export class WeaveNode implements Backend {
     const setting = this.#managedRaw(space).setting;
     if (!setting) return 0;
     let unlocked = 0;
+    let problem: string | undefined;
     try {
       const provider = this.#provider(setting);
       const now = this.clock();
@@ -6094,14 +6131,20 @@ export class WeaveNode implements Backend {
         const weavePart = space.keys[String(epoch)];
         const kept = this.#managedKeys.get(`${space.id}:${epoch}`);
         if (!weavePart || (kept && kept.until > now)) continue;
-        const kmsPart = await provider.unwrap(wrapped, { space: spaceScope(space), epoch });
-        this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
-        unlocked++;
+        // Each epoch on its own: one that can't be unwrapped doesn't keep the others locked (WUCPqIBs).
+        try {
+          const kmsPart = await provider.unwrap(wrapped, { space: spaceScope(space), epoch });
+          this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
+          unlocked++;
+        } catch (error) {
+          problem = `key ${epoch}: ${(error as Error).message}`;
+        }
       }
-      this.#managedProblems.delete(space.id);
     } catch (error) {
-      this.#managedProblems.set(space.id, (error as Error).message);
+      problem = (error as Error).message;
     }
+    if (problem) this.#managedProblems.set(space.id, problem);
+    else this.#managedProblems.delete(space.id);
     if (unlocked) this.#decoded = undefined;
     return unlocked;
   }
@@ -6111,9 +6154,38 @@ export class WeaveNode implements Backend {
     const setting = this.#managedRaw(space).setting;
     if (!setting) return;
     const kmsPart = new Uint8Array(randomBytes(32));
+    (space.rekeyers ??= {})[String(epoch)] = this.identity.author;
+    this.#saveSpace(space);
     this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
     this.#halves.set(`${space.id}:${epoch}`, { space, epoch, kmsPart });
+    this.#saveHalves();
     void this.#publishHalf(`${space.id}:${epoch}`);
+  }
+
+  /**
+   * Halves not published yet, kept on disk (sealed at rest) so that a restart
+   * doesn't lose them (AsPMzM8O): without its half nobody else ever reads that
+   * epoch, and after the grace not even we.
+   */
+  #saveHalves(): void {
+    const file = joinPath(this.home.dir, 'managed-halves.json');
+    const out: Record<string, { space: string; epoch: number; kmsPart: string }> = {};
+    for (const [id, h] of this.#halves) out[id] = { space: h.space.id, epoch: h.epoch, kmsPart: b64u.encode(h.kmsPart) };
+    writeSecretJson(this.home, file, out);
+  }
+
+  #loadHalves(): void {
+    const saved = readSecretJson<Record<string, { space: string; epoch: number; kmsPart: string }>>(this.home, joinPath(this.home.dir, 'managed-halves.json')) ?? {};
+    for (const [id, h] of Object.entries(saved)) {
+      const space = this.#spaces.get(h.space);
+      const setting = space && this.#managedRaw(space).setting;
+      const weavePart = space?.keys[String(h.epoch)];
+      if (!space || !setting || !weavePart) continue;
+      const kmsPart = b64u.decode(h.kmsPart);
+      this.#halves.set(id, { space, epoch: h.epoch, kmsPart });
+      // Ours to read with meanwhile, as before the restart.
+      if (!this.#managedKeys.has(id)) this.#remember(space, setting, h.epoch, this.#splitKey(space, h.epoch, weavePart, kmsPart));
+    }
   }
 
   /** Company halves wrapped and published in the background; kept until published, and tried again on reconcile. */
@@ -6129,6 +6201,7 @@ export class WeaveNode implements Backend {
         const wrapped = await this.#provider(setting).wrap(kmsPart, { space: spaceScope(space), epoch });
         this.replica.write(this.identity, sealFor(space, { kind: KIND_KMS, body: { epoch, wrapped } }));
         this.#halves.delete(id);
+        this.#saveHalves();
       } catch (error) {
         this.#managedProblems.set(space.id, `couldn't wrap the new key: ${(error as Error).message}`);
       } finally {
@@ -7233,7 +7306,10 @@ export class WeaveNode implements Backend {
     const device = this.#deviceProof(input.idToken);
     // Who hands it in, and the salt that ties the token to them (0siqvEzB).
     const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, did: this.identity.author, ...(salt ? { salt } : {}), ...(device ? { device: device as unknown as Json } : {}) });
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
+    // A sign-in is what lets the company's key service open its half to us, so it can't wait for it: boxed to the attestor, it goes under the newest key at hand.
+    const cipher = await this.#cipherReady(space);
+    const athand = { ...cipher, keys: Object.fromEntries(Object.entries(cipher.keys).filter(([, key]) => key)) };
+    this.replica.write(this.identity, sealFor(athand, { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
   }
 
   /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
@@ -7378,7 +7454,7 @@ export class WeaveNode implements Backend {
     const back = await this.#provider(setting).unwrap(await this.#provider(setting).wrap(probe, { space: spaceScope(space), epoch: -1 }), { space: spaceScope(space), epoch: -1 });
     if (b64u.encode(back) !== b64u.encode(probe)) throw new Error('the key service gave back something else');
     const attestor = input.attestor ? this.resolve(input.attestor) : undefined;
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}) } }));
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}), from: currentEpoch(space) + 1 } }));
     // From the next key on, half of it is the company's.
     this.#rotateKey(space);
     return this.#spaceInfo(space);
@@ -7783,6 +7859,7 @@ export class WeaveNode implements Backend {
       const epoch = String(opened.epoch);
       if (!space.keys[epoch]) {
         space.keys[epoch] = opened.key;
+        (space.rekeyers ??= {})[epoch] = event.author;
         this.#saveSpace(space);
         return;
       }
@@ -7793,11 +7870,12 @@ export class WeaveNode implements Backend {
         .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && rekeyCounts(state, e))
         .flatMap((e) => {
           const o = this.#tryOpen((me) => openRekey(e, me));
-          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key }] : [];
+          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key, author: e.author }] : [];
         })
         .sort((a, b) => a.id.localeCompare(b.id));
       const keys = [...new Set([...all.map((k) => k.key), space.keys[epoch], ...(space.alternates?.[epoch] ?? [])])];
       space.keys[epoch] = all[0]?.key ?? space.keys[epoch];
+      if (all[0]) (space.rekeyers ??= {})[epoch] = all[0].author;
       (space.alternates ??= {})[epoch] = keys.filter((k) => k !== space.keys[epoch]);
       this.#saveSpace(space);
       return;
