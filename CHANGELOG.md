@@ -2,6 +2,17 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.2 · 2026-10-25
+
+- Bring the lockfile in line with the phone app's dependencies
+- Show a badge's picture large in its card
+- Give badges a personal note the holder may publish
+- Let authors and maintainers delete chat messages
+- Say why the phone app asks for local network access
+- Phone app: bars clear the island and home bar, tabs show icon over label
+- Show a project's Live and boards at the top of its pages on phones
+- Play in a room from the phone app, through the computer
+
 ## v0.19.1 · 2026-10-24
 
 - Let Bare run on Linux and macOS: set the execute bit npm leaves off
