@@ -7664,9 +7664,13 @@ export class WeaveNode implements Backend {
     const known = this.#spaces.get(opened.space.id);
     if (known) {
       let added = false;
-      for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch))) (known.keys[epoch] = key), (added = true);
+      // For a space we hold, a gifted key counts only if it opens something sealed with it there (8R9bN-yO): anyone in a
+      // group with us can gift, and a made-up key for an epoch to come would keep the real one out.
+      for (const [epoch, key] of Object.entries(opened.space.keys)) {
+        if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch)) && this.#opensSomething(known, epoch, key)) (known.keys[epoch] = key), (added = true);
+      }
       for (const [board, epochs] of Object.entries((opened.space as StoredSpace).boards ?? {})) {
-        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch]) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
+        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch] && this.#opensSomething(known, epoch, key, board)) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
       }
       if (added) this.#saveSpace(known);
       return;
@@ -7674,12 +7678,22 @@ export class WeaveNode implements Backend {
     void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
   }
 
-  /**
-   * The last number of each of a person's keys (devices, agents) this node
-   * holds: what a removal, demotion, leave or handover names as counting before
-   * it. Whatever those keys sign numbered past it counts as after, whatever date
-   * it claims (Julian's backdating issue).
-   */
+  /** Does a key we're handed open something sealed with it in this space (an epoch's events, or a board's)? */
+  #opensSomething(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
+    const scope = spaceScope(space);
+    const withKey = { ...space, keys: { ...space.keys, [epoch]: key } };
+    for (const e of this.replica.events((r) => r.kind === KIND_SEALED && r.scope === scope && !r.missing)) {
+      if (board === undefined) {
+        if ((e.body as { epoch?: unknown } | null)?.epoch === Number(epoch) && openIn(withKey, e)) return true;
+        continue;
+      }
+      const inner = openIn(space, e);
+      const b = inner?.body as { board?: unknown; epoch?: unknown } | null | undefined;
+      if (inner?.kind === KIND_BOARD_SEALED && b?.board === board && b.epoch === Number(epoch) && openBoard(space, inner, { [board]: { [epoch]: key } })) return true;
+    }
+    return false;
+  }
+
   #anchor(person: Did, space: StoredSpace): Record<string, { c: number; s: number; n: number }> {
     // In the space itself, each key's control head and last content (see Anchor in spaces.ts): numbered there without gaps.
     const scope = spaceScope(space);
@@ -7692,6 +7706,12 @@ export class WeaveNode implements Backend {
     return out;
   }
 
+  /**
+   * The last number of each of a person's keys (devices, agents) this node
+   * holds: what a removal, demotion, leave or handover names as counting before
+   * it. Whatever those keys sign numbered past it counts as after, whatever date
+   * it claims (Julian's backdating issue).
+   */
   #upTo(person: Did): Record<string, number> {
     const out: Record<string, number> = {};
     for (const signer of this.replica.signers()) {
