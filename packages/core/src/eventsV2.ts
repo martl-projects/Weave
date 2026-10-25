@@ -78,6 +78,17 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.badge',
   'weave.badge.transfer',
   'weave.badge.note',
+  // treasuries: wallets people link, and how a project's income is split
+  'weave.wallet',
+  'weave.treasury.split',
+  'weave.treasury',
+  'weave.label',
+  'weave.safe.retired',
+  // ticketed events (tickets themselves are boxed content, like membership requests)
+  'weave.show',
+  // a Safe's transactions, signed together
+  'weave.safe.proposal',
+  'weave.safe.signature',
   // project roles and rules
   'weave.project.admit',
   'weave.project.decline',

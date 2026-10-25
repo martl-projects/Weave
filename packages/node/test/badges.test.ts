@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { KIND_BADGE, KIND_BADGE_NOTE, KIND_BADGE_TRANSFER } from '@weave/core';
+import { KIND_BADGE, KIND_BADGE_NOTE, KIND_BADGE_SERIES, KIND_BADGE_TRANSFER } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const sdk = createRequire(import.meta.url)('../../sdk/src/index.cjs') as typeof import('../../sdk/src/index.d.cts');
@@ -129,6 +129,36 @@ describe('badges', () => {
     const [held] = await ada.badges();
     expect(held).toMatchObject({ holder: { name: 'Ada' }, contested: true });
     expect(await ada.badges('Martin')).toEqual([]);
+  });
+
+  it("counts a series for a project only while its issuer maintains it; elsewhere the claim shows as unchecked", async () => {
+    const { martin, lena, ada, series } = await setup();
+    await lena.joinSpace(await martin.invite('Weave'));
+    sync(lena, martin);
+    sync(martin, lena);
+    const weave = (await martin.spaces('project'))[0];
+    // Lena is in Weave but doesn't maintain it; a cheating node signs a Weave series for her anyway.
+    lena.replica.write(lena.identity, { kind: KIND_BADGE_SERIES, body: { series: 'fake-weave', name: 'Weave Founder', symbol: '👑', description: '', project: { id: weave.id, name: 'Weave' } } });
+    lena.replica.write(lena.identity, { kind: KIND_BADGE, body: { series: 'fake-weave', n: 1, to: ada.identity.author } });
+    for (const node of [martin, ada]) sync(lena, node);
+
+    // In the project: a false claim, left out with its badges. Martin's own series checks out.
+    expect((await martin.badgeSeries()).map((s) => [s.name, s.project?.checked])).toEqual([['Super Supporter', true]]);
+    expect(await martin.badges('Ada')).toEqual([]);
+    expect(await lena.badges('Ada')).toEqual([]);
+    // Ada isn't in Weave: she can't check either claim, and sees both as unchecked.
+    expect((await ada.badges()).map((b) => [b.series.name, b.series.project])).toEqual([['Weave Founder', { id: weave.id, name: 'Weave', checked: false }]]);
+    expect((await ada.badgeSeries()).every((s) => s.project?.checked === false)).toBe(true);
+    // And the project's app never sees it.
+    await martin.publishApp({ project: 'Weave', manifest: { app: 'site', name: 'Site', services: [{ id: 'web', port: 4101 }] } });
+    expect(await sdk.connect(await martin.appEnv('Weave'))!.badges(ada.identity.author)).toEqual([]);
+
+    // Made a maintainer, Lena's series counts; once she isn't, it doesn't any more.
+    await martin.setMaintainer({ project: 'Weave', who: 'Lena', on: true });
+    expect((await martin.badges('Ada')).map((b) => b.series.name)).toEqual(['Weave Founder']);
+    await martin.setMaintainer({ project: 'Weave', who: 'Lena', on: false });
+    expect(await martin.badges('Ada')).toEqual([]);
+    expect((await martin.badgeSeries()).map((s) => s.id)).toEqual([series.id]);
   });
 
   it('gives a series its own picture, shown with every badge of it', async () => {

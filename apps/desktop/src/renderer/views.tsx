@@ -12,6 +12,7 @@ import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, u
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
+import { TreasurySettings } from './treasury.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -972,6 +973,7 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
           </div>
         ))}
       </fieldset>
+      <TreasurySettings project={project} spaces={spaces} />
       <RepoSettings space={project} />
       <NewcomerHistory space={project} canSet={info.maintainer} />
       <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />

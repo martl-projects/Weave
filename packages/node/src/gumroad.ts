@@ -7,11 +7,126 @@
  * month at a time while the subscription is paid.
  *
  * Weave never sees card details or money; Gumroad stays the merchant.
+ *
+ * Creators don't have to set the product up by hand: with an access token
+ * from their Gumroad account (scope edit_products) createGumroadMembership
+ * makes a monthly membership with a license key in its content, publishes it
+ * and returns the link for the tier.
+ *
+ * The token comes from connecting Gumroad (startGumroadSignIn): Gumroad's
+ * OAuth in the browser, through the Weave application on Gumroad, a public
+ * client with PKCE whose redirect is a one-off server on 127.0.0.1 (Gumroad
+ * lets the port of a loopback redirect vary). An access token pasted by hand
+ * works too.
  */
 
+import { randomBytes, createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import type { GumroadLink } from '@weave/core';
+import type { Fetch } from './github.ts';
 
-export const GUMROAD_VERIFY = 'https://api.gumroad.com/v2/licenses/verify';
+export const GUMROAD_API = 'https://api.gumroad.com/v2';
+export const GUMROAD_VERIFY = `${GUMROAD_API}/licenses/verify`;
+export const GUMROAD_AUTHORIZE = 'https://gumroad.com/oauth/authorize';
+export const GUMROAD_TOKEN = 'https://api.gumroad.com/oauth/token';
+/** What connecting asks for: making products, and the account's name to show who's connected. */
+export const GUMROAD_SCOPES = 'edit_products view_profile';
+/**
+ * The Weave application on Gumroad (a public client: its
+ * ID isn't a secret). WEAVE_GUMROAD_CLIENT_ID overrides it, e.g. for a test application.
+ */
+export const GUMROAD_CLIENT_ID = process.env.WEAVE_GUMROAD_CLIENT_ID ?? 'ETorAhWMzQUrKFdzjE_DVEeAvemhmxzyUJQNFJQQofQ';
+
+export interface GumroadSignIn {
+  /** Open this in the browser: Gumroad asks the person to allow Weave. */
+  url: string;
+  /** The access token once they did; rejects when they declined, it timed out or was cancelled. */
+  token: Promise<string>;
+  cancel(): void;
+}
+
+const b64url = (bytes: Buffer) => bytes.toString('base64url');
+
+/** Start connecting a Gumroad account: listens on 127.0.0.1 for Gumroad's redirect, for up to ten minutes. */
+export async function startGumroadSignIn(clientId: string, fetchImpl: Fetch = fetch, timeoutMs = 10 * 60_000): Promise<GumroadSignIn> {
+  if (!clientId) throw new Error("this copy of Weave can't connect Gumroad (no Gumroad application client ID); paste an access token instead");
+  const verifier = b64url(randomBytes(32));
+  const state = b64url(randomBytes(16));
+  let settle!: { resolve(token: string): void; reject(error: Error): void };
+  const token = new Promise<string>((resolve, reject) => (settle = { resolve, reject }));
+  token.catch(() => undefined); // nobody may be waiting when it's cancelled
+
+  const page = (title: string, text: string) =>
+    `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;max-width:32em;margin:4em auto;padding:0 1em"><h1 style="font-size:1.4em">${title}</h1><p>${text}</p>`;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname !== '/callback') return void res.writeHead(404).end();
+    const answer = (status: number, title: string, text: string) => res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(page(title, text));
+    if (url.searchParams.get('state') !== state) return answer(400, 'That link is not for this sign-in', 'Start connecting Gumroad again in Weave.');
+    const code = url.searchParams.get('code');
+    if (!code) {
+      const why = url.searchParams.get('error_description') || url.searchParams.get('error') || 'no code';
+      answer(400, 'Gumroad is not connected', `Gumroad said: ${why.replace(/[<&]/g, '')}. You can close this tab.`);
+      return finish(new Error(`Gumroad sign-in didn't work: ${why}`));
+    }
+    void exchange(code).then(
+      (accessToken) => {
+        answer(200, 'Gumroad is connected', 'You can close this tab and go back to Weave.');
+        finish(undefined, accessToken);
+      },
+      (error: Error) => {
+        answer(502, 'Gumroad is not connected', `${error.message.replace(/[<&]/g, '')}. You can close this tab and try again.`);
+        finish(error);
+      },
+    );
+  });
+  await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', () => resolve()));
+  const redirectUri = `http://127.0.0.1:${(server.address() as { port: number }).port}/callback`;
+  const timer = setTimeout(() => finish(new Error('connecting Gumroad timed out; try again')), timeoutMs);
+
+  async function exchange(code: string): Promise<string> {
+    const res = await fetchImpl(GUMROAD_TOKEN, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: clientId, code_verifier: verifier }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data = (await res.json().catch(() => ({}))) as { access_token?: string; error?: string; error_description?: string };
+    if (!data.access_token) throw new Error(`Gumroad didn't give an access token (${data.error_description || data.error || res.status})`);
+    return data.access_token;
+  }
+
+  let done = false;
+  function finish(error?: Error, accessToken?: string) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    server.close();
+    server.closeAllConnections?.();
+    if (accessToken) settle.resolve(accessToken);
+    else settle.reject(error ?? new Error('cancelled'));
+  }
+
+  const url = new URL(GUMROAD_AUTHORIZE);
+  url.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: GUMROAD_SCOPES,
+    state,
+    code_challenge: b64url(createHash('sha256').update(verifier).digest()),
+    code_challenge_method: 'S256',
+  }).toString();
+  return { url: url.toString(), token, cancel: () => finish(new Error('cancelled')) };
+}
+
+/** The connected account's name (or email), to show who's connected. */
+export async function gumroadAccount(token: string, fetchImpl: Fetch = fetch): Promise<string> {
+  const res = await fetchImpl(`${GUMROAD_API}/user`, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
+  const data = (await res.json().catch(() => ({}))) as { success?: boolean; user?: { name?: string; email?: string; url?: string } };
+  if (!data.success || !data.user) throw new Error(`Gumroad didn't accept the access token (${res.status})`);
+  return data.user.name || data.user.email || data.user.url || 'your Gumroad account';
+}
 
 export interface LicenseCheck {
   /** Paid up: renew (or grant). */
@@ -54,3 +169,99 @@ export function judgePurchase(link: GumroadLink, purchase: Record<string, unknow
   }
   return { ok: true, ...(email ? { email } : {}) };
 }
+
+export interface NewGumroadMembership {
+  name: string;
+  /** Per month, in the currency's smallest unit (cents). */
+  price: number;
+  /** ISO code; Gumroad uses the account's currency without one. */
+  currency?: string;
+  /** Plain text for the product page. */
+  description?: string;
+}
+
+export interface CreatedGumroadMembership {
+  link: GumroadLink;
+  /** On sale; false when Gumroad kept it as a draft (warning says why). */
+  published: boolean;
+  warning?: string;
+}
+
+/**
+ * Make a Gumroad membership that sells a tier: one monthly tier named like
+ * the Weave tier, a license key in its content (so buyers get one on their
+ * receipt), published. A product left half made is deleted again.
+ */
+export async function createGumroadMembership(token: string, input: NewGumroadMembership, fetchImpl: Fetch = fetch): Promise<CreatedGumroadMembership> {
+  if (!token.trim()) throw new Error('a Gumroad access token is needed to create the product');
+  if (!(input.price > 0)) throw new Error('a Gumroad membership needs a price: --price 5');
+  const call = async (method: string, path: string, body?: Record<string, unknown>) => {
+    const res = await fetchImpl(`${GUMROAD_API}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token.trim()}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data = (await res.json().catch(() => ({}))) as { success?: boolean; message?: string } & Record<string, unknown>;
+    if (res.status === 401 || res.status === 403) throw new Error("Gumroad didn't accept the access token (it needs the edit_products scope)");
+    if (!data.success) throw new Error(`Gumroad: ${data.message || `${method} ${path} failed (${res.status})`}`);
+    return data;
+  };
+
+  const created = await call('POST', '/products', {
+    native_type: 'membership',
+    name: input.name,
+    price: input.price,
+    ...(input.currency ? { price_currency_type: input.currency.toLowerCase() } : {}),
+    subscription_duration: 'monthly',
+    ...(input.description ? { description: `<p>${escapeHtml(input.description)}</p>` } : {}),
+    draft: true, // published once the license key is in
+  });
+  const product = created.product as { id?: string; short_url?: string } | undefined;
+  if (!product?.id || !product.short_url) throw new Error("Gumroad didn't return the new product's id and page");
+  const id = encodeURIComponent(product.id);
+
+  try {
+    // A membership starts with per-tier content; the license key goes into content shared by all tiers.
+    await call('PUT', `/products/${id}`, {
+      has_same_rich_content_for_all_variants: true,
+      rich_content: [
+        {
+          title: 'Your Weave license key',
+          description: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: `Paste this key into Weave to join ${input.name}: in the app when you ask to join, or with weave support <tier> --license <key>.` }] },
+              { type: 'licenseKey' },
+            ],
+          },
+        },
+      ],
+    });
+  } catch (e) {
+    await call('DELETE', `/products/${id}`).catch(() => undefined);
+    throw e;
+  }
+
+  // Gumroad names the first tier "Untitled"; buyers see it at checkout.
+  await nameFirstTier(call, id, input.name).catch(() => undefined);
+
+  const link: GumroadLink = { product: product.id, url: product.short_url };
+  try {
+    await call('PUT', `/products/${id}/enable`);
+    return { link, published: true };
+  } catch (e) {
+    return { link, published: false, warning: `${(e as Error).message}; publish it on Gumroad, the tier is linked already` };
+  }
+}
+
+async function nameFirstTier(call: (method: string, path: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>, id: string, name: string): Promise<void> {
+  const categories = (await call('GET', `/products/${id}/variant_categories`)).variant_categories as { id: string; title?: string }[] | undefined;
+  const category = categories?.find((c) => c.title === 'Tier') ?? categories?.[0];
+  if (!category) return;
+  const path = `/products/${id}/variant_categories/${encodeURIComponent(category.id)}/variants`;
+  const variants = (await call('GET', path)).variants as { id: string }[] | undefined;
+  if (variants?.length === 1) await call('PUT', `${path}/${encodeURIComponent(variants[0]!.id)}`, { name });
+}
+
+const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

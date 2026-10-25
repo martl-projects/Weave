@@ -15,6 +15,7 @@ import type { AddressInfo } from 'node:net';
  *   GET /v1/project                  the project, its open rooms and who's in them, its groups
  *   GET /v1/access?did=D[&group=G]   what D is in the project, and in which of its groups
  *   GET /v1/badges?did=D             the project's badges D holds (valid ones only)
+ *   GET /v1/tickets?did=D            the project's shows this host let D into: open while they're on
  *
  * Same rules as the daemon's API: 127.0.0.1 only, and the Host check stops web
  * pages from reaching it via DNS rebinding.
