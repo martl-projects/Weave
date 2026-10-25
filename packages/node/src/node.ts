@@ -208,6 +208,10 @@ import {
   KIND_TREASURY,
   KIND_TREASURY_SPLIT,
   KIND_WALLET,
+  KIND_WALLET_CHECKED,
+  contractWalletCheck,
+  contractWalletLinks,
+  contractWalletSaysYes,
   labelsOf,
   labelTarget,
   parseLabelTarget,
@@ -2361,7 +2365,7 @@ export class WeaveNode implements Backend {
     // A standby only follows: no duties, no keys, no writes.
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
@@ -4433,9 +4437,16 @@ export class WeaveNode implements Backend {
     if (!isAddress(input.address)) throw new Error('a wallet address is 0x and 40 hex digits');
     const address = checksumAddress(input.address);
     if (!input.proof) throw new Error(`sign this with the wallet (personal_sign), then pass the signature as proof:\n${walletMessage(this.identity.author, address)}`);
-    if (!verifyWalletProof(this.identity.author, address, input.proof)) throw new Error(`that signature isn't from ${address} over:\n${walletMessage(this.identity.author, address)}`);
+    // A wallet with a key signs itself; a smart wallet's contract says whether the signature is its own (EIP-1271), on chain.
+    let contract = false;
+    if (!verifyWalletProof(this.identity.author, address, input.proof)) {
+      const answer = await this.callChain(TREASURY_CHAIN.id, contractWalletCheck(this.identity.author, address, input.proof)).catch(() => '');
+      if (!contractWalletSaysYes(answer)) throw new Error(`that signature isn't from ${address} (nor does it confirm it as a smart wallet on ${TREASURY_CHAIN.name}) over:\n${walletMessage(this.identity.author, address)}`);
+      contract = true;
+      this.#recordContractCheck(this.identity.author, address, input.proof, true);
+    }
     const before = this.#wallets().get(this.identity.author);
-    this.replica.write(this.identity, { kind: KIND_WALLET, body: { chain: `eip155:${TREASURY_CHAIN.id}`, address, proof: input.proof } });
+    this.replica.write(this.identity, { kind: KIND_WALLET, body: { chain: `eip155:${TREASURY_CHAIN.id}`, address, proof: input.proof, ...(contract ? { contract: true } : {}) } });
     if (before?.verified && before.address !== address) await this.#movedWallet(before.address, address);
     return this.wallet();
   }
@@ -4461,7 +4472,7 @@ export class WeaveNode implements Backend {
     const owner = who ? this.resolve(who) : this.identity.author;
     const wallet = this.#wallets().get(owner);
     if (!wallet) return undefined;
-    return { owner: { did: owner, name: this.nameOf(owner) }, address: wallet.address, verified: wallet.verified, time: wallet.time, mine: owner === this.identity.author };
+    return { owner: { did: owner, name: this.nameOf(owner) }, address: wallet.address, verified: wallet.verified, ...(wallet.contract ? { contract: true as const } : {}), time: wallet.time, mine: owner === this.identity.author };
   }
 
   async treasury(ref: string): Promise<TreasuryInfo> {
@@ -4608,11 +4619,44 @@ export class WeaveNode implements Backend {
   }
 
   #wallets() {
-    return walletsOf(this.replica.events((e) => e.kind === KIND_WALLET));
+    return walletsOf(this.replica.events((e) => e.kind === KIND_WALLET), this.#contractChecked);
+  }
+
+  /** What the chain said about smart wallets' signatures (owner, address and proof → ok), from our sealed records. */
+  #contractChecks?: Map<string, boolean>;
+  #contractChecked = (owner: Did, address: string, proof: string): boolean | undefined => {
+    if (!this.#contractChecks) {
+      this.#contractChecks = new Map();
+      for (const b of this.#selfBodies(KIND_WALLET_CHECKED)) this.#contractChecks.set(`${b.owner} ${String(b.address).toLowerCase()} ${b.proof}`, b.ok === true);
+    }
+    return this.#contractChecks.get(`${owner} ${address.toLowerCase()} ${proof}`);
+  };
+
+  #recordContractCheck(owner: Did, address: string, proof: string, ok: boolean): void {
+    this.#contractChecked(owner, address, proof); // loads what's recorded
+    this.#contractChecks!.set(`${owner} ${address.toLowerCase()} ${proof}`, ok);
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_WALLET_CHECKED, body: { owner, address, proof, ok } }));
+  }
+
+  /** Ask the chain about smart wallets others linked that we haven't asked about yet. */
+  async #checkContractWallets(): Promise<number> {
+    let checked = 0;
+    for (const link of contractWalletLinks(this.replica.events((e) => e.kind === KIND_WALLET))) {
+      if (this.#contractChecked(link.owner, link.address, link.proof) !== undefined) continue;
+      let answer: string;
+      try {
+        answer = await this.callChain(TREASURY_CHAIN.id, contractWalletCheck(link.owner, link.address, link.proof));
+      } catch {
+        continue; // offline: ask again next round
+      }
+      this.#recordContractCheck(link.owner, link.address, link.proof, contractWalletSaysYes(answer));
+      checked++;
+    }
+    return checked;
   }
 
   #walletHistory() {
-    return walletHistoryOf(this.replica.events((e) => e.kind === KIND_WALLET));
+    return walletHistoryOf(this.replica.events((e) => e.kind === KIND_WALLET), this.#contractChecked);
   }
 
   #treasuries() {

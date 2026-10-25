@@ -5,7 +5,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { afterAll, describe, expect, it } from 'vitest';
-import { checksumAddress, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
+import { checksumAddress, contractWalletCheck, EIP1271_MAGIC, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -368,5 +368,40 @@ describe('paying without pasting anything', () => {
     // Looked in steps the public node allows, and stopped where it found it.
     expect(asked.every((a) => a.to - a.from <= 199)).toBe(true);
     expect((await lena.tiers('Martin'))[0].requested).toBe(true);
+  });
+});
+
+describe('smart wallets', () => {
+  it('links a smart wallet when its contract confirms the signature on chain, and others check it themselves', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    // A smart wallet (say a Coinbase Smart Wallet): an address without a key; its owner's passkey signs, its contract confirms.
+    const smart = '0x' + 'ab'.repeat(20);
+    const proof = '0x' + 'cd'.repeat(65 + 32); // whatever the wallet's own signature format is
+    const asked: string[] = [];
+    const chain = (node: WeaveNode) =>
+      (node.callChain = async (_chain, call) => {
+        asked.push(call.to.toLowerCase());
+        const yes = call.to.toLowerCase() === smart && call.data === contractWalletCheck(martin.identity.author, smart, proof).data;
+        return yes ? EIP1271_MAGIC + '0'.repeat(56) : '0x' + '0'.repeat(64);
+      });
+    chain(martin);
+    chain(lena);
+
+    await expect(martin.linkWallet({ address: smart, proof: '0x' + 'ee'.repeat(65) })).rejects.toThrow(/smart wallet/);
+    const linked = await martin.linkWallet({ address: smart, proof });
+    expect(linked).toMatchObject({ address: checksumAddress(smart), verified: true, contract: true });
+
+    // Lena's node doesn't take Martin's word for it: until it asked the chain, the wallet isn't verified.
+    sync(martin, lena);
+    expect(await lena.wallet('Martin')).toMatchObject({ verified: false, contract: true });
+    asked.length = 0;
+    await lena.reconcile();
+    expect(asked).toContain(smart);
+    expect(await lena.wallet('Martin')).toMatchObject({ verified: true, contract: true });
+    // Asked once: the answer is kept.
+    asked.length = 0;
+    await lena.reconcile();
+    expect(asked).not.toContain(smart);
   });
 });

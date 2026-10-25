@@ -6,6 +6,7 @@ import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
 import { LinkedAccountsBox } from './github.tsx';
 import { AgentAppsBox } from './agents.tsx';
+import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -548,6 +549,7 @@ export function KeysView() {
           </div>
         )}
       </fieldset>
+      <WalletBox />
       <fieldset>
         <legend>Devices and agents</legend>
         <table className="keys-table">

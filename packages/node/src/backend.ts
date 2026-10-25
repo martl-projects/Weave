@@ -528,6 +528,8 @@ export interface WalletInfo {
   address: string;
   /** The wallet signed that it belongs to its owner; only verified wallets own treasuries. */
   verified: boolean;
+  /** A smart wallet (a Safe, a Coinbase Smart Wallet): its contract confirmed the signature on chain. */
+  contract?: true;
   time: string;
   mine: boolean;
 }
