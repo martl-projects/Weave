@@ -64,6 +64,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   // the company itself (stage 10)
   'weave.org.freeze',
   'weave.org.settings',
+  'weave.org.generation',
   'weave.org.map',
   'weave.org.start',
   'weave.org.request',

@@ -19,6 +19,8 @@ export interface Config {
   scim?: { port: number; invite?: boolean };
   /** A standby company server (stage 14): it follows the active one and writes nothing, until promoted. */
   standby?: boolean;
+  /** Which server of an identity this is (nQ9JHlUV): promoting a standby counts it up; an older one that sees a newer one stands down. */
+  generation?: number;
   /** The company's node serves the admin console on this port (stage 12). */
   console?: { port: number; url?: string; clientId?: string };
   /** Follow Claude Code sessions for links to posts (the Mentions panel). */
@@ -42,6 +44,7 @@ export function loadConfig(home: Home): Config {
       : {}),
     ...(stored.archive === true ? { archive: true } : {}),
     ...(stored.standby === true ? { standby: true } : {}),
+    ...(Number.isSafeInteger(stored.generation) && stored.generation! > 0 ? { generation: stored.generation } : {}),
     ...(stored.scim && Number.isInteger(stored.scim.port) ? { scim: { port: stored.scim.port, ...(stored.scim.invite === true ? { invite: true } : {}) } } : {}),
     ...(stored.console && Number.isInteger(stored.console.port)
       ? { console: { port: stored.console.port, ...(typeof stored.console.url === 'string' ? { url: stored.console.url } : {}), ...(typeof stored.console.clientId === 'string' ? { clientId: stored.console.clientId } : {}) } }

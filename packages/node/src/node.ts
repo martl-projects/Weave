@@ -763,6 +763,9 @@ interface ManagedRaw {
   parts: Map<number, Map<Did, string>>;
 }
 
+/** A promoted server's generation (nQ9JHlUV): { generation }. */
+const KIND_GENERATION = 'weave.org.generation';
+
 /** An escrow's key: its key service part and its company part, both needed. */
 const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
 
@@ -1015,14 +1018,7 @@ export class WeaveNode implements Backend {
     this.#releaseLock = acquireLock(home);
     this.replica = new Replica(this.#openStore(home));
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
-    if (loadConfig(home).standby) {
-      const refuse = () => {
-        throw new Error('this is a standby server: it follows the active one and writes nothing (weave-server promote, once the active one is gone)');
-      };
-      this.replica.write = refuse;
-      this.replica.append = refuse;
-      this.replica.append2 = refuse;
-    }
+    if (loadConfig(home).standby) this.#refuseWrites();
     this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
@@ -1032,12 +1028,15 @@ export class WeaveNode implements Backend {
     for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
     this.#loadHalves();
+    // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
+    for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#seeGeneration(r);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
+      if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#seeGeneration(event);
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
       if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
@@ -3298,6 +3297,11 @@ export class WeaveNode implements Backend {
   async reconcile(): Promise<number> {
     // A standby only follows: no duties, no keys, no writes.
     if (this.config.standby) return 0;
+    // A promoted server says which generation it is, once: an older one that comes back stands down when it hears.
+    const generation = this.config.generation;
+    if (generation && !this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author && (e.body as { generation?: unknown } | null)?.generation === generation).length) {
+      this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
+    }
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
@@ -7112,6 +7116,33 @@ export class WeaveNode implements Backend {
    * What the person behind this company sign-in may do in the console (stage 15), by their sign-in groups
    * (the directory's when SCIM is on): admins everything, auditors read everything, the helpdesk sets people up.
    */
+  /** Signing nothing: a standby, or a server a newer one took over from. */
+  #refuseWrites(): void {
+    const refuse = () => {
+      throw new Error('this is a standby server: it follows the active one and writes nothing (weave-server promote, once the active one is gone)');
+    };
+    this.replica.write = refuse;
+    this.replica.append = refuse;
+    this.replica.append2 = refuse;
+  }
+
+  /** A server of this identity of a newer generation than ours: we stand down, as a standby. */
+  #seeGeneration(event: { body: Json }): void {
+    const generation = (event.body as { generation?: unknown } | null)?.generation;
+    if (!Number.isSafeInteger(generation) || (generation as number) <= (this.config.generation ?? 0) || this.config.standby) return;
+    this.config = { ...this.config, standby: true };
+    saveConfig(this.home, { ...loadConfig(this.home), standby: true });
+    this.#refuseWrites();
+    console.warn(`weave: a newer server of this identity took over (generation ${generation}): this one is a standby now and writes nothing`);
+  }
+
+  /** Is this person (name or did) one of the company's admins, or the company itself? */
+  isCompanyAdmin(who: string): boolean {
+    const here = this.#companyHere();
+    if (!here) return false;
+    return this.#isOrgAdmin(here.group, here.org, this.resolve(who));
+  }
+
   consoleRole(claims: { sub: string; email?: string; groups: string[] }): ConsoleRole | undefined {
     const group = this.#companyGroups()[0];
     const org = group ? this.#orgOf(group) : undefined;
