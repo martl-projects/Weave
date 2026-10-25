@@ -258,3 +258,29 @@ describe("nobody takes another's key by claiming it first (FTIDssuB)", () => {
     expect(other.authority.grant(victim.did)).toBeUndefined();
   });
 });
+
+describe('one key can\'t fill the pending pool (KtpOfhGu)', () => {
+  it("a key's flood of gapped events waits only so far; an honest out-of-order event still waits, and comes in", () => {
+    const attacker = createIdentity();
+    const other = new Replica();
+    let head;
+    const flood = [];
+    for (let i = 0; i < 400; i++) {
+      head = signEvent(attacker, head, { kind: 'weave.post', body: null });
+      flood.push(head);
+    }
+    const rest = flood.slice(1); // its first event never sent
+    const results = rest.map((e) => other.ingest(e));
+    expect(results.filter((r) => r.status === 'pending')).toHaveLength(256);
+    expect(results.at(-1)).toMatchObject({ status: 'rejected', reason: 'too many events of this key waiting' });
+    // An honest laptop's second event before its first: it waits, and comes in when the first does.
+    const { laptop, replica } = person();
+    replica.append2(laptop, { kind: 'weave.space.create', space: 'group:g', body: { name: 'G' } });
+    replica.append2(laptop, { kind: 'weave.space.join', space: 'group:g', body: { invite: 'x' } });
+    const control = replica.events((r) => r.scope === 'group:g').sort((a, b) => a.seq - b.seq);
+    expect(other.ingest(control[1]).status).toBe('pending');
+    for (const r of replica.events((r) => r.scope !== 'group:g')) other.ingest(r);
+    expect(other.ingest(control[0]).status).toBe('accepted');
+    expect(other.events((r) => r.scope === 'group:g')).toHaveLength(2);
+  });
+});
