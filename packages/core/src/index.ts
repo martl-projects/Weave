@@ -430,3 +430,4 @@ export {
   type ServiceReads,
   type ServiceRequest,
 } from './services.ts';
+export { mayAct, mayActAt, type Decision, type SpaceAction } from './authz.ts';
