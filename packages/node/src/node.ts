@@ -1777,7 +1777,7 @@ export class WeaveNode implements Backend {
           const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
           return d.event.author === this.identity.author && space ? this.#expandCarry(d, space, true) : [];
         }
-        return this.#expandCarry(d, d.space as StoredSpace | undefined);
+        return this.#expandCarry(d, d.space as StoredSpace | undefined).filter((x) => !this.#forgottenCarried().has(x.id));
       });
   }
 
@@ -8240,14 +8240,36 @@ export class WeaveNode implements Backend {
         for (const { id, author } of [{ id: post.id, author: post.by.did as Did }, ...(around.get(post.id)?.ids ?? [])]) {
           if (author === me) continue;
           const record = this.replica.record2(id);
-          if (!record || record.class !== 'content' || record.missing || !isWireItemV2(record.wire)) continue;
-          this.replica.store.dropBody(record.wire.e.body as string);
-          dropped++;
+          if (record && record.class === 'content' && !record.missing && isWireItemV2(record.wire)) {
+            this.replica.store.dropBody(record.wire.e.body as string);
+            dropped++;
+          } else if (!this.#forgottenCarried().has(id) && this.#carriedIds(space).has(id)) {
+            // Restated in a carry (7I92Kk20): a carry is never dropped, so its item is forgotten here, and the next shred leaves it behind.
+            this.#forgetCarried(id);
+            dropped++;
+          }
         }
       }
     }
     if (dropped) this.#decoded = undefined;
     return dropped;
+  }
+
+  /** Items of carries this node forgot by rule: kept in the carry (it can't be dropped), never shown. */
+  #forgottenCarriedSet?: Set<string>;
+  #forgottenCarried(): Set<string> {
+    this.#forgottenCarriedSet ??= new Set(readSecretJson<string[]>(this.home, joinPath(this.home.dir, 'forgotten-carried.json')) ?? []);
+    return this.#forgottenCarriedSet;
+  }
+
+  #forgetCarried(id: string): void {
+    this.#forgottenCarried().add(id);
+    writeSecretJson(this.home, joinPath(this.home.dir, 'forgotten-carried.json'), [...this.#forgottenCarried()]);
+  }
+
+  /** The ids carries restate in a space. */
+  #carriedIds(space: StoredSpace): Set<string> {
+    return new Set(this.#decodedIn(space.id).filter((d) => d.carried).map((d) => d.id));
   }
 
   async setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]> {
