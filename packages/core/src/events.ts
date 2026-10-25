@@ -37,6 +37,8 @@ export interface EventFields {
   time?: string;
   /** Signing as v2: the class to sign as (a sealed event's inner kind's class). v1 ignores it. */
   class?: EventClass;
+  /** Signing as v2: a sealed event's inner hash (see eventsV2). v1 ignores it. */
+  ih?: string;
 }
 
 /** A fresh root identity: a person. */

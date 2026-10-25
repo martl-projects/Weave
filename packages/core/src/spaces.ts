@@ -1,4 +1,4 @@
-import { classOf } from './eventsV2.ts';
+import { classOf, innerHash } from './eventsV2.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { KIND_SEALED } from './authority.ts';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
@@ -178,6 +178,8 @@ export interface SpaceKeys {
 export interface Inner {
   kind: string;
   body: Json;
+  /** Sealed with them: the secret that salts the event's inner hash (ih), for checking a restatement of it. */
+  salt?: string;
 }
 
 export const spaceScope = (space: Pick<SpaceKeys, 'kind' | 'id'>): string => `${space.kind}:${space.id}`;
@@ -248,7 +250,9 @@ const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave
 export function sealFor(space: SpaceKeys, inner: Inner): EventFields {
   const epoch = currentEpoch(space);
   const key = b64u.decode(space.keys[String(epoch)]);
-  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), body: { epoch, ...seal(key, inner as unknown as Json, context(space, epoch)) } };
+  // A secret salt sealed inside, and the salted hash signed outside: a carry can restate it checkably (see innerHash).
+  const sealed = { kind: inner.kind, body: inner.body, salt: b64u.encode(randomBytes(16)) };
+  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), ih: innerHash(sealed), body: { epoch, ...seal(key, sealed as unknown as Json, context(space, epoch)) } };
 }
 
 /** Decrypt a sealed event of a space, or undefined if we lack the key or it doesn't decrypt. */

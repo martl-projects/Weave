@@ -41,6 +41,10 @@ import {
   type BoardRule,
   type Lifetime,
   KIND_CARRY,
+  canonicalJson,
+  verifyEventV2,
+  isWellFormedV2,
+  innerHash,
   KIND_SHRED,
   KIND_MANAGED,
   KIND_KMS,
@@ -542,6 +546,8 @@ interface Decoded {
   space?: StoredSpace;
   /** For events of a read-limited board: which board (they were sealed with its key). */
   board?: string;
+  /** For those: what the event sealed, still under the board's key (with its salt), for a carry to restate checkably. */
+  outer?: Inner;
   private?: true;
 }
 
@@ -618,8 +624,13 @@ function withoutSecrets(value: Json): Json {
   return value;
 }
 
-/** An event as a carry restates it: its id, who wrote it when, and what it said. */
-const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
+/**
+ * An event as a carry restates it: what it said, with its original signed
+ * envelope (`e`) and the salt sealed with it, so that anyone can check the
+ * restatement against its author's signature (the envelope signs the salted
+ * hash of what it sealed, ih) without the key it was sealed with.
+ */
+const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string; wire?: unknown }; inner: { kind: string; body: Json; salt?: string }; outer?: Inner }) => ({
   id: d.id,
   author: d.event.author,
   signer: d.event.signer,
@@ -627,6 +638,9 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
   time: d.event.time,
   kind: d.inner.kind,
   body: d.inner.body,
+  ...(isWireItemV2(d.event.wire) ? { e: d.event.wire.e as unknown as Json } : {}),
+  // A read-limited board's event sealed its board blob: that's what the envelope signs, so that's what's checked (then opened with the board's key).
+  ...(d.outer ? { sealed: { kind: d.outer.kind, body: d.outer.body } as unknown as Json, ...(d.outer.salt ? { salt: d.outer.salt } : {}) } : d.inner.salt ? { salt: d.inner.salt } : {}),
 });
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
@@ -1447,51 +1461,59 @@ export class WeaveNode implements Backend {
   }
 
   /**
-   * A carry becomes the events it restates (see #trustedCarries for whose).
+   * A carry becomes the events it restates, each checked against its original
+   * envelope: signed by its author's key, in this space, sealing exactly what
+   * the carry says (ih). Who wrote it and when come from that envelope, never
+   * from the carry. Items that can't be checked count only in our own private
+   * carries (`unchecked`): anyone else could make them up.
    */
-  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined): Decoded[] {
+  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined, unchecked = false): Decoded[] {
     if (d.inner.kind !== KIND_CARRY || !space) return [];
     const items = (d.inner.body as { events?: unknown } | null)?.events;
     if (!Array.isArray(items)) return [];
+    const scope = spaceScope(space);
     const out: Decoded[] = [];
     for (const item of items as Array<Record<string, unknown>>) {
-      if (typeof item?.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || typeof item.kind !== 'string' || !Number.isSafeInteger(item.seq)) continue;
+      if (typeof item?.kind !== 'string') continue;
+      const inner = { kind: item.kind, body: (item.body ?? null) as Json };
+      const e = item.e;
+      // What the envelope signed: the inner itself, or for a read-limited board its sealed blob, which must open (board key) to exactly the inner.
+      const sealed = item.sealed as { kind?: unknown; body?: unknown } | undefined;
+      const signed = sealed && typeof sealed.kind === 'string' ? { kind: sealed.kind, body: (sealed.body ?? null) as Json } : inner;
+      const opened = signed === inner ? undefined : space.kind === 'project' ? openBoard(space, signed, space.boards) : undefined;
+      const opensTo = signed === inner || (!!opened && opened.kind === inner.kind && canonicalJson(opened.body) === canonicalJson(inner.body));
+      if (isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e)) {
+        const id = canonicalIdV2(e);
+        if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
+        const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, time: e.time, body: null };
+        out.push({ id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
+        continue;
+      }
+      if (!unchecked || typeof item.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || !Number.isSafeInteger(item.seq)) continue;
       const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, time: item.time, body: null };
-      out.push({ id: item.id, event, inner: { kind: item.kind, body: (item.body ?? null) as Json }, space, carried: true, ...(d.board ? { board: d.board } : {}) });
+      out.push({ id: item.id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
     }
     return out;
   }
 
   /**
-   * The events restated in the carries we trust: from whoever handed us a
-   * space's keys (a newcomer trusts them for the keys already), from someone
-   * who manages the space by the state we read ourselves (never by what a
-   * carry says), and our own private ones (what we wrote, kept before keys
-   * were shredded).
+   * The events restated in carries. Whoever wrote a carry vouches for nothing:
+   * every item is checked against its author's own signature (#expandCarry), so
+   * a carry from anyone holding the space's key restates only what was really
+   * written there. Our own private carries (what we wrote, kept before keys were
+   * shredded) count as they are.
    */
   #trustedCarries(decoded: Decoded[]): Decoded[] {
-    const carries = decoded.filter((d) => d.inner.kind === KIND_CARRY);
-    if (!carries.length) return [];
-    const states = new Map<string, SpaceState>();
-    const stateOf = (space: StoredSpace) => {
-      let state = states.get(space.id);
-      if (!state) {
-        state = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id && d.inner.kind !== KIND_CARRY));
-        states.set(space.id, state);
-      }
-      return state;
-    };
-    return carries.flatMap((d) => {
-      if (d.private) {
-        // Our own: {space, events} kept in our private space.
-        const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
-        return d.event.author === this.identity.author && space ? this.#expandCarry(d, space) : [];
-      }
-      const space = d.space as StoredSpace | undefined;
-      if (!space) return [];
-      const trusted = d.event.author === space.via || canManage(stateOf(space), d.event.author);
-      return trusted ? this.#expandCarry(d, space) : [];
-    });
+    return decoded
+      .filter((d) => d.inner.kind === KIND_CARRY)
+      .flatMap((d) => {
+        if (d.private) {
+          // Our own: {space, events} kept in our private space.
+          const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
+          return d.event.author === this.identity.author && space ? this.#expandCarry(d, space, true) : [];
+        }
+        return this.#expandCarry(d, d.space as StoredSpace | undefined);
+      });
   }
 
   /** In managed spaces, what agent keys signed counts only if those who manage the space approved them (stage 9). */
@@ -8163,7 +8185,7 @@ export class WeaveNode implements Backend {
       if (inner.kind === KIND_BOARD_SEALED) {
         const opened = space?.kind === 'project' ? openBoard(space, inner, space.boards) : undefined;
         if (!opened) return undefined;
-        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board };
+        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board, outer: inner };
       }
     }
     // A delegated key may carry sealed events, but only of kinds it was granted.
