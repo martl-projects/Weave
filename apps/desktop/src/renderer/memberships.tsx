@@ -110,7 +110,7 @@ function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   if (!wallet)
     return (
       <p className="small">
-        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (a project's Settings → Treasury, or <code>weave wallet link</code>), so {creator} knows the payment is yours.
+        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (Keys &amp; devices → Wallet), so {creator} knows the payment is yours.
       </p>
     );
   return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;

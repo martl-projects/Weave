@@ -13,10 +13,14 @@ import type { EventView } from './records.ts';
  * split contract on chain. Weave only computes the addresses and records who
  * agreed to what.
  *
- *   weave.wallet           {chain, address, proof}
+ *   weave.wallet           {chain, address, proof, contract}
  *                          public, by a person: their wallet address. proof is the wallet's
  *                          own signature (EIP-191) over walletMessage(did, address), so nobody
  *                          can claim an address they don't hold. address '' unlinks it.
+ *                          contract: a smart wallet (a Safe, a Coinbase Smart Wallet), whose
+ *                          signature its contract confirms on chain (EIP-1271)
+ *   weave.wallet.checked   {owner, address, proof, ok}   sealed to self: what the chain said about
+ *                          a smart wallet's signature, so it's asked once
  *   weave.treasury.split   {preset, shares: {makers, treasury, community, foundation}, makers, community}
  *                          in the project, by a maintainer: how income is divided, in basis
  *                          points (10000 = 100%). makers: [{did, share}] divides the makers'
@@ -44,6 +48,7 @@ import type { EventView } from './records.ts';
  * only while the maintainers and their wallets do: a change gives a new one.
  */
 export const KIND_WALLET = 'weave.wallet';
+export const KIND_WALLET_CHECKED = 'weave.wallet.checked';
 export const KIND_TREASURY_SPLIT = 'weave.treasury.split';
 export const KIND_TREASURY = 'weave.treasury';
 export const KIND_LABEL = 'weave.label';
@@ -107,6 +112,12 @@ export function checksumAddress(address: string): string {
 /** What a wallet signs to say it belongs to a Weave identity. */
 export const walletMessage = (did: Did, address: string): string => `Weave: this wallet ${checksumAddress(address)} belongs to ${did}`;
 
+/** The hash personal_sign (EIP-191) signs for a message. */
+export function personalMessageHash(message: string): Uint8Array {
+  const body = utf8ToBytes(message);
+  return keccak_256(new Uint8Array([...utf8ToBytes(`\x19Ethereum Signed Message:\n${body.length}`), ...body]));
+}
+
 /** The address that signed `message` with personal_sign (EIP-191), or undefined if the signature doesn't parse. */
 export function recoverSigner(message: string, signature: string): string | undefined {
   try {
@@ -114,8 +125,7 @@ export function recoverSigner(message: string, signature: string): string | unde
     if (sig.length !== 65) return undefined;
     const v = sig[64] >= 27 ? sig[64] - 27 : sig[64];
     if (v !== 0 && v !== 1) return undefined;
-    const body = utf8ToBytes(message);
-    const hash = keccak_256(new Uint8Array([...utf8ToBytes(`\x19Ethereum Signed Message:\n${body.length}`), ...body]));
+    const hash = personalMessageHash(message);
     const recovered = new Uint8Array([v, ...sig.subarray(0, 64)]);
     const point = secp256k1.Point.fromBytes(secp256k1.recoverPublicKey(recovered, hash, { prehash: false }));
     return checksumAddress('0x' + bytesToHex(keccak_256(point.toBytes(false).subarray(1)).subarray(12)));
@@ -128,16 +138,40 @@ export function recoverSigner(message: string, signature: string): string | unde
 export const verifyWalletProof = (did: Did, address: string, proof: string): boolean =>
   isAddress(address) && recoverSigner(walletMessage(did, address), proof)?.toLowerCase() === address.toLowerCase();
 
+/**
+ * Smart wallets (a Safe, a Coinbase Smart Wallet) have no key of their own:
+ * their contract says whether a signature is theirs (EIP-1271,
+ * isValidSignature(hash, signature) answering this magic value). Only the chain
+ * can tell, so whoever reads such a link asks the chain, and remembers.
+ */
+export const EIP1271_MAGIC = '0x1626ba7e';
+
+/** The read-only call (eth_call to the wallet) asking whether `proof` is the wallet's signature over its link message. */
+export function contractWalletCheck(did: Did, address: string, proof: string): { to: string; data: string } {
+  const sig = strip0x(proof).toLowerCase();
+  const data = selector('isValidSignature(bytes32,bytes)') + bytesToHex(personalMessageHash(walletMessage(did, address))) + uint(64) + uint(sig.length / 2) + sig.padEnd(Math.ceil(sig.length / 64) * 64, '0');
+  return { to: checksumAddress(address), data: '0x' + data };
+}
+
+/** Whether a smart wallet's answer to contractWalletCheck says yes. */
+export const contractWalletSaysYes = (answer: string): boolean => typeof answer === 'string' && answer.toLowerCase().startsWith(EIP1271_MAGIC + '0'.repeat(56));
+
 export interface LinkedWallet {
   owner: Did;
   address: string;
   /** The wallet signed that it belongs to its owner. */
   verified: boolean;
+  /** A smart wallet (a contract): its signature was checked on chain. */
+  contract?: true;
   time: string;
 }
 
-/** Everyone's linked wallet from their public wallet events, the latest per person winning; unlinked ones are dropped. */
-export function walletsOf(events: EventView[]): Map<Did, LinkedWallet> {
+/**
+ * Everyone's linked wallet from their public wallet events, the latest per
+ * person winning; unlinked ones are dropped. `contractChecked` answers for
+ * smart wallets what the chain said (undefined: not asked yet, so not verified).
+ */
+export function walletsOf(events: EventView[], contractChecked?: (owner: Did, address: string, proof: string) => boolean | undefined): Map<Did, LinkedWallet> {
   const latest = new Map<Did, LinkedWallet | null>();
   for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
     if (event.kind !== KIND_WALLET) continue;
@@ -148,10 +182,24 @@ export function walletsOf(events: EventView[]): Map<Did, LinkedWallet> {
     }
     if (!isAddress(body.address)) continue;
     const address = checksumAddress(body.address);
-    const verified = typeof body.proof === 'string' && verifyWalletProof(event.author, address, body.proof);
+    const proof = typeof body.proof === 'string' ? body.proof : '';
+    if (body.contract === true) {
+      const verified = !!proof && contractChecked?.(event.author, address, proof) === true;
+      latest.set(event.author, { owner: event.author, address, verified, contract: true, time: event.time });
+      continue;
+    }
+    const verified = !!proof && verifyWalletProof(event.author, address, proof);
     latest.set(event.author, { owner: event.author, address, verified, time: event.time });
   }
   return new Map([...latest].filter((pair): pair is [Did, LinkedWallet] => pair[1] !== null));
+}
+
+/** The smart wallet links among wallet events: what to ask the chain about. */
+export function contractWalletLinks(events: EventView[]): Array<{ owner: Did; address: string; proof: string }> {
+  return events.flatMap((event) => {
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    return event.kind === KIND_WALLET && body.contract === true && isAddress(body.address) && typeof body.proof === 'string' ? [{ owner: event.author, address: checksumAddress(body.address), proof: body.proof }] : [];
+  });
 }
 
 // ---------------------------------------------------------------- Safe address
@@ -523,13 +571,14 @@ export function retiredOf(events: EventView[]): Map<string, RetiredAddress> {
 }
 
 /** Every wallet anyone ever linked with a valid signature, by address (lowercase): who it belongs to, even after they moved on. */
-export function walletHistoryOf(events: EventView[]): Map<string, Did> {
+export function walletHistoryOf(events: EventView[], contractChecked?: (owner: Did, address: string, proof: string) => boolean | undefined): Map<string, Did> {
   const out = new Map<string, Did>();
   for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
     if (event.kind !== KIND_WALLET) continue;
     const body = (event.body ?? {}) as Record<string, unknown>;
     if (!isAddress(body.address) || typeof body.proof !== 'string' || out.has(body.address.toLowerCase())) continue;
-    if (verifyWalletProof(event.author, body.address, body.proof)) out.set(body.address.toLowerCase(), event.author);
+    const ok = body.contract === true ? contractChecked?.(event.author, checksumAddress(body.address), body.proof) === true : verifyWalletProof(event.author, body.address, body.proof);
+    if (ok) out.set(body.address.toLowerCase(), event.author);
   }
   return out;
 }

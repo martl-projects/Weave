@@ -4,6 +4,7 @@ import { Icon } from './icons.tsx';
 import { api, bump, shortDid, useApi } from './lib.ts';
 import { copy } from './posts.tsx';
 import { SafeProposals } from './shows.tsx';
+import { WalletLink } from './wallet.tsx';
 import { attempt, AsyncButton, toast } from './ui.tsx';
 
 /*
@@ -42,43 +43,6 @@ function SplitBar({ shares }: { shares: Shares }) {
   );
 }
 
-/** Link your own wallet: it signs a message saying it's yours, so nobody can claim an address they don't hold. */
-function WalletLink({ wallet }: { wallet?: WalletInfo }) {
-  const [address, setAddress] = useState('');
-  const [message, setMessage] = useState('');
-  const [proof, setProof] = useState('');
-  if (wallet)
-    return (
-      <div className="field-row">
-        <Icon name="user" /> <span className="grow">Your wallet: <code>{wallet.address}</code></span>
-        <AsyncButton onClick={() => attempt(() => api('linkWallet', { address: '' }).then(bump), 'Wallet unlinked')}>Unlink</AsyncButton>
-      </div>
-    );
-  return (
-    <>
-      <p className="small">Link your wallet to own this treasury with the other maintainers. Weave never sees its key: the wallet only signs a message saying it's yours. Best use a new address just for Weave: everything on chain is public.</p>
-      <div className="field-row">
-        <input className="grow" placeholder="0x… your wallet address" value={address} onChange={(e) => setAddress(e.target.value.trim())} aria-label="Wallet address" />
-        <AsyncButton onClick={async () => setMessage((await attempt(() => api<string>('walletMessage', address))) ?? '')}>Next</AsyncButton>
-      </div>
-      {message && (
-        <>
-          <p className="small">Sign this message with that wallet (personal_sign, e.g. “Sign message” in your wallet), then paste the signature:</p>
-          <div className="field-row">
-            <code className="grow sunken" style={{ padding: 4, wordBreak: 'break-all' }}>{message}</code>
-            <button onClick={() => copy(message, 'Message copied')}>Copy</button>
-          </div>
-          <div className="field-row">
-            <input className="grow" placeholder="0x… signature" value={proof} onChange={(e) => setProof(e.target.value.trim())} aria-label="Signature" />
-            <AsyncButton className="default" onClick={() => attempt(() => api('linkWallet', { address, proof }).then(bump), 'Wallet linked')}>
-              Link wallet
-            </AsyncButton>
-          </div>
-        </>
-      )}
-    </>
-  );
-}
 
 function SplitEditor({ project, treasury, communities }: { project: SpaceInfo; treasury: TreasuryInfo; communities: SpaceInfo[] }) {
   const start = treasury.pending ?? treasury.split;
@@ -193,7 +157,7 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
           <SafeProposals safe={r.address} />
         </div>
       ))}
-      {treasury.maintainer && <WalletLink wallet={wallet} />}
+      {treasury.maintainer && !wallet && <WalletLink intro="Link your wallet to own this treasury with the other maintainers (also in Keys & devices). Weave never sees its key." />}
       <h4>Split</h4>
       {treasury.split ? <SplitBar shares={treasury.split.shares} /> : <p className="small">No split yet.</p>}
       {treasury.pending && (
