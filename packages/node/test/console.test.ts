@@ -121,7 +121,7 @@ describe('the admin console', { timeout: 120_000 }, () => {
 
       // The link in it sets the account up.
       const link = joinUrl.split('#')[1];
-      const noah = await WeaveNode.enroll(link, mkdtempSync(join(tmpdir(), 'weave-invite-noah-')), { idToken: oidc.token({ sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
+      const noah = await WeaveNode.enroll(link, mkdtempSync(join(tmpdir(), 'weave-invite-noah-')), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
       // A company-owned identity: the company it belongs to is in its inception.
       expect(noah.replica.authority.keys(noah.identity.author).org).toBe(acme.identity.author);
       await noah.close();
@@ -168,7 +168,7 @@ describe('the admin console', { timeout: 120_000 }, () => {
 
     // Noah enrolls, and his node gets an agent.
     const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
-    const noah = await WeaveNode.enroll(await acme.enrollLink(), mkdtempSync(join(tmpdir(), 'weave-roles-noah-')), { idToken: oidc.token({ sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
+    const noah = await WeaveNode.enroll(await acme.enrollLink(), mkdtempSync(join(tmpdir(), 'weave-roles-noah-')), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
     const both = async () => {
       sync(acme, noah);
       sync(noah, acme);

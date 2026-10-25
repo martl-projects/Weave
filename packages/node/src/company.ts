@@ -259,5 +259,7 @@ export interface Enrolling {
   joined?: true;
   words?: string;
   idToken?: string;
+  /** Its nonce's salt (signInNonce). */
+  salt?: string;
   started?: true;
 }

@@ -46,7 +46,7 @@ async function enroll(acme: WeaveNode, people: Array<{ name: string; sub: string
   const link = await acme.enrollLink();
   const nodes: WeaveNode[] = [];
   for (const p of people) {
-    const node = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: p.sub, email: p.email, groups: ['employees'] }), name: p.name });
+    const node = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: p.sub, email: p.email, groups: ['employees'] }), name: p.name });
     p.before?.(node);
     nodes.push(node);
   }
@@ -159,10 +159,10 @@ describe('the company in its user management and device management', { timeout: 
     forgetMachinePolicy();
     try {
       expect(() => WeaveNode.init('Private me', dir())).toThrow(/only company accounts/);
-      const lena = await WeaveNode.enroll(await acme.enrollLink(), dir(), { idToken: oidc.token({ sub: 'lena' }), name: 'Lena' });
+      const lena = await WeaveNode.enroll(await acme.enrollLink(), dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena' }), name: 'Lena' });
       expect((await lena.whoami()).company?.did).toBe(acme.identity.author);
       expect((await lena.updateCheck({ current: '0.1.0' })).latest).toBeUndefined();
-      await expect(WeaveNode.enroll(await other.enrollLink(), dir(), { idToken: oidc.token({ sub: 'x' }) })).rejects.toThrow(/another company/);
+      await expect(WeaveNode.enroll(await other.enrollLink(), dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'x' }) })).rejects.toThrow(/another company/);
       for (const node of [acme, lena, other]) await node.close();
     } finally {
       delete process.env.WEAVE_POLICY;
