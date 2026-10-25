@@ -354,6 +354,7 @@ export {
   eventIdV2,
   isWellFormedV2,
   isWireItemV2,
+  innerHash,
   signContentEventV2,
   signControlEventV2,
   signEventV2,

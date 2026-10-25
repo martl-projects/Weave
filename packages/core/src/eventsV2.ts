@@ -122,6 +122,12 @@ interface HeaderV2 {
   kind: string;
   /** The v1 event this one re-signs (stage 1 migration), so references to the old id keep working. */
   was?: string;
+  /**
+   * For a sealed event: the hash of what it seals (innerHash), salted with a
+   * secret inside it. Signed with the rest, so a restatement of it (a carry) can
+   * be checked against the author's signature by someone who never held its key.
+   */
+  ih?: string;
 }
 
 export interface UnsignedControlEventV2 extends HeaderV2 {
@@ -153,11 +159,17 @@ export interface EventFieldsV2 {
   /** The class to sign as; defaults to the kind's class. Sealed events pass their inner kind's class. */
   class?: EventClass;
   was?: string;
+  /** A sealed event's inner hash (see HeaderV2.ih). */
+  ih?: string;
 }
 
 const SIGNING_CONTEXT = 'weave/event/v2\n';
 
 const signingBytes = (event: UnsignedControlEventV2 | UnsignedContentEventV2): Uint8Array => utf8(SIGNING_CONTEXT + canonicalJson(event as unknown as Json));
+
+/** The hash a sealed event signs of what it seals: its inner kind and body, and a secret salt sealed with them (so the hash can't confirm a guess). */
+export const innerHash = (inner: { kind: string; body: Json; salt: string }): string =>
+  b64u.encode(sha256(utf8('weave/inner/v1\n' + canonicalJson({ kind: inner.kind, body: inner.body, salt: inner.salt }))));
 
 /** The hash a content event signs in place of its body. */
 export const bodyHash = (body: Json): string => b64u.encode(sha256(utf8(canonicalJson(body))));
@@ -182,6 +194,7 @@ export function signControlEventV2(identity: SigningIdentity, head: ControlEvent
     kind: fields.kind,
     body: fields.body ?? null,
     ...(fields.was ? { was: fields.was } : {}),
+    ...(fields.ih ? { ih: fields.ih } : {}),
   };
   return { ...unsigned, sig: b64u.encode(sign(signingBytes(unsigned), identity.keys.secretKey)) };
 }
@@ -200,6 +213,7 @@ export function signContentEventV2(identity: SigningIdentity, fields: EventField
     kind: fields.kind,
     body: bodyHash(body),
     ...(fields.was ? { was: fields.was } : {}),
+    ...(fields.ih ? { ih: fields.ih } : {}),
   };
   return { event: { ...unsigned, sig: b64u.encode(sign(signingBytes(unsigned), identity.keys.secretKey)) }, body };
 }
@@ -242,6 +256,7 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
     typeof e.space === 'string' && SPACE_PATTERN.test(e.space) &&
     Number.isSafeInteger(e.n) && (e.n as number) >= 1 &&
     (e.was === undefined || (typeof e.was === 'string' && HASH_PATTERN.test(e.was))) &&
+    (e.ih === undefined || (typeof e.ih === 'string' && HASH_PATTERN.test(e.ih))) &&
     typeof e.time === 'string' && !Number.isNaN(Date.parse(e.time)) &&
     typeof e.kind === 'string' && KIND_PATTERN.test(e.kind) &&
     typeof e.sig === 'string';
@@ -249,7 +264,7 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
   // A sealed event hides its inner kind, so only an open kind must match its class.
   const sealed = e.kind === 'weave.sealed';
   if (e.class === 'control') {
-    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'seq', 'prev', 'time', 'kind', 'body', 'was', 'sig']);
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'seq', 'prev', 'time', 'kind', 'body', 'was', 'ih', 'sig']);
     return (
       Object.keys(e).every((k) => allowed.has(k)) &&
       (sealed || CONTROL_KINDS.has(e.kind as string)) &&
@@ -259,7 +274,7 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
     );
   }
   if (e.class === 'content') {
-    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'time', 'kind', 'body', 'was', 'sig']);
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'time', 'kind', 'body', 'was', 'ih', 'sig']);
     return (
       Object.keys(e).every((k) => allowed.has(k)) &&
       (sealed || !CONTROL_KINDS.has(e.kind as string)) &&
