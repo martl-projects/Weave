@@ -160,3 +160,14 @@ describe('v2 events in the replica', () => {
     expect(bodyHash(null)).toBeTypeOf('string');
   });
 });
+
+describe('peer input that can\'t be read (KixI_JwE)', () => {
+  it('rejects a body with a non-finite number instead of throwing', () => {
+    const laptop = createIdentity();
+    const other = new Replica();
+    const { event } = signContentEventV2(laptop, { n: 1, kind: 'weave.post', space: 'public', body: { x: 1 } });
+    // On the wire \`{"x":1e400}\` parses to Infinity, which canonical JSON can't hash.
+    expect(() => other.ingest({ e: event, b: JSON.parse('{"x":1e400}') })).not.toThrow();
+    expect(other.ingest({ e: event, b: { x: Number.POSITIVE_INFINITY } }).status).not.toBe('accepted');
+  });
+});

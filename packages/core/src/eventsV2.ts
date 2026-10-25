@@ -219,7 +219,13 @@ export function verifyEventV2(event: EventV2): boolean {
 }
 
 /** Does this body belong to this content event? */
-export const bodyMatches = (event: ContentEventV2, body: Json): boolean => bodyHash(body) === event.body;
+export const bodyMatches = (event: ContentEventV2, body: Json): boolean => {
+  try {
+    return bodyHash(body) === event.body;
+  } catch {
+    return false; // not JSON we can hash (Infinity from `1e400` on the wire, say): not this event's body
+  }
+};
 
 const KIND_PATTERN = /^[a-z0-9]+(\.[a-z0-9_-]+)+$/;
 const SPACE_PATTERN = /^(public|self|[a-z]+:[A-Za-z0-9_-]{1,64})$/;
