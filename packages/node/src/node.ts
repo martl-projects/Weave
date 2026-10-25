@@ -138,6 +138,10 @@ import {
   KIND_MEMBERSHIP_PENDING,
   KIND_MEMBERSHIP_LICENSE,
   parseGumroadLink,
+  parseOnchainPrice,
+  isTxHash,
+  type OnchainPrice,
+  type PaymentCheck,
   type GumroadLink,
   KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
@@ -164,6 +168,34 @@ import {
   KIND_THREAD,
   KIND_TIER,
   badgesOf,
+  checksumAddress,
+  isAddress,
+  KIND_LABEL,
+  KIND_TREASURY,
+  KIND_TREASURY_SPLIT,
+  KIND_WALLET,
+  labelsOf,
+  labelTarget,
+  parseLabelTarget,
+  safeDeployment,
+  splitDeployedCall,
+  splitDeployment,
+  splitSalt,
+  splitAllocations,
+  splitRecipients,
+  treasuriesOf,
+  WEAVE_FOUNDATION_PROJECT,
+  parseShares,
+  safeAddress,
+  SPLIT_PRESETS,
+  splitOf,
+  TREASURY_CHAIN,
+  treasurySaltNonce,
+  treasuryThreshold,
+  verifyWalletProof,
+  walletMessage,
+  walletsOf,
+  type Split,
   BADGE_LIMIT_MAX,
   KIND_BADGE,
   KIND_BADGE_SERIES,
@@ -301,6 +333,11 @@ import {
   type MembershipRequestInfo,
   type BadgeInfo,
   type BadgeSeriesInfo,
+  type LabelInfo,
+  type SplitContractInfo,
+  type SplitInfo,
+  type TreasuryInfo,
+  type WalletInfo,
   type ChannelInfo,
   type CommunityInfo,
   type EdgeInput,
@@ -401,6 +438,7 @@ import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
+import { checkOnchainPayment, ethCall, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
@@ -557,6 +595,9 @@ const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', descripti
 const personalRepo = (repo: string) =>
   `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again`;
 
+/** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
+const ONCHAIN_RECORD = 'tx:';
+
 export class WeaveNode implements Backend {
   readonly home: Home;
   #identity: SigningIdentity;
@@ -593,6 +634,10 @@ export class WeaveNode implements Backend {
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
   checkLicense: LicenseChecker = checkGumroadLicense;
+  /** How payments on chain are checked (tests put a fake here). */
+  checkPayment: PaymentChecker = checkOnchainPayment;
+  /** The chain's answers for paid requests, so each transaction is read once per run (request id → answer). */
+  #paymentChecks = new Map<string, PaymentCheck | 'checking'>();
   /** How memberships are made on Gumroad (tests put a fake here). */
   makeGumroadMembership: typeof createGumroadMembership = createGumroadMembership;
   /** How Gumroad gets connected: the Weave application, the browser sign-in and who's connected (tests put fakes here). */
@@ -3648,14 +3693,14 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- memberships
 
-  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo> {
+  async createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo> {
     const group = await this.#createSpace('group', input.name, { tier: true });
     const position = this.#tierOffers(this.identity.author).length;
     this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, auto: false, time: '' }, input);
     return this.#tierInfo(this.#tierOffer(group.id));
   }
 
-  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo> {
+  async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo> {
     const before = this.#tierOffer(input.tier);
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
@@ -3722,17 +3767,21 @@ export class WeaveNode implements Backend {
     return this.#tierOffers(who ? this.resolve(who) : this.identity.author).map((t) => this.#tierInfo(t));
   }
 
-  async requestMembership(input: { tier: string; note?: string; license?: string }): Promise<void> {
+  async requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void> {
     const tier = this.#tierOffer(input.tier);
     if (tier.creator === this.identity.author) throw new Error("that's your own tier");
     if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
     const license = input.license?.trim();
     if (license && !tier.gumroad) throw new Error(`${tier.name} isn't sold through Gumroad`);
     if (license && !/^[A-Za-z0-9-]{8,100}$/.test(license)) throw new Error('a Gumroad license key looks like XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX');
+    const payment = input.payment?.trim().toLowerCase();
+    if (payment && !tier.onchain) throw new Error(`${tier.name} isn't paid on chain`);
+    if (payment && !isTxHash(payment)) throw new Error("a payment is the transaction's hash: 0x and 64 hex digits");
+    if (payment && !this.#wallets().get(this.identity.author)?.verified) throw new Error('link the wallet you paid from first (weave wallet link): that is how the creator knows the payment is yours');
     await this.join(tier.creator); // the creator's node listens on their identity topic
     this.replica.write(
       this.identity,
-      membershipRequest(this.#encryptionKeyOf(tier.creator), { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint(), ...(license ? { license } : {}) }),
+      membershipRequest(this.#encryptionKeyOf(tier.creator), { tier: tier.id, note: input.note?.trim().slice(0, 500) ?? '', entry: this.#entryPoint(), ...(license ? { license } : {}), ...(payment ? { payment } : {}) }),
     );
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_PENDING, body: { creator: tier.creator, tier: tier.id } }));
   }
@@ -3749,7 +3798,10 @@ export class WeaveNode implements Backend {
       const check = this.#licenseChecks.get(id);
       const answer = check && check !== 'checking' ? { ok: check.ok, ...(check.reason ? { reason: check.reason } : {}), ...(check.email ? { email: check.email } : {}) } : {};
       const license = request.license ? { license: { key: request.license, ...answer } } : {};
-      out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time, ...license });
+      const paid = this.#paymentChecks.get(id);
+      const paidAnswer = paid && paid !== 'checking' ? { ok: paid.ok, ...(paid.reason ? { reason: paid.reason } : {}), ...(paid.months ? { months: paid.months } : {}) } : {};
+      const payment = request.payment ? { payment: { tx: request.payment, ...paidAnswer } } : {};
+      out.push({ id, tier: { id: tier.id, name: tier.name }, did: event.author, name: this.nameOf(event.author), note: request.note, time: event.time, ...license, ...payment });
     }
     return out.sort((a, b) => a.time.localeCompare(b.time));
   }
@@ -3848,13 +3900,14 @@ export class WeaveNode implements Backend {
    * one Gumroad doesn't accept, waits in the Inbox with the reason.
    */
   async #grantPaid(): Promise<number> {
+    let granted = await this.#grantPaidOnchain();
     const sold = new Map(this.#tierOffers(this.identity.author).filter((t) => t.gumroad && t.open).map((t) => [t.id, t]));
-    if (!sold.size) return 0;
-    let granted = 0;
+    if (!sold.size) return granted;
     for (const request of await this.membershipRequests()) {
       const tier = sold.get(request.tier.id);
       const key = request.license?.key;
       if (!tier?.gumroad || !key || this.#licenseChecks.has(request.id)) continue;
+      if (key.startsWith(ONCHAIN_RECORD)) continue;
       const holder = this.#licenses().find((l) => l.tier === tier.id && l.license === key && l.member !== request.did);
       if (holder) {
         this.#licenseChecks.set(request.id, { ok: false, reason: `that license key already let ${this.nameOf(holder.member) ?? 'someone else'} in` });
@@ -3891,7 +3944,7 @@ export class WeaveNode implements Backend {
     for (const record of this.#licenses()) {
       const tier = sold.get(record.tier);
       const group = this.#spaces.get(record.tier);
-      if (!tier?.gumroad || !group || now - Date.parse(record.checked) < 6 * 3600_000) continue;
+      if (!tier?.gumroad || !group || record.license.startsWith(ONCHAIN_RECORD) || now - Date.parse(record.checked) < 6 * 3600_000) continue;
       const until = this.#state(group).members.get(record.member)?.until;
       if (!until || until > soon || until <= new Date(now).toISOString()) continue;
       let check: LicenseCheck;
@@ -3908,17 +3961,62 @@ export class WeaveNode implements Backend {
     return renewed;
   }
 
+  /**
+   * Let in supporters who paid a tier on chain: the transaction is read once
+   * from the chain; it has to pay the tier's address from the supporter's own
+   * linked wallet, and counts once. A month per month's price paid (at most 36).
+   * Paying again later is a new request with a new transaction.
+   */
+  async #grantPaidOnchain(): Promise<number> {
+    const sold = new Map(this.#tierOffers(this.identity.author).filter((t) => t.onchain && t.open).map((t) => [t.id, t]));
+    if (!sold.size) return 0;
+    let granted = 0;
+    for (const request of await this.membershipRequests()) {
+      const tier = sold.get(request.tier.id);
+      const tx = request.payment?.tx;
+      if (!tier?.onchain || !tx || this.#paymentChecks.has(request.id)) continue;
+      const used = this.#licenses().find((l) => l.license === ONCHAIN_RECORD + tx);
+      if (used) {
+        this.#paymentChecks.set(request.id, { ok: false, reason: `that transaction already let ${this.nameOf(used.member) ?? 'someone'} in` });
+        continue;
+      }
+      this.#paymentChecks.set(request.id, 'checking');
+      let check: PaymentCheck;
+      try {
+        check = await this.checkPayment(tier.onchain, tx);
+      } catch {
+        this.#paymentChecks.delete(request.id); // offline, or the chain's node down: try again later
+        continue;
+      }
+      const wallet = this.#wallets().get(request.did);
+      if (check.ok && (!wallet?.verified || wallet.address.toLowerCase() !== check.from?.toLowerCase())) {
+        check = { ...check, ok: false, reason: `paid from ${check.from}, which isn't ${request.name ?? 'their'}'s linked wallet` };
+      }
+      if (!check.ok && /pending/.test(check.reason ?? '')) {
+        this.#paymentChecks.delete(request.id); // not mined yet: read it again next round
+        continue;
+      }
+      this.#paymentChecks.set(request.id, check);
+      if (!check.ok || !check.months) continue;
+      this.#recordLicense(tier.id, request.did, ONCHAIN_RECORD + tx, { ok: true });
+      await this.grantMembership({ tier: tier.id, who: request.did, months: check.months });
+      granted++;
+    }
+    return granted;
+  }
+
   #recordLicense(tier: string, member: Did, license: string, check: LicenseCheck): void {
     const body = { tier, member, license, ok: check.ok, ...(check.reason ? { reason: check.reason } : {}), checked: new Date(this.clock()).toISOString() };
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_MEMBERSHIP_LICENSE, body }));
   }
 
-  /** The license keys behind our paid memberships, the latest record per tier and member. */
+  /** The license keys (and transactions, ONCHAIN_RECORD + hash) behind our paid memberships, the latest record per tier and member and key. */
   #licenses(): Array<{ tier: string; member: Did; license: string; ok: boolean; checked: string }> {
     const latest = new Map<string, { tier: string; member: Did; license: string; ok: boolean; checked: string }>();
     for (const b of this.#selfBodies(KIND_MEMBERSHIP_LICENSE)) {
       if (typeof b.tier !== 'string' || !isDid(b.member) || typeof b.license !== 'string') continue;
-      latest.set(`${b.tier} ${b.member}`, { tier: b.tier, member: b.member, license: b.license, ok: b.ok === true, checked: typeof b.checked === 'string' ? b.checked : '' });
+      // Every transaction is kept: each one counts once, however often its payer pays.
+      latest.set(b.license.startsWith(ONCHAIN_RECORD) ? b.license : `${b.tier} ${b.member}`, { tier: b.tier, member: b.member, license: b.license, ok: b.ok === true, checked: typeof b.checked === 'string' ? b.checked : '' });
     }
     return [...latest.values()];
   }
@@ -3945,7 +4043,7 @@ export class WeaveNode implements Backend {
     return removed;
   }
 
-  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): void {
+  #publishTier(before: Tier, patch: { name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): void {
     const price = patch.price ?? before.price;
     if (!Number.isInteger(price) || price < 0) throw new Error('the price is a whole number of cents, 0 for free');
     const currency = (patch.currency ?? before.currency).toUpperCase();
@@ -3970,6 +4068,12 @@ export class WeaveNode implements Backend {
       if (!link) throw new Error('the Gumroad link needs the product id and its page, https://…gumroad.com/l/…');
       body.gumroad = link as unknown as Json;
     } else if (patch.gumroad === undefined && before.gumroad) body.gumroad = before.gumroad as unknown as Json;
+    // On chain: a new price, null to remove it, or keep the one before.
+    if (patch.onchain) {
+      const onchain = parseOnchainPrice(patch.onchain);
+      if (!onchain) throw new Error('an onchain price names the chain, the token (0x…), its decimals, the address paid to (0x…) and a whole amount per month');
+      body.onchain = onchain as unknown as Json;
+    } else if (patch.onchain === undefined && before.onchain) body.onchain = before.onchain as unknown as Json;
     this.replica.write(this.identity, { kind: KIND_TIER, body });
   }
 
@@ -4017,6 +4121,7 @@ export class WeaveNode implements Backend {
       open: tier.open,
       auto: tier.auto,
       ...(tier.gumroad ? { gumroad: tier.gumroad } : {}),
+      ...(tier.onchain ? { onchain: tier.onchain } : {}),
       mine,
       ...(mine && state ? { members: [...state.members.values()].filter((m) => m.did !== tier.creator && (!m.until || m.until > now)).length } : {}),
       ...(!mine && me?.until ? { membership: { until: me.until, active: me.until > now } } : {}),
@@ -4176,6 +4281,148 @@ export class WeaveNode implements Backend {
       ...(badge.contested ? { contested: true as const } : {}),
       mine: badge.holder === this.identity.author,
     };
+  }
+
+  // ---------------------------------------------------------------- treasuries
+
+  async walletMessage(address: string): Promise<string> {
+    if (!isAddress(address)) throw new Error('a wallet address is 0x and 40 hex digits');
+    return walletMessage(this.identity.author, address);
+  }
+
+  async linkWallet(input: { address: string; proof?: string }): Promise<WalletInfo | undefined> {
+    if (input.address === '') {
+      this.replica.write(this.identity, { kind: KIND_WALLET, body: { address: '' } });
+      return undefined;
+    }
+    if (!isAddress(input.address)) throw new Error('a wallet address is 0x and 40 hex digits');
+    const address = checksumAddress(input.address);
+    if (!input.proof) throw new Error(`sign this with the wallet (personal_sign), then pass the signature as proof:\n${walletMessage(this.identity.author, address)}`);
+    if (!verifyWalletProof(this.identity.author, address, input.proof)) throw new Error(`that signature isn't from ${address} over:\n${walletMessage(this.identity.author, address)}`);
+    this.replica.write(this.identity, { kind: KIND_WALLET, body: { chain: `eip155:${TREASURY_CHAIN.id}`, address, proof: input.proof } });
+    return this.wallet();
+  }
+
+  async wallet(who?: string): Promise<WalletInfo | undefined> {
+    const owner = who ? this.resolve(who) : this.identity.author;
+    const wallet = this.#wallets().get(owner);
+    if (!wallet) return undefined;
+    return { owner: { did: owner, name: this.nameOf(owner) }, address: wallet.address, verified: wallet.verified, time: wallet.time, mine: owner === this.identity.author };
+  }
+
+  async treasury(ref: string): Promise<TreasuryInfo> {
+    const space = this.#space(ref);
+    if (space.kind !== 'project' && space.kind !== 'community') throw new Error(`${space.name} is a ${space.kind}: only projects and communities have a treasury`);
+    const state = this.#state(space);
+    const wallets = this.#wallets();
+    const person = (did: Did) => ({ did, name: this.nameOf(did) });
+    const owners: TreasuryInfo['owners'] = [];
+    const missing: TreasuryInfo['missing'] = [];
+    for (const did of state.maintainers) {
+      const wallet = wallets.get(did);
+      if (wallet?.verified) owners.push({ person: person(did), address: wallet.address });
+      else missing.push(person(did));
+    }
+    owners.sort((a, b) => a.address.toLowerCase().localeCompare(b.address.toLowerCase()));
+    const threshold = treasuryThreshold(owners.length);
+    const ownerAddresses = owners.map((o) => o.address);
+    const address = owners.length ? safeAddress(ownerAddresses, threshold, treasurySaltNonce(space.id)) : undefined;
+    const announced = this.#treasuries();
+    const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers) : {};
+    const splitInfo = (split: Split): SplitInfo => ({ ...split, makers: split.makers.map((m) => ({ person: person(m.did), share: m.share })), by: person(split.by) });
+    const recipients = current
+      ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: announced, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
+      : undefined;
+    const allocations = recipients && splitAllocations(recipients);
+    const recipientName = (r: { kind: string; id: string }) => (r.kind === 'person' ? this.nameOf(r.id as Did) : r.kind === 'foundation' ? 'Weave Foundation' : this.#spaces.get(r.id)?.name);
+    return {
+      project: { id: space.id, name: space.name },
+      kind: space.kind,
+      chain: { id: TREASURY_CHAIN.id, name: TREASURY_CHAIN.name, explorer: TREASURY_CHAIN.explorer },
+      ...(address ? { address } : {}),
+      threshold,
+      owners,
+      missing,
+      ...(current ? { split: splitInfo(current) } : {}),
+      ...(pending ? { pending: splitInfo(pending) } : {}),
+      presets: SPLIT_PRESETS,
+      ...(recipients ? { recipients: recipients.map((r) => ({ ...r, name: recipientName(r) })) } : {}),
+      ...(allocations ? { allocations } : {}),
+      ...(address ? { deploy: safeDeployment(ownerAddresses, threshold, treasurySaltNonce(space.id)) } : {}),
+      ...(address && allocations ? { splitDeploy: splitDeployment(allocations, address, splitSalt(space.id)) } : {}),
+      announced: !!address && announced.get(space.id)?.address === address,
+      maintainer: state.maintainers.has(this.identity.author),
+    };
+  }
+
+  async splitContract(ref: string): Promise<SplitContractInfo> {
+    const t = await this.treasury(ref);
+    if (t.kind !== 'project') throw new Error(`${t.project.name} is a community: splits are for projects`);
+    if (!t.split) throw new Error(`${t.project.name} has no split yet (weave split <preset>)`);
+    if (!t.address || !t.allocations) throw new Error(`${t.project.name} has no treasury yet: a maintainer has to link a wallet first`);
+    const salt = splitSalt(t.project.id);
+    // The factory says where the split is and whether it exists: one read-only call answers both.
+    const answer = await ethCall(t.chain.id, splitDeployedCall(t.allocations, t.address, salt));
+    const address = checksumAddress('0x' + answer.slice(26, 66));
+    return { chain: t.chain, address, deployed: BigInt('0x' + answer.slice(66, 130)) === 1n, deploy: splitDeployment(t.allocations, t.address, salt), allocations: t.allocations };
+  }
+
+  async announceTreasury(ref: string): Promise<TreasuryInfo> {
+    const space = this.#space(ref);
+    this.#maintainerState(space);
+    const treasury = await this.treasury(space.id);
+    if (!treasury.address) throw new Error(`${space.name} has no treasury yet: its ${space.kind === 'community' ? 'moderators' : 'maintainers'} need to link a wallet first`);
+    if (!treasury.announced) this.replica.write(this.identity, { kind: KIND_TREASURY, body: { space: space.id, kind: treasury.kind, address: treasury.address, owners: treasury.owners.map((o) => o.address), threshold: treasury.threshold } });
+    return this.treasury(space.id);
+  }
+
+  async label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined> {
+    const target = isAddress(input.target) ? labelTarget(input.target) : parseLabelTarget(input.target);
+    if (!target) throw new Error("a label's target is an address (0x…) or eip155:<chain id>:<address>");
+    if (input.label && input.label !== 'endorse' && input.label !== 'block') throw new Error('a label is endorse or block ("" withdraws yours)');
+    const reason = input.reason?.trim().slice(0, 500) ?? '';
+    if (input.label === 'block' && !reason) throw new Error('say why you block it: people following your labels see the reason');
+    this.replica.write(this.identity, { kind: KIND_LABEL, body: { target, label: input.label, ...(reason ? { reason } : {}) } });
+    return (await this.labels({ target, by: [this.identity.author] }))[0];
+  }
+
+  async labels(input: { target?: string; by?: string[] } = {}): Promise<LabelInfo[]> {
+    const target = input.target ? (isAddress(input.target) ? labelTarget(input.target) : parseLabelTarget(input.target)) : undefined;
+    const by = input.by ? new Set(input.by.map((who) => this.resolve(who))) : undefined;
+    return labelsOf(this.replica.events((e) => e.kind === KIND_LABEL))
+      .filter((l) => (!target || l.target === target) && (!by || by.has(l.by)))
+      .map((l) => ({ ...l, by: { did: l.by, name: this.nameOf(l.by) }, mine: l.by === this.identity.author }));
+  }
+
+  async setSplit(input: { project: string; preset?: string; shares?: { makers: number; treasury?: number; community?: number; foundation?: number }; makers?: Array<{ who: string; share: number }>; community?: string }): Promise<TreasuryInfo> {
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const preset = input.shares ? 'custom' : (input.preset ?? 'standard');
+    const shares = input.shares ? parseShares(input.shares) : SPLIT_PRESETS[preset];
+    if (!shares) throw new Error(input.shares ? 'shares are whole basis points (10000 = 100%) that add up to 10000' : `no preset "${preset}": ${Object.keys(SPLIT_PRESETS).join(', ')}`);
+    const makers = (input.makers ?? []).map((m) => ({ did: this.resolve(m.who), share: m.share }));
+    if (makers.length && (!makers.every((m) => Number.isInteger(m.share) && m.share > 0) || makers.reduce((sum, m) => sum + m.share, 0) !== 10000)) throw new Error("the makers' shares are whole basis points of their part, adding up to 10000");
+    let community: string | undefined;
+    if (input.community) {
+      const space = this.#space(input.community);
+      if (space.kind !== 'community') throw new Error(`${space.name} is not a community`);
+      community = space.id;
+    }
+    const body: Record<string, Json> = { preset, shares: { ...shares } };
+    if (makers.length) body.makers = makers;
+    if (community) body.community = community;
+    await this.publish({ kind: KIND_TREASURY_SPLIT, body, space: project.id });
+    // A split names the treasury it pays: announce it, so others can see where the money goes.
+    if ((await this.treasury(project.id)).address) return this.announceTreasury(project.id);
+    return this.treasury(project.id);
+  }
+
+  #wallets() {
+    return walletsOf(this.replica.events((e) => e.kind === KIND_WALLET));
+  }
+
+  #treasuries() {
+    return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY));
   }
 
   // ---------------------------------------------------------------- direct chats between friends

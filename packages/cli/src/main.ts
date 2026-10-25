@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
+import { formatUnits, isAddress, parseUnits, TEST_USDC } from '@weave/core';
 import {
   connectDaemon,
   daemonInfo,
@@ -46,6 +47,10 @@ import {
   type TierInfo,
   type BadgeInfo,
   type BadgeSeriesInfo,
+  type LabelInfo,
+  type SplitInfo,
+  type TreasuryInfo,
+  type WalletInfo,
   type RoomInfo,
   type LinkInfo,
   SqliteStore,
@@ -215,12 +220,15 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
   tier create <name>         offer a tier                     [--price 5] [--currency EUR] [--text <description>] [--benefit "a,b"] [--auto: let people in without asking]
   tier list [who]            the tiers someone offers (default: yours)
   tier set <tier>            change it                        [--name] [--price] [--text] [--benefit]
+                             paid on chain (test USDC on Base Sepolia): --usdc 5 per month [--pay-to <address | project: its split contract>]
+                             (default: your linked wallet); --usdc off stops it. Payments are checked on chain, then let in
                              sell it through Gumroad: --gumroad new makes the membership there, with license keys,
                              and publishes it (weave gumroad connect first, or GUMROAD_ACCESS_TOKEN; tier create too)
                              or link one you made: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
                              your node lets buyers in and renews monthly; --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
   support <tier>             ask to join a tier               [--text "how I paid"] [--license <key from your Gumroad receipt>]
+                             [--payment <tx hash>: for tiers paid on chain, from your linked wallet]
   requests                   people asking to join your tiers
   grant <tier> <who>         let them in, or renew            [--months 1]
   decline <tier> <who>       turn a request down
@@ -234,6 +242,21 @@ badges: lasting recognition from a project, signed and checkable by anyone, neve
   badge give <series> <who>  give them the next free number   [--text <what for>] [--ref <post id>]
   badge pass <badge> <who>   pass a badge you hold on, e.g. to your other account; it keeps its number
   badges [who]               the badges someone holds (default: yours)
+
+treasuries: a project's own wallet (a Safe its maintainers own) and how its income is split; Weave holds no keys or money:
+  wallet message <address>   what your wallet signs (personal_sign) to show it's yours
+  wallet link <address> --proof <signature>   link your wallet; only linked wallets own treasuries
+  wallet unlink              unlink it
+  wallet [who]               someone's linked wallet (default: yours)
+  treasury -p <project>      the project's treasury: its address, owners, split and who it pays  [-r <community> instead]
+  treasury announce -p <project>  announce it publicly, so others can pay it and name it in their splits  [-r <community>]
+  treasury deploy -p <project>    the transaction that puts the Safe on chain; any wallet can send it
+  treasury split -p <project>     the project's split contract: its address, whether it exists, how to deploy it
+  label <address> endorse|block --text <why>   your label on an address or contract; "" withdraws it
+  labels [address]           labels this node knows                     [--from <who>,<who>]
+  split <preset> -p <project>  how income is split (maintainers): standard, community, solo or free  [-r <community>]
+                             [--shares makers=7000,treasury=1500,community=1400,foundation=100: your own, in basis points]
+                             a changed split counts after 7 days; the Weave Foundation's part is a suggestion, 0 is fine
 
 rooms: share a project's app live with its participants (needs a running daemon):
   app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
@@ -359,8 +382,13 @@ const { values, positionals } = parseArgs({
     'gumroad-variant': { type: 'string' },
     'gumroad-token': { type: 'string' },
     license: { type: 'string' },
+    usdc: { type: 'string' },
+    'pay-to': { type: 'string' },
+    payment: { type: 'string' },
     months: { type: 'string' },
     limit: { type: 'string' },
+    proof: { type: 'string' },
+    shares: { type: 'string' },
     symbol: { type: 'string' },
     ref: { type: 'string' },
     name: { type: 'string' },
@@ -440,6 +468,24 @@ const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   return [`${name.padEnd(24)} ${count}${broken}${where}`, `  ${s.id}`, ...(s.description ? [`  ${s.description}`] : [])].join('\n');
 };
 
+const percent = (bp: number) => `${(bp / 100).toFixed(bp % 100 ? 2 : 0)}%`;
+const walletLine = (w: WalletInfo) => `${w.owner.name ?? w.owner.did}: ${w.address}${w.verified ? '' : '  (not verified: the signature does not match)'}`;
+const splitLine = (s: SplitInfo, community?: string) =>
+  `${s.preset}: makers ${percent(s.shares.makers)} · treasury ${percent(s.shares.treasury)} · community ${percent(s.shares.community)}${s.shares.community && !community ? ' (no community named: goes to the treasury)' : ''} · Weave Foundation ${percent(s.shares.foundation)}` +
+  (s.makers.length ? `\n    makers:${s.makers.map((m) => `${m.person.name ?? m.person.did} ${percent(m.share)}`).join(', ')}` : '');
+const treasuryLine = (t: TreasuryInfo) =>
+  [
+    `${t.project.name} treasury on ${t.chain.name} (test network, no real money)`,
+    t.address ? `  address: ${t.address}  (a Safe: ${t.threshold} of ${t.owners.length} must sign)\n  ${t.chain.explorer}/address/${t.address}` : '  no address yet: a maintainer has to link a wallet first (weave wallet link)',
+    ...t.owners.map((o) => `  owner: ${o.person.name ?? o.person.did} ${o.address}`),
+    ...t.missing.map((p) => `  not an owner yet (no linked wallet): ${p.name ?? p.did}`),
+    t.split ? `  split ${splitLine(t.split, t.split.community)}` : '  no split yet (weave split <preset>)',
+    ...(t.pending ? [`  from ${t.pending.from.slice(0, 10)}: ${splitLine(t.pending, t.pending.community)}`] : []),
+    ...(t.recipients?.length ? ['  pays:', ...t.recipients.map((r) => `    ${percent(r.share / 100)} ${r.name ?? (r.id || r.kind)} (${r.part})${r.address ? ` ${r.address}` : ' (no address yet: stays with a maker on chain)'}`)] : []),
+    ...(t.address && !t.announced ? ['  not announced yet: weave treasury announce'] : []),
+  ].join('\n');
+const labelLine = (l: LabelInfo) => `${l.label === 'block' ? 'BLOCK  ' : 'endorse'} ${l.target} by ${l.by.name ?? l.by.did}${l.reason ? `: ${l.reason}` : ''}`;
+
 const badgeLine = (b: BadgeInfo) => {
   const name = `${b.series.symbol ? `${b.series.symbol} ` : ''}${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}`;
   const problem = b.invalid ? `  NOT VALID (${b.invalid === 'duplicate' ? 'its number was given twice' : 'over the limit'})` : b.contested ? '  contested: passed on twice' : '';
@@ -455,8 +501,24 @@ const badgeLine = (b: BadgeInfo) => {
 const tierLine = (t: TierInfo) => {
   const state = t.mine ? `${t.members ?? 0} member${t.members === 1 ? '' : 's'}${t.open ? '' : ', closed'}` : t.membership ? (t.membership.active ? `member until ${new Date(t.membership.until).toLocaleDateString()}` : 'membership ended') : t.requested ? 'asked to join' : t.open ? 'open' : 'closed';
   const gumroad = t.gumroad ? `\n  sold on Gumroad: ${t.gumroad.url}${t.gumroad.variant ? ` (${t.gumroad.variant})` : ''}${t.mine ? '' : ` — then: weave support ${t.id} --license <key>`}` : '';
-  return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}${gumroad}`;
+  const onchain = t.onchain ? `\n  paid on chain: ${formatUnits(t.onchain.amount, t.onchain.decimals)} ${t.onchain.symbol} a month to ${t.onchain.to}${t.mine ? '' : ` — pay from your linked wallet, then: weave support ${t.id} --payment <tx hash>`}` : '';
+  return `${t.name.padEnd(20)} ${money(t.price, t.currency).padEnd(18)} ${state}${t.mine ? '' : `  — ${t.creator.name ?? t.creator.did}`}\n${t.description ? `  ${t.description}\n` : ''}${t.benefits.map((b) => `  · ${b}`).join('\n')}${gumroad}${onchain}`;
 };
+
+/** --usdc and --pay-to as a tier's onchain price: undefined leaves it, null (--usdc off) removes it. */
+async function onchainPrice(b: Backend): Promise<TierInfo['onchain'] | null | undefined> {
+  if (values.usdc === undefined) return undefined;
+  if (values.usdc === 'off') return null;
+  const amount = parseUnits(values.usdc, TEST_USDC.decimals);
+  if (!amount) throw new Error('--usdc is an amount per month, like 5 or 2.50');
+  const payTo = values['pay-to'];
+  let to: string | undefined;
+  if (payTo && isAddress(payTo)) to = payTo;
+  else if (payTo) to = (await b.splitContract(payTo)).address;
+  else to = (await b.wallet())?.address;
+  if (!to) throw new Error('where do payments go? link your wallet (weave wallet link), or add --pay-to <address | project>');
+  return { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: TEST_USDC.symbol, decimals: TEST_USDC.decimals, to, amount };
+}
 
 /** --gumroad options as a tier's Gumroad link: undefined leaves it (and for "new"), null removes it. */
 function gumroadLink(): TierInfo['gumroad'] | null {
@@ -1772,7 +1834,7 @@ ${postLine(p)}`);
       if (sub === 'create' && ref) {
         const selling = values.gumroad === 'new';
         const token = selling ? await gumroadToken(b) : undefined;
-        let t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined });
+        let t = await b.createTier({ name: args.slice(1).join(' '), price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() ?? undefined, onchain: (await onchainPrice(b)) ?? undefined });
         const sold = selling ? await sellOnGumroad(b, t, token) : undefined;
         if (sold) t = sold.tier;
         return out(t, () => `offered ${t.name}\n${tierLine(t)}${sold ? `\n${sold.note}` : ''}\n\ninvite it into a project:  weave project add-group <project> "${t.name}"`);
@@ -1784,7 +1846,7 @@ ${postLine(p)}`);
       if (sub === 'set' && ref) {
         const selling = values.gumroad === 'new';
         const token = selling ? await gumroadToken(b) : undefined;
-        let t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink() });
+        let t = await b.setTier({ tier: ref, name: values.name, price: cents(values.price), currency: values.currency, description: values.text, benefits: benefits(values.benefit), auto: values.auto, gumroad: gumroadLink(), onchain: await onchainPrice(b) });
         const sold = selling ? await sellOnGumroad(b, t, token) : undefined;
         if (sold) t = sold.tier;
         return out(t, () => `${tierLine(t)}${sold ? `\n${sold.note}` : ''}`);
@@ -1799,15 +1861,17 @@ ${postLine(p)}`);
     case 'support': {
       const tier = args.join(' ').trim();
       if (!tier) throw new Error('usage: weave support <tier id> [--text "how I paid"]');
-      await (await backend()).requestMembership({ tier, note: values.text, license: values.license });
-      return out({ requested: tier }, () => (values.license ? "sent your license key: you're in once the creator's node has checked it with Gumroad" : 'asked to join; the creator decides'));
+      await (await backend()).requestMembership({ tier, note: values.text, license: values.license, payment: values.payment });
+      return out({ requested: tier }, () => (values.license ? "sent your license key: you're in once the creator's node has checked it with Gumroad" : values.payment ? "sent your payment: you're in once the creator's node has read it on chain" : 'asked to join; the creator decides'));
     }
 
     case 'requests': {
       const list = await (await backend()).membershipRequests();
       const license = (r: (typeof list)[number]) =>
         r.license ? `\n  Gumroad license ${r.license.key.slice(0, 8)}…: ${r.license.ok === undefined ? 'checking' : r.license.ok ? 'valid' : `not let in: ${r.license.reason}`}${r.license.email ? ` (${r.license.email})` : ''}` : '';
-      return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}${license(r)}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
+      const payment = (r: (typeof list)[number]) =>
+        r.payment ? `\n  paid on chain ${r.payment.tx.slice(0, 10)}…: ${r.payment.ok === undefined ? 'checking' : r.payment.ok ? `valid, ${r.payment.months} month${r.payment.months === 1 ? '' : 's'}` : `not let in: ${r.payment.reason}`}` : '';
+      return out(list, () => list.map((r) => `${r.tier.name}: ${r.name ?? r.did}${r.note ? ` — "${r.note}"` : ''}${license(r)}${payment(r)}\n  weave grant "${r.tier.name}" ${r.did} --months 1`).join('\n') || '(nobody waiting)');
     }
 
     case 'grant': {
@@ -1852,6 +1916,63 @@ ${postLine(p)}`);
     case 'badges': {
       const list = await (await backend()).badges(args[0]);
       return out(list, () => list.map(badgeLine).join('\n\n') || '(no badges)');
+    }
+
+    case 'wallet': {
+      const [sub, address] = args;
+      const b = await backend();
+      if (sub === 'message' && address) {
+        const message = await b.walletMessage(address);
+        return out({ message }, () => message);
+      }
+      if (sub === 'link' && address) {
+        const wallet = await b.linkWallet({ address, proof: values.proof });
+        return out(wallet, () => `linked ${wallet ? walletLine(wallet) : address}`);
+      }
+      if (sub === 'unlink') {
+        await b.linkWallet({ address: '' });
+        return out({ unlinked: true }, () => 'unlinked your wallet');
+      }
+      const wallet = await b.wallet(sub);
+      return out(wallet ?? null, () => (wallet ? walletLine(wallet) : '(no linked wallet)'));
+    }
+
+    case 'treasury': {
+      const b = await backend();
+      const space = values.project ?? values.community;
+      if (!space) throw new Error('which one? add -p <project> or -r <community>');
+      if (args[0] === 'deploy') {
+        const t = await b.treasury(space);
+        const deploy = t.deploy;
+        if (!deploy) throw new Error(`${t.project.name} has no treasury yet: a maintainer has to link a wallet first`);
+        return out(deploy, () => `send this from any wallet on ${t.chain.name} to put ${t.address} on chain (it belongs to its owners alone):\n  to:   ${deploy.to}\n  data: ${deploy.data}`);
+      }
+      if (args[0] === 'split') {
+        const c = await b.splitContract(space);
+        return out(c, () => [`split contract on ${c.chain.name}: ${c.address} (${c.deployed ? 'deployed' : 'not deployed yet'})`, `  ${c.chain.explorer}/address/${c.address}`, ...c.allocations.map((a) => `  ${(a.share / 10000).toFixed(2)}% ${a.address}`), ...(c.deployed ? [] : [`deploy it from any wallet (it belongs to the treasury):`, `  to:   ${c.deploy.to}`, `  data: ${c.deploy.data}`])].join('\n'));
+      }
+      const t = args[0] === 'announce' ? await b.announceTreasury(space) : await b.treasury(space);
+      return out(t, () => treasuryLine(t));
+    }
+
+    case 'label': {
+      const [target, label] = args;
+      if (!target || (label !== 'endorse' && label !== 'block' && label !== '')) throw new Error('usage: weave label <address> endorse|block --text <why>');
+      const l = await (await backend()).label({ target, label, reason: values.text });
+      return out(l ?? null, () => (l ? labelLine(l) : 'withdrawn'));
+    }
+
+    case 'labels': {
+      const list = await (await backend()).labels({ ...(args[0] ? { target: args[0] } : {}), ...(values.from ? { by: values.from.split(',') } : {}) });
+      return out(list, () => list.map(labelLine).join('\n') || '(no labels)');
+    }
+
+    case 'split': {
+      const shares = values.shares
+        ? (Object.fromEntries(values.shares.split(',').map((pair) => { const [key, value] = pair.split('='); return [key.trim(), Number(value)]; })) as { makers: number })
+        : undefined;
+      const t = await (await backend()).setSplit({ project: needProject(), preset: args[0], shares, community: values.community });
+      return out(t, () => treasuryLine(t));
     }
 
     case 'app': {
