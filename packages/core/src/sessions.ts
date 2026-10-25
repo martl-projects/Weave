@@ -9,9 +9,12 @@ import type { Entry } from './collab.ts';
  * and it comes back up when the one above is done. Sessions and items are
  * many-to-many: an item can sit on several stacks.
  *
- *   weave.session  {provider, id, host?, folder?, title?, stack}   sealed to yourself; the latest per
- *                                                                   provider and id counts
+ *   weave.session  {provider, id, host?, folder?, title?, stack,   sealed to yourself; the latest per
+ *                   role?, projects?, available?, last?}             provider and id counts
  *     stack: [{post, since}], top first
+ *     role: 'driver' (plans and hands out work) or 'worker' (takes work items)
+ *     projects: the spaces whose items it takes (none: any); available: it takes new items
+ *     last: {post, time}, the item it last finished
  *
  * Kept sealed to the person: a stack is their own scratch board, on all their
  * devices. An item's team only sees what the sessions posted into its chat.
@@ -34,9 +37,20 @@ export interface SessionRecord {
   title?: string;
   /** Top first. */
   stack: StackItem[];
+  /** Its job: the driver plans and hands out work, workers take work items. */
+  role?: SessionRole;
+  /** The spaces whose work items it takes; none means any. */
+  projects?: string[];
+  /** It takes new work items (from the app and from the driver). */
+  available?: boolean;
+  /** The item it last finished. */
+  last?: { post: string; time: string };
   /** When it last changed. */
   time: string;
 }
+
+export const SESSION_ROLES = ['driver', 'worker'] as const;
+export type SessionRole = (typeof SESSION_ROLES)[number];
 
 /** At most this many items on a stack: it's a scratch board, not an archive. */
 export const MAX_STACK = 50;
@@ -58,6 +72,9 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       .map((s) => ({ post: str((s as Record<string, Json>)?.post, 100), since: str((s as Record<string, Json>)?.since, 40) || e.event.time }))
       .filter((s) => s.post)
       .slice(0, MAX_STACK);
+    const role = SESSION_ROLES.find((r) => r === b?.role);
+    const projects = (Array.isArray(b?.projects) ? b.projects : []).filter((p): p is string => typeof p === 'string' && p.length <= 100).slice(0, 50);
+    const last = b?.last as Record<string, Json> | undefined;
     out.set(sessionKey(provider, id), {
       provider,
       id,
@@ -65,6 +82,10 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       ...(str(b?.folder, 1000) ? { folder: str(b?.folder, 1000) } : {}),
       ...(str(b?.title, 200) ? { title: str(b?.title, 200) } : {}),
       stack,
+      ...(role ? { role } : {}),
+      ...(projects.length ? { projects } : {}),
+      ...(b?.available === true ? { available: true } : {}),
+      ...(str(last?.post, 100) ? { last: { post: str(last?.post, 100), time: str(last?.time, 40) || e.event.time } } : {}),
       time: e.event.time,
     });
   }

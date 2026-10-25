@@ -804,6 +804,14 @@ export interface SessionInfo {
   time: string;
   /** When the session last did something (its transcript was written), if Weave can tell. */
   active?: string;
+  /** Its job: your daily driver (plans and hands out work) or a worker (takes work items). */
+  role?: 'driver' | 'worker';
+  /** The projects whose items it takes; none means any. */
+  projects?: SpaceRef[];
+  /** It takes new work items, from the app (Ctrl+click) and from your driver. */
+  available?: boolean;
+  /** The item it last finished. */
+  last?: { post: StackPost | { id: string; missing: true }; time: string };
 }
 
 /** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
@@ -1560,7 +1568,7 @@ export interface Backend {
   /** Take a work item off a session's stack (the top one if none is named); the next one comes back up. `close` marks an issue done. */
   doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
   /** Where to work on an item (Ctrl+click): its latest session or the folders known for its project, and the message to start with. */
-  workTarget(input: { post: string }): Promise<WorkTarget>;
+  workTarget(input: { post: string; session?: SessionRef }): Promise<WorkTarget>;
   /** Your desk, once it's set up. */
   desk(): Promise<DeskInfo | null>;
   /** Where your desk's folder is, or goes unless you choose another. */
@@ -1586,6 +1594,18 @@ export interface Backend {
   rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
   /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
   restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo>;
+  /**
+   * Give a session its job: your daily driver (only one: it also becomes your desk's driver) or a worker, the
+   * projects whose items it takes (none: any) and whether it takes new ones now. `role: null` takes the job away.
+   */
+  setSessionRole(input: { session: SessionRef; role?: 'driver' | 'worker' | null; projects?: string[]; available?: boolean }): Promise<SessionInfo>;
+  /**
+   * Who can take an item (or any item of a project): your available workers that take its project, and your
+   * driver; those with nothing on their stack first, then the most recently active.
+   */
+  workers(input?: { post?: string; space?: string }): Promise<SessionInfo[]>;
+  /** Hand an item to one of your workers (or the driver): it goes on top of that session's stack. */
+  assign(input: { post: string; session: SessionRef; as?: string }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
@@ -1844,7 +1864,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder',
+  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'setSessionRole', 'workers', 'assign',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',

@@ -198,11 +198,15 @@ ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' 
  * session's stack), or to a new session in a folder known for its project
  * (asked once). The side panel shows that session. Nothing is sent.
  */
-ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: Delivered; where?: string }> => {
+ipcMain.handle('weave:work-on', async (_event, post: string, choice?: { session?: { provider?: unknown; id?: unknown }; new?: unknown }): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: Delivered; where?: string }> => {
   if (typeof post !== 'string' || !daemon) throw new Error('not connected to Weave');
   const client = daemon.client;
-  const target = await client.workTarget({ post });
-  const session = target.session;
+  // A worker you picked (it must take the item), a new session, or where the item was last.
+  const picked = typeof choice?.session?.id === 'string' ? { provider: typeof choice.session.provider === 'string' ? choice.session.provider : 'claude-code', id: choice.session.id } : undefined;
+  if (picked) await client.assign({ post, session: picked });
+  const target = await client.workTarget({ post, ...(picked ? { session: picked } : {}) });
+  const session = choice?.new === true ? undefined : target.session;
+  if (picked && !session?.host) throw new Error("Weave hasn't seen that session in the Claude app yet: open it there once, with Follow Claude Code on");
   if (session?.provider === 'claude-code' && session.host) {
     await client.workOn({ session: { provider: session.provider, id: session.id, host: session.host, ...(session.folder ? { folder: session.folder } : {}) }, post: target.post.id });
     showMentions(false);

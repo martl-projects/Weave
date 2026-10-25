@@ -615,6 +615,19 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-foot { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .panel-pick { width: 100%; }
 .routine-row { align-items: center; gap: 6px; }
+.sessions { display: flex; flex-direction: column; gap: 10px; font-family: var(--content-font); }
+.session-card { margin: 0; display: flex; flex-direction: column; gap: 6px; border-left: 3px solid transparent; }
+.session-card.running { border-left-color: #2fa36b; }
+.session-card.driver { border-left-color: var(--accent); }
+.session-head { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.session-doing { font-size: 12px; opacity: .8; }
+.session-job { display: flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
+.session-projects { font-size: 12px; }
+.session-projects summary { cursor: pointer; }
+.worker-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.worker { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 6px 8px; font-family: var(--content-font); }
+.role-badge { margin-left: 6px; padding: 0 4px; font-size: 10px; font-weight: normal; text-transform: uppercase; letter-spacing: .04em; border: 1px solid currentColor; opacity: .75; }
+.role-badge.driver { color: var(--accent); opacity: 1; }
 .routines { display: flex; flex-direction: column; gap: 10px; font-family: var(--content-font); }
 .routines > button { align-self: flex-start; }
 .routine-card { margin: 0; display: flex; flex-direction: column; gap: 6px; }

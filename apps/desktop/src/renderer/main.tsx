@@ -2,7 +2,7 @@ import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
-import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
+import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SessionInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
@@ -13,6 +13,7 @@ import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
+import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
@@ -119,6 +120,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         <TreeLink href="#/inbox" icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} on={route[0] === 'inbox'} />
         <TreeLink href="#/people" icon="users" label="People" on={route[0] === 'people'} />
         <TreeLink href="#/memberships" icon="star" label="Memberships" on={route[0] === 'memberships'} />
+        {bridge.workOn && <TreeLink href="#/sessions" icon="code" label="Sessions" on={route[0] === 'sessions'} />}
         <li className="tree-head">
           <Icon name="message" /> Chats
         </li>
@@ -411,7 +413,14 @@ document.addEventListener(
     event.preventDefault();
     event.stopPropagation();
     if (!bridge.workOn) return toast('Ctrl+click opens a work item in the Claude app: that works in the desktop app');
-    bridge.workOn(post).then(
+    // Your available workers for it, to pick from; without any, it goes where it was last.
+    const pick = async () => {
+      const [item, workers] = await Promise.all([api<PostInfo>('post', post), api<SessionInfo[]>('workers', { post })]);
+      return workers.length ? chooseWorker(item.title, workers) : { usual: true as const };
+    };
+    pick()
+      .then((choice) => (choice ? bridge.workOn!(post, 'usual' in choice ? undefined : choice) : { how: 'cancelled' as const }))
+      .then(
       (r) => {
         if (r.how === 'cancelled') return;
         if (r.delivered === 'clipboard') toast('The message is on your clipboard: paste it in Claude (Ctrl+V)');
@@ -513,6 +522,7 @@ function Shell() {
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} knocks={knocks ?? []} />;
     else if (route[0] === 'keys') center = <KeysView />;
+    else if (route[0] === 'sessions') center = <SessionsView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
     else if (route[0] === 'saved')
@@ -678,6 +688,7 @@ function App() {
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
+          <WorkerChooser />
           {/* A phone app is updated with the app itself, not from Weave's desktop releases. */}
           {!bridge.phone && <UpdatePrompt />}
         </>

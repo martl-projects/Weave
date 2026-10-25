@@ -3,6 +3,7 @@ import type { ClaudeCodeFollow, MentionInfo, PostInfo, Profile, SessionInfo, Spa
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
 import { PostHeader, spaceLabel } from './posts.tsx';
 import { attempt } from './ui.tsx';
+import { folderName, running } from './sessions.tsx';
 
 /*
  * The side panel: a small window that stays on top beside your work (Claude
@@ -28,10 +29,6 @@ function source(m: MentionInfo): string {
   return `in Claude Code${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
 }
 
-const folderName = (folder?: string) => folder?.split(/[\\/]/).filter(Boolean).pop();
-
-/** Running: the session wrote to its transcript in the last two minutes. */
-const running = (s: SessionInfo) => !!s.active && Date.now() - Date.parse(s.active) < 2 * 60 * 1000;
 
 /** What every post needs to know: who you are and your spaces. */
 interface Context {
@@ -133,7 +130,10 @@ function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string
         return (
           <li key={`${s.provider}:${s.id}`} className={`panel-session${s.id === focused ? ' focused' : ''}${running(s) ? ' running' : ''}`}>
             <button className="link panel-session-pick" onClick={() => onPick(s.id)} title="Show this session here">
-              <b>{s.title ?? 'Untitled session'}</b>
+              <b>
+                {s.title ?? 'Untitled session'}
+                {s.role && <span className={`role-badge ${s.role}`}>{s.role === 'driver' ? 'driver' : s.available ? 'worker' : 'worker, resting'}</span>}
+              </b>
               <span className="panel-line-note">
                 {[folderName(s.folder), state].filter(Boolean).join(' · ')}
               </span>

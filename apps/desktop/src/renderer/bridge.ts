@@ -31,7 +31,8 @@ interface Bridge {
   /** In the main window: a route the panel asked for. */
   onRoute?(listener: (hash: string) => void): void;
   /** Ctrl+click: work on a post in the Claude app (its session, or a new one). Missing in a browser. */
-  workOn?(post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: 'pasted' | 'clipboard' | 'link'; where?: string }>;
+  /** Work on an item in the Claude app: in a session you picked, a new one, or (no choice) where it was last. */
+  workOn?(post: string, choice?: { session: { provider: string; id: string } } | { new: true }): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: 'pasted' | 'clipboard' | 'link'; where?: string }>;
   /** Bring a session (the Claude app's own id) to the front in the Claude app. Missing in a browser. */
   showSession?(host: string): Promise<void>;
   /** In the side panel: show this session (after Ctrl+click). */

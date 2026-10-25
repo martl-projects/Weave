@@ -199,6 +199,8 @@ import {
   pushOnto,
   reorder,
   sessionKey,
+  SESSION_ROLES,
+  type SessionRole,
   sessionsOf,
   takeOff,
   type SessionRecord,
@@ -722,6 +724,9 @@ mine now, change it as you learn how I work.)
 - Today's journal entry is our planning: keep the plan in its text, and turn
   what deserves it into work items in the right project, each with a clear
   starting prompt. Say where you put them, as links.
+- I keep a pool of worker sessions (weave_workers: what each takes, is on and
+  finished last). While planning, hand items to them with weave_assign, only
+  to workers that take the item's project, and tell me whom you gave what.
 - When something interrupts, put it on top of the stack (weave_work_on); when
   it's done, weave_done, and tell me what we're back to.
 - Folders and projects aren't one to one. To start work elsewhere, use a
@@ -2233,7 +2238,8 @@ export class WeaveNode implements Backend {
       const post = await this.post(id);
       if (post.type === 'issue' && post.issue?.status !== 'done') await this.setIssueStatus({ issue: id, status: 'done', as: input.as });
     }
-    return this.#saveSession({ ...record, stack: takeOff(record.stack, id, new Date().toISOString()) });
+    const now = new Date().toISOString();
+    return this.#saveSession({ ...record, stack: takeOff(record.stack, id, now), last: { post: id, time: now } });
   }
 
   async restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo> {
@@ -2242,6 +2248,50 @@ export class WeaveNode implements Backend {
     const remove = new Set(await ids(input.remove));
     const stack = reorder(record.stack, await ids(input.posts)).filter((s) => !remove.has(s.post));
     return this.#saveSession({ ...record, stack });
+  }
+
+  async setSessionRole(input: { session: SessionRef; role?: SessionRole | null; projects?: string[]; available?: boolean }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    if (input.role !== undefined && input.role !== null && !SESSION_ROLES.includes(input.role)) throw new Error('a session is your driver or a worker');
+    const role = input.role === undefined ? record.role : (input.role ?? undefined);
+    const projects = input.projects === undefined ? record.projects : [...new Set(input.projects.map((p) => this.#space(p).id))];
+    const available = input.available ?? (input.role && !record.role ? true : record.available);
+    const desk = this.config.desk;
+    const isDriver = (r: { provider?: string; id: string } | undefined) => !!r && (r.provider ?? 'claude-code') === record.provider && r.id === record.id;
+    if (role === 'driver') {
+      // One driver: the one before goes back to being a worker.
+      for (const other of this.#sessionRecords().values())
+        if (other.role === 'driver' && !isDriver(other)) this.#saveSession({ ...other, role: 'worker' });
+      if (desk) {
+        this.config = { ...this.config, desk: { ...desk, driver: { provider: record.provider, id: record.id, ...(record.host ? { host: record.host } : {}), ...(record.folder ? { folder: record.folder } : {}) } } };
+        saveConfig(this.home, this.config);
+      }
+    } else if (desk?.driver && isDriver(desk.driver)) {
+      const { driver: _, ...rest } = desk;
+      this.config = { ...this.config, desk: rest };
+      saveConfig(this.home, this.config);
+    }
+    return this.#saveSession({ ...record, role, projects: projects?.length ? projects : undefined, available: role ? !!available : undefined });
+  }
+
+  async workers(input: { post?: string; space?: string } = {}): Promise<SessionInfo[]> {
+    const space = input.post ? (await this.post(input.post)).space?.id : input.space ? this.#space(input.space).id : undefined;
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    const takes = (r: SessionRecord) =>
+      r.role === 'driver' ? r.available !== false || space === this.config.desk?.space : r.role === 'worker' && !!r.available && (!space || !r.projects?.length || r.projects.includes(space));
+    const when = (s: SessionInfo) => s.active ?? s.time;
+    return [...this.#sessionRecords().values()]
+      .filter(takes)
+      .map((r) => this.#sessionInfo(r, posts))
+      .sort((a, b) => Number(a.stack.length > 0) - Number(b.stack.length > 0) || when(b).localeCompare(when(a)));
+  }
+
+  async assign(input: { post: string; session: SessionRef; as?: string }): Promise<SessionInfo> {
+    const post = await this.post(input.post);
+    const record = this.#sessionRecord(input.session);
+    if (!(await this.workers({ post: post.id })).some((w) => w.provider === record.provider && w.id === record.id))
+      throw new Error(`that session doesn't take ${post.title} now: it isn't an available worker for its project`);
+    return this.workOn({ session: input.session, post: post.id, as: input.as });
   }
 
   // ---------------------------------------------------------------- your desk and its routines
@@ -2400,13 +2450,16 @@ export class WeaveNode implements Backend {
     await this.workOn({ session: { provider: 'claude-code', id: focus.id, host: focus.host, ...(expected.folder ? { folder: expected.folder } : {}) }, post: expected.post });
   }
 
-  async workTarget(input: { post: string }): Promise<WorkTarget> {
+  async workTarget(input: { post: string; session?: SessionRef }): Promise<WorkTarget> {
     const post = await this.post(input.post);
     const records = [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time));
-    // Your desk's items go to your daily driver; others to their latest session.
+    // The session you picked; else your desk's items go to your daily driver, others to their latest session.
     const driver = this.config.desk?.driver;
-    const latest =
-      driver && post.space?.id === this.config.desk?.space ? this.#sessionRecord(driver) : records.find((r) => r.stack.some((s) => s.post === post.id));
+    const latest = input.session
+      ? this.#sessionRecord(input.session)
+      : driver && post.space?.id === this.config.desk?.space
+        ? this.#sessionRecord(driver)
+        : records.find((r) => r.stack.some((s) => s.post === post.id));
     const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
     // Folders for the item's space: the ones you chose, then the ones its sessions ran in.
     const space = post.space?.id;
@@ -2452,6 +2505,10 @@ export class WeaveNode implements Backend {
       ...((ref.folder ?? known?.folder) ? { folder: ref.folder ?? known?.folder } : {}),
       ...(known?.title ? { title: known.title } : {}),
       stack: known?.stack ?? [],
+      ...(known?.role ? { role: known.role } : {}),
+      ...(known?.projects ? { projects: known.projects } : {}),
+      ...(known?.available ? { available: true } : {}),
+      ...(known?.last ? { last: known.last } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
   }
@@ -2465,13 +2522,17 @@ export class WeaveNode implements Backend {
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
       stack: record.stack.map((s) => ({ post: s.post, since: s.since })),
+      ...(record.role ? { role: record.role } : {}),
+      ...(record.projects?.length ? { projects: record.projects } : {}),
+      ...(record.available ? { available: true } : {}),
+      ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
     };
     const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
     return this.#sessionInfo({ ...record, ...(title ? { title } : {}), time: event.time }, new Map(this.#allPosts().map((p) => [p.id, p])));
   }
 
   #sessionInfo(record: SessionRecord, posts: Map<string, PostInfo>): SessionInfo {
-    const brief = (item: StackItem): SessionInfo['stack'][number]['post'] => {
+    const brief = (item: { post: string }): SessionInfo['stack'][number]['post'] => {
       const p = posts.get(item.post);
       return p ?? { id: item.post, missing: true };
     };
@@ -2486,6 +2547,12 @@ export class WeaveNode implements Backend {
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
       stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),
+      ...(record.role ? { role: record.role } : {}),
+      ...(record.projects?.length
+        ? { projects: record.projects.map((id) => this.#spaces.get(id)).filter((s): s is StoredSpace => !!s).map((s) => ({ id: s.id, kind: s.kind, name: s.name })) }
+        : {}),
+      ...(record.available ? { available: true } : {}),
+      ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
       time: record.time,
     };
   }

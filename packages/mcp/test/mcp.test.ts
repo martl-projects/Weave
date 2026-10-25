@@ -247,6 +247,13 @@ describe('Weave over MCP', () => {
     // The stack is the person's: sealed to them, listed with the session.
     expect((await node.sessions()).map((x) => [x.id, x.stack.length])).toEqual([['e360e3d1-test', 1]]);
     await expect(call('weave_done', { post: standup.id })).rejects.toThrow(/isn't on this session's stack/);
+
+    // As the driver: the workers that take an item, and handing it to one.
+    await node.setSessionRole({ session: { id: 'worker-1', folder: 'C:\\code' }, role: 'worker', projects: ['Desk'] });
+    const workers = await call('weave_workers', { post: standup.id });
+    expect(workers.map((w: { id: string; role: string }) => [w.id, w.role])).toEqual([['worker-1', 'worker']]);
+    expect(titles(await call('weave_assign', { post: standup.url, worker: 'worker-1' }))).toEqual(['Standup']);
+    await expect(call('weave_assign', { post: standup.id, worker: 'nobody' })).rejects.toThrow(/available worker/);
     close();
   });
 

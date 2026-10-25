@@ -711,6 +711,28 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_workers',
+    {
+      title: 'Your workers',
+      description:
+        "The sessions your person made available for work, with their job (driver or worker), the projects they take, what they're on now (top of their stack) and what they finished last. With a post (or a space), only those that take it, idle ones first. As the daily driver, use it while planning the day, then hand items out with weave_assign.",
+      inputSchema: { post: z.string().min(4).optional().describe('A work item: url or id'), space: z.string().optional().describe('Or a project') },
+    },
+    run(async ({ post, space }: { post?: string; space?: string }) => backend.workers({ post, space })),
+  );
+
+  server.registerTool(
+    'weave_assign',
+    {
+      title: 'Hand an item to a worker',
+      description:
+        "Put a work item on top of one of your person's available workers' stacks (from weave_workers): that session works on it next. Only workers that take the item's project; tell your person whom you gave what. Nothing is sent to the session itself: your person opens it there.",
+      inputSchema: { post: z.string().min(4).describe('The work item: url or id'), worker: z.string().min(1).describe("The worker session's id, from weave_workers"), provider: z.string().optional() },
+    },
+    run(async ({ post, worker, provider }: { post: string; worker: string; provider?: string }) => backend.assign({ post, session: { id: worker, ...(provider ? { provider } : {}) }, as })),
+  );
+
+  server.registerTool(
     'weave_show',
     {
       title: 'Show posts in the Mentions panel',
