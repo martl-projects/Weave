@@ -19,6 +19,7 @@ export type {
   LabelInfo,
   RecipientInfo,
   SplitContractInfo,
+  SafeProposalInfo,
   ShowInfo,
   ShowSettlement,
   SplitInfo,

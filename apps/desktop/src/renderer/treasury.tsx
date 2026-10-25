@@ -3,6 +3,7 @@ import type { SpaceInfo, TreasuryInfo, WalletInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bump, shortDid, useApi } from './lib.ts';
 import { copy } from './posts.tsx';
+import { SafeProposals } from './shows.tsx';
 import { attempt, AsyncButton } from './ui.tsx';
 
 /*
@@ -169,6 +170,7 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
           <span className="muted">no wallet linked: not an owner yet</span>
         </div>
       ))}
+      {treasury.address && <SafeProposals safe={treasury.address} />}
       {treasury.maintainer && <WalletLink wallet={wallet} />}
       <h4>Split</h4>
       {treasury.split ? <SplitBar shares={treasury.split.shares} /> : <p className="small">No split yet.</p>}

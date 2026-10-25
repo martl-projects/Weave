@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
-import { b64u, canonicalJson, sign, utf8, type Json } from '@weave/core';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { b64u, canonicalJson, checksumAddress, sign, utf8, type Json } from '@weave/core';
 import { loadConfig, resolveHome, saveConfig, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -13,6 +16,19 @@ afterAll(() => {
   closeOpenStores();
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
+
+/** A wallet as MetaMask & co. have one: an address, and personal_sign. */
+function testWallet() {
+  const secret = secp256k1.utils.randomSecretKey();
+  const address = checksumAddress('0x' + bytesToHex(keccak_256(secp256k1.getPublicKey(secret, false).subarray(1)).subarray(12)));
+  const sign = (message: string) => {
+    const body = utf8ToBytes(message);
+    const hash = keccak_256(new Uint8Array([...utf8ToBytes('\x19Ethereum Signed Message:\n' + body.length), ...body]));
+    const sig = secp256k1.sign(hash, secret, { prehash: false, format: 'recovered' });
+    return '0x' + bytesToHex(sig.subarray(1)) + (27 + sig[0]).toString(16);
+  };
+  return { address, sign };
+}
 
 async function until<T>(get: () => Promise<T> | T, timeoutMs = 30_000): Promise<NonNullable<T>> {
   const start = Date.now();
@@ -66,6 +82,49 @@ describe('rooms and shared apps', () => {
     nodes.push(node);
     return node;
   }
+
+  it("lets only a show's ticket holders into its room, while the show is on", async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const kofi = person('Kofi');
+    await martin.createProject({ name: 'Bühne' });
+    await martin.publishApp({ project: 'Bühne', manifest: { app: 'buehne', name: 'Bühne', services: [{ id: 'stream', port: appPort, open: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } }] } });
+    await lena.joinSpace(await martin.invite('Bühne'));
+    await kofi.joinSpace(await martin.invite('Bühne'));
+    const sync = () => {
+      for (let round = 0; round < 2; round++) for (const a of [martin, lena, kofi]) for (const b of [martin, lena, kofi]) if (a !== b) a.replica.events().forEach((e) => b.replica.ingest(e));
+    };
+    for (const node of [martin, lena, kofi]) {
+      const w = testWallet();
+      await node.linkWallet({ address: w.address, proof: w.sign(await node.walletMessage(w.address)) });
+    }
+    sync();
+    const now = Date.now();
+    const show = await martin.createShow({ name: 'Premiere', project: 'Bühne', starts: new Date(now + 30 * 60_000).toISOString(), ends: new Date(now + 3 * 3600_000).toISOString(), price: 1_000_000 });
+    await martin.goOnline();
+    await lena.goOnline();
+    await kofi.goOnline();
+    const hosted = await martin.hostRoom({ project: 'Bühne', name: 'Premiere live', show: show.id });
+    sync();
+
+    // Lena buys a ticket; Kofi doesn't.
+    martin.checkPayment = async () => ({ ok: true, from: (await lena.wallet())!.address, value: '1000000', months: 1 });
+    await lena.buyTicket({ show: show.id, payment: '0x' + '1'.repeat(64) });
+    sync();
+    await martin.reconcile();
+    sync();
+
+    const forKofi = await until(async () => (await kofi.rooms('Bühne')).find((r) => r.id === hosted.id));
+    expect(forKofi.mayJoin).toBe(false);
+    await expect(kofi.joinRoom(hosted.id)).rejects.toThrow(/ticket holders/);
+    const forLena = await until(async () => (await lena.rooms('Bühne')).find((r) => r.id === hosted.id && r.mayJoin));
+    await lena.joinRoom(forLena.id);
+    const connected = await until(async () => {
+      const info = (await lena.rooms('Bühne')).find((r) => r.id === hosted.id);
+      return info?.connected && info.url ? info : undefined;
+    });
+    expect(connected.url).toMatch(/\/watch$/);
+  });
 
   it('shares the host app through an encrypted tunnel, with a room chat, and keeps outsiders out', async () => {
     const martin = person('Martin');

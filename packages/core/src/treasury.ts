@@ -1,6 +1,7 @@
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
+import { TREASURY_CHAIN } from './chain.ts';
 import type { Entry } from './collab.ts';
 import { isDid, type Did } from './keys.ts';
 import type { EventView } from './records.ts';
@@ -49,8 +50,7 @@ export const KIND_LABEL = 'weave.label';
  */
 export const WEAVE_FOUNDATION_PROJECT: string | undefined = undefined;
 
-/** The chain treasuries live on while this is a prototype: Base Sepolia, a test network without real money. */
-export const TREASURY_CHAIN = { id: 84532, name: 'Base Sepolia', rpc: 'https://sepolia.base.org', explorer: 'https://sepolia.basescan.org' } as const;
+export { TREASURY_CHAIN };
 
 /** Safe v1.4.1, at the same addresses on every chain. */
 export const SAFE = {

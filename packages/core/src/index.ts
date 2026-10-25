@@ -258,6 +258,20 @@ export {
   type SplitShares,
 } from './treasury.ts';
 export {
+  asEthSign,
+  execTransactionData,
+  KIND_SAFE_PROPOSAL,
+  KIND_SAFE_SIGNATURE,
+  parseSafeTx,
+  SAFE_CALLS,
+  safeProposalsOf,
+  safeSigner,
+  safeTxHash,
+  safeTxTypedData,
+  type SafeProposal,
+  type SafeTx,
+} from './safetx.ts';
+export {
   erc20BalanceOf,
   erc20Transfer,
   KIND_SHOW,

@@ -13,6 +13,7 @@ import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, space
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
 import { TreasurySettings } from './treasury.tsx';
+import { ShowsSection } from './shows.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -974,6 +975,7 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
         ))}
       </fieldset>
       <TreasurySettings project={project} spaces={spaces} />
+      <ShowsSection project={project} maintainer={info.maintainer} />
       <RepoSettings space={project} />
       <NewcomerHistory space={project} canSet={info.maintainer} />
       <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />

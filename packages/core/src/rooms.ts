@@ -16,7 +16,8 @@ import { isRepoName } from './github.ts';
  *                                                       env: [{name, label, secret, optional, hint}]: settings the host
  *                                                       fills in (an API key…), see AppSetting; only names, never values
  *                                                       sealed in the project, the latest by a maintainer counts
- *   weave.room   {room, name, service, key, invite, open}
+ *   weave.room   {room, name, service, key, invite, open, show}
+ *                show: a ticketed show the room belongs to: only its ticket holders get in, while it's on
  *                                                       the host announces a room (open) or ends it (open: false);
  *                                                       `key` is the room's DHT public key, so only participants find it
  *
@@ -355,6 +356,8 @@ export interface Room {
   key: string;
   /** Who may join: every participant, or these people. */
   invite: 'participants' | Did[];
+  /** A ticketed show it belongs to: only ticket holders join, while the show is on. */
+  show?: string;
   open: boolean;
   time: string;
 }
@@ -375,7 +378,8 @@ export function roomsOf(entries: Array<{ event: { author: Did; time: string }; k
     const key = text(b.key, 64);
     if (!/^[0-9a-f]{64}$/.test(key)) continue;
     const invite = Array.isArray(b.invite) ? b.invite.filter(isDid) : 'participants';
-    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, open: true, time: e.event.time });
+    const show = text(b.show, 100);
+    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), open: true, time: e.event.time });
   }
   return [...rooms.values()];
 }

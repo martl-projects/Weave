@@ -616,6 +616,30 @@ export interface ShowSettlement {
   multiSend: { to: string; data: string; operation: number };
   /** The same for the Safe app's Transaction Builder: load it at app.safe.global, check, sign. */
   batch: unknown;
+  /** Proposed in Weave: the hosts sign it here, in their wallets. */
+  proposal: SafeProposalInfo;
+}
+
+/** A transaction for a Safe that its owners sign together in Weave; once enough signed, anyone sends `exec`. */
+export interface SafeProposalInfo {
+  id: string;
+  title: string;
+  safe: { address: string; label: string; threshold: number };
+  chain: number;
+  tx: { to: string; value: string; data: string; operation: 0 | 1; nonce: number };
+  /** What owners sign: this hash, as typed data (eth_signTypedData_v4) or as a message. */
+  hash: string;
+  typedData: unknown;
+  by: Person;
+  time: string;
+  signed: Array<{ person: Person; owner: string }>;
+  /** Owners who haven't signed yet. */
+  waiting: Person[];
+  /** Enough signed: send this transaction (from any wallet) to run it on the Safe. */
+  exec?: { to: string; data: string };
+  /** You own the Safe (one of your wallets signs for it). */
+  mine: boolean;
+  signedByMe: boolean;
 }
 
 /** What someone thinks of an address or contract: endorse or block, and why. People choose whose labels they follow. */
@@ -1477,7 +1501,7 @@ export interface Backend {
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo>;
+  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1527,6 +1551,14 @@ export interface Backend {
   treasury(space: string): Promise<TreasuryInfo>;
   /** The project's split contract: where it is (asked from the chain), whether it exists yet, and how to put it there. */
   splitContract(project: string): Promise<SplitContractInfo>;
+  // a Safe's transactions, signed together in Weave: Weave checks every signature and builds the transaction; owners sign in their own wallets
+  /** Propose a transaction for a Safe you own with others (a treasury, a show's Safe). */
+  proposeSafeTx(input: { safe: string; tx: { to: string; value?: string; data: string; operation?: 0 | 1 }; title: string }): Promise<SafeProposalInfo>;
+  /** Add your wallet's signature over a proposal's hash (typed data, or the hash as a message). */
+  signSafeTx(input: { proposal: string; signature: string }): Promise<SafeProposalInfo>;
+  /** Proposals for the Safes this node knows, or one Safe's. */
+  safeProposals(safe?: string): Promise<SafeProposalInfo[]>;
+
   // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
   /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
   createShow(input: { name: string; project?: string; room?: string; starts: string; ends: string; price: number; capacity?: number; hosts?: string[]; split?: Array<{ to: string; share: number }> }): Promise<ShowInfo>;
@@ -1611,7 +1643,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
-  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow',
+  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

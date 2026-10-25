@@ -140,6 +140,15 @@ import {
   parseGumroadLink,
   parseOnchainPrice,
   erc20BalanceOf,
+  asEthSign,
+  execTransactionData,
+  KIND_SAFE_PROPOSAL,
+  KIND_SAFE_SIGNATURE,
+  parseSafeTx,
+  SAFE_CALLS,
+  safeProposalsOf,
+  safeSigner,
+  safeTxTypedData,
   erc20Transfer,
   formatUnits,
   KIND_SHOW,
@@ -355,6 +364,7 @@ import {
   type BadgeInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
+  type SafeProposalInfo,
   type ShowInfo,
   type ShowSettlement,
   type TicketInfo,
@@ -3324,7 +3334,7 @@ export class WeaveNode implements Backend {
     return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
   }
 
-  async hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo> {
+  async hostRoom(input: { project: string; name: string; invite?: string[]; show?: string }): Promise<RoomInfo> {
     const project = this.#project(input.project);
     const app = this.#app(project);
     if (!app) throw new Error(`${project.name} has no app to share yet: a maintainer publishes one with "weave app publish"`);
@@ -3333,7 +3343,9 @@ export class WeaveNode implements Backend {
     const name = input.name?.trim().slice(0, 60) || `${this.nameOf(this.identity.author) ?? 'Someone'}'s room`;
     const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : 'participants';
     const key = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, open: true } }));
+    const show = input.show ? this.#showRef(input.show) : undefined;
+    if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} hosts rooms for ${show.name}: they let ticket holders in`);
+    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, ...(show ? { show: show.id } : {}), open: true } }));
     const room = this.#roomById(id).room;
     await this.#live.host(room);
     return this.#roomInfo(room, project);
@@ -3350,7 +3362,7 @@ export class WeaveNode implements Backend {
     const { room, project } = this.#roomById(ref);
     if (!room.open) throw new Error('this room has ended');
     if (room.host === this.identity.author) return this.#roomInfo(room, project);
-    if (!this.#mayJoin(room, this.identity.author)) throw new Error("you're not invited to this room");
+    if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show ? "this room is for a show's ticket holders, while it's on (weave shows)" : "you're not invited to this room");
     const app = this.#app(project);
     if (!app) throw new Error(`${project.name} has no app`);
     await this.#live.join(room, app.app);
@@ -3413,6 +3425,13 @@ export class WeaveNode implements Backend {
     if (person === room.host) return true;
     const found = this.#allRooms().find((r) => r.room.id === room.id);
     if (!found || !this.#state(found.project).members.has(person)) return false;
+    if (room.show) {
+      // A ticketed room: only while the show is on, and only with a ticket (the host checks its own records, a guest its ticket).
+      const show = this.#allShows().find((s) => s.id === room.show && s.host === room.host);
+      if (!show || !showOpen(show, new Date(this.clock()))) return false;
+      const holds = person === this.identity.author ? this.#myTickets().some((t) => t.show === show.id && t.host === show.host) : show.host === this.identity.author && this.#ticketRecords(show.id).some((r) => r.holder === person);
+      if (!holds) return false;
+    }
     return room.invite === 'participants' || room.invite.includes(person);
   }
 
@@ -4461,6 +4480,103 @@ export class WeaveNode implements Backend {
     return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY));
   }
 
+  // ---------------------------------------------------------------- signing a Safe's transactions together
+
+  async proposeSafeTx(input: { safe: string; tx: { to: string; value?: string; data: string; operation?: 0 | 1 }; title: string }): Promise<SafeProposalInfo> {
+    const safe = this.#knownSafe(input.safe);
+    if (!safe.owners.some((o) => o.did === this.identity.author)) throw new Error(`only the owners of ${safe.label} propose its transactions`);
+    // The Safe's next nonce from the chain; a Safe not deployed yet starts at 0.
+    const answer = await this.callChain(TREASURY_CHAIN.id, { to: safe.address, data: SAFE_CALLS.nonce });
+    const nonce = answer && answer !== '0x' ? Number(BigInt(answer)) : 0;
+    const tx = parseSafeTx({ to: input.tx.to, value: input.tx.value ?? '0', data: input.tx.data, operation: input.tx.operation ?? 0, nonce });
+    if (!tx) throw new Error('a Safe transaction has a target address, data (0x…) and an operation (0 call, 1 delegatecall)');
+    if (tx.operation === 1 && tx.to.toLowerCase() !== MULTI_SEND_CALL_ONLY.toLowerCase()) throw new Error('Weave only proposes delegatecalls to MultiSendCallOnly');
+    const id = b64u.encode(randomBytes(12));
+    this.replica.write(this.identity, { kind: KIND_SAFE_PROPOSAL, body: { proposal: id, chain: TREASURY_CHAIN.id, safe: safe.address, ...tx, title: input.title.trim().slice(0, 200) } as unknown as Json });
+    return this.#safeProposalInfo(id);
+  }
+
+  async signSafeTx(input: { proposal: string; signature: string }): Promise<SafeProposalInfo> {
+    const proposal = this.#safeProposal(input.proposal);
+    const safe = this.#knownSafe(proposal.safe);
+    // A wallet signed the typed data or the hash as a message; the signature alone doesn't say which: take the reading that gives an owner.
+    const isOwner = (s: { owner: string } | undefined) => !!s && safe.owners.some((o) => o.address.toLowerCase() === s.owner.toLowerCase());
+    const signed = [safeSigner(proposal.hash, input.signature.trim()), safeSigner(proposal.hash, asEthSign(input.signature.trim()))].find(isOwner);
+    if (!signed) throw new Error(`that isn't a signature of one of ${safe.label}'s owners over ${proposal.hash} (sign the typed data, or the hash as a message)`);
+    this.replica.write(this.identity, { kind: KIND_SAFE_SIGNATURE, body: { proposal: proposal.id, hash: proposal.hash, signature: signed.signature } });
+    return this.#safeProposalInfo(proposal.id);
+  }
+
+  async safeProposals(safe?: string): Promise<SafeProposalInfo[]> {
+    const address = safe ? this.#knownSafe(safe).address : undefined;
+    return this.#allSafeProposals()
+      .filter((p) => !address || p.safe === address)
+      .map((p) => this.#safeProposalInfo(p.id));
+  }
+
+  /** The Safes this node knows the owners of: the treasuries of its projects and communities, and the shows' Safes. */
+  #knownSafes(): Array<{ address: string; label: string; owners: Array<{ did: Did; address: string }>; threshold: number }> {
+    const wallets = this.#wallets();
+    const out: Array<{ address: string; label: string; owners: Array<{ did: Did; address: string }>; threshold: number }> = [];
+    const ownersOf = (dids: Iterable<Did>) => [...dids].flatMap((did) => (wallets.get(did)?.verified ? [{ did, address: wallets.get(did)!.address }] : []));
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      const owners = ownersOf(this.#state(space).maintainers);
+      const address = this.#treasuryAddressOf(space);
+      if (address) out.push({ address, label: `${space.name}'s treasury`, owners, threshold: treasuryThreshold(owners.length) });
+    }
+    for (const show of this.#allShows()) {
+      const owners = ownersOf(show.hosts);
+      if (owners.length === show.hosts.length) out.push({ address: show.price.to, label: `the Safe of ${show.name}`, owners, threshold: treasuryThreshold(owners.length) });
+    }
+    return out;
+  }
+
+  #knownSafe(ref: string): { address: string; label: string; owners: Array<{ did: Did; address: string }>; threshold: number } {
+    const found = this.#knownSafes().find((s) => s.address.toLowerCase() === ref.toLowerCase());
+    if (!found) throw new Error(`Weave doesn't know whose Safe ${ref} is: only treasuries and shows' Safes it knows the owners of`);
+    return found;
+  }
+
+  #allSafeProposals() {
+    return safeProposalsOf(this.replica.events((e) => e.kind === KIND_SAFE_PROPOSAL || e.kind === KIND_SAFE_SIGNATURE));
+  }
+
+  #safeProposal(ref: string) {
+    const match = this.#allSafeProposals().filter((p) => p.id === ref || (ref.length >= 6 && p.id.startsWith(ref)));
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several proposals start with "${ref}"` : `no proposal "${ref}" is known`);
+  }
+
+  #safeProposalInfo(id: string): SafeProposalInfo {
+    const proposal = this.#safeProposal(id);
+    const safe = this.#knownSafes().find((s) => s.address === proposal.safe);
+    const owners = safe?.owners ?? [];
+    // Only signatures of today's owners count.
+    const signatures = proposal.signatures.flatMap((s) => {
+      const owner = owners.find((o) => o.address.toLowerCase() === s.owner.toLowerCase());
+      return owner ? [{ ...s, person: { did: owner.did, name: this.nameOf(owner.did) } }] : [];
+    });
+    const threshold = safe?.threshold ?? 1;
+    const ready = signatures.length >= threshold;
+    return {
+      id: proposal.id,
+      title: proposal.title,
+      safe: { address: proposal.safe, label: safe?.label ?? proposal.safe, threshold },
+      chain: proposal.chain,
+      tx: proposal.tx,
+      hash: proposal.hash,
+      typedData: safeTxTypedData(proposal.chain, proposal.safe, proposal.tx),
+      by: { did: proposal.by, name: this.nameOf(proposal.by) },
+      time: proposal.time,
+      signed: signatures.map((s) => ({ person: s.person, owner: s.owner })),
+      waiting: owners.filter((o) => !signatures.some((s) => s.owner.toLowerCase() === o.address.toLowerCase())).map((o) => ({ did: o.did, name: this.nameOf(o.did) })),
+      ...(ready ? { exec: { to: proposal.safe, data: execTransactionData(proposal.tx, signatures.slice(0, threshold)) } } : {}),
+      mine: owners.some((o) => o.did === this.identity.author),
+      signedByMe: signatures.some((s) => s.person.did === this.identity.author),
+    };
+  }
+
   // ---------------------------------------------------------------- ticketed events
 
   async createShow(input: { name: string; project?: string; room?: string; starts: string; ends: string; price: number; capacity?: number; hosts?: string[]; split?: Array<{ to: string; share: number }> }): Promise<ShowInfo> {
@@ -4551,15 +4667,19 @@ export class WeaveNode implements Backend {
       if (missing.length) throw new Error(`no address yet for ${missing.map((p) => p.name ?? p.to).join(', ')}: they need a linked wallet or treasury`);
       calls = payouts(balance, info.split.map((p) => ({ address: p.address!, share: p.share }))).map((p) => ({ to: show.price.token, data: erc20Transfer(p.address, p.amount) }));
     }
+    if (!calls.length) throw new Error(input.action === 'refund' ? `nobody has a ticket to ${show.name}: there is nothing to pay back` : `the Safe of ${show.name} holds nothing yet`);
     const total = calls.reduce((sum, c) => sum + BigInt('0x' + c.data.slice(74)), 0n);
     if (total > balance) throw new Error(`the Safe holds ${formatUnits(balance, show.price.decimals)} ${show.price.symbol}, the ${input.action} needs ${formatUnits(total, show.price.decimals)}`);
     const name = `${show.name}: ${input.action === 'refund' ? 'pay everyone back' : 'pay out by the split'}`;
+    const multiSend = { to: MULTI_SEND_CALL_ONLY, data: multiSendData(calls), operation: 1 as const };
+    const proposal = await this.proposeSafeTx({ safe: info.safe.address, tx: multiSend, title: name });
     return {
+      proposal,
       safe: info.safe.address,
       balance: balance.toString(),
       total: total.toString(),
       calls,
-      multiSend: { to: MULTI_SEND_CALL_ONLY, data: multiSendData(calls), operation: 1 },
+      multiSend,
       batch: safeBatch({ chain: show.price.chain, safe: info.safe.address, name, description: `${calls.length} transfer${calls.length === 1 ? '' : 's'} of ${show.price.symbol}, prepared by Weave`, calls }),
     };
   }

@@ -48,6 +48,7 @@ import {
   type BadgeInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
+  type SafeProposalInfo,
   type ShowInfo,
   type SplitInfo,
   type TreasuryInfo,
@@ -261,6 +262,9 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
   tickets <show>             for the host: every ticket sold, and requests not let in
   show cancel <show>         call it off: tickets stop letting people in
   show settle <show> payout|refund [--file batch.json]   the Safe transaction that pays out by the split, or back
+  safe proposals [address]   transactions waiting for a Safe's owners (treasuries, shows' Safes)
+  safe show <proposal> [--file typed.json]   what to sign: the hash, and the typed data for your wallet
+  safe sign <proposal> --signature <0x…>     add your wallet's signature (typed data, or the hash signed as a message)
   label <address> endorse|block --text <why>   your label on an address or contract; "" withdraws it
   labels [address]           labels this node knows                     [--from <who>,<who>]
   split <preset> -p <project>  how income is split (maintainers): standard, community, solo or free  [-r <community>]
@@ -280,7 +284,7 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   rooms [-p <project>]       open rooms
-  room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people]
+  room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on]
   room join <room>           join: prints the address to open
   room leave|end <room>      leave a room, or end the one you host
   room chat <room>           the room's chat (never stored)
@@ -392,6 +396,8 @@ const { values, positionals } = parseArgs({
     'gumroad-token': { type: 'string' },
     license: { type: 'string' },
     usdc: { type: 'string' },
+    show: { type: 'string' },
+    signature: { type: 'string' },
     starts: { type: 'string' },
     ends: { type: 'string' },
     capacity: { type: 'string' },
@@ -511,6 +517,15 @@ const showLine = (sh: ShowInfo) => {
     ...(sh.ticket ? [`  your ticket: ${sh.ticket.tx.slice(0, 12)}…`] : sh.mine || sh.cancelled ? [] : [`  pay ${formatUnits(sh.price.amount, sh.price.decimals)} ${sh.price.symbol} to the Safe from your linked wallet, then: weave ticket ${sh.id} --payment <tx hash>`]),
   ].join('\n');
 };
+const safeProposalLine = (pr: SafeProposalInfo) =>
+  [
+    `${pr.title || '(untitled)'}  ${pr.signed.length}/${pr.safe.threshold} signed${pr.exec ? ' — ready' : ''}`,
+    `  ${pr.id} · ${pr.safe.label} ${pr.safe.address} · nonce ${pr.tx.nonce}`,
+    `  hash ${pr.hash}`,
+    ...(pr.signed.length ? [`  signed: ${pr.signed.map((x) => x.person.name ?? x.person.did).join(', ')}`] : []),
+    ...(pr.waiting.length ? [`  waiting for: ${pr.waiting.map((x) => x.name ?? x.did).join(', ')}`] : []),
+    ...(pr.exec ? [`  send from any wallet to run it:`, `    to:   ${pr.exec.to}`, `    data: ${pr.exec.data}`] : pr.mine && !pr.signedByMe ? [`  sign: weave safe show ${pr.id} --file typed.json, sign it in your wallet, then weave safe sign ${pr.id} --signature <0x…>`] : []),
+  ].join('\n');
 const labelLine = (l: LabelInfo) => `${l.label === 'block' ? 'BLOCK  ' : 'endorse'} ${l.target} by ${l.by.name ?? l.by.did}${l.reason ? `: ${l.reason}` : ''}`;
 
 const badgeLine = (b: BadgeInfo) => {
@@ -2027,6 +2042,26 @@ ${postLine(p)}`);
       return out(list, () => list.map((t) => `${t.ok ? 'ticket ' : 'not let in'} ${t.holder.name ?? t.holder.did}  ${t.tx.slice(0, 12)}…${t.reason ? `: ${t.reason}` : ''}`).join('\n') || '(no tickets)');
     }
 
+    case 'safe': {
+      const [sub, ref] = args;
+      const b = await backend();
+      if (sub === 'proposals') {
+        const list = await b.safeProposals(ref);
+        return out(list, () => list.map(safeProposalLine).join('\n\n') || '(nothing to sign)');
+      }
+      if (sub === 'show' && ref) {
+        const pr = (await b.safeProposals()).find((x) => x.id === ref || x.id.startsWith(ref));
+        if (!pr) throw new Error(`no proposal "${ref}" is known`);
+        if (values.file) writeFileSync(resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file), JSON.stringify(pr.typedData, null, 2));
+        return out(pr, () => `${safeProposalLine(pr)}${values.file ? `\n\nwrote the typed data to ${values.file}: sign it with eth_signTypedData_v4, or sign the hash as a message` : ''}`);
+      }
+      if (sub === 'sign' && ref && values.signature) {
+        const pr = await b.signSafeTx({ proposal: ref, signature: values.signature });
+        return out(pr, () => safeProposalLine(pr));
+      }
+      throw new Error('usage: weave safe proposals|show|sign — see "weave --help"');
+    }
+
     case 'label': {
       const [target, label] = args;
       if (!target || (label !== 'endorse' && label !== 'block' && label !== '')) throw new Error('usage: weave label <address> endorse|block --text <why>');
@@ -2162,7 +2197,7 @@ ${postLine(p)}`);
       const [sub, ref, ...words] = args;
       const b = await backend({ needsDaemon: sub !== 'chat' });
       if (sub === 'host' && ref) {
-        const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean) });
+        const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean), show: values.show });
         return out(r, () => `${roomLine(r)}${r.service?.ready ? '' : `\n  start the app first${r.app?.startHint ? `: ${r.app.startHint}` : ''}`}`);
       }
       if (sub === 'join' && ref) {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { checksumAddress, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
@@ -36,7 +36,18 @@ function wallet() {
     const sig = secp256k1.sign(hash, secret, { prehash: false, format: 'recovered' });
     return '0x' + bytesToHex(sig.subarray(1)) + (27 + sig[0]).toString(16);
   };
-  return { address, sign };
+  /** Signs a 32-byte hash as it is (what signTypedData gives for a Safe transaction), v 27/28. */
+  const signHash = (hash: string) => {
+    const sig = secp256k1.sign(hexToBytes(hash.slice(2)), secret, { prehash: false, format: 'recovered' });
+    return '0x' + bytesToHex(sig.subarray(1)) + (27 + sig[0]).toString(16);
+  };
+  /** Signs a 32-byte hash as a message (personal_sign over its bytes), what a wallet's "sign message" gives. */
+  const signHashAsMessage = (hash: string) => {
+    const digest = keccak_256(new Uint8Array([...utf8ToBytes('\x19Ethereum Signed Message:\n32'), ...hexToBytes(hash.slice(2))]));
+    const sig = secp256k1.sign(digest, secret, { prehash: false, format: 'recovered' });
+    return '0x' + bytesToHex(sig.subarray(1)) + (27 + sig[0]).toString(16);
+  };
+  return { address, sign, signHash, signHashAsMessage };
 }
 
 describe('treasuries', () => {
@@ -238,5 +249,47 @@ describe('ticketed shows', () => {
     const refund = await martin.settleShow({ show: show.id, action: 'refund' });
     expect(refund.calls.map((c) => [c.data.slice(34, 74), BigInt('0x' + c.data.slice(74))])).toEqual([[kofiWallet.address.slice(2).toLowerCase(), 3_000_000n]]);
     expect(refund.batch).toMatchObject({ chainId: '84532', meta: { createdFromSafeAddress: show.safe.address } });
+  });
+});
+
+describe('signing a Safe transaction together', () => {
+  it("collects the owners' signatures in Weave and builds the transaction once enough signed", async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const nodes = [martin, lena];
+    const all = () => {
+      for (let round = 0; round < 2; round++) for (const a of nodes) for (const b of nodes) if (a !== b) sync(a, b);
+    };
+    const link = async (node: WeaveNode) => {
+      const w = wallet();
+      await node.linkWallet({ address: w.address, proof: w.sign(await node.walletMessage(w.address)) });
+      return w;
+    };
+    const mw = await link(martin);
+    const lw = await link(lena);
+    all();
+    const show = await martin.createShow({ name: 'Duett', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T21:00:00Z', price: 1_000_000, hosts: ['Lena'], split: [{ to: 'Martin', share: 5000 }, { to: 'Lena', share: 5000 }] });
+    expect(show.safe.threshold).toBe(2);
+    martin.clock = () => Date.parse('2030-01-02T00:00:00Z');
+    martin.callChain = async (_chain, call) => '0x' + (call.data === '0xaffed0e0' ? 0 : 2_000_000).toString(16).padStart(64, '0');
+    const { proposal } = await martin.settleShow({ show: show.id, action: 'payout' });
+    expect(proposal).toMatchObject({ safe: { address: show.safe.address, threshold: 2 }, signed: [], tx: { operation: 1, nonce: 0 } });
+    all();
+
+    // Lena signs the typed data; a stranger's signature is refused; Martin signs the hash as a message.
+    await expect(lena.signSafeTx({ proposal: proposal.id, signature: wallet().signHash(proposal.hash) })).rejects.toThrow(/owners/);
+    const half = await lena.signSafeTx({ proposal: proposal.id, signature: lw.signHash(proposal.hash) });
+    expect(half.signed.map((s) => s.person.name)).toEqual(['Lena']);
+    expect(half.waiting.map((p) => p.name)).toEqual(['Martin']);
+    expect(half.exec).toBeUndefined();
+    all();
+    const done = await martin.signSafeTx({ proposal: proposal.id, signature: mw.signHashAsMessage(proposal.hash) });
+    expect(done.exec?.to).toBe(show.safe.address);
+    expect(done.exec?.data.startsWith('0x6a761202')).toBe(true);
+    // Both signatures are in it, sorted by owner, the message one with v + 4.
+    const sigs = done.exec!.data.slice(-((65 * 2 * 2 + 63) & ~63));
+    expect(sigs).toContain(lw.signHash(proposal.hash).slice(2, 130));
+    all();
+    expect((await lena.safeProposals(show.safe.address))[0].exec?.data).toBe(done.exec?.data);
   });
 });

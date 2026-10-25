@@ -1,7 +1,8 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import type { OnchainPrice } from './memberships.ts';
-import { checksumAddress, TREASURY_CHAIN } from './treasury.ts';
+import { formatUnits } from './chain.ts';
+import { checksumAddress } from './treasury.ts';
 
 /*
  * Payments on chain, for tiers (group access) paid with a token: the supporter
@@ -11,13 +12,10 @@ import { checksumAddress, TREASURY_CHAIN } from './treasury.ts';
  * Weave never touches the money; it only reads what the chain says.
  */
 
-/** Circle's test USDC on Base Sepolia: no real money. */
-export const TEST_USDC = { chain: TREASURY_CHAIN.id, token: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', symbol: 'USDC', decimals: 6 } as const;
+export { formatUnits, isTxHash, parseUnits, TEST_USDC } from './chain.ts';
 
 /** keccak256("Transfer(address,address,uint256)"): the ERC-20 transfer event's first topic. */
 export const TRANSFER_TOPIC = '0x' + bytesToHex(keccak_256(utf8ToBytes('Transfer(address,address,uint256)')));
-
-export const isTxHash = (value: unknown): value is string => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value);
 
 /** The parts of a transaction receipt (eth_getTransactionReceipt) a payment is read from. */
 export interface Receipt {
@@ -57,20 +55,4 @@ export function readPayment(receipt: Receipt | null | undefined, price: OnchainP
   const months = value / BigInt(price.amount);
   if (months < 1n) return { ok: false, from, value: value.toString(), reason: `that pays ${formatUnits(value, price.decimals)} ${price.symbol}, a month is ${formatUnits(BigInt(price.amount), price.decimals)}` };
   return { ok: true, from, value: value.toString(), months: Number(months > 36n ? 36n : months) };
-}
-
-/** An amount in the token's smallest unit, shown with its decimals: 2500000 with 6 → "2.5". */
-export function formatUnits(value: bigint | number, decimals: number): string {
-  const v = BigInt(value);
-  const base = 10n ** BigInt(decimals);
-  const fraction = (v % base).toString().padStart(decimals, '0').replace(/0+$/, '');
-  return `${v / base}${fraction ? `.${fraction}` : ''}`;
-}
-
-/** A decimal amount ("2.5") in the token's smallest unit, or undefined. */
-export function parseUnits(text: string, decimals: number): number | undefined {
-  const match = /^(\d{1,12})(?:\.(\d+))?$/.exec(text.trim());
-  if (!match || (match[2]?.length ?? 0) > decimals) return undefined;
-  const value = Number(match[1]) * 10 ** decimals + Number((match[2] ?? '').padEnd(decimals, '0') || 0);
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }

@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { GumroadInfo, MembershipRequestInfo, TierInfo } from '@weave/node/client';
+import type { GumroadInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
+import { formatUnits, isHexAddress, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
+import { copy } from './posts.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
@@ -7,7 +9,8 @@ import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.ts
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
  * ask to join (saying how they paid), creators grant months from their Inbox.
- * Tiers sold through Gumroad let supporters in by their license key instead.
+ * Tiers sold through Gumroad let supporters in by their license key instead,
+ * tiers paid on chain (test USDC) by the transaction that paid them.
  * A tier is a group, so members get its chat and the projects it's invited into.
  */
 
@@ -38,6 +41,11 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
       <div className="grow">
         <b>{tier.name}</b> <span className="price">{money(tier.price, tier.currency)}</span>
         {tier.gumroad && <span className="tag">via Gumroad</span>}
+        {tier.onchain && (
+          <span className="tag" title={`To ${tier.onchain.to} on ${TREASURY_CHAIN.name}, a test network`}>
+            {formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} on chain
+          </span>
+        )}
         {tier.description && <p className="small">{tier.description}</p>}
         {tier.benefits.length > 0 && (
           <ul className="benefits">
@@ -94,9 +102,72 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   );
 }
 
+/** Joining a tier paid on chain: send the token from your linked wallet, then paste the transaction's hash. */
+function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
+  const price = tier.onchain!;
+  const [tx, setTx] = useState('');
+  const [note, setNote] = useState('');
+  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
+  const amount = formatUnits(price.amount, price.decimals);
+  return (
+    <form
+      className="form"
+      onSubmit={async (e: FormEvent) => {
+        e.preventDefault();
+        const sent = await attempt(() => api('requestMembership', { tier: tier.id, note, payment: tx }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has read your payment on chain`);
+        if (sent !== undefined) onClose();
+      }}
+    >
+      <ol className="steps">
+        <li>
+          {wallet ? (
+            <>
+              From your linked wallet <code>{wallet.address}</code>,
+            </>
+          ) : (
+            <>Link your wallet first (a project's Settings → Treasury); then from it,</>
+          )}{' '}
+          send <b>
+            {amount} {price.symbol}
+          </b>{' '}
+          per month (two months: twice that) on {TREASURY_CHAIN.name} to:
+          <div className="field-row">
+            <code className="grow">{price.to}</code>
+            <button type="button" onClick={() => copy(price.to, 'Address copied')}>
+              Copy
+            </button>
+          </div>
+        </li>
+        <li>
+          <label htmlFor="join-tx">Paste the transaction's hash:</label>
+          <input id="join-tx" className="wide" required autoFocus spellCheck={false} placeholder="0x…" value={tx} onChange={(e) => setTx(e.target.value.trim())} />
+        </li>
+      </ol>
+      <input className="wide" placeholder="A note for them (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+      <p className="small">
+        A test network: no real money. {creator}'s Weave reads the payment on chain and lets you in, a month per month's price. It counts once, and only from your own linked wallet.
+      </p>
+      <div className="buttons">
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="default" disabled={!isTxHash(tx) || !wallet}>
+          Send payment
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
   const [note, setNote] = useState('');
   const creator = tier.creator.name ?? shortDid(tier.creator.did);
+  if (tier.onchain)
+    return (
+      <Modal title={`Join ${tier.name}`} onClose={onClose}>
+        <OnchainJoin tier={tier} creator={creator} onClose={onClose} />
+      </Modal>
+    );
   if (tier.gumroad)
     return (
       <Modal title={`Join ${tier.name}`} onClose={onClose}>
@@ -150,6 +221,10 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const [makeIt, setMakeIt] = useState(!tier?.gumroad);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
+  const [onChain, setOnChain] = useState(!!tier?.onchain);
+  const [usdc, setUsdc] = useState(tier?.onchain ? formatUnits(tier.onchain.amount, tier.onchain.decimals) : '5');
+  const [payTo, setPayTo] = useState(tier?.onchain?.to ?? '');
+  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
   const making = onGumroad && makeIt;
   const [connection, setConnection] = useState<GumroadInfo>();
   const [useToken, setUseToken] = useState(false);
@@ -175,10 +250,14 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   // A new Gumroad link, null to stop selling there, or nothing to leave it as it is (or until the made product links it).
   const gumroad = making ? undefined : onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
   const cents = Math.round(Number(price.replace(',', '.')) * 100);
-  const input = () => ({ name, price: cents, currency, description, benefits: benefits.split('\n'), open, auto: onGumroad ? false : auto, gumroad });
+  const usdcAmount = parseUnits(usdc, TEST_USDC.decimals);
+  const to = payTo.trim() || wallet?.address || '';
+  const onchain = onChain ? { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: TEST_USDC.symbol, decimals: TEST_USDC.decimals, to, amount: usdcAmount ?? 0 } : tier?.onchain ? null : undefined;
+  const input = () => ({ name, price: cents, currency, description, benefits: benefits.split('\n'), open, auto: onGumroad || onChain ? false : auto, gumroad, onchain });
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (making && !(cents > 0)) return toast('A tier sold on Gumroad needs a price', 'error');
+    if (onChain && (!usdcAmount || !isHexAddress(to))) return toast(usdcAmount ? 'Where do payments go? Link your wallet, or give an address' : 'Give the price in USDC, like 5 or 2.50', 'error');
     setBusy(true);
     const saved = await attempt(() => (tier ? api<TierInfo>('setTier', { tier: tier.id, ...input() }) : api<TierInfo>('createTier', input())), making ? undefined : tier ? 'Tier saved' : `${name} is on your hub`);
     if (saved && making) {
@@ -305,6 +384,28 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
             <p className="small">Supporters pay you through Gumroad, and Weave lets them in automatically. Gumroad is the seller: it handles payments, taxes and refunds.</p>
           )}
         </fieldset>
+        <fieldset>
+          <legend>
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain">Accept USDC on chain (test network)</label>
+          </legend>
+          {onChain ? (
+            <>
+              <div className="field-row">
+                <label htmlFor="tier-usdc">USDC per month</label>
+                <input id="tier-usdc" inputMode="decimal" size={6} value={usdc} onChange={(e) => setUsdc(e.target.value)} />
+              </div>
+              <div className="field-row-stacked">
+                <label htmlFor="tier-payto">Paid to</label>
+                <input id="tier-payto" spellCheck={false} placeholder={wallet ? `your wallet ${wallet.address}` : '0x… (link your wallet, or give an address)'} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
+              </div>
+              <p className="small">
+                Empty: your linked wallet. Or a project's split contract (CLI: weave treasury split), so payments are divided as the project's split says. Supporters pay from their linked wallet and send the transaction; your Weave reads it on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can.
+              </p>
+            </>
+          ) : (
+            <p className="small">Supporters pay in test USDC straight to your wallet or a project's split, and Weave lets them in automatically. No real money yet.</p>
+          )}
+        </fieldset>
         <p className="small">
           A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.
         </p>
@@ -374,6 +475,12 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
               Gumroad license <code>{request.license.key.slice(0, 8)}…</code>:{' '}
               {request.license.ok === undefined ? 'checking with Gumroad…' : request.license.ok ? 'valid' : `not let in automatically: ${request.license.reason}`}
               {request.license.email && ` (bought as ${request.license.email})`}
+            </div>
+          )}
+          {request.payment && (
+            <div className="small">
+              Paid on chain <code>{request.payment.tx.slice(0, 10)}…</code>:{' '}
+              {request.payment.ok === undefined ? 'reading it on chain…' : request.payment.ok ? `valid, ${request.payment.months} month${request.payment.months === 1 ? '' : 's'}` : `not let in automatically: ${request.payment.reason}`}
             </div>
           )}
         </div>
