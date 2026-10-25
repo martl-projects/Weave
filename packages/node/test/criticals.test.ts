@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { decodeInvite, gift, isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
-import { loadSpaces, WeaveNode, closeOpenStores } from '../src/index.ts';
+import { loadConfig, loadSpaces, resolveHome, saveConfig, WeaveNode, closeOpenStores } from '../src/index.ts';
+import { cpSync } from 'node:fs';
 
 /* Regression tests from Julian's pre-release review: each one reproduces an issue and checks it stays fixed. */
 
@@ -496,5 +497,28 @@ describe('a carried post is forgotten when it comes due (7I92Kk20)', () => {
     lena.clock = () => Date.now() + 45 * day;
     await lena.reconcile();
     expect(await titles(lena)).toContain('Lena old');
+  });
+});
+
+describe('a promoted standby fences off the old server (nQ9JHlUV)', () => {
+  it('the old server stands down when it hears of the newer generation', async () => {
+    const old = person('Acme server');
+    await old.close();
+    const dirB = mkdtempSync(join(tmpdir(), 'weave-criticals-'));
+    dirs.push(dirB);
+    rmSync(dirB, { recursive: true, force: true });
+    cpSync(old.home.dir, dirB, { recursive: true });
+    // As weave-server promote does on the copy.
+    const home = resolveHome(dirB);
+    saveConfig(home, { ...loadConfig(home), generation: 1 });
+    const promoted = WeaveNode.open(dirB);
+    nodes.push(promoted);
+    await promoted.reconcile();
+    const back = WeaveNode.open(old.home.dir);
+    nodes.push(back);
+    sync(promoted, back);
+    expect(back.config.standby).toBe(true);
+    await expect(back.setProfile({ name: 'still me?' })).rejects.toThrow(/standby/);
+    await promoted.setProfile({ name: 'Acme server 2' });
   });
 });

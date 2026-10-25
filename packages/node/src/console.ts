@@ -44,6 +44,10 @@ interface Session {
 /** What the helpdesk may call: who's who, and setting people up. */
 const HELPDESK = new Set(['GET /me', 'GET /company', 'GET /members', 'GET /devices', 'POST /enroll-link', 'POST /invite', 'POST /recovery']);
 
+/** Recoveries each helpdesk person may run a day, and when they ran theirs. */
+const HELPDESK_RECOVERIES_PER_DAY = 3;
+const helpdeskRecoveries = new Map<string, number[]>();
+
 /** May this role make this call? Auditors read everything; admins do everything. */
 export function consoleAllows(role: ConsoleRole, route: string): boolean {
   if (role === 'admin') return true;
@@ -227,6 +231,14 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
       }
       case 'POST /recovery': {
         const company = await node.company();
+        // The helpdesk sets people up, not admins (oreXqcSP): their identity is the company's say. And only so many a day.
+        if (who.role === 'helpdesk') {
+          if (node.isCompanyAdmin(String(input.person))) return send(res, 403, { error: "an admin's identity is recovered by an admin, not the helpdesk" });
+          const day = Date.now() - 24 * 3_600_000;
+          const recent = (helpdeskRecoveries.get(who.subject) ?? []).filter((t) => t > day);
+          if (recent.length >= HELPDESK_RECOVERIES_PER_DAY) return send(res, 429, { error: `the helpdesk recovers at most ${HELPDESK_RECOVERIES_PER_DAY} identities a day each: ask an admin` });
+          helpdeskRecoveries.set(who.subject, [...recent, Date.now()]);
+        }
         await node.consoleRecord({ action: 'recovery', person: String(input.person) }, admin);
         return send(res, 200, { answer: await node.openEscrow({ space: company!.group.id, person: String(input.person), for: String(input.request) }) });
       }

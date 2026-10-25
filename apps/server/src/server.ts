@@ -206,6 +206,8 @@ async function promote(): Promise<void> {
   const config = loadConfig(home);
   if (!config.standby) throw new Error(`${home.dir} isn't a standby`);
   delete config.standby;
+  // One generation on: when the old one comes back and hears of it, it stands down (nQ9JHlUV).
+  config.generation = (config.generation ?? 0) + 1;
   saveConfig(home, config);
   console.log(`${home.dir} is the active server now. Start it (weave-server run). The old one must never run again as it was: set it up anew as a standby from a backup of this one.`);
 }

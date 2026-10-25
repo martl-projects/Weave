@@ -222,6 +222,8 @@ describe('the admin console', { timeout: 120_000 }, () => {
     expect((await hal.post('/enroll-link', { days: 7 })).status).toBe(200);
     for (const path of ['/audit', '/agents', '/scim', '/streams']) expect((await hal.get(path)).status, path).toBe(403);
     expect((await hal.post('/action', { action: 'freeze', person: noah.identity.author })).status).toBe(403);
+    // An admin's identity (the company's own included) is recovered by an admin, never the helpdesk (oreXqcSP).
+    expect((await hal.post('/recovery', { person: acme.identity.author, request: 'x' })).status).toBe(403);
 
     // Searching the audit: by person, by words, by date.
     type Lines = { lines: Array<{ kind: string; by: string; detail: Record<string, unknown> }> };
