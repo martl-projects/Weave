@@ -21,6 +21,8 @@ export {
   KIND_DELEGATE,
   KIND_IDENTITY,
   KIND_REVOKE,
+  withinRevocation,
+  type RevokedHead,
   KIND_ROTATE,
   KIND_ORG_FREEZE,
   KIND_SEALED,

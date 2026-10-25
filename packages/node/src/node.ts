@@ -41,6 +41,7 @@ import {
   type BoardRule,
   type Lifetime,
   KIND_CARRY,
+  type RevokedHead,
   canonicalJson,
   verifyEventV2,
   isWellFormedV2,
@@ -3682,14 +3683,22 @@ export class WeaveNode implements Backend {
       afterSeq = 0;
       for (const event of this.replica.eventsBy(key.did)) if (Date.parse(event.time) < since) afterSeq = event.seq;
     }
+    // Where we saw it, per space, up to that number (KgmsMa_g): numbers it left unused elsewhere can't be filled in later.
+    const heads: Record<string, RevokedHead> = {};
+    for (const { event } of this.replica.store.range2(key.did)) {
+      if (event.n > afterSeq) continue;
+      const head = (heads[event.space] ??= { c: 0, s: 0 });
+      if (event.class === 'control') head.c = Math.max(head.c, event.seq);
+      else if (event.cs !== undefined) (head.s = Math.max(head.s, event.cs)), (head.f = Math.min(head.f ?? Infinity, event.n));
+    }
     const ownDevice = key.did === this.identity.did;
     if (key.role === 'agent' && !input.words) {
       if (ownDevice) throw new Error('that is this device');
-      this.replica.write(this.identity, revocation(key.did, afterSeq));
+      this.replica.write(this.identity, revocation(key.did, afterSeq, heads));
     } else {
       if (!input.words) throw new Error('revoking a device needs your recovery words');
       const root = this.#currentRoot(input.words);
-      this.replica.write(root, revocation(key.did, afterSeq));
+      this.replica.write(root, revocation(key.did, afterSeq, heads));
       if (ownDevice) {
         // This computer keeps working with a fresh device key.
         const fresh = createSubKey(me);
