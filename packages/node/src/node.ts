@@ -140,6 +140,7 @@ import {
   parseGumroadLink,
   parseOnchainPrice,
   erc20BalanceOf,
+  TRANSFER_TOPIC,
   asEthSign,
   execTransactionData,
   KIND_SAFE_PROPOSAL,
@@ -367,6 +368,7 @@ import {
   type BadgeInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
+  type PaymentRequestInfo,
   type SafeProposalInfo,
   type ShowInfo,
   type ShowSettlement,
@@ -475,7 +477,7 @@ import { BlobStore } from './blobstore.ts';
 import { AppProcesses, launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
-import { checkOnchainPayment, ethCall, type PaymentChecker } from './onchain.ts';
+import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
@@ -675,6 +677,8 @@ export class WeaveNode implements Backend {
   checkPayment: PaymentChecker = checkOnchainPayment;
   /** How contracts are read on chain (eth_call; tests put a fake here). */
   callChain: typeof ethCall = ethCall;
+  /** Other reads from a chain (block numbers, logs; tests put a fake here). */
+  chainRpc: typeof rpc = rpc;
   /** Answers to ticket requests for our shows, so each is read once per run (request id → answer). */
   #ticketChecks = new Map<string, { show: string; holder: Did; tx: string; ok: boolean; reason?: string } | 'checking'>();
   /** The chain's answers for paid requests, so each transaction is read once per run (request id → answer). */
@@ -3337,7 +3341,7 @@ export class WeaveNode implements Backend {
     return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
   }
 
-  async hostRoom(input: { project: string; name: string; invite?: string[]; show?: string }): Promise<RoomInfo> {
+  async hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo> {
     const project = this.#project(input.project);
     const app = this.#app(project);
     if (!app) throw new Error(`${project.name} has no app to share yet: a maintainer publishes one with "weave app publish"`);
@@ -3348,7 +3352,13 @@ export class WeaveNode implements Backend {
     const key = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
     const show = input.show ? this.#showRef(input.show) : undefined;
     if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} hosts rooms for ${show.name}: they let ticket holders in`);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, ...(show ? { show: show.id } : {}), open: true } }));
+    const groups = (input.groups ?? []).map((ref) => {
+      const group = this.#space(ref);
+      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
+      if (!this.#state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
+      return group.id;
+    });
+    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}), open: true } }));
     const room = this.#roomById(id).room;
     await this.#live.host(room);
     return this.#roomInfo(room, project);
@@ -3365,7 +3375,7 @@ export class WeaveNode implements Backend {
     const { room, project } = this.#roomById(ref);
     if (!room.open) throw new Error('this room has ended');
     if (room.host === this.identity.author) return this.#roomInfo(room, project);
-    if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show ? "this room is for a show's ticket holders, while it's on (weave shows)" : "you're not invited to this room");
+    if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show || room.groups ? "this room is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this room");
     const app = this.#app(project);
     if (!app) throw new Error(`${project.name} has no app`);
     await this.#live.join(room, app.app);
@@ -3428,14 +3438,25 @@ export class WeaveNode implements Backend {
     if (person === room.host) return true;
     const found = this.#allRooms().find((r) => r.room.id === room.id);
     if (!found || !this.#state(found.project).members.has(person)) return false;
-    if (room.show) {
-      // A ticketed room: only while the show is on, and only with a ticket (the host checks its own records, a guest its ticket).
-      const show = this.#allShows().find((s) => s.id === room.show && s.host === room.host);
-      if (!show || !showOpen(show, new Date(this.clock()))) return false;
-      const holds = person === this.identity.author ? this.#myTickets().some((t) => t.show === show.id && t.host === show.host) : show.host === this.identity.author && this.#ticketRecords(show.id).some((r) => r.holder === person);
-      if (!holds) return false;
+    if (room.show || room.groups?.length) {
+      // A ticketed room: a ticket while the show is on (the host checks its own records, a guest its ticket)…
+      const show = room.show ? this.#allShows().find((s) => s.id === room.show && s.host === room.host) : undefined;
+      const ticket =
+        !!show &&
+        showOpen(show, new Date(this.clock())) &&
+        (person === this.identity.author ? this.#myTickets().some((t) => t.show === show.id && t.host === show.host) : show.host === this.identity.author && this.#ticketRecords(show.id).some((r) => r.holder === person));
+      // …or an active membership in one of its groups (a tier).
+      const member = (room.groups ?? []).some((id) => this.#activeMember(id, person));
+      if (!ticket && !member) return false;
     }
     return room.invite === 'participants' || room.invite.includes(person);
+  }
+
+  /** Whether someone is in a group right now (a tier's grant not run out). */
+  #activeMember(groupId: string, person: Did): boolean {
+    const group = this.#spaces.get(groupId);
+    const member = group && this.#state(group).members.get(person);
+    return !!member && (!member.until || member.until > new Date(this.clock()).toISOString());
   }
 
   #roomService(room: Room) {
@@ -4649,6 +4670,69 @@ export class WeaveNode implements Backend {
       mine: owners.some((o) => o.did === this.identity.author),
       signedByMe: signatures.some((s) => s.person.did === this.identity.author),
     };
+  }
+
+  // ---------------------------------------------------------------- paying from a wallet, without copying anything
+
+  async paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo> {
+    const { price, what } = this.#payable(input);
+    const wallet = this.#wallets().get(this.identity.author);
+    if (!wallet?.verified) throw new Error('link your wallet first (weave wallet link): Weave looks for your payment from it');
+    const since = Number(BigInt(await this.chainRpc<string>(price.chain, 'eth_blockNumber', [])));
+    return {
+      what,
+      chain: price.chain,
+      token: price.token,
+      symbol: price.symbol,
+      decimals: price.decimals,
+      to: price.to,
+      amount: String(price.amount),
+      from: wallet.address,
+      // EIP-681: phone wallets open this as "send <amount> of the token to <to>", from a QR code.
+      uri: `ethereum:${price.token}@${price.chain}/transfer?address=${price.to}&uint256=${price.amount}`,
+      // The same as a transaction for a wallet in the browser (eth_sendTransaction).
+      tx: { from: wallet.address, to: price.token, data: erc20Transfer(price.to, BigInt(price.amount)), chainId: '0x' + price.chain.toString(16) },
+      since,
+    };
+  }
+
+  async findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }> {
+    const { price } = this.#payable(input);
+    // From any wallet we ever linked (we may have moved on), to the address asked for.
+    const mine = [...this.#walletHistory()].filter(([, did]) => did === this.identity.author).map(([address]) => '0x' + address.slice(2).padStart(64, '0'));
+    if (!mine.length) throw new Error('link your wallet first (weave wallet link)');
+    const latest = Number(BigInt(await this.chainRpc<string>(price.chain, 'eth_blockNumber', [])));
+    let from = Math.max(0, input.since);
+    // Public nodes answer at most a couple of hundred blocks per question: look in steps, a few per call.
+    for (let steps = 0; from <= latest && steps < 25; steps++) {
+      const to = Math.min(latest, from + 199);
+      const logs = await this.chainRpc<Array<{ transactionHash: string; data: string }>>(price.chain, 'eth_getLogs', [
+        { address: price.token, topics: [TRANSFER_TOPIC, mine, '0x' + price.to.slice(2).toLowerCase().padStart(64, '0')], fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16) },
+      ]);
+      const paid = logs.find((l) => BigInt(l.data) >= BigInt(price.amount));
+      if (paid) {
+        // Found: send it on, as if its hash had been pasted.
+        if (input.tier) await this.requestMembership({ tier: input.tier, payment: paid.transactionHash });
+        else await this.buyTicket({ show: input.show!, payment: paid.transactionHash });
+        return { found: paid.transactionHash, checkedTo: to };
+      }
+      from = to + 1;
+    }
+    return { checkedTo: from - 1 };
+  }
+
+  /** What a tier or show asks to be paid, and where. */
+  #payable(input: { tier?: string; show?: string }): { price: OnchainPrice; what: string } {
+    if (input.tier) {
+      const tier = this.#tierOffer(input.tier);
+      if (!tier.onchain) throw new Error(`${tier.name} isn't paid on chain`);
+      return { price: tier.onchain, what: `a month of ${tier.name}` };
+    }
+    if (input.show) {
+      const show = this.#showRef(input.show);
+      return { price: show.price, what: `a ticket to ${show.name}` };
+    }
+    throw new Error('pay for what? a tier or a show');
   }
 
   // ---------------------------------------------------------------- ticketed events

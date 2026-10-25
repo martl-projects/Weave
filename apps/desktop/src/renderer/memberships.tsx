@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { GumroadInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
 import { formatUnits, isHexAddress, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
-import { copy } from './posts.tsx';
+import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
@@ -104,74 +104,37 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
 
 /** Joining a tier paid on chain: send the token from your linked wallet, then paste the transaction's hash. */
 function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
-  const price = tier.onchain!;
-  const [tx, setTx] = useState('');
-  const [note, setNote] = useState('');
-  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
-  const amount = formatUnits(price.amount, price.decimals);
-  return (
-    <form
-      className="form"
-      onSubmit={async (e: FormEvent) => {
-        e.preventDefault();
-        const sent = await attempt(() => api('requestMembership', { tier: tier.id, note, payment: tx }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has read your payment on chain`);
-        if (sent !== undefined) onClose();
-      }}
-    >
-      <ol className="steps">
-        <li>
-          {wallet ? (
-            <>
-              From your linked wallet <code>{wallet.address}</code>,
-            </>
-          ) : (
-            <>Link your wallet first (a project's Settings → Treasury); then from it,</>
-          )}{' '}
-          send <b>
-            {amount} {price.symbol}
-          </b>{' '}
-          per month (two months: twice that) on {TREASURY_CHAIN.name} to:
-          <div className="field-row">
-            <code className="grow">{price.to}</code>
-            <button type="button" onClick={() => copy(price.to, 'Address copied')}>
-              Copy
-            </button>
-          </div>
-        </li>
-        <li>
-          <label htmlFor="join-tx">Paste the transaction's hash:</label>
-          <input id="join-tx" className="wide" required autoFocus spellCheck={false} placeholder="0x…" value={tx} onChange={(e) => setTx(e.target.value.trim())} />
-        </li>
-      </ol>
-      <input className="wide" placeholder="A note for them (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+  // null: no wallet linked; undefined: still asking.
+  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
+  if (wallet === undefined) return null;
+  if (!wallet)
+    return (
       <p className="small">
-        A test network: no real money. {creator}'s Weave reads the payment on chain and lets you in, a month per month's price. It counts once, and only from your own linked wallet.
+        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (a project's Settings → Treasury, or <code>weave wallet link</code>), so {creator} knows the payment is yours.
       </p>
-      <div className="buttons">
-        <button type="button" onClick={onClose}>
-          Cancel
-        </button>
-        <button className="default" disabled={!isTxHash(tx) || !wallet}>
-          Send payment
-        </button>
-      </div>
-    </form>
-  );
+    );
+  return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;
 }
 
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
   const [note, setNote] = useState('');
+  const [way, setWay] = useState<'gumroad' | 'onchain'>(tier.gumroad ? 'gumroad' : 'onchain');
   const creator = tier.creator.name ?? shortDid(tier.creator.did);
-  if (tier.onchain)
+  if (tier.onchain || tier.gumroad)
     return (
       <Modal title={`Join ${tier.name}`} onClose={onClose}>
-        <OnchainJoin tier={tier} creator={creator} onClose={onClose} />
-      </Modal>
-    );
-  if (tier.gumroad)
-    return (
-      <Modal title={`Join ${tier.name}`} onClose={onClose}>
-        <GumroadJoin tier={tier} creator={creator} onClose={onClose} />
+        {tier.onchain && tier.gumroad && (
+          <div className="field-row" role="radiogroup" aria-label="How to pay">
+            <span className="small">Pay with</span>
+            <input id="way-gumroad" type="radio" checked={way === 'gumroad'} onChange={() => setWay('gumroad')} />
+            <label htmlFor="way-gumroad">Gumroad ({money(tier.price, tier.currency)})</label>
+            <input id="way-onchain" type="radio" checked={way === 'onchain'} onChange={() => setWay('onchain')} />
+            <label htmlFor="way-onchain">
+              USDC ({formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} / month)
+            </label>
+          </div>
+        )}
+        {tier.onchain && (way === 'onchain' || !tier.gumroad) ? <OnchainJoin tier={tier} creator={creator} onClose={onClose} /> : <GumroadJoin tier={tier} creator={creator} onClose={onClose} />}
       </Modal>
     );
   return (
@@ -305,9 +268,11 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <label htmlFor="tier-auto">Let people in automatically (for free tiers)</label>
         </div>
         <fieldset>
-          <legend>
-            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad">Sell it through Gumroad</label>
-          </legend>
+          <legend>Ways to pay</legend>
+          <p className="small">Offer one or more; supporters pick theirs when they join. Nothing ticked: they pay you the way you agree on, and you let them in.</p>
+          <div className="field-row">
+            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad"><b>Gumroad</b>: card, PayPal; Gumroad is the seller</label>
+          </div>
           {onGumroad && (
             <>
               <div className="field-row">
@@ -380,14 +345,10 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 In Gumroad, make it a membership and turn on <b>Generate a unique license key per sale</b>. Supporters buy there and send you the key from their receipt; your Weave checks it with Gumroad, lets them in and renews each month while they pay. Keep Weave running so it can.
               </p>
             </>
-          ) : (
-            <p className="small">Supporters pay you through Gumroad, and Weave lets them in automatically. Gumroad is the seller: it handles payments, taxes and refunds.</p>
-          )}
-        </fieldset>
-        <fieldset>
-          <legend>
-            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain">Accept USDC on chain (test network)</label>
-          </legend>
+          ) : null}
+          <div className="field-row">
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you or a project's split (test network)</label>
+          </div>
           {onChain ? (
             <>
               <div className="field-row">
@@ -402,9 +363,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 Empty: your linked wallet. Or a project's split contract (CLI: weave treasury split), so payments are divided as the project's split says. Supporters pay from their linked wallet and send the transaction; your Weave reads it on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can.
               </p>
             </>
-          ) : (
-            <p className="small">Supporters pay in test USDC straight to your wallet or a project's split, and Weave lets them in automatically. No real money yet.</p>
-          )}
+          ) : null}
         </fieldset>
         <p className="small">
           A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.

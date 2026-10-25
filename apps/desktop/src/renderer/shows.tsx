@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { SafeProposalInfo, ShowInfo, SpaceInfo, TicketInfo, WalletInfo } from '@weave/node/client';
 import { formatUnits, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
 import { api, bump, shortDid, useApi } from './lib.ts';
+import { PayFromWallet } from './pay.tsx';
 import { copy } from './posts.tsx';
 import { ask, attempt, AsyncButton } from './ui.tsx';
 
@@ -78,32 +79,11 @@ function SafeProposalCard({ proposal: p }: { proposal: SafeProposalInfo }) {
 }
 
 function BuyTicket({ show }: { show: ShowInfo }) {
-  const [tx, setTx] = useState('');
+  const [paying, setPaying] = useState(false);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
-  return (
-    <>
-      <p className="small">
-        {wallet ? (
-          <>
-            From your linked wallet <code>{wallet.address}</code>, send
-          </>
-        ) : (
-          <>Link your wallet (Treasury, above), then send</>
-        )}{' '}
-        <b>{usdc(show.price.amount, show.price.decimals)}</b> on {TREASURY_CHAIN.name} to the show's Safe:
-      </p>
-      <div className="field-row">
-        <code className="grow">{show.safe.address}</code>
-        <button onClick={() => copy(show.safe.address, 'Address copied')}>Copy</button>
-      </div>
-      <div className="field-row">
-        <input className="grow" spellCheck={false} placeholder="0x… the transaction's hash" value={tx} onChange={(e) => setTx(e.target.value.trim())} aria-label="Transaction hash" />
-        <AsyncButton className="default" onClick={() => (isTxHash(tx) && wallet ? attempt(() => api('buyTicket', { show: show.id, payment: tx }).then(bump), `Sent: you're in once ${show.host.name ?? 'the host'}'s Weave has read it on chain`) : Promise.resolve())}>
-          Get ticket
-        </AsyncButton>
-      </div>
-    </>
-  );
+  if (!wallet) return <p className="small">Link your wallet (a project's Settings → Treasury) to buy a ticket from it.</p>;
+  if (!paying) return <button className="default" onClick={() => setPaying(true)}>Get a ticket ({usdc(show.price.amount, show.price.decimals)})…</button>;
+  return <PayFromWallet show={show.id} payee={show.host.name ?? 'the host'} onDone={() => setPaying(false)} />;
 }
 
 function HostTools({ show }: { show: ShowInfo }) {
@@ -221,19 +201,19 @@ function NewShow({ project, onDone }: { project: SpaceInfo; onDone(): void }) {
   );
 }
 
-/** In a project's settings: its ticketed shows. */
+/** In a project's Live: its ticketed shows, to get a ticket for, or (hosts) to set up, call off and pay out. */
 export function ShowsSection({ project, maintainer }: { project: SpaceInfo; maintainer: boolean }) {
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const [adding, setAdding] = useState(false);
   if (!shows) return null;
   return (
-    <fieldset>
-      <legend>Shows</legend>
-      {shows.length === 0 && !adding && <p className="small">One-off events with tickets, like a live stream. Tickets are paid into the show's own Safe until it's over.</p>}
+    <section>
+      <h3>Shows</h3>
+      {shows.length === 0 && !adding && <p className="small">One-off events with tickets, like a live stream. Tickets are paid into the show's own Safe until it's over; its room lets ticket holders in while it's on.</p>}
       {shows.map((s) => (
         <ShowCard key={s.id} show={s} />
       ))}
       {maintainer && (adding ? <NewShow project={project} onDone={() => setAdding(false)} /> : <button onClick={() => setAdding(true)}>New show…</button>)}
-    </fieldset>
+    </section>
   );
 }

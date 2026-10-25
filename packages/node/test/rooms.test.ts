@@ -83,6 +83,43 @@ describe('rooms and shared apps', () => {
     return node;
   }
 
+  it('lets the members of a tier into a room meant for them', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const kofi = person('Kofi');
+    await martin.createProject({ name: 'Studio' });
+    await martin.publishApp({ project: 'Studio', manifest: { app: 'studio', name: 'Studio', services: [{ id: 'stream', port: appPort, open: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } }] } });
+    const tier = await martin.createTier({ name: 'Backstage' });
+    await martin.inviteGroup({ project: 'Studio', group: tier.id });
+    await lena.joinSpace(await martin.invite('Studio'));
+    await kofi.joinSpace(await martin.invite('Studio'));
+    const sync = async () => {
+      for (let round = 0; round < 3; round++) {
+        for (const a of [martin, lena, kofi]) for (const b of [martin, lena, kofi]) if (a !== b) a.replica.events().forEach((e) => b.replica.ingest(e));
+        for (const n of [martin, lena, kofi]) await n.reconcile();
+      }
+    };
+    await sync();
+    await lena.requestMembership({ tier: tier.id }); // asking lets her node take the tier's keys
+    await sync();
+    await martin.grantMembership({ tier: tier.id, who: lena.identity.author, months: 1 });
+    await sync();
+    await martin.goOnline();
+    await lena.goOnline();
+    await kofi.goOnline();
+    const hosted = await martin.hostRoom({ project: 'Studio', name: 'Backstage live', groups: [tier.id] });
+    await sync();
+
+    const forKofi = await until(async () => (await kofi.rooms('Studio')).find((r) => r.id === hosted.id));
+    expect(forKofi.mayJoin).toBe(false);
+    const forLena = await until(async () => (await lena.rooms('Studio')).find((r) => r.id === hosted.id && r.mayJoin));
+    await lena.joinRoom(forLena.id);
+    await until(async () => {
+      const info = (await lena.rooms('Studio')).find((r) => r.id === hosted.id);
+      return info?.connected && info.url ? info : undefined;
+    });
+  });
+
   it("lets only a show's ticket holders into its room, while the show is on", async () => {
     const martin = person('Martin');
     const lena = person('Lena');

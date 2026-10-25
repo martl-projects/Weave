@@ -18,6 +18,7 @@ import { isRepoName } from './github.ts';
  *                                                       sealed in the project, the latest by a maintainer counts
  *   weave.room   {room, name, service, key, invite, open, show}
  *                show: a ticketed show the room belongs to: only its ticket holders get in, while it's on
+ *                groups: groups (tiers, say) whose members get in; with a show too, either lets them in
  *                                                       the host announces a room (open) or ends it (open: false);
  *                                                       `key` is the room's DHT public key, so only participants find it
  *
@@ -358,6 +359,8 @@ export interface Room {
   invite: 'participants' | Did[];
   /** A ticketed show it belongs to: only ticket holders join, while the show is on. */
   show?: string;
+  /** Groups (tiers, say) whose members may join; with a show, either a ticket or one of these lets someone in. */
+  groups?: string[];
   open: boolean;
   time: string;
 }
@@ -379,7 +382,8 @@ export function roomsOf(entries: Array<{ event: { author: Did; time: string }; k
     if (!/^[0-9a-f]{64}$/.test(key)) continue;
     const invite = Array.isArray(b.invite) ? b.invite.filter(isDid) : 'participants';
     const show = text(b.show, 100);
-    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), open: true, time: e.event.time });
+    const groups = Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string' && g.length <= 100).slice(0, 10) : [];
+    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), open: true, time: e.event.time });
   }
   return [...rooms.values()];
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
+import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
+import { ShowsSection } from './shows.tsx';
 import { Page } from './views.tsx';
 import { copy } from './posts.tsx';
 
@@ -561,17 +562,23 @@ function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
   );
 }
 
-function HostDialog({ project, members, meDid, app, onClose }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; app: AppManifest; onClose(): void }) {
+function HostDialog({ project, members, meDid, app, groups, onClose }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; app: AppManifest; groups: ProjectInfo['groups']; onClose(): void }) {
   const [name, setName] = useState('');
-  const [everyone, setEveryone] = useState(true);
+  const [who, setWho] = useState<'everyone' | 'people' | 'paid'>('everyone');
+  const everyone = who === 'everyone';
   const [picked, setPicked] = useState<string[]>([]);
+  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
+  const mine = (shows ?? []).filter((s) => s.mine && !s.cancelled && Date.parse(s.ends) > Date.now());
+  const [show, setShow] = useState('');
+  const [tiers, setTiers] = useState<string[]>([]);
   return (
     <Modal title={`Host a room · ${app.name}`} onClose={onClose}>
       <form
         className="form"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          const room = await attempt(() => api<RoomInfo>('hostRoom', { project: project.id, name, invite: everyone ? undefined : picked }), 'Room is open');
+          const access = who === 'people' ? { invite: picked } : who === 'paid' ? { ...(show ? { show } : {}), ...(tiers.length ? { groups: tiers } : {}) } : {};
+          const room = await attempt(() => api<RoomInfo>('hostRoom', { project: project.id, name, ...access }), 'Room is open');
           if (room) {
             bump();
             onClose();
@@ -588,14 +595,14 @@ function HostDialog({ project, members, meDid, app, onClose }: { project: SpaceI
         <fieldset>
           <legend>Who may join</legend>
           <div className="field-row">
-            <input id="who-all" type="radio" checked={everyone} onChange={() => setEveryone(true)} />
+            <input id="who-all" type="radio" checked={everyone} onChange={() => setWho('everyone')} />
             <label htmlFor="who-all">Everyone in p/{project.name}</label>
           </div>
           <div className="field-row">
-            <input id="who-some" type="radio" checked={!everyone} onChange={() => setEveryone(false)} />
+            <input id="who-some" type="radio" checked={who === 'people'} onChange={() => setWho('people')} />
             <label htmlFor="who-some">Only…</label>
           </div>
-          {!everyone &&
+          {who === 'people' &&
             members
               .filter((m) => m.did !== meDid)
               .map((m) => (
@@ -604,12 +611,42 @@ function HostDialog({ project, members, meDid, app, onClose }: { project: SpaceI
                   <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
                 </div>
               ))}
+          {(mine.length > 0 || groups.length > 0) && (
+            <div className="field-row">
+              <input id="who-paid" type="radio" checked={who === 'paid'} onChange={() => setWho('paid')} />
+              <label htmlFor="who-paid">Ticket holders, or members of tiers</label>
+            </div>
+          )}
+          {who === 'paid' && (
+            <>
+              {mine.length > 0 && (
+                <div className="field-row indent">
+                  <label htmlFor="who-show">Show</label>
+                  <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                    <option value="">none</option>
+                    {mine.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="small">its ticket holders, while it's on</span>
+                </div>
+              )}
+              {groups.map((g) => (
+                <div className="field-row indent" key={g.id}>
+                  <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                  <label htmlFor={`who-tier-${g.id}`}>members of {g.name}</label>
+                </div>
+              ))}
+            </>
+          )}
         </fieldset>
         <div className="buttons">
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default" disabled={!everyone && picked.length === 0}>
+          <button className="default" disabled={(who === 'people' && picked.length === 0) || (who === 'paid' && !show && tiers.length === 0)}>
             Open room
           </button>
         </div>
@@ -673,11 +710,12 @@ export function RoomsView({ project, members, meDid }: { project: SpaceInfo; mem
         </p>
       )}
       {app && <AppPanel project={project} app={app} />}
+      <ShowsSection project={project} maintainer={!!info?.maintainer} />
       {(rooms ?? []).map((room) => (
         <RoomCard key={room.id} room={room} />
       ))}
       {app && rooms?.length === 0 && <p className="empty">No open rooms. Host one to share {app.name}.</p>}
-      {hosting && app && <HostDialog project={project} members={members} meDid={meDid} app={app} onClose={() => setHosting(false)} />}
+      {hosting && app && <HostDialog project={project} members={members} meDid={meDid} app={app} groups={info?.groups ?? []} onClose={() => setHosting(false)} />}
     </Page>
   );
 }

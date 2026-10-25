@@ -620,6 +620,27 @@ export interface ShowSettlement {
   proposal: SafeProposalInfo;
 }
 
+/** How to pay a tier or show from your wallet without copying anything: a QR code for a phone wallet, or a transaction for a wallet in the browser. */
+export interface PaymentRequestInfo {
+  /** What it pays for, e.g. "a month of Editors". */
+  what: string;
+  chain: number;
+  token: string;
+  symbol: string;
+  decimals: number;
+  to: string;
+  /** In the token's smallest unit. */
+  amount: string;
+  /** Your linked wallet: pay from it. */
+  from: string;
+  /** EIP-681 link (ethereum:…): show it as a QR code for a phone wallet. */
+  uri: string;
+  /** The same as a transaction for eth_sendTransaction. */
+  tx: { from: string; to: string; data: string; chainId: string };
+  /** The chain's block when asked: look for the payment from there (findPayment). */
+  since: number;
+}
+
 /** A transaction for a Safe that its owners sign together in Weave; once enough signed, anyone sends `exec`. */
 export interface SafeProposalInfo {
   id: string;
@@ -1503,7 +1524,7 @@ export interface Backend {
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string }): Promise<RoomInfo>;
+  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1560,6 +1581,11 @@ export interface Backend {
   signSafeTx(input: { proposal: string; signature: string }): Promise<SafeProposalInfo>;
   /** Proposals for the Safes this node knows, or one Safe's. */
   safeProposals(safe?: string): Promise<SafeProposalInfo[]>;
+
+  /** How to pay a tier (a month) or a show (a ticket) from your linked wallet: a QR link and a transaction. */
+  paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo>;
+  /** Look on chain for that payment from your wallets since a block; found, it is sent on (as if its hash were pasted). */
+  findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
 
   // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
   /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
@@ -1647,7 +1673,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
-  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals',
+  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

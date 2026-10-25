@@ -335,3 +335,38 @@ describe('changing wallets', () => {
     expect(kept.safe.deploy?.data).toBe(show.safe.deploy?.data);
   });
 });
+
+describe('paying without pasting anything', () => {
+  it('gives a QR link and finds the payment on chain by itself, then asks to join with it', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const lw = wallet();
+    await lena.linkWallet({ address: lw.address, proof: lw.sign(await lena.walletMessage(lw.address)) });
+    const price = { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: 'USDC', decimals: 6, to: '0x2222222222222222222222222222222222222222', amount: 5_000_000 };
+    const tier = await martin.createTier({ name: 'Editors', onchain: price });
+    sync(martin, lena);
+    sync(lena, martin);
+
+    // A fake chain: at block 1000; Lena's transfer is in block 1350.
+    const asked: Array<{ from: number; to: number }> = [];
+    lena.chainRpc = (async (_chain: number, method: string, params: unknown[]) => {
+      if (method === 'eth_blockNumber') return '0x' + (1400).toString(16);
+      const q = params[0] as { fromBlock: string; toBlock: string; topics: [string, string[], string] };
+      const from = parseInt(q.fromBlock, 16);
+      const to = parseInt(q.toBlock, 16);
+      asked.push({ from, to });
+      expect(q.topics[1]).toEqual(['0x' + lw.address.slice(2).toLowerCase().padStart(64, '0')]);
+      expect(q.topics[2]).toBe('0x' + price.to.slice(2).padStart(64, '0'));
+      return from <= 1350 && 1350 <= to ? [{ transactionHash: '0x' + 'ab'.repeat(32), data: '0x' + (5_000_000).toString(16).padStart(64, '0') }] : [];
+    }) as typeof lena.chainRpc;
+    const request = await lena.paymentRequest({ tier: tier.id });
+    expect(request.uri).toBe(`ethereum:${price.token}@84532/transfer?address=${price.to}&uint256=5000000`);
+    expect(request.tx).toMatchObject({ from: lw.address, to: price.token, chainId: '0x14a34' });
+
+    const found = await lena.findPayment({ tier: tier.id, since: 1000 });
+    expect(found.found).toBe('0x' + 'ab'.repeat(32));
+    // Looked in steps the public node allows, and stopped where it found it.
+    expect(asked.every((a) => a.to - a.from <= 199)).toBe(true);
+    expect((await lena.tiers('Martin'))[0].requested).toBe(true);
+  });
+});
