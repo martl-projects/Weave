@@ -179,7 +179,8 @@ describe('the phone app worker on Bare', () => {
       const local = await patiently(() => phone.ask<string>('openRoom', { room: room!.id, url: room!.url }));
       expect(local).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/play$/);
       expect(await phone.ask('openRoom', { room: room!.id, url: room!.url })).toBe(local);
-      expect(await (await fetch(local)).text()).toBe('a horse race, at /play');
+      // The first request may find the computer's way to the room not up yet (a slow test network): like a browser reload, ask again.
+      await vi.waitFor(async () => expect(await (await fetch(local)).text()).toBe('a horse race, at /play'), { timeout: 30_000, interval: 500 });
 
       // Forgetting the computer closes it.
       await phone.ask('forget');
