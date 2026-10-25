@@ -3,6 +3,9 @@ import { b64u, utf8 } from './bytes.ts';
 import { isDid, publicKeyFromDid, type Did } from './keys.ts';
 import type { EventFields, WeaveEvent } from './events.ts';
 
+/** What authority reads of an event: a v1 event or a record of either version (seq is a v2 event's n). */
+export type Signed = Pick<WeaveEvent, 'author' | 'signer' | 'seq' | 'kind' | 'body'>;
+
 /*
  * Who may sign for whom. A person's identifier is the did:key of their first
  * root key and never changes; the keys behind it do.
@@ -26,11 +29,17 @@ export const KIND_DELEGATE = 'weave.delegate';
 export const KIND_REVOKE = 'weave.revoke';
 export const KIND_IDENTITY = 'weave.identity';
 export const KIND_ROTATE = 'weave.rotate';
+/**
+ * `{person, keys: {key: n}}`, public, by the company named in a company-owned
+ * identity's first record (stage 10): what that identity's keys sign after
+ * these numbers (and anything by keys not named) no longer counts.
+ */
+export const KIND_ORG_FREEZE = 'weave.org.freeze';
 /** An encrypted event; its real kind is inside and is checked by whoever can decrypt it. */
 export const KIND_SEALED = 'weave.sealed';
 
 /** Kinds that change who may sign: they're processed by the Authority. */
-export const KEY_KINDS = new Set([KIND_DELEGATE, KIND_REVOKE, KIND_IDENTITY, KIND_ROTATE]);
+export const KEY_KINDS = new Set([KIND_DELEGATE, KIND_REVOKE, KIND_IDENTITY, KIND_ROTATE, KIND_ORG_FREEZE]);
 
 export type Role = 'device' | 'agent';
 
@@ -57,6 +66,10 @@ export interface KeyState {
   next?: string;
   /** The key others encrypt to; the identifier itself if none was named. */
   enc: Did;
+  /** Every encryption key named so far, oldest first (enc is the last). */
+  encs: Did[];
+  /** A company-owned identity: the company that holds its recovery and may freeze it. */
+  org?: Did;
 }
 
 export type Check = { ok: true } | { ok: false; reason: string; retry: boolean };
@@ -74,9 +87,9 @@ export function revocation(subject: Did, afterSeq: number): EventFields {
 /** The commitment to a future root key: a hash of its public key. */
 export const keyCommitment = (key: Did): string => b64u.encode(sha256(new Uint8Array([...utf8('weave/next-key/v1'), ...publicKeyFromDid(key)])));
 
-/** The root's first identity event: commit to the next root key and name the encryption key. */
-export function inception(next: Did, enc: Did): EventFields {
-  return { kind: KIND_IDENTITY, body: { next: keyCommitment(next), enc } };
+/** The root's first identity event: commit to the next root key and name the encryption key (and, for a company-owned identity, the company). */
+export function inception(next: Did, enc: Did, org?: Did): EventFields {
+  return { kind: KIND_IDENTITY, body: { next: keyCommitment(next), enc, ...(org ? { org } : {}) } };
 }
 
 /** Signed by the new root (the committed next key): take over, void the old root after `retire`, commit to the one after. */
@@ -89,7 +102,7 @@ export function permits(permissions: string[], kind: string): boolean {
   return permissions.some((p) => p === '*' || p === kind || (p.endsWith('.*') && (kind === p.slice(0, -2) || kind.startsWith(p.slice(0, -1)))));
 }
 
-const body = (event: WeaveEvent): Record<string, unknown> => (event.body && typeof event.body === 'object' && !Array.isArray(event.body) ? (event.body as Record<string, unknown>) : {});
+const body = (event: Signed): Record<string, unknown> => (event.body && typeof event.body === 'object' && !Array.isArray(event.body) ? (event.body as Record<string, unknown>) : {});
 
 /**
  * Tracks which keys may sign for which people, built from identity, rotate,
@@ -101,6 +114,14 @@ export class Authority {
   #people = new Map<Did, KeyState>();
   /** Root keys after the first, mapped to the person they act for. */
   #rootOf = new Map<Did, Did>();
+  /** Freezes, by person and by who signed them: key → last number that counts. Only the person's own company's apply. */
+  #freezes = new Map<Did, Map<Did, Record<string, number>>>();
+
+  /** A company-owned identity's cut-offs, if its company froze it. */
+  frozen(person: Did): Record<string, number> | undefined {
+    const org = this.#people.get(person)?.org;
+    return org ? this.#freezes.get(person)?.get(org) : undefined;
+  }
 
   grant(subject: Did): Grant | undefined {
     return this.#grants.get(subject);
@@ -113,12 +134,17 @@ export class Authority {
 
   /** A person's key state; people who never published identity events have their identifier as root and encryption key. */
   keys(person: Did): KeyState {
-    return this.#people.get(person) ?? { root: person, retired: new Map(), enc: person };
+    return this.#people.get(person) ?? { root: person, retired: new Map(), enc: person, encs: [person] };
   }
 
   /** The person a key acts for: itself for a person's identifier, the author for devices, agents and later roots. */
   personOf(key: Did): Did {
     return this.#rootOf.get(key) ?? this.#grants.get(key)?.author ?? key;
+  }
+
+  /** Every encryption key a person named, oldest first. */
+  encryptionKeys(person: Did): Did[] {
+    return this.keys(person).encs;
   }
 
   /** The key to encrypt to when writing to this person. */
@@ -144,18 +170,30 @@ export class Authority {
   }
 
   /** May this device delegate (or revoke) agents? */
-  #isDelegatingDevice(event: WeaveEvent): boolean {
+  #isDelegatingDevice(event: Signed): boolean {
     const device = this.#grants.get(event.signer);
     return !!device && device.author === event.author && device.role === 'device' && device.permissions.includes('*') && this.check(event).ok;
   }
 
   /** Feed an accepted event; only identity, rotate, delegate and revoke events have an effect. */
-  apply(event: WeaveEvent): void {
+  apply(event: Signed): void {
     const b = body(event);
     if (event.kind === KIND_IDENTITY) {
       // Once per person, by the original root, before any rotation.
       if (event.signer !== event.author || this.#people.has(event.author) || typeof b.next !== 'string' || !isDid(b.enc)) return;
-      this.#people.set(event.author, { root: event.author, retired: new Map(), next: b.next, enc: b.enc });
+      this.#people.set(event.author, { root: event.author, retired: new Map(), next: b.next, enc: b.enc, encs: [b.enc], ...(isDid(b.org) && b.org !== event.author ? { org: b.org } : {}) });
+      return;
+    }
+    if (event.kind === KIND_ORG_FREEZE) {
+      // Kept whoever signed it; it counts only for the company the identity names (see frozen).
+      if (!isDid(b.person) || !b.keys || typeof b.keys !== 'object' || Array.isArray(b.keys)) return;
+      const keys: Record<string, number> = {};
+      for (const [key, n] of Object.entries(b.keys as Record<string, unknown>)) if (Number.isSafeInteger(n)) keys[key] = n as number;
+      let by = this.#freezes.get(b.person);
+      if (!by) this.#freezes.set(b.person, (by = new Map()));
+      const before = by.get(event.author);
+      if (before) for (const key of new Set([...Object.keys(before), ...Object.keys(keys)])) keys[key] = Math.min(before[key] ?? 0, keys[key] ?? 0);
+      by.set(event.author, keys);
       return;
     }
     if (event.kind === KIND_ROTATE) {
@@ -164,7 +202,10 @@ export class Authority {
       state.retired.set(state.root, Math.min(state.retired.get(state.root) ?? Infinity, b.retire as number));
       state.root = event.signer;
       state.next = b.next;
-      if (isDid(b.enc)) state.enc = b.enc;
+      if (isDid(b.enc) && b.enc !== state.enc) {
+        state.enc = b.enc;
+        state.encs.push(b.enc);
+      }
       this.#rootOf.set(event.signer, event.author);
       return;
     }
@@ -197,7 +238,9 @@ export class Authority {
   }
 
   /** May this event's signer sign it for its author? `retry` means a missing delegation or identity event may still arrive. */
-  check(event: WeaveEvent): Check {
+  check(event: Signed): Check {
+    const frozen = this.#freezes.size ? this.frozen(event.author) : undefined;
+    if (frozen && event.seq > (frozen[event.signer] ?? 0)) return { ok: false, reason: 'frozen by its company', retry: false };
     if (event.signer === event.author || this.#rootOf.get(event.signer) === event.author) {
       return this.#isRoot(event.author, event.signer, event.seq) ? { ok: true } : { ok: false, reason: 'root key retired', retry: false };
     }

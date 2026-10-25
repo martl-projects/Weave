@@ -6,6 +6,7 @@ import { ago, api, bump, navigate, plain, postLink, shortDid, useApi } from './l
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast } from './ui.tsx';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
+import { NameBadges } from './badges.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -240,6 +241,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
             </>
           )}
           <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+          {!post.by.agent && <NameBadges did={post.by.did} project={post.space?.kind === 'project' ? post.space.id : undefined} />}
           {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
           <Coauthors post={post} />
           {' · '}
@@ -304,14 +306,59 @@ export function PostList({
         </span>
       </header>
       <div className="pane-scroll sunken">
+        {board?.rule && (
+          <p className="small rule-line">
+            <Icon name="clock" /> {ruleText(board.rule)}
+          </p>
+        )}
         {above}
         {(posts ?? []).map((p) => (
           <PostRow key={p.id} post={p} meDid={meDid} spaces={spaces} showWhere={!query.space} curate={curate} moderator={canCurate && !!query.space} />
         ))}
         {posts?.length === 0 && <div className="empty">{empty}</div>}
+        {query.space && posts?.some((p) => p.heldBy) && (
+          <div className="buttons load-older">
+            <AsyncButton onClick={() => attempt(() => api('fetchOlder', { space: query.space! }).then(bump), 'Asked the members for the month before')}>Load older</AsyncButton>
+            <span className="small muted">Older posts are with the members who keep them.</span>
+          </div>
+        )}
       </div>
     </section>
   );
+}
+
+// ---------------------------------------------------------------- how long things stay
+
+const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+
+/** Why a post stays for good, or until when and what stretched it. */
+export function lifetimeText(l: NonNullable<PostInfo['lifetime']>): string {
+  const yours = l.yours ? ' Your devices keep it regardless.' : '';
+  if ('forever' in l) return { pinned: 'Stays for good: it is pinned.', permanent: 'Stays for good: issues, proposals and releases always do.', 'no-rule': 'Stays for good: this board has no rule for forgetting.' }[l.forever];
+  if (l.full) return `Goes now: the board is over its size, and this post would go soonest.${yours}`;
+  const why = l.grace
+    ? ', given 14 days after the rule was set'
+    : l.overShare
+      ? `, shortened: its author posts ${l.overShare}× their share of this board`
+      : l.upvotes
+        ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days`
+        : '';
+  const gone = Date.parse(l.until) <= Date.now();
+  return `${gone ? 'Forgotten since' : 'Stays until'} ${day(l.until)}${why}.${yours}`;
+}
+
+/** Roughly who holds a post of a big space: an estimate, from what everyone knows. */
+export function heldByText(h: NonNullable<PostInfo['heldBy']>): string {
+  if (h.recent) return `Held by everyone online while it's recent (${h.about} members).`;
+  const parts = ['its author', `${h.share} member${h.share === 1 ? '' : 's'} by share`, ...(h.upvoters ? [`${h.upvoters} who upvoted`] : [])];
+  return `Held by about ${h.about}: ${parts.join(', ')}.`;
+}
+
+/** A board's rule, said in a line, with who set it when. */
+export function ruleText(rule: NonNullable<BoardInfo['rule']>): string {
+  const keep = rule.keepDays ? `Posts here stay ${rule.keepDays} days after their last activity, longer with upvotes` : 'Posts here stay';
+  const size = rule.maxMB ? `${rule.keepDays ? ', and' : ''} up to ${rule.maxMB} MB in all` : '';
+  return `${keep}${size}. Set by ${rule.by.name ?? shortDid(rule.by.did)} on ${day(rule.time)}.`;
 }
 
 // ---------------------------------------------------------------- one post
@@ -435,10 +482,17 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
               </>
             )}
             <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+            {!post.by.agent && <NameBadges did={post.by.did} project={post.space?.kind === 'project' ? post.space.id : undefined} />}
             {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
             <Coauthors post={post} /> · {ago(post.time)}
             {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
           </div>
+          {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
+            <div className="small muted lifetime">
+              <Icon name="clock" /> {lifetimeText(post.lifetime)}
+            </div>
+          )}
+          {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
           {post.link && (
             <a className="post-link big" href={post.link}>
               <Icon name="externalLink" /> {post.link}

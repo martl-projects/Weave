@@ -28,6 +28,9 @@ const MAX_FRAME = 4 * 1024 * 1024;
 const BATCH = 256;
 
 /**
+ * The v0.3 sync protocol: v1 logs, whole, with everyone. v0.4 nodes speak
+ * PeerSession2; this stays to stand in for v0.3 peers in tests.
+ *
  * Replicates a Replica with one peer over any byte stream (a Hyperswarm socket
  * in production, an in-memory pair in tests).
  *
@@ -50,7 +53,9 @@ export class PeerSession {
     this.replica = replica;
     this.stream = stream;
     this.blobs = blobs;
-    this.#unsubscribe = replica.onAppend((event) => this.#offer(event));
+    this.#unsubscribe = replica.onAppend((record) => {
+      if (record.v === 1) this.#offer(record.wire as WeaveEvent);
+    });
     stream.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());

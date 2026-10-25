@@ -1,6 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { Duplex } from 'node:stream';
 
-/** Two connected in-memory streams: what one writes, the other reads. For tests and simulations. */
+/**
+ * Two connected in-memory streams: what one writes, the other reads. For tests
+ * and simulations. Both carry the same random `handshakeHash`, as the two ends
+ * of a Hyperswarm connection do.
+ */
 export function duplexPair(): [Duplex, Duplex] {
   let a: Duplex;
   let b: Duplex;
@@ -18,5 +23,8 @@ export function duplexPair(): [Duplex, Duplex] {
     });
   a = make(() => b);
   b = make(() => a);
+  const handshakeHash = randomBytes(32);
+  Object.assign(a, { handshakeHash });
+  Object.assign(b, { handshakeHash });
   return [a, b];
 }

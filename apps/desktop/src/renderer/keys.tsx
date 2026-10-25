@@ -1,11 +1,12 @@
-import { useState, type FormEvent } from 'react';
-import type { IdentityInfo, KeyInfo } from '@weave/node/client';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { IdentityInfo, KeepersInfo, KeyInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { ago, api, bridge, bump, shortDid, useApi } from './lib.ts';
+import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
 import { LinkedAccountsBox } from './github.tsx';
 import { AgentAppsBox } from './agents.tsx';
+import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 
 /*
@@ -28,9 +29,30 @@ function Words({ words }: { words: string }) {
   );
 }
 
-/** First start: a name, then the words to write down; or restore from words you already have. */
+/** First start: a name, then the words to write down; or restore from words you already have; or a company account. */
 export function Onboarding({ onDone }: { onDone(): void }) {
-  const [mode, setMode] = useState<'create' | 'restore'>('create');
+  const [mode, setMode] = useState<'create' | 'restore' | 'company'>('create');
+  // A company's device management may name its enrollment link, or allow only company accounts here.
+  const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
+  const [link, setLink] = useState('');
+  const [enrolled, setEnrolled] = useState<{ name?: string; company?: { name?: string } }>();
+  useEffect(() => {
+    void bridge.state().then((s) => {
+      setManaged({ enrollLink: s.enrollLink, companyOnly: s.companyOnly });
+      if (s.enrollLink) setLink(s.enrollLink);
+      if (s.enrollLink || s.companyOnly) setMode('company');
+    });
+    // An enrollment link clicked in the company's invitation opens this screen with it filled in.
+    const opened = (value?: string) => {
+      if (!value) return;
+      setLink((current) => current || value);
+      setMode('company');
+    };
+    opened(openedEnrollLink);
+    const listener = (e: Event) => opened((e as CustomEvent<string>).detail);
+    globalThis.addEventListener('weave-enroll-link', listener);
+    return () => globalThis.removeEventListener('weave-enroll-link', listener);
+  }, []);
   const [name, setName] = useState('');
   const [words, setWords] = useState<string>();
   const [wrote, setWrote] = useState(false);
@@ -70,6 +92,63 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           </button>
         </div>
       </>,
+    );
+
+  if (enrolled)
+    return window(
+      'Your company account is ready',
+      <>
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          <p>
+            Welcome, <b>{enrolled.name}</b>. Your account belongs to <b>{enrolled.company?.name ?? 'your company'}</b>: it keeps it safe and can set it up on a new computer, so there are no words
+            to write down.
+          </p>
+        </div>
+        <p className="small">You stay signed in with your company account; Weave renews it by itself. Your company's projects and groups appear as soon as the company has let you in.</p>
+        <div className="buttons">
+          <button className="default" onClick={() => (setEnrolled(undefined), onDone())}>
+            Open Weave
+          </button>
+        </div>
+      </>,
+    );
+
+  if (mode === 'company')
+    return window(
+      'Set up your company account',
+      <form
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          setBusy(true);
+          const who = await attempt(() => bridge.enroll(link.trim()));
+          setBusy(false);
+          if (who) setEnrolled(who);
+        }}
+      >
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          <p>Your company sets up your Weave account. You sign in with your company account in your browser; there are no recovery words to keep.</p>
+        </div>
+        {managed.enrollLink ? (
+          <p className="small">Your company has set this computer up for its Weave already.</p>
+        ) : (
+          <div className="field-row-stacked">
+            <label htmlFor="enroll-link">The enrollment link from your company</label>
+            <textarea id="enroll-link" className="wide" rows={3} required autoFocus spellCheck={false} placeholder="weave:enroll:…" value={link} onChange={(e) => setLink(e.target.value)} />
+          </div>
+        )}
+        <div className="buttons">
+          {!managed.companyOnly && (
+            <button type="button" onClick={() => setMode('create')}>
+              Back
+            </button>
+          )}
+          <button className="default" disabled={busy || !link.trim()}>
+            {busy ? 'Waiting for the sign-in in your browser…' : 'Sign in with your company'}
+          </button>
+        </div>
+      </form>,
     );
 
   if (mode === 'restore')
@@ -119,6 +198,9 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="buttons">
+        <button type="button" onClick={() => setMode('company')}>
+          My company uses Weave…
+        </button>
         <button type="button" onClick={() => setMode('restore')}>
           I already use Weave…
         </button>
@@ -127,6 +209,41 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </button>
       </div>
     </form>,
+  );
+}
+
+/** A company account (stage 13): whose it is, and whether it's signed in and vouched for. */
+function CompanyAccountBox() {
+  const { data: status } = useApi(() => api<SignInStatus>('signInStatus'), []);
+  if (!status?.company) return null;
+  const day = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+  return (
+    <fieldset>
+      <legend>Company account</legend>
+      <p>
+        This account belongs to <b>{status.name}</b>
+        {status.account ? (
+          <>
+            {' '}
+            and is signed in as <b>{status.account}</b>
+          </>
+        ) : null}
+        . The company keeps it safe and can set it up on a new computer.
+      </p>
+      {status.problem ? (
+        <p className="notice alarm">
+          <Icon name="lock" /> {status.problem}
+        </p>
+      ) : (
+        <p className="small">
+          {status.renews ? 'Weave renews the sign-in by itself.' : 'Sign in again when it runs out.'}
+          {status.vouchedUntil ? ` The company vouches for you until ${day(status.vouchedUntil)}.` : ' The company vouches for you once it has checked the sign-in.'}
+        </p>
+      )}
+      <AsyncButton onClick={() => api('companySignIn').then(bump)} title="Opens your company's sign-in in the browser">
+        Sign in again
+      </AsyncButton>
+    </fieldset>
   );
 }
 
@@ -236,9 +353,134 @@ function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: s
   );
 }
 
+const KEYSTORE_NAME: Record<Status['keystore'], string> = {
+  dpapi: 'Windows (DPAPI)',
+  keychain: 'the macOS Keychain',
+  'secret-service': 'your desktop’s Secret Service',
+  file: 'nothing',
+  kms: 'your company’s key service',
+  tpm: 'this computer’s TPM chip',
+  'secure-enclave': 'this Mac’s Secure Enclave',
+  yubikey: 'your YubiKey',
+};
+
+type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boolean; why?: string; current: boolean };
+
+/**
+ * Always-on nodes (stage 18): a server, NAS or cluster that keeps your spaces and hosts your rooms while your
+ * computers are off. It shows a request (weave-server pair); this answers it, and the answer goes back to it.
+ */
+function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
+  const nodes = keys.filter((k) => k.name?.startsWith('node:'));
+  const [request, setRequest] = useState('');
+  const [answer, setAnswer] = useState<{ answer: string; name: string }>();
+  return (
+    <fieldset>
+      <legend>Always-on nodes</legend>
+      {nodes.map((n) => (
+        <div className="field-row" key={n.did}>
+          <Icon name="community" />
+          <span className="grow">
+            <b>{n.name!.slice(5)}</b>{' '}
+            <span className="small muted">
+              {n.revokedAfter !== undefined ? 'revoked' : n.lastTime ? `last heard ${ago(n.lastTime)}` : 'not heard from yet'} · {n.events} events
+            </span>
+          </span>
+          {n.revokedAfter === undefined && (
+            <AsyncButton
+              onClick={async () =>
+                (await ask(`Revoke the always-on node ${n.name!.slice(5)}? It stops hosting your rooms, and what it signs from now on counts nowhere.`, 'Revoke')) &&
+                attempt(() => api('revokeKey', { key: n.did }).then(bump), 'Revoked')
+              }
+            >
+              Revoke
+            </AsyncButton>
+          )}
+        </div>
+      ))}
+      <p className="small">
+        A server, NAS or home cluster that keeps your spaces and hosts your rooms while your computers are off. It gets a key of its own that only hosts rooms (it can't post or change anything for
+        you), and your spaces' keys, but not your direct chats. On it, run <code>weave-server pair</code> and paste its request here.
+      </p>
+      {answer ? (
+        <div className="field-row-stacked">
+          <p className="small">
+            Linked <b>{answer.name}</b>. On the node, run <code>weave-server join</code> with this answer:
+          </p>
+          <textarea className="wide" rows={3} readOnly value={answer.answer} onFocus={(e) => e.currentTarget.select()} />
+          <div className="buttons">
+            <button onClick={() => void navigator.clipboard.writeText(answer.answer)}>Copy</button>
+            <button onClick={() => setAnswer(undefined)}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <div className="field-row">
+          <input className="grow" placeholder="weave:node-request:…" value={request} onChange={(e) => setRequest(e.target.value)} spellCheck={false} />
+          <AsyncButton
+            onClick={async () => {
+              const linked = await attempt(() => api<{ answer: string; name: string }>('linkNode', { request: request.trim() }));
+              if (linked) {
+                setAnswer(linked);
+                setRequest('');
+                bump();
+              }
+            }}
+          >
+            Link node
+          </AsyncButton>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+/** Where the key to your keys is kept, and moving it into hardware (stage 17). */
+function KeystoreChoice({ current }: { current: Status['keystore'] }) {
+  const { data: options } = useApi(() => api<KeystoreOption[]>('keystores'), []);
+  const [to, setTo] = useState('');
+  if (!options || current === 'kms') return null;
+  const others = options.filter((o) => !o.current && o.ready);
+  const missing = options.filter((o) => !o.ready);
+  if (!others.length) return null;
+  return (
+    <div className="field-row">
+      <label htmlFor="keystore">Keep it in</label>
+      <select id="keystore" value={to} onChange={(e) => setTo(e.target.value)}>
+        <option value="">{KEYSTORE_NAME[current]} (now)</option>
+        {others.map((o) => (
+          <option key={o.keystore} value={o.keystore}>
+            {KEYSTORE_NAME[o.keystore]}
+          </option>
+        ))}
+      </select>
+      {to && (
+        <AsyncButton
+          onClick={async () => {
+            const hardware = to === 'tpm' || to === 'secure-enclave' || to === 'yubikey';
+            if (hardware && !(await ask(`Keep the key to your keys in ${KEYSTORE_NAME[to as Status['keystore']]}? Weave then opens only with it${to === 'yubikey' ? ' plugged in (touch it if it blinks)' : ''}. If it's lost or replaced, you set Weave up again from your recovery words, or your company does.`, 'Move it')))
+              return;
+            if (await attempt(() => api('moveHomeKey', { to }), `The key is now kept by ${KEYSTORE_NAME[to as Status['keystore']]}`)) {
+              setTo('');
+              bump();
+            }
+          }}
+        >
+          Move
+        </AsyncButton>
+      )}
+      {missing.length > 0 && <span className="small muted"> Not here: {missing.map((o) => KEYSTORE_NAME[o.keystore]).join(', ')}.</span>}
+    </div>
+  );
+}
+
 export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
+  const { data: status } = useApi(() => api<Status>('status'), []);
+  const { data: keeping } = useApi(() => api<KeepersInfo>('keepers'), []);
+  // A company account has no recovery words: its company holds them.
+  const { data: signIn } = useApi(() => api<SignInStatus>('signInStatus'), []);
+  const company = signIn?.company ? (signIn.name ?? 'your company') : undefined;
   const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
   if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
   return (
@@ -249,24 +491,65 @@ export function KeysView() {
           last trusted it.
         </div>
       )}
+      <CompanyAccountBox />
+      {status && (
+        <fieldset>
+          <legend>On this computer</legend>
+          {status.keystoreWarning ? (
+            <p className="notice alarm">
+              <Icon name="lock" /> Your keys are not protected by the operating system here: anyone who copies your Weave folder can use them. Weave found no keystore it can use
+              {/\((.*)\)$/.exec(status.keystoreWarning)?.[1] ? ` (${/\((.*)\)$/.exec(status.keystoreWarning)![1]})` : ' on this system'}.
+            </p>
+          ) : (
+            <p className="small">
+              Your keys are sealed, and the key to them is kept by {KEYSTORE_NAME[status.keystore]}: a copy of your Weave folder can't be opened on another computer or by another user.{' '}
+              {company ? `To use Weave on another computer, ask ${company} to set it up.` : 'To use Weave on another computer, set it up from your recovery words.'}
+            </p>
+          )}
+          <KeystoreChoice current={status.keystore} />
+        </fieldset>
+      )}
+      {keeping && (
+        <fieldset>
+          <legend>Keepers</legend>
+          <p className="small">
+            Friends keep a sealed copy of your own space, your direct chats and your small groups, so that you can get them back with your recovery words even if every device is
+            lost. They can't read it or tell what it is.
+          </p>
+          {keeping.spaces.map((s) => (
+            <div className="field-row" key={s.space.id}>
+              <span className="grow">{s.space.name}</span>
+              <span className="small muted">{s.keepers.length ? `kept by ${s.keepers.map((k) => k.name ?? shortDid(k.did)).join(', ')}` : 'no keeper yet: you need friends (people you follow who follow you back)'}</span>
+            </div>
+          ))}
+          <p className="small muted">
+            You keep {(keeping.forOthers / 1048576).toFixed(1)} MB for friends (at most {Math.round(keeping.quota / 1048576)} MB).
+          </p>
+        </fieldset>
+      )}
       <fieldset>
         <legend>Your identity</legend>
         <p className="small">
           <code>{info.did}</code>
         </p>
-        {info.recoverable ? (
+        {company ? (
+          <p className="small">
+            {company} holds this identity's recovery words. For a new computer, run <code>weave recover-request</code> there and give the request to one of {company}'s admins.
+          </p>
+        ) : info.recoverable ? (
           <p className="small">
             Protected by your recovery words. Your root key was rotated {info.rotations} time{info.rotations === 1 ? '' : 's'}; your words already cover the next one.
           </p>
         ) : (
           <p className="small">This identity was made before recovery words existed: it can't rotate keys or add devices. Creating a new identity gives you both.</p>
         )}
-        {info.recoverable && (
+        {info.recoverable && !company && (
           <div className="buttons">
             <button onClick={() => setDialog({ kind: 'rotate' })}>Rotate keys…</button>
           </div>
         )}
       </fieldset>
+      <WalletBox />
       <fieldset>
         <legend>Devices and agents</legend>
         <table className="keys-table">
@@ -295,7 +578,7 @@ export function KeysView() {
                           Revoke
                         </AsyncButton>
                       </>
-                    ) : (
+                    ) : company ? null : (
                       <button onClick={() => setDialog({ kind: 'revoke', key: k })}>{k.current ? 'Replace…' : 'Revoke…'}</button>
                     ))}
                 </td>
@@ -303,9 +586,14 @@ export function KeysView() {
             ))}
           </tbody>
         </table>
-        <p className="small">Each computer signs with its own key. To use Weave on another computer, choose “I already use Weave” there and type your words; don't copy your Weave folder.</p>
+        <p className="small">
+          Each computer signs with its own key.{' '}
+          {company ? `For another computer, ask ${company}; don't copy your Weave folder.` : 'To use Weave on another computer, choose “I already use Weave” there and type your words; don\'t copy your Weave folder.'}
+        </p>
       </fieldset>
-      <PhonesBox />
+      {/* Pairing more phones is for the computer itself; a phone may not. */}
+      {!bridge.phone && <PhonesBox />}
+      <AlwaysOnNodes keys={keys} />
       <AgentAppsBox />
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (

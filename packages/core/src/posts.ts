@@ -23,7 +23,7 @@ import type { SpaceKind } from './spaces.ts';
  *                                                      (posts and issues carry one; '' removes it)
  *                                                      the post's author changes it; the latest edit counts
  *   weave.post.delete {target}                        the post's author, or the space's maintainers or moderators,
- *                                                      take it down; it stays in the logs, out of sight
+ *                                                      take it down; it stays in the logs, out of sight (chat messages too, see collab.ts)
  *   weave.upvote   {target, value}                     1, 0 or -1; the latest per person counts
  *   weave.board    {name, title, type, sort, position, on}
  *                                                      project maintainers add, change or drop a board
@@ -431,8 +431,10 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       posts.push({ ...base, type: 'post', board: 'ideas', title: str(e.body, 'title', 200), text: str(e.body, 'text') });
     } else if (kind === 'project' && (e.kind === KIND_ISSUE || e.kind === KIND_PROPOSAL) && str(e.body, 'title')) {
       const issue = e.kind === KIND_ISSUE;
+      // In the board they name (a project can have several issue or proposal boards), else the default one.
+      const board = boardName(field(e.body, 'board')) ?? (issue ? 'issues' : 'proposals');
       const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
-      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board: issue ? 'issues' : 'proposals', title: str(e.body, 'title', 200), text: str(e.body, 'text'), ...(prompt ? { prompt } : {}) });
+      posts.push({ ...base, type: issue ? 'issue' : 'proposal', board, title: str(e.body, 'title', 200), text: str(e.body, 'text'), ...(prompt ? { prompt } : {}) });
     }
   }
   return reviseAll(posts, entries, maintainers);

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Weave's managed settings for Intune (Settings catalog: import ADMX) and Group
+  Policy. They go to HKLM\SOFTWARE\Policies\Weave, where Weave reads them
+  (packages/node/src/machine.ts). See docs/managed-settings.md.
+-->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="weave" namespace="Weave.Policies.Weave" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Weave_0_15" displayName="$(string.SUPPORTED_Weave_0_15)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Weave" displayName="$(string.Weave)" />
+  </categories>
+  <policies>
+    <policy name="Enroll" class="Machine" displayName="$(string.Enroll)" explainText="$(string.Enroll_Explain)" presentation="$(presentation.Enroll)" key="SOFTWARE\Policies\Weave">
+      <parentCategory ref="Weave" />
+      <supportedOn ref="SUPPORTED_Weave_0_15" />
+      <elements>
+        <text id="EnrollText" valueName="Enroll" maxLength="8192" />
+      </elements>
+    </policy>
+    <policy name="CompanyOnly" class="Machine" displayName="$(string.CompanyOnly)" explainText="$(string.CompanyOnly_Explain)" key="SOFTWARE\Policies\Weave" valueName="CompanyOnly">
+      <parentCategory ref="Weave" />
+      <supportedOn ref="SUPPORTED_Weave_0_15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Companies" class="Machine" displayName="$(string.Companies)" explainText="$(string.Companies_Explain)" presentation="$(presentation.Companies)" key="SOFTWARE\Policies\Weave">
+      <parentCategory ref="Weave" />
+      <supportedOn ref="SUPPORTED_Weave_0_15" />
+      <elements>
+        <multiText id="CompaniesList" valueName="Companies" />
+      </elements>
+    </policy>
+    <policy name="DeviceCertificate" class="Machine" displayName="$(string.DeviceCertificate)" explainText="$(string.DeviceCertificate_Explain)" presentation="$(presentation.DeviceCertificate)" key="SOFTWARE\Policies\Weave">
+      <parentCategory ref="Weave" />
+      <supportedOn ref="SUPPORTED_Weave_0_15" />
+      <elements>
+        <text id="DeviceCertText" valueName="DeviceCert" />
+        <text id="DeviceKeyText" valueName="DeviceKey" />
+      </elements>
+    </policy>
+    <policy name="Updates" class="Machine" displayName="$(string.Updates)" explainText="$(string.Updates_Explain)" key="SOFTWARE\Policies\Weave" valueName="Updates">
+      <parentCategory ref="Weave" />
+      <supportedOn ref="SUPPORTED_Weave_0_15" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

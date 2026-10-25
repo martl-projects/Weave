@@ -113,6 +113,9 @@ button .icon { vertical-align: -3px; }
 .buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 .field-row { flex-wrap: wrap; gap: 6px; }
 .field-row > * + * { margin-left: 0; }
+.radio-row { display: flex; gap: 8px; align-items: baseline; margin: 4px 0; }
+.rule-line { margin: 4px 8px; display: flex; gap: 6px; align-items: center; }
+.lifetime { display: flex; gap: 4px; align-items: center; margin: 2px 0 6px; }
 .notice { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #ffffe1; border: 1px solid #000; color: #000; text-decoration: none; font-family: var(--content-font); font-size: 12px; }
 
 /* ---------- places tree */
@@ -173,6 +176,12 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .tag.rejected, .tag.status-closed, .tag.status-archived { background: #f6dada; border-color: #a33; }
 .tag.voting, .tag.status-in-progress, .tag.status-active { background: #e2e8ff; border-color: #3a5dff; }
 .agent-tag { margin-left: 4px; padding: 0 3px; background: var(--agent); color: #fff; font: bold 9px var(--content-font); text-transform: uppercase; vertical-align: 1px; }
+.name-badges { display: inline-flex; gap: 2px; margin-left: 4px; vertical-align: -3px; }
+.badge-mark { display: inline-block; border-radius: 3px; object-fit: cover; cursor: pointer; }
+.hub-badges { display: flex; flex-wrap: wrap; gap: 12px; }
+.hub-badge { display: flex; align-items: center; gap: 8px; min-width: 200px; }
+.badge-picture { display: block; margin: 4px auto 8px; border-radius: 8px; object-fit: cover; }
+.badge-mark-text { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* ---------- banners (project and community heads) */
 .banner {
@@ -520,17 +529,20 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 @media (max-width: 700px) {
   .mobile-only { display: flex !important; }
   .not-mobile, .menubar, .brand, .toolbar .tool-sep, .members, .status-bar, .app-window > .title-bar .title-bar-controls { display: none !important; }
-  .app-window > .title-bar { padding-top: calc(3px + env(safe-area-inset-top)); }
-  .app-window > .toolbar {
-    order: 10; justify-content: space-around; gap: 0; padding: 2px 0 calc(2px + env(safe-area-inset-bottom));
-    border-top: 1px solid #fff; border-bottom: none; box-shadow: 0 -1px #808080;
-  }
-  .tool { flex: 1; min-width: 0; min-height: 50px; padding: 2px; font-size: 11px; }
+  .app-window > .toolbar { border-top: 1px solid #fff; border-bottom: none; box-shadow: 0 -1px #808080; }
+  /* Every look styles its bars; on a phone these win (:root[data-skin] outweighs a look's own rules),
+     so the bars clear the notch or island and the home indicator, and each tab is an icon over its label. */
+  :root[data-skin] .app-window > .title-bar { padding-top: calc(3px + env(safe-area-inset-top)); }
+  :root[data-skin] .app-window > .toolbar { order: 10; justify-content: space-around; gap: 0; padding: 2px 0 calc(2px + env(safe-area-inset-bottom)); }
+  :root[data-skin] .app-window > .toolbar .tool { flex: 1 1 0; flex-direction: column; gap: 2px; min-width: 0; min-height: 50px; padding: 4px 2px; font-size: 11px; }
+  :root[data-skin] .app-window > .toolbar .tool .icon { width: 22px !important; height: 22px !important; }
   .tool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panes { padding: 2px 0; gap: 0; }
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
+  .project-sections { flex: none; gap: 2px; padding: 2px 4px; overflow-x: auto; }
+  .project-sections .tree-link { flex: none; }
   /* Fingers, not mouse pointers. */
   .tree-link { min-height: 36px; padding: 4px 6px; font-size: 14px; }
   .tree-head { font-size: 13px; padding: 6px; }
@@ -616,3 +628,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mention-when { display: block; color: #666; font-size: 11px; }
 .mention-note { font-family: var(--content-font); font-size: 12px; font-style: italic; margin-bottom: 4px; }
 .mentions-weave { align-self: flex-end; }
+/* New Weave version (update.tsx) */
+.update-prompt { max-width: 520px; }
+.update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }

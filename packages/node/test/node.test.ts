@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { ApiClient, loadConfig, resolveHome, saveConfig, startApi, startDaemon, WeaveNode, type Daemon, type FeedItem } from '../src/index.ts';
+import { ApiClient, loadConfig, resolveHome, saveConfig, startApi, startDaemon, WeaveNode, type Daemon, type FeedItem, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 function tempHome(): string {
@@ -11,7 +11,10 @@ function tempHome(): string {
   dirs.push(dir);
   return dir;
 }
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 async function until(condition: () => Promise<boolean> | boolean, timeoutMs = 20_000): Promise<void> {
   const start = Date.now();

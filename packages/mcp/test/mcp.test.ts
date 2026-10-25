@@ -1,3 +1,4 @@
+import { closeOpenStores } from '@weave/node';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +9,10 @@ import { WeaveNode } from '@weave/node';
 import { createWeaveMcp, sessionFromEnv } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 /** A node with a project and an agent, and an MCP client connected as that agent. */
 async function setup(permissions = ['weave.post', 'weave.reply', 'weave.msg', 'weave.issue.*']) {
@@ -68,7 +72,7 @@ describe('Weave over MCP', () => {
       ...node.githubSetup,
       fetch: (async (input: string | URL | Request) => {
         const path = new URL(String(input)).pathname;
-        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : { message: 'Not Found' };
+        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : path === '/repos/martl/weave' ? { full_name: 'martl/weave', owner: { type: 'Organization' } } : { message: 'Not Found' };
         return new Response(JSON.stringify(body), { status: 'message' in body ? 404 : 200 });
       }) as typeof fetch,
     };
@@ -298,5 +302,21 @@ describe('Weave over MCP', () => {
     expect(data.items[0].text).toBe('late arrival');
     expect(Date.now() - started).toBeLessThan(3000);
     close();
+  });
+
+  it('keeps company spaces an agent isn’t approved in out of its sight', async () => {
+    const { agentView } = await import('../src/index.ts');
+    const fake = {
+      agentBlocked: async () => [{ id: 'acme', name: 'Acme' }],
+      spaces: async () => [{ id: 'acme', kind: 'project', name: 'Acme' }, { id: 'open', kind: 'project', name: 'Open' }],
+      feed: async () => [{ id: '1', scope: 'project:acme' }, { id: '2', scope: 'project:open' }],
+      posts: async () => [],
+      post: async () => ({ id: 'p', space: { id: 'acme' } }),
+    } as unknown as import('@weave/node').Backend;
+    const seen = agentView(fake, 'helper');
+    expect((await seen.spaces()).map((s) => s.id)).toEqual(['open']);
+    expect((await seen.feed({})).map((i) => i.id)).toEqual(['2']);
+    await expect(seen.posts({ space: 'Acme' })).rejects.toThrow(/isn't approved/);
+    await expect(seen.post('p')).rejects.toThrow(/isn't approved/);
   });
 });

@@ -1,0 +1,11 @@
+# HTTPS for Weave Server (see docker-compose.yml). Caddy gets the certificate for WEAVE_DOMAIN.
+{$WEAVE_DOMAIN} {
+	# The company's user management (Entra ID, Okta, Google) provisions here.
+	handle /scim/v2* {
+		reverse_proxy weave:7720
+	}
+	# The admin console, its sign-in, and the page emailed invitations open.
+	handle {
+		reverse_proxy weave:7730
+	}
+}

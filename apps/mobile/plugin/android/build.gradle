@@ -1,0 +1,54 @@
+// The WeaveWorker plugin: bare-kit (libs/bare-kit, from fetch-bare-kit.ts) and
+// the worker's native addons (addons/, from bare-link in build.ts).
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace = "app.weave.worker"
+    compileSdk = project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
+    defaultConfig {
+        // bare-kit needs Android 10.
+        minSdkVersion 29
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
+    }
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['addons', 'libs/bare-kit/jni']
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    packagingOptions {
+        // Addons are loaded by file name from the app's native library folder.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+    api files('libs/bare-kit/classes.jar')
+}

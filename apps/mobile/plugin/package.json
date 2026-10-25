@@ -1,0 +1,15 @@
+{
+  "name": "@weave/capacitor-worker",
+  "version": "0.3.0",
+  "description": "Runs the Weave phone app's worker (Bare, via bare-kit) and carries its messages to the WebView.",
+  "license": "MIT",
+  "private": true,
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}

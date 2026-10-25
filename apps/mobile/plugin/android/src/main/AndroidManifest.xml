@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The worker connects to your computer over the internet (Hyperswarm's DHT, UDP). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

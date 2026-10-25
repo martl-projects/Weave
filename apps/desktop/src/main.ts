@@ -2,16 +2,17 @@ import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
-import { resolveHome, type Backend } from '@weave/node/client';
+import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { newSession, openSession, showSession, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
-import { createIdentity, ensureDaemon, hasIdentity, restoreIdentity, type RunningDaemon } from './daemon.ts';
+import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
 // --route <hash>       start on a view, e.g. "#/groups"
 // --screenshot <file>  render, save a PNG of the window and quit (for checks)
 // weave:post:…         open at that post (how the OS hands over a clicked link)
+// weave:project:…      open that project (also weave:group:…, weave:community:…)
 const { values } = parseArgs({
   args: process.argv.slice(app.isPackaged ? 1 : 2),
   strict: false,
@@ -26,9 +27,10 @@ let window: BrowserWindow | undefined;
 let watching = new AbortController();
 let quitting = false;
 
-// weave:post:… links: the OS starts the app with one (registered by the installer,
-// see `protocols` in package.ts), or hands it to the app that's already open.
-const LINK = /^weave:[a-z]+:[A-Za-z0-9_-]{1,200}$/;
+// weave:post:… and weave:project:… (group, community) links: the OS starts the app with one (registered by the installer,
+// see `protocols` in package.ts), or hands it to the app that's already open. A company's enrollment link
+// (weave:enroll:…, clicked in its invitation) is longer: it carries the company and its sign-in.
+const LINK = /^weave:[a-z]+:[A-Za-z0-9_-]{1,6000}$/;
 const linkIn = (argv: string[]) => argv.find((arg) => LINK.test(arg));
 let pendingLink = linkIn(process.argv);
 let loaded = false;
@@ -60,7 +62,7 @@ async function connect(): Promise<void> {
   watching.abort();
   watching = new AbortController();
   const signal = watching.signal;
-  daemon = await ensureDaemon(home);
+  daemon = await ensureDaemon(home, app.getVersion());
   daemon.client
     .watch((item) => {
       window?.webContents.send('weave:event', item);
@@ -86,7 +88,18 @@ async function connect(): Promise<void> {
 /** The daemon can't be reached: it was restarted on another port, or stopped. */
 const unreachable = (error: unknown) => /ECONNREFUSED|ECONNRESET|socket hang up/.test(String((error as Error)?.message ?? error) + String((error as { code?: string })?.code ?? ''));
 
-ipcMain.handle('weave:state', () => ({ home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined }));
+ipcMain.handle('weave:state', () => {
+  // A company's device management may name its enrollment link, or allow only company accounts here.
+  const managed = machinePolicy();
+  return { home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined, ...(managed.enroll ? { enrollLink: managed.enroll } : {}), ...(managed.companyOnly ? { companyOnly: true } : {}) };
+});
+
+ipcMain.handle('weave:enroll', async (_event, link: string) => {
+  if (hasIdentity(home)) throw new Error('this computer already has an identity');
+  const who = await enrollIdentity(home, link);
+  if (!daemon) await connect();
+  return who;
+});
 
 ipcMain.handle('weave:init', async (_event, name: string) => {
   const words = hasIdentity(home) ? undefined : await createIdentity(home, name);
@@ -390,8 +403,13 @@ app.on('before-quit', () => {
   quitting = true;
 });
 
-app.on('will-quit', () => {
+// The daemon this app started stops properly first (closing the node), then the app quits for real.
+let daemonStopped = false;
+app.on('will-quit', (event) => {
   quitting = true;
   watching.abort();
-  daemon?.child?.kill();
+  if (daemonStopped || !daemon?.child || daemon.child.exitCode !== null) return;
+  event.preventDefault();
+  daemonStopped = true;
+  void stopOwnDaemon(daemon).finally(() => app.quit());
 });

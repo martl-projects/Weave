@@ -134,6 +134,33 @@ export function markSeen(key: string, time: string): void {
 
 export const isUnread = (key: string, latest?: string): boolean => !!latest && latest > (readSeen()[key] ?? '');
 
+// ---------------------------------------------------------------- payments switched on (per viewer, in this browser only)
+
+const PAYMENTS_KEY = 'weave.payments';
+
+function readPayments(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(PAYMENTS_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+/** Whether you turned a project's payments (treasury, split, ticketed shows) on; re-renders when that changes. */
+export function usePaymentsSwitch(project: string): [boolean, (on: boolean) => void] {
+  useTick();
+  const set = (on: boolean) => {
+    const all = readPayments();
+    if (on) all[project] = true;
+    else delete all[project];
+    try {
+      localStorage.setItem(PAYMENTS_KEY, JSON.stringify(all));
+    } catch {}
+    bump();
+  };
+  return [!!readPayments()[project], set];
+}
+
 // ---------------------------------------------------------------- formatting
 
 /** Markdown reduced to plain text, for one-line previews. */
@@ -188,7 +215,19 @@ const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|wblob|weave):|[^a-z]|[a-z+.-]+(?
 
 /** A post link (weave:post:…) and the id it names. */
 export const POST_LINK = /weave:post:([A-Za-z0-9_-]+)/;
+
+/** A company's enrollment link that was clicked (stage 14): the first start's company screen picks it up. */
+export let openedEnrollLink: string | undefined;
+export function enrollLinkOpened(link: string): void {
+  openedEnrollLink = link;
+  window.dispatchEvent(new CustomEvent('weave-enroll-link', { detail: link }));
+}
 export const postLink = (id: string) => `weave:post:${id}`;
+
+/** A link to a project, group or community (weave:project:…), and where it opens in the app. */
+export const SPACE_LINK = /^weave:(project|group|community):([A-Za-z0-9_-]+)$/;
+export const spaceRoute = (kind: string, id: string) => `#/${({ project: 'p', group: 'g', community: 'r' } as Record<string, string>)[kind]}/${id}`;
+
 
 /**
  * A post's web address, http://weave.localhost:<any port>/project~id[/board/post[/title]]

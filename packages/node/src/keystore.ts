@@ -1,7 +1,8 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, createIdentity, createSubKey, didFromPublicKey, type Did, type SigningIdentity } from '@weave/core';
-import { readJson, writeJson, type Home } from './home.ts';
+import type { Home } from './home.ts';
+import { readSecretJson, writeSecretJson } from './vault.ts';
 
 interface StoredKey {
   author: Did;
@@ -32,13 +33,13 @@ function fromStored(stored: StoredKey): SigningIdentity {
 }
 
 export function loadIdentity(home: Home): SigningIdentity | undefined {
-  const stored = readJson<StoredKey>(home.identity);
+  const stored = readSecretJson<StoredKey>(home, home.identity);
   return stored && fromStored(stored);
 }
 
 /** Save this device's key (it acts for `identity.author`). Replaces the previous one. */
 export function saveDevice(home: Home, identity: SigningIdentity): void {
-  writeJson(home.identity, toStored(identity));
+  writeSecretJson(home, home.identity, toStored(identity));
 }
 
 export interface EncryptionKey {
@@ -48,18 +49,18 @@ export interface EncryptionKey {
 
 /** The person's encryption keys held on this device, oldest first; empty for homes from before they existed. */
 export function loadEncryptionKeys(home: Home): EncryptionKey[] {
-  const stored = readJson<Array<{ did: Did; publicKey: string; secretKey: string }>>(home.encryption) ?? [];
+  const stored = readSecretJson<Array<{ did: Did; publicKey: string; secretKey: string }>>(home, home.encryption) ?? [];
   return stored.map((s) => ({ did: s.did, keys: { publicKey: b64u.decode(s.publicKey), secretKey: b64u.decode(s.secretKey) } }));
 }
 
 export function saveEncryptionKeys(home: Home, keys: EncryptionKey[]): void {
-  writeJson(home.encryption, keys.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })));
+  writeSecretJson(home, home.encryption, keys.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })));
 }
 
 export function createAndSaveIdentity(home: Home): SigningIdentity {
   if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
   const identity = createIdentity();
-  writeJson(home.identity, toStored(identity));
+  writeSecretJson(home, home.identity, toStored(identity));
   return identity;
 }
 
@@ -69,13 +70,13 @@ export function createAndSaveAgent(home: Home, author: Did, name: string, permis
   if (!AGENT_NAME.test(name)) throw new Error('agent names use lowercase letters, digits and dashes');
   if (loadAgents(home).some((a) => a.name === name)) throw new Error(`agent "${name}" already exists`);
   const key = createSubKey(author);
-  writeJson(join(home.agents, `${name}.json`), toStored(key, { name, permissions }));
+  writeSecretJson(home, join(home.agents, `${name}.json`), toStored(key, { name, permissions }));
   return { ...key, name, permissions };
 }
 
 /** Save an agent key again (after its permissions changed). */
 export function saveAgent(home: Home, agent: AgentKey): void {
-  writeJson(join(home.agents, `${agent.name}.json`), toStored(agent, { name: agent.name, permissions: agent.permissions }));
+  writeSecretJson(home, join(home.agents, `${agent.name}.json`), toStored(agent, { name: agent.name, permissions: agent.permissions }));
 }
 
 export function loadAgents(home: Home): AgentKey[] {
@@ -86,7 +87,7 @@ export function loadAgents(home: Home): AgentKey[] {
     return [];
   }
   return files.map((file) => {
-    const stored = readJson<StoredKey>(join(home.agents, file))!;
+    const stored = readSecretJson<StoredKey>(home, join(home.agents, file))!;
     return { ...fromStored(stored), name: stored.name ?? file.replace(/\.json$/, ''), permissions: stored.permissions ?? [] };
   });
 }

@@ -96,7 +96,7 @@ Linking to posts: every post has a url (http://weave.localhost:7710/project~id/b
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
-3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back.
+3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back. Only repositories of a GitHub organization can be linked: a personal account's repositories can't give read-only access. If the repository belongs to your person, tell them to move it to an organization (free; the repository's Settings → Transfer on GitHub), install the GitHub App there, and link it again.
 
 A project's app, installed by hosts with one click (prefer this to asking hosts to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
@@ -113,13 +113,62 @@ Releases: weave_app_releases lists the repository's releases and how many files 
 Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
 /**
+ * The node as an agent sees it: company spaces it isn't approved in (stage 9)
+ * stay out of everything it reads, and tools aimed at them are refused.
+ */
+export function agentView(backend: Backend, as: string): Backend {
+  let blocked: { at: number; list: Array<{ id: string; name: string }> } | undefined;
+  const blockedNow = async () => {
+    if (!blocked || Date.now() - blocked.at > 5000) blocked = { at: Date.now(), list: await backend.agentBlocked(as).catch(() => []) };
+    return blocked.list;
+  };
+  type Shape = { space?: { id?: string }; scope?: unknown; kind?: unknown; id?: unknown };
+  const spaceOf = (x: unknown): string | undefined => {
+    const v = x as Shape | null;
+    if (!v || typeof v !== 'object') return undefined;
+    if (typeof v.space?.id === 'string') return v.space.id;
+    if (typeof v.scope === 'string' && v.scope.includes(':')) return v.scope.slice(v.scope.indexOf(':') + 1);
+    if ((v.kind === 'project' || v.kind === 'group' || v.kind === 'community') && typeof v.id === 'string') return v.id;
+    return undefined;
+  };
+  const hidden = (list: Array<{ id: string }>, x: unknown) => list.some((b) => b.id === spaceOf(x));
+  const aimed = (list: Array<{ id: string; name: string }>, v: unknown) => typeof v === 'string' && list.some((b) => b.id === v || b.name === v);
+  const refuse = () => {
+    throw new Error(`agent "${as}" isn't approved in that company space: those who manage it can approve it`);
+  };
+  return new Proxy(backend, {
+    get(target, prop) {
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+      if (typeof value !== 'function') return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      if (prop === 'agentBlocked' || prop === 'whoami') return fn.bind(target);
+      if (prop === 'watch')
+        return (onItem: (item: FeedItem) => void, signal: AbortSignal) =>
+          fn.call(target, (item: FeedItem) => void blockedNow().then((list) => !hidden(list, item) && onItem(item)), signal);
+      return async (...args: unknown[]) => {
+        const list = await blockedNow();
+        for (const a of args) {
+          if (aimed(list, a)) refuse();
+          if (a && typeof a === 'object') for (const k of ['space', 'project', 'community', 'group']) if (aimed(list, (a as Record<string, unknown>)[k])) refuse();
+        }
+        const out = await fn.apply(target, args);
+        if (Array.isArray(out)) return out.filter((x) => !hidden(list, x));
+        if (hidden(list, out)) refuse();
+        return out;
+      };
+    },
+  });
+}
+
+/**
  * An MCP server that lets an agent harness take part in Weave: read projects and groups,
  * discussions, chat, issues and votes, write into them, and pick up what's new
  * through an inbox. It talks to a node through the Backend interface, so it
  * works against a running daemon or a node opened directly.
  */
-export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) {
+export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   const as = options.as;
+  const backend = as ? agentView(node, as) : node;
   const server = new McpServer({ name: 'weave', version: VERSION }, { instructions: INSTRUCTIONS });
 
   // ---------------------------------------------------------------- inbox
@@ -471,6 +520,20 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
   );
 
   server.registerTool(
+    'weave_delete_message',
+    {
+      title: 'Delete a chat message',
+      description: 'Take down your own chat message, or one in a space you maintain or moderate. It disappears for everyone but stays in the logs.',
+      inputSchema: { message: z.string().min(6) },
+      annotations: { destructiveHint: true },
+    },
+    run(async ({ message }: { message: string }) => {
+      await backend.deleteMessage({ message, as });
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
     'weave_react',
     {
       title: 'React with an emoji',
@@ -764,7 +827,7 @@ export function createWeaveMcp(backend: Backend, options: WeaveMcpOptions = {}) 
     {
       title: 'Link a repository',
       description:
-        'Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). Members who give the space their GitHub account get read access. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository.',
+        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). Members who give the space their GitHub account get read access. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository, which must belong to a GitHub organization (a personal account's repositories can't give read-only access).",
       inputSchema: { space: z.string(), repo: z.string().describe('owner/name or its github.com link'), board: z.string().optional().describe('In a project: only the readers of this board'), on: z.boolean().default(true) },
     },
     run(async ({ space, repo, board, on }: { space: string; repo: string; board?: string; on: boolean }) => backend.linkRepo({ space, repo, board, on, as })),

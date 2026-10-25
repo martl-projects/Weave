@@ -1,6 +1,7 @@
 import type { Json } from './bytes.ts';
 import { boxTo, openBox, type Box } from './crypto.ts';
-import type { EventFields, WeaveEvent } from './events.ts';
+import type { EventFields } from './events.ts';
+import type { EventView } from './records.ts';
 import { isDid, type Did, type KeyPair } from './keys.ts';
 
 /*
@@ -8,10 +9,13 @@ import { isDid, type Did, type KeyPair } from './keys.ts';
  * creator founded, so its members get the group's chat and every project the
  * group is invited into. Memberships buy access, never votes.
  *
- *   weave.tier                  {tier, name, price, currency, description, benefits, position, open, auto, gumroad}
+ *   weave.tier                  {tier, name, price, currency, description, benefits, position, open, auto, gumroad, onchain}
  *                               public, by the creator: the offer, shown on their hub; gumroad: the Gumroad
- *                               product that sells it ({product, url, variant}), see node/gumroad.ts
- *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry, license}
+ *                               product that sells it ({product, url, variant}), see node/gumroad.ts;
+ *                               onchain: paid with a token on chain ({chain, token, symbol, decimals, to, amount}),
+ *                               amount per month in the token's smallest unit, to a wallet or treasury
+ *   weave.membership.request    {box}   public, boxed to the creator: {tier, note, entry, license, payment}
+ *                               payment: the hash of the transaction that paid an onchain tier
  *                               license: the supporter's Gumroad license key, for tiers sold there
  *   weave.membership.license    {tier, member, license, ok, reason, checked}   sealed to the creator: the
  *                               license key behind a membership and its last check, for renewing it
@@ -61,6 +65,35 @@ export function parseGumroadLink(value: unknown): GumroadLink | undefined {
   return { product, url, ...(variant ? { variant } : {}) };
 }
 
+/** A tier paid on chain: how much of which token, per month, to which address (a wallet or a treasury). */
+export interface OnchainPrice {
+  /** The chain id (EIP-155). */
+  chain: number;
+  /** The token contract (ERC-20). */
+  token: string;
+  symbol: string;
+  decimals: number;
+  /** Where payments go. */
+  to: string;
+  /** Per month, in the token's smallest unit. */
+  amount: number;
+}
+
+const HEX_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+/** An onchain price from untrusted input, or undefined. */
+export function parseOnchainPrice(value: unknown): OnchainPrice | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  const chain = Number(v.chain);
+  const decimals = Number(v.decimals);
+  const amount = Number(v.amount);
+  if (!Number.isSafeInteger(chain) || chain < 1 || !Number.isInteger(decimals) || decimals < 0 || decimals > 36 || !Number.isSafeInteger(amount) || amount < 1) return undefined;
+  if (typeof v.token !== 'string' || !HEX_ADDRESS.test(v.token) || typeof v.to !== 'string' || !HEX_ADDRESS.test(v.to)) return undefined;
+  const symbol = typeof v.symbol === 'string' ? v.symbol.trim().slice(0, 12) : '';
+  return { chain, token: v.token, symbol: symbol || 'tokens', decimals, to: v.to, amount };
+}
+
 export interface Tier {
   /** The tier's group id. */
   id: string;
@@ -78,13 +111,15 @@ export interface Tier {
   auto: boolean;
   /** Sold through Gumroad: supporters buy there and send their license key. */
   gumroad?: GumroadLink;
+  /** Paid on chain: supporters pay, then send the transaction's hash. */
+  onchain?: OnchainPrice;
   time: string;
 }
 
 const str = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
 
 /** A creator's tiers from their public tier events, the latest per tier winning; withdrawn ones (open: false and hidden) are dropped. */
-export function tiersOf(events: WeaveEvent[]): Tier[] {
+export function tiersOf(events: EventView[]): Tier[] {
   const latest = new Map<string, Tier & { hidden: boolean }>();
   for (const event of events) {
     if (event.kind !== KIND_TIER) continue;
@@ -94,6 +129,7 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
     if (!id || !name) continue;
     const price = Number(body.price);
     const gumroad = parseGumroadLink(body.gumroad);
+    const onchain = parseOnchainPrice(body.onchain);
     latest.set(id, {
       id,
       creator: event.author,
@@ -106,6 +142,7 @@ export function tiersOf(events: WeaveEvent[]): Tier[] {
       open: body.open !== false,
       auto: body.auto === true,
       ...(gumroad ? { gumroad } : {}),
+      ...(onchain ? { onchain } : {}),
       hidden: body.hidden === true,
       time: event.time,
     });
@@ -121,6 +158,8 @@ export interface MembershipRequest {
   note: string;
   /** A Gumroad license key, for tiers sold there. */
   license?: string;
+  /** The hash of the transaction that paid an onchain tier. */
+  payment?: string;
   /** Where the supporter's node can be reached. */
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
 }
@@ -131,14 +170,15 @@ export function membershipRequest(creatorEncryptionKey: Did, request: Membership
 }
 
 /** If a request event is addressed to `me`, what it asks for. */
-export function openMembershipRequest(event: WeaveEvent, me: { keys: KeyPair }): MembershipRequest | undefined {
+export function openMembershipRequest(event: EventView, me: { keys: KeyPair }): MembershipRequest | undefined {
   const box = (event.body as { box?: Box } | null)?.box;
   if (event.kind !== KIND_MEMBERSHIP_REQUEST || !box) return undefined;
   try {
     const opened = openBox(me.keys.secretKey, me.keys.publicKey, box) as unknown as MembershipRequest;
     if (typeof opened?.tier !== 'string') return undefined;
     const license = str(opened.license, 100).trim();
-    return { tier: opened.tier, note: str(opened.note, 500), entry: opened.entry ?? { topics: [], bootstrap: [] }, ...(license ? { license } : {}) };
+    const payment = str(opened.payment, 66).trim();
+    return { tier: opened.tier, note: str(opened.note, 500), entry: opened.entry ?? { topics: [], bootstrap: [] }, ...(license ? { license } : {}), ...(/^0x[0-9a-fA-F]{64}$/.test(payment) ? { payment: payment.toLowerCase() } : {}) };
   } catch {
     return undefined;
   }

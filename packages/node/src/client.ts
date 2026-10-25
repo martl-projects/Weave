@@ -6,6 +6,11 @@ export interface DaemonInfo {
   pid: number;
   port: number;
   token: string;
+  /** Its Weave version, and whether it runs a release build or the source (development). Missing on daemons from before. */
+  version?: string;
+  build?: 'release' | 'dev';
+  /** Started by the app (it may stop and replace it) or by hand (weave daemon: left alone). */
+  startedBy?: 'app' | 'cli';
 }
 
 // Every Backend method is available on an ApiClient (provided by the proxy below).
@@ -60,6 +65,12 @@ export class ApiClient {
       req.on('error', reject);
       req.end(payload);
     });
+  }
+
+  /** Ask the daemon to stop: it closes the node properly (unpublished keys, the database) and exits. */
+  async stop(): Promise<void> {
+    const res = await fetch(`${this.base}/stop`, { method: 'POST', headers: { authorization: `Bearer ${this.#token}` } });
+    if (!res.ok) throw new Error(res.status === 404 ? 'this daemon is too old to stop on request' : `stop failed: ${res.status}`);
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
@@ -160,4 +171,42 @@ export async function connectDaemon(home: Home): Promise<ApiClient | undefined> 
   } catch {
     return undefined; // stale daemon.json from a daemon that is gone
   }
+}
+
+/** What daemon.json says about this home's daemon (it may be gone; connectDaemon checks). */
+export function daemonInfo(home: Home): DaemonInfo | undefined {
+  return readJson<DaemonInfo>(home.daemon);
+}
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/**
+ * Stop this home's daemon properly and wait until it's gone. A daemon that doesn't answer in time (or is too old
+ * to stop on request) is ended hard with `force`; otherwise that's an error. Resolves to whether one was running.
+ */
+export async function stopDaemon(home: Home, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
+  const info = daemonInfo(home);
+  const client = await connectDaemon(home);
+  if (!info || !client) return false;
+  let asked = true;
+  try {
+    await client.stop();
+  } catch (error) {
+    if (!options.force) throw error;
+    asked = false;
+  }
+  const until = Date.now() + (options.timeoutMs ?? 15_000);
+  while (asked && alive(info.pid) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 100));
+  if (alive(info.pid)) {
+    if (!options.force) throw new Error(`the daemon (pid ${info.pid}) didn't stop within ${Math.round((options.timeoutMs ?? 15_000) / 1000)} s`);
+    process.kill(info.pid);
+  }
+  return true;
 }

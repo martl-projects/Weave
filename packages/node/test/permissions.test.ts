@@ -2,10 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { WeaveNode, type FeedItem } from '../src/index.ts';
+import { WeaveNode, type FeedItem, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 describe("an agent asking for a permission", () => {
   it('reaches its person as a notice (a notification when Weave is in the background), and survives a restart', async () => {

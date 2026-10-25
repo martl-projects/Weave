@@ -1,5 +1,6 @@
 // Packages the desktop app into installers for this platform (unsigned for
-// now): an NSIS setup .exe on Windows, a .dmg on macOS, an AppImage on Linux.
+// now): an NSIS setup .exe and an MSI (per machine, for IT) on Windows, a .dmg
+// and a .pkg on macOS, an AppImage on Linux.
 //
 //   npm run package                 installers in apps/desktop/release/
 //   npm run package -- --dir        just the unpacked app, for a quick look
@@ -14,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { build as bundle } from 'esbuild';
-import { build, type Configuration } from 'electron-builder';
+import { Arch, build, type Configuration } from 'electron-builder';
 
 const root = join(import.meta.dirname, '..', '..');
 const pkg = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
@@ -52,6 +53,9 @@ const dependencies = Object.fromEntries(NATIVE.map((name) => [name, pkg(join(roo
 writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon', private: true, type: 'module', dependencies }, null, 2));
 execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
+// The admin console a company's node serves (packages/node/src/console.ts looks for it next to the daemon).
+execFileSync(process.execPath, [join(root, 'apps', 'console', 'build.ts')], { stdio: 'inherit' });
+cpSync(join(root, 'apps', 'console', 'dist'), 'pack/daemon/console', { recursive: true });
 
 // --- the `weave` command: small scripts in resources/bin that run the bundled
 // CLI with the app's own Node. The Windows installer puts that folder on the
@@ -93,10 +97,12 @@ const config: Configuration = {
   electronVersion: pkg(join(root, 'node_modules', 'electron')).version,
   directories: { app: 'pack/app', output: 'release' },
   // Copied by hand: extraResources would leave out the daemon's node_modules.
-  afterPack: async ({ appOutDir, electronPlatformName, packager }) => {
+  afterPack: async ({ appOutDir, electronPlatformName, packager, arch }) => {
     const mac = electronPlatformName === 'darwin';
     const resources = mac ? join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources') : join(appOutDir, 'resources');
     cpSync('pack/daemon', join(resources, 'daemon'), { recursive: true });
+    // The Secure Enclave helper (stage 17): keeps the home key's key inside the Mac's Secure Enclave, if the person chooses it.
+    if (mac) execFileSync('swiftc', ['-O', '-target', `${arch === Arch.arm64 ? 'arm64' : 'x86_64'}-apple-macos11`, 'native/weave-se.swift', '-o', join(resources, 'weave-se')], { stdio: 'inherit' });
     // The app's executable, seen from resources/bin.
     const exe = mac ? `../../MacOS/${packager.appInfo.productFilename}` : electronPlatformName === 'win32' ? `../../${packager.appInfo.productFilename}.exe` : `../../${(packager as unknown as { executableName: string }).executableName}`;
     writeShims(join(resources, 'bin'), exe, electronPlatformName === 'win32');
@@ -105,18 +111,33 @@ const config: Configuration = {
   artifactName: 'Weave-${version}-${os}-${arch}.${ext}',
   nativeModules: { npmRebuild: false },
   publish: null,
-  win: { target: [{ target: 'nsis', arch: ['x64'] }] },
+  // nsis: per person, with the weave command on PATH. msi: per machine, for IT to push silently (msiexec /i … /qn).
+  win: { target: [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }] },
+  msi: { perMachine: true, oneClick: true, runAfterFinish: false },
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
   mac: {
-    target: [{ target: 'dmg', arch: ['arm64', 'x64'] }],
+    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune). For installers
+    // they're built one architecture at a time (below): two pkg builds at once share a temporary
+    // org.weave.desktop.pkg in release/, and two hdiutil runs at once fail with "Resource busy".
+    target: [
+      { target: 'dmg', arch: ['arm64', 'x64'] },
+      { target: 'pkg', arch: ['arm64', 'x64'] },
+    ],
     category: 'public.app-category.social-networking',
     // Ad-hoc signed until there is an Apple Developer ID: Apple silicon refuses to run unsigned apps at all.
     sign: { identity: '-', hardenedRuntime: false },
   },
+  pkg: { installLocation: '/Applications', isRelocatable: false },
   linux: { target: [{ target: 'AppImage', arch: ['x64'] }], category: 'Network' },
   // weave:post:… links open the app at that post (see src/main.ts).
   protocols: [{ name: 'Weave link', schemes: ['weave'] }],
 };
-await build({ config, dir: process.argv.includes('--dir') });
+// We publish ourselves (the release workflow attaches the installers): electron-builder 27 wants that said
+// explicitly, and on a CI tag it crashes without it.
+const dir = process.argv.includes('--dir');
+if (process.platform === 'darwin' && !dir) {
+  for (const arch of ['arm64', 'x64'] as const)
+    await build({ config: { ...config, mac: { ...config.mac, target: [{ target: 'dmg', arch: [arch] }, { target: 'pkg', arch: [arch] }] } }, publish: 'never' });
+} else await build({ config, publish: 'never', dir });
 console.log('installers in apps/desktop/release/');

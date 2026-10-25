@@ -2,11 +2,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { recoveryRoot, signEvent } from '@weave/core';
-import { WeaveNode } from '../src/index.ts';
+import { recoveryRoot, signContentEventV2, signEvent } from '@weave/core';
+import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), 'weave-keys-'));
   dirs.push(dir);
@@ -14,7 +17,7 @@ const tempDir = () => {
 };
 
 const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
-const allEvents = (node: WeaveNode) => node.replica.store.signers().flatMap((s) => node.replica.store.range(s, 1));
+const allEvents = (node: WeaveNode) => node.replica.events();
 
 describe('identities with a recovery kit', () => {
   it('creates an identity whose root keys never touch the disk', async () => {
@@ -80,6 +83,34 @@ describe('identities with a recovery kit', () => {
     expect((await node.social()).muted).toHaveLength(1);
   });
 
+  it('keeps a direct chat, its history and its id when either side rotates the encryption key', async () => {
+    const { node: martin, words } = WeaveNode.create('Martin', tempDir());
+    const lena = WeaveNode.init('Lena', tempDir());
+    sync(martin, lena);
+    sync(lena, martin);
+    await martin.setEdge({ edge: 'follow', who: 'Lena', on: true });
+    await lena.setEdge({ edge: 'follow', who: 'Martin', on: true });
+    sync(martin, lena);
+    sync(lena, martin);
+    const chat = await martin.openChat('Lena');
+    await martin.say({ space: chat.id, text: 'before' });
+    sync(martin, lena);
+
+    await martin.rotateRoot({ words, encryption: true });
+    sync(martin, lena);
+    // The same chat on both sides, sealed with the new pair of keys from now on.
+    expect((await martin.openChat('Lena')).id).toBe(chat.id);
+    expect((await lena.openChat('Martin')).id).toBe(chat.id);
+    await lena.say({ space: chat.id, text: 'after, from Lena' });
+    await martin.say({ space: chat.id, text: 'after, from Martin' });
+    sync(lena, martin);
+    sync(martin, lena);
+    const texts = async (node: WeaveNode) => (await node.feed({ space: chat.id, kinds: ['weave.msg'] })).map((i) => (i.body as { text: string }).text).sort();
+    expect(await texts(martin)).toEqual(['after, from Lena', 'after, from Martin', 'before']);
+    expect(await texts(lena)).toEqual(['after, from Lena', 'after, from Martin', 'before']);
+    expect((await martin.chats()).length).toBe(1);
+  });
+
   it('revokes agents from the device, devices with the words, and gives a revoked own device a fresh key', async () => {
     const { node, words } = WeaveNode.create('Martin', tempDir());
     await node.addAgent('forge', ['weave.msg']);
@@ -102,10 +133,9 @@ describe('identities with a recovery kit', () => {
 
   it('raises the alarm when one of my keys signs two different events at the same place', async () => {
     const { node } = WeaveNode.create('Martin', tempDir());
-    const head = node.replica.store.head(node.identity.did)!;
-    const before = node.replica.store.range(node.identity.did, head.seq - 1, head.seq - 1)[0] ?? undefined;
-    const copy = signEvent(node.identity, before, { kind: 'weave.post', body: { text: 'from a copied home' } });
-    expect(node.replica.ingest(copy)).toMatchObject({ status: 'rejected', reason: 'conflicting event (fork)' });
+    // A copy of this home signs its next event with a number this one already used.
+    const copy = signContentEventV2(node.identity, { n: node.replica.number(node.identity.did), kind: 'weave.post', body: { text: 'from a copied home' } });
+    expect(node.replica.ingest({ e: copy.event, b: copy.body })).toMatchObject({ status: 'rejected', reason: 'conflicting event (fork)' });
     expect((await node.identityInfo()).forks).toEqual([node.identity.did]);
     expect((await node.keys())[0].forked).toBe(true);
   });

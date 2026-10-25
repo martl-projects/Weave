@@ -2,6 +2,197 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.4 · 2026-10-25
+
+- Give up stalled phone connections after 4 s and try again
+- Notice periods count from when a node first saw the change
+- Votes, badges and invites: decide by number where a date is only a claim
+- Company policy: hold accounts to it by number, not by claimed time
+- Backdating: cut removed members off by number, settle concurrent rekeys
+- Show badges on the hub, and tell people when they get one
+- A wallet section in Keys & devices; smart wallets (EIP-1271)
+
+## v0.19.3 · 2026-10-25
+
+- Run the phone worker's test on its own in CI, with time limits
+- Let the phone room test reload when the way to the room isn't up yet
+- Let the phone room test ask again when the test network is slow
+- Pay from a wallet without copying anything; tiers open live rooms; shows in Live
+- Changing wallets: retire old addresses, keep Safes' owners, move what's left
+- Sign Safe transactions together in Weave; ticketed rooms; shows and USDC tiers in the app
+- Ticketed shows: entry paid into the show's own Safe, paid out or back after
+- Treasuries: project wallets, splits and paid group access on chain
+- Connect Gumroad in the browser instead of pasting an access token
+- Make the Gumroad product from the tier dialog too
+- Count a badge series for a project only while its issuer maintains it
+- Badges: lasting, verifiable recognition from a project
+
+## v0.19.2 · 2026-10-25
+
+- Bring the lockfile in line with the phone app's dependencies
+- Show a badge's picture large in its card
+- Give badges a personal note the holder may publish
+- Let authors and maintainers delete chat messages
+- Say why the phone app asks for local network access
+- Phone app: bars clear the island and home bar, tabs show icon over label
+- Show a project's Live and boards at the top of its pages on phones
+- Play in a room from the phone app, through the computer
+
+## v0.19.1 · 2026-10-24
+
+- Let Bare run on Linux and macOS: set the execute bit npm leaves off
+
+## v0.19.0 · 2026-10-24
+
+- Let the phone worker test wait for the reconnect after a restart
+- Badges: lasting, verifiable recognition from a project
+- Let phones call only an allow list of methods
+- Pack the phone worker from the repository root so it finds hoisted modules
+- Add the companion phone app
+
+## v0.18.1 · 2026-10-24
+
+- Fix the container test on Linux: tell the Docker stand-in the app's port
+
+## v0.18.0 · 2026-10-24
+
+- Always-on nodes: a server, NAS or cluster that keeps your spaces and hosts your rooms
+- Apps from a container image, and X-Weave-Person for who is who
+- Link only repositories of a GitHub organization
+
+## v0.17.2 · 2026-10-24
+
+- Stop and restart the daemon properly; replace an outdated one only between release builds
+- Say who sees your GitHub name before you give it to a space
+
+## v0.17.1 · 2026-10-23
+
+- Add a dark mode to the Clean look
+- Make Clean the default look
+
+## v0.17.0 · 2026-10-23
+
+- Stage 17: keys held in hardware (TPM, Secure Enclave, YubiKey)
+- Stage 16: AWS KMS and Google Cloud KMS as key services
+- Stage 15: console roles, approving agents, device status, audit search, retention per project
+- Undo the whole-file reformatting in the stage 14 commit
+- Stage 14: Azure delegated access, the server's home key in the key service, backups and standby, invitations
+
+## v0.16.1 · 2026-10-22
+
+- Build the macOS installers one architecture at a time
+
+## v0.16.0 · 2026-10-22
+
+- Fixes from running the company flow end to end, and the demo that runs it
+- v2 stage 13: sign in with a company account in the app; Weave Server; Azure for the company node
+
+## v0.15.1 · 2026-10-22
+
+- Fix the macOS pkg build; the app's own icons in the admin console
+- Give the admin console Weave's look: the woven logo, pixel icons, avatars, light and dark
+
+## v0.15.0 · 2026-10-22
+
+- Say projects and groups in the admin console, and open them in Weave
+- v2 stage 12: SCIM, device checks, managed settings, IT installers, audit streams, admin console
+- Give the company tests two minutes: slow CI runners timed out
+
+## v0.14.0 · 2026-10-22
+
+- v2 stage 11: company policy and retention minimums
+
+## v0.13.0 · 2026-10-22
+
+- v2 stage 10: company accounts
+
+## v0.12.0 · 2026-10-22
+
+- v2 stage 9.4: Azure Key Vault as a key provider
+- v2 stage 9.3: audit export; company commands
+- v2 stage 9.2: recovery words kept by the company
+- v2 stage 9.1: approved agents in company spaces
+
+## v0.11.0 · 2026-10-22
+
+- v2 stage 8: abuse budgets (part 1): a fair share, and a rate budget
+
+## v0.10.0 · 2026-10-22
+
+- v2 stage 7: range-based set reconciliation (Negentropy-style)
+
+## v0.9.0 · 2026-10-22
+
+- v2 stage 6.4: legal hold and archive nodes; company commands
+- v2 stage 6.3: company sign-in (SSO) and offboarding
+- v2 stage 6.2: managed spaces with split keys
+- v2 stage 6.1: key providers (local, Vault Transit)
+
+## v0.8.0 · 2026-10-22
+
+- v2 stage 5: keepers
+
+## v0.7.0 · 2026-10-21
+
+- v2 stage 4.3: held by, and load older, in the app
+- v2 stage 4.1-4.2: content held by members in big spaces
+- v2 stage 4: design
+
+## v0.6.0 · 2026-10-21
+
+- v2 stage 3.4: shredding, with carry-forward
+- v2 stage 3.3: how long things stay, shown
+- v2 stage 3.1-3.2: board rules, lifetimes, and forgetting
+- v2 stage 3: design
+
+## v0.5.1 · 2026-10-21
+
+- Desktop: what newcomers read, and where keys are kept
+
+## v0.5.0 · 2026-10-21
+
+- v2 stage 2.4: keys at rest
+- v2 stage 2.3: what newcomers read, set per space
+- v2 stage 2.2: close the grace key
+- v2 stage 2.1: direct chats keep their id and history when an encryption key rotates
+- v2 stage 2: design
+
+## v0.4.0 · 2026-10-21
+
+- v2 stage 1.7: end to end over a testnet, and notes on what was built
+- v2 stage 1.6: moving a home to v0.4
+- v2 stage 1.5: meeting points move with a space's key
+- v2 stage 1.4: members-only sync (PeerSession2)
+- v2 stage 1.3: the node writes v2 and reads records of both versions
+- v2 stage 1.1-1.2: v2 events in the store and replica, records of both versions
+- v2 stage 1: design
+- v2 stage 0.6: benchmark, and two fixes it found
+- v2 stage 0.5: keep each person's own events instead of scanning every log
+- v2 stage 0.4: cache each space's state and entries, and whole-scan results
+- v2 stage 0.3: decode each new event once instead of everything again
+- v2 stage 0.2: keep events in SQLite (node:sqlite), with import and export
+- v2 stage 0.1: the v2 event format in core, with its design
+
+## v0.3.2 · 2026-10-21
+
+- Make weave decline <tier> <who> reachable again
+- Show issues and proposals in the board they were filed on
+- Build installers on release tags again: tell electron-builder 27 we publish ourselves
+
+## v0.3.1 · 2026-10-21
+
+- Ask to update when a newer Weave is out
+- Refuse over-long posts instead of cutting them silently, and count characters
+- Show Memberships in the app's look, not in default hub colors
+- Add a Clean look: corporate, efficient, minimal
+- Drop the Arcade look's mouse glow and falling blocks
+- Add an Arcade look: a CRT cabinet with a rippling Tetris well
+- Let apps ask hosts for settings like an API key, kept on the host's computer
+- Let apps ask Weave who their players are: the app API and @weave/sdk
+- Tell joiners when the host's app isn't running, instead of a blank window
+- Move to electron-builder 27, which drops the deprecated libraries
+- Use Weave's own title bar, with working window buttons
+
 ## v0.3.0 · 2026-10-20
 
 - Bring the weave command along with the installed app

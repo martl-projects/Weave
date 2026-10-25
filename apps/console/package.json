@@ -1,0 +1,23 @@
+{
+  "name": "@weave/console",
+  "version": "0.19.4",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "The admin console for a company's Weave: served by the company's node, for its admins.",
+  "scripts": {
+    "build": "node build.ts",
+    "dev": "node build.ts && node dev.ts"
+  },
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "pixelarticons": "^2.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2"
+  }
+}

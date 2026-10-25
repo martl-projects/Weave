@@ -9,9 +9,11 @@ import { MyProjects } from './hubprojects.tsx';
 import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
-import { boardIcon, copy, PostHeader, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
+import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
+import { PaymentsSettings } from './treasury.tsx';
+import { HubBadges } from './badges.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -158,6 +160,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
             </div>
           )}
         </header>
+        <HubBadges did={p.did} me={p.me} name={name} />
         <SupportBox did={p.did} name={name} me={p.me} />
         {p.me && <MyProjects name={name} />}
         {!p.me && p.projects.length > 0 && (
@@ -370,9 +373,13 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
+  const { data: fading } = useApi(() => api<PostInfo[]>('fading').catch(() => []), []);
   return (
     <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && fading?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+      {(fading ?? []).map((p) => (
+        <FadingCard key={p.id} post={p} />
+      ))}
       {(asks ?? []).map((r) => (
         <PermissionCard key={r.id} request={r} />
       ))}
@@ -389,6 +396,28 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
         <AdmissionCard key={`${a.project.id}-${a.did}-${a.group.id}-${a.change}`} admission={a} />
       ))}
     </Page>
+  );
+}
+
+/** A post of yours that others will forget soon, by the rule of its board. */
+export function FadingCard({ post }: { post: PostInfo }) {
+  return (
+    <div className="admission window">
+      <div className="window-body">
+        <Icon name="clock" />
+        <div className="grow">
+          <a href={`#/post/${post.id}`}>“{post.title}”</a>
+          {post.space && <span className="small muted"> in {post.space.name}</span>}
+          <div className="small muted">{post.lifetime ? lifetimeText(post.lifetime) : ''} Keep it, and its time starts again; maintainers and moderators can also pin it to keep it for good.</div>
+        </div>
+        <a className="button" href={`#/post/${post.id}`}>
+          Open
+        </a>
+        <AsyncButton className="default" onClick={() => attempt(() => api('keepPost', post.id).then(bump), `Kept “${post.title}”`)}>
+          Keep
+        </AsyncButton>
+      </div>
+    </div>
   );
 }
 
@@ -729,9 +758,64 @@ function BoardAccessDialog({ project, board, onClose }: { project: SpaceInfo; bo
   );
 }
 
+/** How long a board's posts stay: days after their last activity, and a size limit; empty for no limit. */
+export function BoardRuleDialog({ space, board, onClose }: { space: SpaceInfo; board: BoardInfo; onClose(): void }) {
+  const [days, setDays] = useState(board.rule?.keepDays ? String(board.rule.keepDays) : '');
+  const [mb, setMb] = useState(board.rule?.maxMB ? String(board.rule.maxMB) : '');
+  const save = async () => {
+    const value = (v: string) => (v.trim() ? Number(v) : null);
+    if (await attempt(() => api('setBoardRule', { space: space.id, board: board.name, keepDays: value(days), maxMB: value(mb) }).then(bump), 'Rule saved')) onClose();
+  };
+  return (
+    <Modal title={`How long posts stay in “${board.title}”`} onClose={onClose}>
+      <div className="field-row">
+        <label>
+          Days after their last activity <input type="number" min={1} value={days} placeholder="for good" onChange={(e) => setDays(e.target.value)} />
+        </label>
+      </div>
+      <div className="field-row">
+        <label>
+          At most, in all (MB) <input type="number" min={1} value={mb} placeholder="no limit" onChange={(e) => setMb(e.target.value)} />
+        </label>
+      </div>
+      <p className="small">
+        Each upvote stretches a post's time. Pinned posts, issues, proposals and releases always stay, and so does everything on the devices of whoever wrote it. A new rule
+        forgets nothing for its first 14 days, and authors are told two weeks ahead.
+      </p>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <AsyncButton className="default" onClick={save}>
+          Save
+        </AsyncButton>
+      </div>
+    </Modal>
+  );
+}
+
+/** A community's one board: how long its posts stay. */
+function CommunityRule({ community, canSet }: { community: SpaceInfo; canSet: boolean }) {
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', community.id), [community.id]);
+  const [open, setOpen] = useState(false);
+  const board = boards?.[0];
+  if (!board) return null;
+  return (
+    <fieldset>
+      <legend>How long posts stay</legend>
+      <p className="small">{board.rule ? ruleText(board.rule) : 'Posts stay for good: there is no rule for forgetting.'}</p>
+      {canSet && (
+        <div className="buttons">
+          <button onClick={() => setOpen(true)}>Change…</button>
+        </div>
+      )}
+      {open && <BoardRuleDialog space={community} board={board} onClose={() => setOpen(false)} />}
+    </fieldset>
+  );
+}
+
 function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
   const add = useForm({ name: '', type: 'posts' });
   const [editing, setEditing] = useState<BoardInfo>();
+  const [ruling, setRuling] = useState<BoardInfo>();
   const set = (name: string, patch: Record<string, unknown>) => attempt(() => api('setBoard', { project: project.id, name, ...patch }).then(bump));
   const move = (i: number, by: number) => {
     const other = boards[i + by];
@@ -755,6 +839,11 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
               <td>
                 <button className="small-btn access-btn" title="Who may read and write" onClick={() => setEditing(b)}>
                   {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
+                </button>
+              </td>
+              <td>
+                <button className="small-btn" title={b.rule ? ruleText(b.rule) : 'Posts stay for good'} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
+                  <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? 'for good' : b.rule?.keepDays ? `${b.rule.keepDays} days` : b.rule?.maxMB ? `${b.rule.maxMB} MB` : 'for good'}
                 </button>
               </td>
               <td>
@@ -795,6 +884,7 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
         <button>Add board</button>
       </form>
       {editing && <BoardAccessDialog project={project} board={editing} onClose={() => setEditing(undefined)} />}
+      {ruling && <BoardRuleDialog space={project} board={ruling} onClose={() => setRuling(undefined)} />}
     </fieldset>
   );
 }
@@ -886,8 +976,44 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
         ))}
       </fieldset>
       <RepoSettings space={project} />
+      <PaymentsSettings project={project} spaces={spaces} />
+      <NewcomerHistory space={project} canSet={info.maintainer} />
       <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />
     </Page>
+  );
+}
+
+// ---------------------------------------------------------------- what newcomers read
+
+const HISTORY_CHOICES: Array<{ value: SpaceInfo['history']; label: string; detail: string }> = [
+  { value: 'all', label: 'Everything', detail: 'Newcomers read all of its history, as everyone before them.' },
+  { value: '30d', label: 'The last 30 days', detail: 'Newcomers read about the last month. Its key changes every month for that.' },
+  { value: 'joining', label: 'From their invite on', detail: 'Each invite comes with a new key: newcomers read only what is written after it.' },
+];
+
+/** What newcomers get to read; whoever manages the space decides, everyone sees it. */
+export function NewcomerHistory({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
+  const word = KIND_WORD[space.kind];
+  const set = (history: SpaceInfo['history']) =>
+    attempt(() => api('setHistory', { space: space.id, history }).then(bump), `Newcomers to ${space.name} read ${HISTORY_CHOICES.find((c) => c.value === history)!.label.toLowerCase()}`);
+  return (
+    <fieldset>
+      <legend>What newcomers read</legend>
+      {HISTORY_CHOICES.map((c) => (
+        <label key={c.value} className="radio-row">
+          <input type="radio" name={`history-${space.id}`} checked={space.history === c.value} disabled={!canSet} onChange={() => void set(c.value)} />
+          <span>
+            <b>{c.label}</b>
+            <span className="small"> · {c.detail}</span>
+          </span>
+        </label>
+      ))}
+      <p className="small">
+        {canSet
+          ? `Either way they see who is in this ${word}, its roles${space.kind === 'project' ? ', boards and page' : ''}. Members who are in already keep everything.`
+          : `Set by the ${space.kind === 'project' ? 'maintainers' : space.kind === 'community' ? 'moderators' : 'owner'}.`}
+      </p>
+    </fieldset>
   );
 }
 
@@ -969,6 +1095,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
       <RepoSettings space={group} />
+      <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
   );
@@ -1059,6 +1186,8 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
         })}
       </fieldset>
       <RepoSettings space={community} />
+      <CommunityRule community={community} canSet={info.moderator} />
+      <NewcomerHistory space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
   );

@@ -14,6 +14,8 @@ import type { AddressInfo } from 'node:net';
  *   GET /v1/who?port=N               who is behind the app's connection from 127.0.0.1:N
  *   GET /v1/project                  the project, its open rooms and who's in them, its groups
  *   GET /v1/access?did=D[&group=G]   what D is in the project, and in which of its groups
+ *   GET /v1/badges?did=D             the project's badges D holds (valid ones only)
+ *   GET /v1/tickets?did=D            the project's shows this host let D into: open while they're on
  *
  * Same rules as the daemon's API: 127.0.0.1 only, and the Host check stops web
  * pages from reaching it via DNS rebinding.
@@ -56,7 +58,8 @@ export async function startAppApi(projectOf: (token: string) => string | undefin
 
 function handle(projectOf: (token: string) => string | undefined, answer: AppApiAnswer, req: IncomingMessage, res: ServerResponse): void {
   const host = (req.headers.host ?? '').split(':')[0];
-  if (host !== '127.0.0.1' && host !== 'localhost') return send(res, 403, { error: 'forbidden host' });
+  // host.docker.internal: an app in a container reaching the host (Weave and Docker). The token is needed either way.
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== 'host.docker.internal') return send(res, 403, { error: 'forbidden host' });
   const given = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
   const project = given ? projectOf(given) : undefined;
   if (!project) return send(res, 401, { error: 'unauthorized' });

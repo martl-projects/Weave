@@ -1,12 +1,13 @@
 {
   "name": "@weave/core",
-  "version": "0.3.0",
+  "version": "0.19.4",
   "license": "MIT",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./limits": "./src/limits.ts"
+    "./limits": "./src/limits.ts",
+    "./chain": "./src/chain.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",

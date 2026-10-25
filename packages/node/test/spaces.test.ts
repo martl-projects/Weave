@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { loadConfig, resolveHome, saveConfig, startDaemon, WeaveNode, type Daemon, type FeedItem } from '../src/index.ts';
+import { loadConfig, resolveHome, saveConfig, startDaemon, WeaveNode, type Daemon, type FeedItem, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 function tempHome(): string {
@@ -11,7 +11,10 @@ function tempHome(): string {
   dirs.push(dir);
   return dir;
 }
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 async function until(condition: () => Promise<boolean> | boolean, timeoutMs = 20_000): Promise<void> {
   const start = Date.now();
@@ -71,20 +74,25 @@ describe('projects, groups and the social graph between daemons', () => {
 
     // Members read the group; the founder sees the invite chain.
     await until(async () => texts(await bob.node.feed({ space: 'Synths' })).includes('welcome to the synth group'));
-    await until(async () => (await alice.node.members('Synths')).length === 3);
+    // Names come with each person's public events, which may arrive after their join.
+    await until(async () => (await alice.node.members('Synths')).filter((m) => m.name).length === 3);
     const members = await alice.node.members('Synths');
     expect(members.find((m) => m.name === 'Bob')?.invitedByName).toBe('Alice');
 
     // Relays only ever see sealed events.
-    const onDisk = readdirSync(resolveHome(carolDir).logs).map((f) => readFileSync(join(resolveHome(carolDir).logs, f), 'utf8')).join('');
+    const home = resolveHome(carolDir).dir;
+    const onDisk = readdirSync(home).filter((f) => f.startsWith('weave.db')).map((f) => readFileSync(join(home, f), 'latin1')).join('');
+    expect(onDisk.length).toBeGreaterThan(0);
     expect(onDisk).not.toContain('welcome to the synth group');
 
     // Alice removes Bob; the key rotates; Bob can't read what comes next, Carol can.
     await until(async () => (await carol.node.members('Synths')).length === 3);
     await alice.node.removeMember('Synths', 'Bob');
-    await alice.node.publish({ kind: 'weave.post', body: { text: 'after bob' }, space: 'Synths' });
+    const after = await alice.node.publish({ kind: 'weave.post', body: { text: 'after bob' }, space: 'Synths' });
     await until(async () => texts(await carol.node.feed({ space: 'Synths' })).includes('after bob'));
-    await until(async () => (await bob.node.status()).events >= (await alice.node.status()).events);
+    // Bob doesn't even get it sealed: he proves only the key from before.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(bob.node.replica.events((r) => r.id === after.id)).toHaveLength(0);
     expect(texts(await bob.node.feed({ space: 'Synths' }))).not.toContain('after bob');
     expect((await carol.node.spaces('project'))[0].epoch).toBe(1);
   });
@@ -161,8 +169,10 @@ describe('projects, groups and the social graph between daemons', () => {
     expect((await alice.node.social()).blocked[0].name).toBe('Mallory');
     expect(texts(await alice.node.feed({ kinds: ['weave.post'] }))).not.toContain('spam');
 
-    // The block is private: Mallory receives the event but can't read it.
-    await until(async () => (await mallory.node.status()).events >= (await alice.node.status()).events);
+    // The block is private: it stays in Alice's own space, which Mallory never gets.
+    const alicePublic = () => mallory.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'public').length;
+    await until(() => alicePublic() === alice.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'public').length);
+    expect(mallory.node.replica.events((r) => r.author === alice.node.identity.author && r.scope === 'self')).toHaveLength(0);
     expect((await mallory.node.feed({ kinds: ['weave.block'] })).length).toBe(0);
     expect((await mallory.node.social()).followers).toHaveLength(0);
   });

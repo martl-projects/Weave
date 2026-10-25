@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { planSync } from '@weave/core';
-import { WeaveNode, type Fetch } from '../src/index.ts';
+import { WeaveNode, type Fetch, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 /**
  * A stand-in for GitHub: the device sign-in (each code is approved on the
@@ -14,7 +17,7 @@ afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true 
  * collaborators and invitations.
  */
 class FakeGitHub {
-  repos = new Map<string, { collaborators: Set<string>; invitations: Map<number, string> }>();
+  repos = new Map<string, { collaborators: Set<string>; invitations: Map<number, string>; owner: 'Organization' | 'User' }>();
   /** Who gets signed in next, per node. */
   #codes = new Map<string, { login: string; polls: number }>();
   #tokens = new Map<string, string>();
@@ -22,8 +25,9 @@ class FakeGitHub {
   calls: string[] = [];
   gists = new Map<string, { owner: string; content: string }>();
 
-  addRepo(name: string, collaborators: string[] = []): void {
-    this.repos.set(name, { collaborators: new Set(collaborators), invitations: new Map() });
+  /** A repository, owned by an organization unless said otherwise (a person's can't take read-only collaborators). */
+  addRepo(name: string, collaborators: string[] = [], owner: 'Organization' | 'User' = 'Organization'): void {
+    this.repos.set(name, { collaborators: new Set(collaborators), invitations: new Map(), owner });
   }
 
   accept(repo: string, login: string): void {
@@ -72,12 +76,16 @@ class FakeGitHub {
       }
       if (url.pathname === '/user/installations') return json(200, { installations: [{ id: 7 }] });
       if (url.pathname === '/user/installations/7/repositories') return json(200, { repositories: [...this.repos.keys()].filter((r) => r.startsWith(`${who}/`)).map((full_name) => ({ full_name, permissions: { admin: true } })) });
+      const whole = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
+      if (whole) return this.repos.has(whole[1]) ? json(200, { full_name: whole[1], owner: { type: this.repos.get(whole[1])!.owner } }) : json(404, { message: 'Not Found' });
       const m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/(collaborators|invitations)(?:\/([^/]+))?$/);
       const repo = m && this.repos.get(m[1]);
       if (!m || !repo || !m[1].startsWith(`${who}/`)) return json(404, { message: 'Not Found' });
       if (m[2] === 'collaborators' && !m[3]) return json(200, [...repo.collaborators].map((login) => ({ login })));
       if (m[2] === 'invitations' && !m[3]) return json(200, [...repo.invitations].map(([id, login]) => ({ id, invitee: { login } })));
       if (m[2] === 'collaborators' && method === 'PUT') {
+        // As GitHub does: a person's repository has no read-only collaborators.
+        if (repo.owner === 'User' && JSON.parse(String(init?.body ?? '{}')).permission === 'pull') return json(422, { message: 'Validation Failed' });
         repo.invitations.set(this.#nextId++, decodeURIComponent(m[3]));
         return json(201, { id: this.#nextId });
       }
@@ -235,5 +243,41 @@ describe('GitHub repos that follow a space', () => {
     const access = { collaborators: new Set(['hand', 'lena']), invited: new Map([['kofi', 9]]) };
     expect(planSync(['Lena', 'kofi', 'new', 'declined'], access, ['lena', 'declined'])).toEqual({ invite: ['new'], remove: [] });
     expect(planSync([], access, ['lena', 'kofi'])).toEqual({ invite: [], remove: [{ login: 'kofi', invitation: 9 }, { login: 'lena' }] });
+  });
+
+  it('links only repositories of an organization: a person\'s can\'t give read-only access', async () => {
+    const github = new FakeGitHub();
+    github.addRepo('martl/party-game', [], 'User');
+    github.addRepo('martl/old-link', [], 'User');
+    const martl = person('martl', github, 'martl');
+    const nic = person('Nic', github, 'nic-gh');
+    await martl.createProject({ name: 'Party' });
+    await nic.joinSpace(await martl.invite('Party'));
+    syncAll([martl, nic]);
+    await connect(martl);
+    // Linking a person's repository: refused, saying what to do.
+    await expect(martl.linkRepo({ space: 'Party', repo: 'martl/party-game', on: true })).rejects.toThrow(/personal GitHub account[^]*organization[^]*Transfer/);
+    expect((await martl.spaceRepos('Party')).repos).toEqual([]);
+
+    // One linked before Weave checked (as an older Weave wrote it): nobody is invited, and it says why instead of a bare 422.
+    await martl.publish({ kind: 'weave.github.repo', body: { repo: 'martl/old-link', on: true }, space: 'Party' });
+    await connect(nic);
+    await nic.shareGithub({ space: 'Party', on: true });
+    syncAll([martl, nic]);
+    await martl.reconcile();
+    expect(github.invited('martl/old-link')).toEqual([]);
+    const [old] = (await martl.spaceRepos('Party')).repos;
+    expect(old.repo).toBe('martl/old-link');
+    expect(old.problem).toMatch(/personal GitHub account[^]*organization/);
+    expect(old.problem).not.toMatch(/422/);
+
+    // Moved to an organization, then linked: Nic is invited, read-only.
+    github.repos.get('martl/party-game')!.owner = 'Organization';
+    await martl.linkRepo({ space: 'Party', repo: 'martl/party-game', on: true });
+    syncAll([martl, nic]);
+    await martl.reconcile();
+    expect(github.invited('martl/party-game')).toEqual(['nic-gh']);
+    expect((await martl.spaceRepos('Party')).repos.find((r) => r.repo === 'martl/party-game')?.problem).toBeUndefined();
+    for (const node of [martl, nic]) await node.close();
   });
 });

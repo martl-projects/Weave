@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { WeaveNode } from '../src/index.ts';
+import { closeOpenStores, WeaveNode } from '../src/index.ts';
 
 const dirs: string[] = [];
 const temp = (prefix: string) => {
@@ -10,7 +10,10 @@ const temp = (prefix: string) => {
   dirs.push(dir);
   return dir;
 };
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores(); // weave.db stays open until then, and Windows won't delete it
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 describe('your desk and its routines', () => {
   it('sets up a private desk with Journal and Ideas, a folder for the daily driver, and the first routines', async () => {

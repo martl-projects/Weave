@@ -2,10 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { WeaveNode } from '../src/index.ts';
+import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 const tempDir = (prefix: string) => {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(dir);

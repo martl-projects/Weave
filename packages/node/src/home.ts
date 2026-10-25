@@ -6,10 +6,12 @@ import { dirname, join, resolve } from 'node:path';
  * A Weave home directory holds one person's node: identity, agent keys,
  * config and logs. Several homes on one machine are several simulated people.
  *
- *   identity.json   this device's key, acting for the person (old homes: the root key itself)
- *   encryption.json the person's encryption keys, newest last (old homes: none, the root key is used)
- *   agents/*.json   delegated agent keys
- *   groups/*.json   keys of the groups and projects you belong to (secret)
+ *   vault.json      the home key, wrapped by the OS keystore; files marked (sealed) are sealed with it
+ *   identity.json   this device's key, acting for the person (old homes: the root key itself) (sealed)
+ *   encryption.json the person's encryption keys, newest last (old homes: none, the root key is used) (sealed)
+ *   agents/*.json   delegated agent keys (sealed)
+ *   groups/*.json   keys of the groups and projects you belong to (sealed)
+ *   github.json, app-settings.json, remote.json   tokens and pairings (sealed)
  *   config.json     topics to join, bootstrap nodes
  *   logs/*.jsonl    one append-only file per signing key
  *   blobs/<hash>    encrypted files (images), see @weave/core blobs

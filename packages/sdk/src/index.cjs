@@ -8,10 +8,18 @@
  * app API Weave describes in WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT (set when
  * Weave starts the app; `weave app env <project>` prints them otherwise).
  *
+ * For http services Weave also says it in each request: X-Weave-Person, signed
+ * with the app's token. who(req) reads that first; it needs no call back to
+ * Weave, and works where ports can't tell (an app in a container, behind a proxy).
+ *
  * One file, no dependencies, Node 18+ or Bun: require it, import it, or copy it.
  */
 
+const { createHmac, timingSafeEqual } = require('node:crypto');
+
 const LOOPBACK = /^(127\.|::1$|::ffff:127\.)/;
+/** How old an X-Weave-Person may be, in seconds: it's made fresh for every request. */
+const HEADER_AGE = 300;
 
 class WeaveError extends Error {
   constructor(status, message) {
@@ -42,6 +50,8 @@ class Weave {
    * computers on the network).
    */
   async who(from) {
+    const vouched = this.#vouched(from);
+    if (vouched) return vouched;
     const peer = remoteOf(from);
     if (!peer) throw new TypeError('who() needs a request, a socket, {address, port} or a port number');
     if (peer.address !== undefined && !LOOPBACK.test(peer.address)) return undefined;
@@ -63,6 +73,39 @@ class Weave {
     const query = new URLSearchParams({ did: String(did) });
     if (options && options.group) query.set('group', String(options.group));
     return this.#get(`/v1/access?${query}`);
+  }
+
+  /** The project's shows someone has a ticket to (paid on chain), and whether each is on right now: let them in while `open`. */
+  tickets(did) {
+    return this.#get(`/v1/tickets?${new URLSearchParams({ did: String(did) })}`);
+  }
+
+  /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
+  badges(did) {
+    return this.#get(`/v1/badges?${new URLSearchParams({ did: String(did) })}`);
+  }
+
+  /** The person in a request's X-Weave-Person, if Weave signed it with this app's token lately. */
+  #vouched(from) {
+    const headers = from && typeof from === 'object' ? from.headers : undefined;
+    if (!headers) return undefined;
+    const raw = typeof headers.get === 'function' ? headers.get('x-weave-person') : headers['x-weave-person'];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof value !== 'string') return undefined;
+    const [payload, sig] = value.split('.');
+    if (!payload || !sig) return undefined;
+    const expected = createHmac('sha256', this.token).update(payload).digest();
+    const given = Buffer.from(sig, 'base64url');
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+    let person;
+    try {
+      person = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    } catch {
+      return undefined;
+    }
+    if (!person || typeof person.did !== 'string' || typeof person.t !== 'number' || Math.abs(Date.now() / 1000 - person.t) > HEADER_AGE) return undefined;
+    const { t: _time, ...who } = person;
+    return who;
   }
 
   async #get(path) {

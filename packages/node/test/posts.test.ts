@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { postLink } from '@weave/core';
-import { WeaveNode } from '../src/index.ts';
+import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 function person(name: string) {
   const dir = mkdtempSync(join(tmpdir(), 'weave-posts-'));
@@ -182,6 +185,13 @@ describe('posts, boards and communities', () => {
     const proposal = await node.submit({ space: 'Weave', board: 'proposals', title: 'Adopt Hypercore' });
     expect(proposal.proposal?.eligible).toBe(1);
     await expect(node.submit({ space: 'Weave', board: 'nope', title: 'x' })).rejects.toThrow(/no board "nope"/);
+
+    // A second issue board keeps its own items.
+    await node.setBoard({ project: 'Weave', name: 'work', title: 'Work', type: 'issues' });
+    const item = await node.submit({ space: 'Weave', board: 'work', title: 'v2 stage 0' });
+    expect(item).toMatchObject({ type: 'issue', board: 'work' });
+    expect((await node.posts({ space: 'Weave', board: 'work' })).map((p) => p.title)).toEqual(['v2 stage 0']);
+    expect((await node.posts({ space: 'Weave', board: 'issues' })).map((p) => p.title)).toEqual(['Encrypt keys at rest']);
 
     const [project] = await node.posts();
     expect(project).toMatchObject({ type: 'project', title: 'Weave', text: 'A p2p makers hub', project: { member: true, participants: 1 } });

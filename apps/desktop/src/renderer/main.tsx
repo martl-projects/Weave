@@ -1,3 +1,4 @@
+import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
@@ -7,12 +8,13 @@ import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
+import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
 import { RoomsView } from './rooms.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applyMode, applySkin, bridge, bump, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
+import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
@@ -206,6 +208,26 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 // ---------------------------------------------------------------- spaces
 
+/** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
+function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
+  const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', space.id), [space.id]);
+  const base = spaceHref(space);
+  const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
+    <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
+      <Icon name={icon} />
+      <span className="tree-label">{label}</span>
+    </a>
+  );
+  return (
+    <nav className="project-sections mobile-only">
+      {link(base, 'hash', 'general', !view)}
+      {link(`${base}/live`, 'zap', `Live${rooms?.length ? ` (${rooms.length})` : ''}`, view === 'live', !!rooms?.length)}
+      {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
+      {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
+    </nav>
+  );
+}
+
 function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
@@ -298,6 +320,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   return (
     <>
       <div className="center">
+        {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings`}>
             <Icon name="inbox" /> {mine[0].name ?? 'Someone'} from group {mine[0].group.name} is waiting to join{mine.length > 1 ? ` (+${mine.length - 1} more)` : ''}. Open Settings to decide.
@@ -360,6 +383,13 @@ const go = (hash: string) => (location.hash.startsWith('#/overlay') && bridge.ro
 /** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. Post addresses open here, not in a browser. */
 function openLink(link: string): void {
   const ref = postRefOfHref(link);
+  const space = SPACE_LINK.exec(link);
+  if (space) return go(spaceRoute(space[1], space[2]));
+  if (link.startsWith('weave:enroll:')) {
+    if (document.querySelector('.welcome')) enrollLinkOpened(link);
+    else toast('This is a link to set up a company account. This computer has a Weave account already.');
+    return;
+  }
   if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
@@ -455,7 +485,8 @@ function Shell() {
   const { data: knocks } = useApi(() => api<KnockInfo[]>('knocks'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
-  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0);
+  const { data: fading } = useApi(() => api<PostInfo[]>('fading').catch(() => []), []);
+  const inbox = (waiting?.length ?? 0) + (requests?.length ?? 0) + (knocks?.length ?? 0) + (coauthors?.length ?? 0) + (asks?.length ?? 0) + (fading?.length ?? 0);
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
   const [mode, setMode] = useState<Mode>(loadMode);
@@ -487,7 +518,18 @@ function Shell() {
     else if (route[0] === 'saved')
       center = <PostList title={<>Saved</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty="Save posts to find them here again. Only you can see what you save." />;
     else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
-    body = <div className="center">{center}</div>;
+    // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
+    const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
+      <a className="notice alarm" href="#/keys">
+        <Icon name="lock" /> Your keys aren't protected by this computer's keystore. See Keys &amp; devices.
+      </a>
+    );
+    body = (
+      <div className="center">
+        {unprotected}
+        {center}
+      </div>
+    );
   }
 
   return (
@@ -549,7 +591,13 @@ function Shell() {
             { label: 'Invite someone here…', disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
           ]}
         />
-        <Menu label="Help" items={[{ label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) }]} />
+        <Menu
+          label="Help"
+          items={[
+            { label: 'Check for updates…', onClick: checkForUpdates },
+            { label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) },
+          ]}
+        />
       </nav>
       <div className="toolbar">
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
@@ -612,13 +660,26 @@ function App() {
   };
   return (
     <>
-      {!state ? null : !state.hasIdentity ? <Onboarding onDone={refresh} /> : !state.connected ? <NotConnected home={state.home} onRetry={refresh} /> : location.hash.startsWith('#/overlay') ? (
+      {!state ? (
+        bridge.phone && <PhoneConnecting />
+      ) : bridge.phone && !state.hasIdentity ? (
+        <PhonePairing onDone={refresh} />
+      ) : bridge.phone && !state.connected ? (
+        <PhoneNotConnected name={state.home} onRetry={refresh} />
+      ) : !state.hasIdentity ? (
+        <Onboarding onDone={refresh} />
+      ) : !state.connected ? (
+        <NotConnected home={state.home} onRetry={refresh} />
+      ) : location.hash.startsWith('#/overlay') ? (
         <MentionsPanel />
       ) : (
         <>
           <Shell />
-          <AgentsOffer />
+          {/* Connecting agents is about the computer they run on, not this phone. */}
+          {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
+          {/* A phone app is updated with the app itself, not from Weave's desktop releases. */}
+          {!bridge.phone && <UpdatePrompt />}
         </>
       )}
       <Toasts />

@@ -3,12 +3,13 @@ import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { startLinks, WeaveNode, type FeedItem } from '../src/index.ts';
+import { closeOpenStores, startLinks, WeaveNode, type FeedItem } from '../src/index.ts';
 
 const dirs: string[] = [];
 const closers: Array<() => Promise<void>> = [];
 afterAll(async () => {
   await Promise.all(closers.map((close) => close()));
+  closeOpenStores(); // weave.db stays open until then, and Windows won't delete it
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 

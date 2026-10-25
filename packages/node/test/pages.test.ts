@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import { decryptBlob, encryptBlob, parseBlobRef } from '@weave/core';
-import { loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
+import { loadConfig, resolveHome, saveConfig, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'weave-pages-'));

@@ -1,0 +1,24 @@
+# systemd unit for Weave Server. Install the release's weave-server folder in
+# /opt/weave-server (npm install --omit=dev there), create a weave user, put the
+# key service secret in /etc/weave-server.env (WEAVE_VAULT_TOKEN=… or
+# WEAVE_AZURE_CLIENT_SECRET=…, mode 600), run `weave-server init` once as that
+# user, then: systemctl enable --now weave-server
+[Unit]
+Description=Weave Server (a company's Weave node, admin console and SCIM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=weave
+Environment=WEAVE_HOME=/var/lib/weave-server
+EnvironmentFile=/etc/weave-server.env
+ExecStart=/usr/bin/node /opt/weave-server/weave-server.mjs run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/weave-server
+StateDirectory=weave-server
+
+[Install]
+WantedBy=multi-user.target

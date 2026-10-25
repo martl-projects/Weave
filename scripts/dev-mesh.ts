@@ -6,7 +6,7 @@
 
 import { parseArgs } from 'node:util';
 import createTestnet from 'hyperdht/testnet.js';
-import { createIdentity, createSubKey, delegation, Replica, type SigningIdentity, type WeaveEvent } from '@weave/core';
+import { createIdentity, createSubKey, delegation, Replica, type SigningIdentity, type WeaveRecord } from '@weave/core';
 import { SwarmNode } from '@weave/net';
 
 const { values } = parseArgs({
@@ -47,7 +47,7 @@ alice.replica.append(alice.identity, delegation(forgeKey.did, 'agent', ['weave.p
 const forge: Peer = { name: 'forge (alice\'s agent)', color: peopleCount, identity: forgeKey, replica: new Replica() };
 peers.push(forge);
 
-const nameOf = (event: WeaveEvent) => {
+const nameOf = (event: WeaveRecord) => {
   const peer = peers.find((p) => p.identity.did === event.signer);
   return peer ? paint(peer.color, peer.name) : event.signer.slice(0, 16);
 };

@@ -36,6 +36,32 @@ export interface Access extends Person {
   groups: Group[];
 }
 
+/** A badge of the project: lasting recognition, signed by the maintainer who gave it. */
+/** A show someone holds a ticket to, as its host let them in. */
+export interface Ticket {
+  show: string;
+  name: string;
+  room?: string;
+  starts: string;
+  ends: string;
+  /** On right now (from an hour before the start to the end), and not called off. */
+  open: boolean;
+  cancelled: boolean;
+}
+
+export interface Badge {
+  id: string;
+  /** image: its picture (wblob: reference), shown next to the holder's name instead of the symbol. */
+  series: { id: string; name: string; symbol: string; image?: string; limit?: number };
+  /** Its number in the series: #7 of 20. */
+  n: number;
+  issuer: { did: string; name?: string };
+  note: string;
+  /** What it's for, e.g. the post an idea came from. */
+  ref?: string;
+  time: string;
+}
+
 /** Something a connection can be told by: a request, a socket, Bun's server.requestIP(req), or a remote port. */
 export type ConnectionLike = number | { address?: string; port: number } | { remotePort?: number; remoteAddress?: string } | { socket: { remotePort?: number; remoteAddress?: string } };
 
@@ -53,6 +79,10 @@ export declare class Weave {
   who(from: ConnectionLike): Promise<Player | undefined>;
   project(): Promise<Project>;
   access(did: string, options?: { group?: string }): Promise<Access>;
+  /** The project's shows someone has a ticket to (paid on chain), and whether each is on right now: let them in while `open`. */
+  tickets(did: string): Promise<Ticket[]>;
+  /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
+  badges(did: string): Promise<Badge[]>;
 }
 
 /** Weave as the app was started with it (WEAVE_API, WEAVE_TOKEN, WEAVE_PROJECT), or undefined when Weave didn't start it. */

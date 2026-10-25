@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { WeaveNode, type FeedItem, type MentionInfo } from '../src/index.ts';
+import { closeOpenStores, WeaveNode, type FeedItem, type MentionInfo } from '../src/index.ts';
 
 const dirs: string[] = [];
 const temp = (prefix: string) => {
@@ -10,7 +10,10 @@ const temp = (prefix: string) => {
   dirs.push(dir);
   return dir;
 };
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores(); // weave.db stays open until then, and Windows won't delete it
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 /** Waits until `count` mentions arrived (or a few seconds passed). */
 function collect(node: WeaveNode, count: number): Promise<MentionInfo[]> {

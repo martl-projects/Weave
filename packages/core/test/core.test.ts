@@ -12,7 +12,6 @@ import {
   revocation,
   signEvent,
   verifyEventSignature,
-  type WeaveEvent,
 } from '../src/index.ts';
 
 describe('canonicalJson', () => {
@@ -186,7 +185,7 @@ describe('delegation', () => {
     replica.append(laptop, { kind: 'weave.post', body: 'stolen laptop' });
     replica.append(alice, revocation(laptop.did, 1));
 
-    const texts = replica.events((e) => e.signer === laptop.did).map((e: WeaveEvent) => e.body);
+    const texts = replica.events((e) => e.signer === laptop.did).map((e) => e.body);
     expect(texts).toEqual(['ok']);
     const later = signEvent(laptop, replica.store.head(laptop.did), { kind: 'weave.post', body: 'more' });
     expect(replica.ingest(later)).toEqual({ status: 'rejected', reason: 'signer revoked' });

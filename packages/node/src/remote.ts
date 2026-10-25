@@ -1,9 +1,12 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { b64u, canonicalJson, utf8, type Json } from '@weave/core';
-import { readLine, roomKeyPair, type DhtServer, type DhtSocket } from '@weave/net';
+import { b64u } from '@weave/core';
+import { createConnection } from 'node:net';
+import { readLine, roomKeyPair, splice, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
-import { RPC_METHODS, type FeedItem, type RpcMethod } from './backend.ts';
-import { readJson, writeJson, type Home } from './home.ts';
+import type { FeedItem, RpcMethod } from './backend.ts';
+import type { Home } from './home.ts';
+import { encodePhoneLink } from './phone-link.ts';
+import { readSecretJson, writeSecretJson } from './vault.ts';
 
 /*
  * Remote access for paired phones: the companion app on a phone uses this
@@ -24,6 +27,13 @@ import { readJson, writeJson, type Home } from './home.ts';
  *   node → phone   {event}                  a new event, like the desktop's live updates
  * Calls a phone may not make (keys, agents, starting programs, pairing more
  * phones) are refused. The node signs what the phone posts, with its own key.
+ *
+ * Playing in a room: a paired phone opens one more connection per TCP
+ * connection its browser makes, starting with {tunnel: roomId}, and the node
+ * forwards the rest of it to the port the room's app has on this computer:
+ * the room's tunnel when this node joined it, the app itself when it hosts
+ * it. So the phone reaches only rooms its computer is in, as that person;
+ * the room's proof and invitation stay with the computer's node.
  */
 
 export interface PairedPhone {
@@ -40,44 +50,38 @@ export interface PairingOffer {
   expires: string;
 }
 
-/** What a phone may call: what the desktop app may, minus key management, agents, local programs and phone pairing. */
-export const PHONE_METHODS: readonly RpcMethod[] = RPC_METHODS.filter(
-  (m) => !['addAgent', 'join', 'revokeKey', 'rotateRoot', 'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'pairPhone', 'phones', 'unpairPhone', 'connectHarness', 'requestPermission'].includes(m),
-);
+/**
+ * What a phone may call: everyday use of your spaces, listed one by one, so a
+ * new method stays off phones until it's added here on purpose. Not on a
+ * phone: keys and recovery, data export and backups, agents and their
+ * permissions, company and server setup, publishing or running apps, your
+ * GitHub account, and pairing phones. A lost phone can be unpaired; what it
+ * can't do, it can't do before that either.
+ */
+export const PHONE_METHODS: readonly RpcMethod[] = [
+  // You and your node
+  'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
+  // Spaces and their members
+  'spaces', 'createGroup', 'createProject', 'createCommunity', 'community', 'setCommunity', 'setModerator', 'project', 'setProjectPage', 'setMaintainer', 'invite', 'inviteGroup', 'uninviteGroup', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setRule', 'members', 'removeMember', 'admissions', 'admit', 'decline', 'knocks', 'answerKnock', 'audit',
+  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  // Home, boards and posts
+  'feed', 'publish', 'setHomeVisibility', 'followBoard', 'boards', 'setBoard', 'setBoardRule', 'setBoardAccess', 'curate', 'posts', 'post', 'submit', 'editPost', 'deletePost', 'confirmCoauthor', 'coauthorRequests', 'upvote', 'save', 'share', 'putBlob', 'blob',
+  'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers',
+  // Chat
+  'chats', 'openChat', 'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react', 'threads', 'startThread', 'reply',
+  // Issues and proposals
+  'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
+  // Rooms and project apps (joining; hosting needs the computer)
+  'rooms', 'joinRoom', 'leaveRoom', 'endRoom', 'roomChat', 'sayInRoom', 'projectApp', 'appLaunch', 'appReleases',
+  // GitHub, to look only
+  'github', 'githubRepos', 'spaceRepos',
+];
 
-/** What a pairing link carries. */
-export interface PhoneLink {
-  v: 1;
-  /** The node's remote DHT key (hex). */
-  node: string;
-  secret: string;
-  expires: string;
-  /** Whose node it is, for the phone to show. */
-  name?: string;
-  /** DHT bootstrap nodes, when the node isn't on the public network (tests). */
-  bootstrap?: Array<{ host: string; port: number }>;
-}
+export { decodePhoneLink, encodePhoneLink, type PhoneLink } from './phone-link.ts';
 
-const PREFIX = 'weave:phone:';
 const PAIRING_MINUTES = 10;
 /** Room for one image (2 MB as base64) in a call. */
 const MAX_LINE = 4 * 1024 * 1024;
-
-export const encodePhoneLink = (link: PhoneLink): string => PREFIX + b64u.encode(utf8(canonicalJson(link as unknown as Json)));
-
-export function decodePhoneLink(text: string): PhoneLink {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith(PREFIX)) throw new Error('not a Weave pairing code');
-  let link: PhoneLink;
-  try {
-    link = JSON.parse(new TextDecoder().decode(b64u.decode(trimmed.slice(PREFIX.length))));
-  } catch {
-    throw new Error('the pairing code is damaged');
-  }
-  if (link?.v !== 1 || !/^[0-9a-f]{64}$/.test(link.node ?? '') || typeof link.secret !== 'string') throw new Error('the pairing code is damaged or from a newer Weave');
-  if (Date.parse(link.expires) < Date.now()) throw new Error('the pairing code has expired: show a new one on your computer');
-  return link;
-}
 
 /** What the remote side needs from its node. */
 export interface RemoteHost {
@@ -88,6 +92,8 @@ export interface RemoteHost {
   name(): string | undefined;
   call(method: RpcMethod, args: unknown[]): Promise<unknown>;
   watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void>;
+  /** The local port a room's app is reached on from this node, while it's in the room (joined or hosting). */
+  roomPort(roomId: string): Promise<number | undefined>;
 }
 
 interface RemoteFile {
@@ -130,6 +136,8 @@ export class RemoteAccess {
   #server?: DhtServer;
   #offers = new Map<string, string>(); // secret → expires
   #sessions = new Map<DhtSocket, { phone: string; stop: AbortController }>();
+  /** Open room tunnels → the phone each belongs to. */
+  #tunnels = new Map<DhtSocket, string>();
 
   constructor(host: RemoteHost) {
     this.#host = host;
@@ -140,15 +148,15 @@ export class RemoteAccess {
   }
 
   #load(): RemoteFile {
-    const stored = readJson<RemoteFile>(this.#file);
+    const stored = readSecretJson<RemoteFile>(this.#host.home(), this.#file);
     if (stored?.seed) return { seed: stored.seed, phones: stored.phones ?? [] };
     const fresh = { seed: b64u.encode(randomBytes(32)), phones: [] };
-    writeJson(this.#file, fresh);
+    writeSecretJson(this.#host.home(), this.#file, fresh);
     return fresh;
   }
 
   #save(file: RemoteFile): void {
-    writeJson(this.#file, file);
+    writeSecretJson(this.#host.home(), this.#file, file);
   }
 
   #keyPair() {
@@ -173,6 +181,8 @@ export class RemoteAccess {
       socket.destroy();
     }
     this.#sessions.clear();
+    for (const socket of this.#tunnels.keys()) socket.destroy();
+    this.#tunnels.clear();
     await this.#server?.close();
     this.#server = undefined;
   }
@@ -205,6 +215,7 @@ export class RemoteAccess {
       socket.destroy();
       this.#sessions.delete(socket);
     }
+    for (const [socket, phone] of this.#tunnels) if (phone === key) socket.destroy();
   }
 
   #isPaired(key: string): boolean {
@@ -221,7 +232,8 @@ export class RemoteAccess {
     socket.on('error', () => socket.destroy());
     const key = socket.remotePublicKey.toString('hex');
     const { line, rest } = await readLine(socket, 4096);
-    const hello = JSON.parse(line) as { pair?: unknown; name?: unknown; hello?: unknown };
+    const hello = JSON.parse(line) as { pair?: unknown; name?: unknown; hello?: unknown; tunnel?: unknown };
+    if (typeof hello.tunnel === 'string') return this.#tunnel(socket, key, hello.tunnel, rest);
     if (typeof hello.pair === 'string') {
       const expires = this.#takeOffer(hello.pair);
       if (!expires) {
@@ -239,6 +251,20 @@ export class RemoteAccess {
       send(socket, { hello: true, name: this.#host.name() ?? null });
     }
     this.#serve(socket, key, rest);
+  }
+
+  /** A room tunnel from a paired phone: the rest of the connection goes to the room's app, as this computer reaches it. */
+  async #tunnel(socket: DhtSocket, phone: string, roomId: string, rest: Buffer): Promise<void> {
+    socket.pause();
+    const port = this.#isPaired(phone) ? await this.#host.roomPort(roomId).catch(() => undefined) : undefined;
+    if (!port || socket.destroyed) return void socket.destroy();
+    this.#tunnels.set(socket, phone);
+    socket.on('close', () => this.#tunnels.delete(socket));
+    // Yes: the phone waits for this before it sends the browser's bytes on (and tries again if it doesn't come).
+    send(socket, { tunnel: true });
+    const local = createConnection({ host: '127.0.0.1', port });
+    local.on('error', () => socket.destroy());
+    splice(socket, local, rest);
   }
 
   /** Use up a pairing secret (compared in constant time); its expiry if it was valid. */

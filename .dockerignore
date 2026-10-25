@@ -1,0 +1,7 @@
+node_modules
+**/node_modules
+.git
+.dev
+apps/*/dist
+apps/*/pack
+apps/*/release

@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeJson } from '../src/home.ts';
-import { followDaemon, startApi, WeaveNode, type FeedItem } from '../src/index.ts';
+import { followDaemon, startApi, WeaveNode, type FeedItem, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+afterAll(() => {
+  closeOpenStores();
+  dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+});
 
 describe('following the daemon', () => {
   it('finds the daemon again after it restarts on another port, and waits for one that is not running', async () => {

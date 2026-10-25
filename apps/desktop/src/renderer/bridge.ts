@@ -5,6 +5,10 @@ export interface AppState {
   home: string;
   hasIdentity: boolean;
   connected: boolean;
+  /** The company's enrollment link, from this computer's managed settings. */
+  enrollLink?: string;
+  /** Managed by a company: only company accounts here. */
+  companyOnly?: boolean;
 }
 
 interface Bridge {
@@ -12,6 +16,8 @@ interface Bridge {
   /** Create the identity; resolves to the recovery words, shown once. */
   init(name: string): Promise<string | undefined>;
   restore(words: string): Promise<void>;
+  /** Set up a company account: the company's sign-in opens in the browser. Resolves to who was set up. */
+  enroll(link: string): Promise<{ name?: string; company?: { name?: string } }>;
   /** Open a room's shared app in its own window. */
   openApp(url: string, title: string): Promise<void>;
   /** Let the person pick a folder on this computer; undefined if they cancel. */
@@ -41,6 +47,17 @@ interface Bridge {
   onEvent(listener: (item: FeedItem) => void): void;
   /** A weave: link the app was opened with (clicked somewhere outside it). */
   onLink(listener: (link: string) => void): void;
+  /** In the phone app, which uses a computer's node: pairing with it takes the place of creating an identity. */
+  phone?: {
+    /** Pair with the computer whose pairing link (from its QR code) this is. */
+    pair(link: string): Promise<void>;
+    /** Scan a QR code with the camera; undefined if the person cancels. */
+    scan(): Promise<string | undefined>;
+    /** Forget the computer on this phone, to pair again. */
+    forget(): Promise<void>;
+    /** Open a room's app (its address on the computer) on the phone, through the computer. */
+    openRoom(room: string, url: string): Promise<void>;
+  };
 }
 
 declare global {
@@ -68,6 +85,12 @@ const webBridge: Bridge = {
   },
   init: async () => {
     throw new Error('create your identity with "weave init" when using the web preview');
+  },
+  enroll: async (link) => {
+    const res = await fetch('/enroll', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ link }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? `request failed: ${res.status}`);
+    return data;
   },
   call: async (method, ...args) => {
     const res = await fetch('/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method, args }) });

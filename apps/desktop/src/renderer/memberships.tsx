@@ -1,13 +1,16 @@
-import { useState, type FormEvent } from 'react';
-import type { MembershipRequestInfo, TierInfo } from '@weave/node/client';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { GumroadInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
+import { formatUnits, isHexAddress, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
+import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Modal, Sprite } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
  * ask to join (saying how they paid), creators grant months from their Inbox.
- * Tiers sold through Gumroad let supporters in by their license key instead.
+ * Tiers sold through Gumroad let supporters in by their license key instead,
+ * tiers paid on chain (test USDC) by the transaction that paid them.
  * A tier is a group, so members get its chat and the projects it's invited into.
  */
 
@@ -38,6 +41,11 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
       <div className="grow">
         <b>{tier.name}</b> <span className="price">{money(tier.price, tier.currency)}</span>
         {tier.gumroad && <span className="tag">via Gumroad</span>}
+        {tier.onchain && (
+          <span className="tag" title={`To ${tier.onchain.to} on ${TREASURY_CHAIN.name}, a test network`}>
+            {formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} on chain
+          </span>
+        )}
         {tier.description && <p className="small">{tier.description}</p>}
         {tier.benefits.length > 0 && (
           <ul className="benefits">
@@ -94,13 +102,39 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   );
 }
 
+/** Joining a tier paid on chain: send the token from your linked wallet, then paste the transaction's hash. */
+function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
+  // null: no wallet linked; undefined: still asking.
+  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
+  if (wallet === undefined) return null;
+  if (!wallet)
+    return (
+      <p className="small">
+        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (Keys &amp; devices → Wallet), so {creator} knows the payment is yours.
+      </p>
+    );
+  return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;
+}
+
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
   const [note, setNote] = useState('');
+  const [way, setWay] = useState<'gumroad' | 'onchain'>(tier.gumroad ? 'gumroad' : 'onchain');
   const creator = tier.creator.name ?? shortDid(tier.creator.did);
-  if (tier.gumroad)
+  if (tier.onchain || tier.gumroad)
     return (
       <Modal title={`Join ${tier.name}`} onClose={onClose}>
-        <GumroadJoin tier={tier} creator={creator} onClose={onClose} />
+        {tier.onchain && tier.gumroad && (
+          <div className="field-row" role="radiogroup" aria-label="How to pay">
+            <span className="small">Pay with</span>
+            <input id="way-gumroad" type="radio" checked={way === 'gumroad'} onChange={() => setWay('gumroad')} />
+            <label htmlFor="way-gumroad">Gumroad ({money(tier.price, tier.currency)})</label>
+            <input id="way-onchain" type="radio" checked={way === 'onchain'} onChange={() => setWay('onchain')} />
+            <label htmlFor="way-onchain">
+              USDC ({formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} / month)
+            </label>
+          </div>
+        )}
+        {tier.onchain && (way === 'onchain' || !tier.gumroad) ? <OnchainJoin tier={tier} creator={creator} onClose={onClose} /> : <GumroadJoin tier={tier} creator={creator} onClose={onClose} />}
       </Modal>
     );
   return (
@@ -146,13 +180,56 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const [product, setProduct] = useState(tier?.gumroad?.product ?? '');
   const [url, setUrl] = useState(tier?.gumroad?.url ?? '');
   const [variant, setVariant] = useState(tier?.gumroad?.variant ?? '');
-  // A new Gumroad link, null to stop selling there, or nothing to leave it as it is.
-  const gumroad = onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
-  const input = () => ({ name, price: Math.round(Number(price.replace(',', '.')) * 100), currency, description, benefits: benefits.split('\n'), open, auto: onGumroad ? false : auto, gumroad });
+  // Make the product on Gumroad (through the Gumroad connection, or an access token used once) instead of linking one made by hand.
+  const [makeIt, setMakeIt] = useState(!tier?.gumroad);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [onChain, setOnChain] = useState(!!tier?.onchain);
+  const [usdc, setUsdc] = useState(tier?.onchain ? formatUnits(tier.onchain.amount, tier.onchain.decimals) : '5');
+  const [payTo, setPayTo] = useState(tier?.onchain?.to ?? '');
+  const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
+  const making = onGumroad && makeIt;
+  const [connection, setConnection] = useState<GumroadInfo>();
+  const [useToken, setUseToken] = useState(false);
+  const askConnection = () => api<GumroadInfo>('gumroad').then(setConnection, () => undefined);
+  useEffect(() => {
+    if (making && !connection) void askConnection();
+  }, [making, connection]);
+  // While Gumroad waits for the creator in the browser, ask how it went.
+  const waiting = connection?.pending?.url;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void askConnection(), 1500);
+    return () => clearInterval(timer);
+  }, [waiting]);
+  const connect = async () => {
+    const started = await attempt(() => api<GumroadInfo>('connectGumroad'));
+    if (!started) return;
+    setConnection(started);
+    if (started.pending) window.open(started.pending.url, '_blank', 'noopener');
+  };
+  const viaToken = useToken || (!!connection && !connection.available && !connection.account);
+  const ready = !making || (viaToken ? !!token : !!connection?.account);
+  // A new Gumroad link, null to stop selling there, or nothing to leave it as it is (or until the made product links it).
+  const gumroad = making ? undefined : onGumroad ? { product, url, ...(variant.trim() ? { variant } : {}) } : tier?.gumroad ? null : undefined;
+  const cents = Math.round(Number(price.replace(',', '.')) * 100);
+  const usdcAmount = parseUnits(usdc, TEST_USDC.decimals);
+  const to = payTo.trim() || wallet?.address || '';
+  const onchain = onChain ? { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: TEST_USDC.symbol, decimals: TEST_USDC.decimals, to, amount: usdcAmount ?? 0 } : tier?.onchain ? null : undefined;
+  const input = () => ({ name, price: cents, currency, description, benefits: benefits.split('\n'), open, auto: onGumroad || onChain ? false : auto, gumroad, onchain });
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    const done = await attempt(() => (tier ? api('setTier', { tier: tier.id, ...input() }) : api('createTier', input())), tier ? 'Tier saved' : `${name} is on your hub`);
-    if (done) {
+    if (making && !(cents > 0)) return toast('A tier sold on Gumroad needs a price', 'error');
+    if (onChain && (!usdcAmount || !isHexAddress(to))) return toast(usdcAmount ? 'Where do payments go? Link your wallet, or give an address' : 'Give the price in USDC, like 5 or 2.50', 'error');
+    setBusy(true);
+    const saved = await attempt(() => (tier ? api<TierInfo>('setTier', { tier: tier.id, ...input() }) : api<TierInfo>('createTier', input())), making ? undefined : tier ? 'Tier saved' : `${name} is on your hub`);
+    if (saved && making) {
+      const sold = await attempt(() => api<{ published: boolean; warning?: string }>('sellTierOnGumroad', { tier: saved.id, ...(viaToken ? { token } : {}) }));
+      if (!sold) toast(`${name} is saved, but not on Gumroad yet: Edit it to try again`, 'error');
+      else toast(sold.published ? `${name} is on sale on Gumroad` : `${name} is on Gumroad, not published yet: ${sold.warning}`, sold.published ? 'ok' : 'error');
+    }
+    setBusy(false);
+    if (saved) {
       bump();
       onClose();
     }
@@ -191,10 +268,66 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <label htmlFor="tier-auto">Let people in automatically (for free tiers)</label>
         </div>
         <fieldset>
-          <legend>
-            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad">Sell it through Gumroad</label>
-          </legend>
-          {onGumroad ? (
+          <legend>Ways to pay</legend>
+          <p className="small">Offer one or more; supporters pick theirs when they join. Nothing ticked: they pay you the way you agree on, and you let them in.</p>
+          <div className="field-row">
+            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad"><b>Gumroad</b>: card, PayPal; Gumroad is the seller</label>
+          </div>
+          {onGumroad && (
+            <>
+              <div className="field-row">
+                <input id="gumroad-make" type="radio" checked={makeIt} onChange={() => setMakeIt(true)} />
+                <label htmlFor="gumroad-make">{tier?.gumroad ? 'Make a new product on Gumroad' : 'Make the product on Gumroad for me'}</label>
+              </div>
+              <div className="field-row">
+                <input id="gumroad-link" type="radio" checked={!makeIt} onChange={() => setMakeIt(false)} />
+                <label htmlFor="gumroad-link">{tier?.gumroad ? 'Keep the product it is linked to, or link another' : 'Link a product I made'}</label>
+              </div>
+            </>
+          )}
+          {making ? (
+            <>
+              {viaToken ? (
+                <>
+                  <div className="field-row-stacked">
+                    <label htmlFor="gumroad-token">Gumroad access token</label>
+                    <input id="gumroad-token" required type="password" autoComplete="off" spellCheck={false} value={token} onChange={(e) => setToken(e.target.value.trim())} />
+                  </div>
+                  <p className="small">
+                    In Gumroad: <b>Settings → Advanced → Applications</b>, create an application (any name and redirect URI), then <b>Generate access token</b>. Weave uses it once and doesn't keep it.
+                    {connection?.available && (
+                      <>
+                        {' '}
+                        <button type="button" className="link" onClick={() => setUseToken(false)}>
+                          Connect Gumroad instead
+                        </button>
+                      </>
+                    )}
+                  </p>
+                </>
+              ) : connection?.account ? (
+                <p className="small">
+                  Connected to Gumroad as <b>{connection.account}</b>.{' '}
+                  <button type="button" className="link" onClick={() => setUseToken(true)}>
+                    Use an access token instead
+                  </button>
+                </p>
+              ) : (
+                <div className="field-row">
+                  <button type="button" onClick={() => void connect()}>
+                    {waiting ? 'Waiting for Gumroad…' : 'Connect Gumroad…'}
+                  </button>
+                  <span className="small grow">{waiting ? 'Allow Weave in your browser, then come back.' : connection?.error}</span>
+                  <button type="button" className="link" onClick={() => setUseToken(true)}>
+                    Use an access token
+                  </button>
+                </div>
+              )}
+              <p className="small">
+                Weave makes a monthly membership at this price on Gumroad, with license keys, and publishes it. Supporters buy there and send you the key from their receipt; your Weave lets them in and renews each month while they pay. Keep Weave running so it can.
+              </p>
+            </>
+          ) : onGumroad ? (
             <>
               <div className="field-row-stacked">
                 <label htmlFor="gumroad-url">Product page</label>
@@ -212,9 +345,25 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 In Gumroad, make it a membership and turn on <b>Generate a unique license key per sale</b>. Supporters buy there and send you the key from their receipt; your Weave checks it with Gumroad, lets them in and renews each month while they pay. Keep Weave running so it can.
               </p>
             </>
-          ) : (
-            <p className="small">Supporters pay you through Gumroad, and Weave lets them in automatically. Gumroad is the seller: it handles payments, taxes and refunds.</p>
-          )}
+          ) : null}
+          <div className="field-row">
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you (test network)</label>
+          </div>
+          {onChain ? (
+            <>
+              <div className="field-row">
+                <label htmlFor="tier-usdc">USDC per month</label>
+                <input id="tier-usdc" inputMode="decimal" size={6} value={usdc} onChange={(e) => setUsdc(e.target.value)} />
+              </div>
+              <div className="field-row-stacked">
+                <label htmlFor="tier-payto">Paid to</label>
+                <input id="tier-payto" spellCheck={false} placeholder={wallet ? `your wallet ${wallet.address}` : '0x… (link your wallet, or give an address)'} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
+              </div>
+              <p className="small">
+                Empty: your linked wallet. Supporters pay from their linked wallet; your Weave reads the payment on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can. (To divide payments among a project's makers, give its split contract here: <code>weave treasury split</code>, once the project's payments are on.)
+              </p>
+            </>
+          ) : null}
         </fieldset>
         <p className="small">
           A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.
@@ -234,7 +383,9 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default">{tier ? 'Save' : 'Offer tier'}</button>
+          <button className="default" disabled={busy || !ready}>
+            {busy && making ? 'Making it on Gumroad…' : tier ? 'Save' : 'Offer tier'}
+          </button>
         </div>
       </form>
     </Modal>
@@ -283,6 +434,12 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
               Gumroad license <code>{request.license.key.slice(0, 8)}…</code>:{' '}
               {request.license.ok === undefined ? 'checking with Gumroad…' : request.license.ok ? 'valid' : `not let in automatically: ${request.license.reason}`}
               {request.license.email && ` (bought as ${request.license.email})`}
+            </div>
+          )}
+          {request.payment && (
+            <div className="small">
+              Paid on chain <code>{request.payment.tx.slice(0, 10)}…</code>:{' '}
+              {request.payment.ok === undefined ? 'reading it on chain…' : request.payment.ok ? `valid, ${request.payment.months} month${request.payment.months === 1 ? '' : 's'}` : `not let in automatically: ${request.payment.reason}`}
             </div>
           )}
         </div>

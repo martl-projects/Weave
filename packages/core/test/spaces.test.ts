@@ -38,6 +38,7 @@ import {
   type SigningIdentity,
   type SpaceKeys,
   type SpaceKind,
+  epochsToShare,
 } from '../src/index.ts';
 
 describe('crypto', () => {
@@ -248,5 +249,17 @@ describe('social graph', () => {
     const a = createIdentity();
     const graph = socialGraph([edge(a, a, true, '2026-01-01'), { ...edge(a, a, true, '2026-01-01'), body: 'nonsense' } as never]);
     expect(graph.size).toBe(0);
+  });
+
+  it('hands newcomers the epochs the history setting allows', () => {
+    const now = Date.parse('2026-10-21T12:00:00.000Z');
+    const day = (d: number) => new Date(now - d * 24 * 3600 * 1000).toISOString();
+    const space = { keys: { '0': 'a', '1': 'b', '2': 'c', '3': 'd' } };
+    const starts = new Map([[1, day(90)], [2, day(40)], [3, day(10)]]);
+    expect(epochsToShare(space, 'all', starts, now)).toEqual([0, 1, 2, 3]);
+    // The one current 30 days ago (2), and those since (3).
+    expect(epochsToShare(space, '30d', starts, now)).toEqual([2, 3]);
+    expect(epochsToShare(space, 'joining', starts, now)).toEqual([3]);
+    expect(epochsToShare({ keys: { '0': 'a' } }, '30d', new Map(), now)).toEqual([0]);
   });
 });

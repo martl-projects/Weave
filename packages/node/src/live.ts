@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import { createServer as createHttpServer, request as httpRequest, Agent as HttpAgent, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import { createConnection, createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 import { b64u, canonicalJson, publicKeyFromDid, sign, utf8, verify, type Did, type Json, type Room, type SigningIdentity } from '@weave/core';
 import { readLine, roomKeyPair, splice, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
@@ -49,6 +50,11 @@ export interface LiveHost {
   mayJoin(room: Room, person: Did): boolean;
   /** The port this node's room shares (host side). */
   servicePort(room: Room): number | undefined;
+  /**
+   * For a room whose service is http and whose app Weave can vouch to (Weave and Docker): a fresh, signed
+   * X-Weave-Person value for this person. Undefined: the tunnel passes the bytes through untouched.
+   */
+  personHeader?(room: Room, person: Did): string | undefined;
   seed(roomId: string): Uint8Array;
   nameOf(did: Did): string | undefined;
   changed(): void;
@@ -62,6 +68,8 @@ interface Hosting {
   /** Whether the app answers on the room's port, as last checked. */
   appReady: boolean;
   watch?: NodeJS.Timeout;
+  /** The room's HTTP proxy, which adds X-Weave-Person to every request (started with the first tunnel that needs it). */
+  proxy?: Promise<{ server: HttpServer; port: number }>;
 }
 
 interface Joined {
@@ -175,6 +183,9 @@ export class LiveRooms {
     clearInterval(hosting.watch);
     for (const socket of hosting.controls.keys()) socket.destroy();
     await hosting.server.close().catch(() => {});
+    const proxy = await hosting.proxy?.catch(() => undefined);
+    proxy?.server.closeAllConnections();
+    proxy?.server.close();
     this.#host.changed();
   }
 
@@ -187,7 +198,10 @@ export class LiveRooms {
     if (proof.purpose === 'tunnel') {
       const port = this.#host.servicePort(hosting.room);
       if (!port) return void socket.destroy();
-      const local = createConnection({ host: '127.0.0.1', port });
+      // An http service the app can tell people apart in by a signed header: through the room's proxy, which adds it.
+      const vouched = this.#host.personHeader?.(hosting.room, person) !== undefined;
+      const target = vouched ? (await (hosting.proxy ??= this.#startProxy(hosting))).port : port;
+      const local = createConnection({ host: '127.0.0.1', port: target });
       local.on('error', () => socket.destroy());
       // Registered before splice, so it runs before any bytes reach the app (and the app could ask who sent them).
       local.once('connect', () => {
@@ -214,6 +228,76 @@ export class LiveRooms {
     send(socket, { type: 'state', peers: this.peers(hosting.room.id), chat: hosting.chat.slice(-50) as unknown as Json, appReady: hosting.appReady });
     this.#broadcastState(hosting);
     this.#host.changed();
+  }
+
+  /** Whose tunnel a local port belongs to, for the proxy: and its own connections to the app count as theirs too. */
+  #remember(socket: Socket, person: Did, room: string): void {
+    const at = socket.localPort;
+    if (!at) return;
+    this.#tunnels.set(at, { person, room, socket });
+    socket.once('close', () => {
+      if (this.#tunnels.get(at)?.socket === socket) this.#tunnels.delete(at);
+    });
+  }
+
+  /**
+   * The room's HTTP proxy (Weave and Docker): tunnels arrive here, it knows each one's person by its port, and
+   * forwards every request to the app with a fresh X-Weave-Person (a header a player sent is dropped). WebSockets
+   * get it on their upgrade request. Its own connections to the app count as the person's too, so apps asking
+   * by port still find them. Only on 127.0.0.1.
+   */
+  async #startProxy(hosting: Hosting): Promise<{ server: HttpServer; port: number }> {
+    const whoIs = (socket: Socket) => this.#tunnels.get(socket.remotePort ?? 0);
+    const headersFor = (req: IncomingMessage, person: Did): Record<string, string | string[]> => {
+      const headers: Record<string, string | string[]> = {};
+      for (const [key, value] of Object.entries(req.headers)) if (value !== undefined && key !== 'x-weave-person') headers[key] = value;
+      const vouch = this.#host.personHeader?.(hosting.room, person);
+      if (vouch) headers['x-weave-person'] = vouch;
+      return headers;
+    };
+    // One agent per player connection: its sockets to the app are that player's.
+    const agents = new WeakMap<Socket, HttpAgent>();
+    const server = createHttpServer((req, res) => {
+      const tunnel = whoIs(req.socket);
+      const port = this.#host.servicePort(hosting.room);
+      if (!tunnel || !port) return void res.writeHead(502).end();
+      let agent = agents.get(req.socket);
+      if (!agent) {
+        agent = new HttpAgent({ keepAlive: true, maxSockets: 4 });
+        agents.set(req.socket, agent);
+        req.socket.once('close', () => agent!.destroy());
+      }
+      const out = httpRequest({ host: '127.0.0.1', port, method: req.method, path: req.url, headers: headersFor(req, tunnel.person), agent }, (answer) => {
+        res.writeHead(answer.statusCode ?? 502, answer.rawHeaders);
+        answer.pipe(res);
+      });
+      out.on('socket', (socket) => {
+        if (socket.localPort) this.#remember(socket, tunnel.person, tunnel.room);
+        else socket.once('connect', () => this.#remember(socket, tunnel.person, tunnel.room));
+      });
+      out.on('error', () => (res.headersSent ? res.destroy() : res.writeHead(502).end()));
+      req.pipe(out);
+    });
+    server.on('upgrade', (req, socket: Socket, head: Buffer) => {
+      const tunnel = whoIs(socket);
+      const port = this.#host.servicePort(hosting.room);
+      if (!tunnel || !port) return void socket.destroy();
+      const app = createConnection({ host: '127.0.0.1', port });
+      app.on('error', () => socket.destroy());
+      socket.on('error', () => app.destroy());
+      app.once('connect', () => {
+        this.#remember(app, tunnel.person, tunnel.room);
+        const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`];
+        for (const [key, value] of Object.entries(headersFor(req, tunnel.person))) for (const v of Array.isArray(value) ? value : [value]) lines.push(`${key}: ${v}`);
+        app.write(`${lines.join('\r\n')}\r\n\r\n`);
+        if (head.length) app.write(head);
+        app.pipe(socket);
+        socket.pipe(app);
+      });
+    });
+    server.on('clientError', (_error, socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return { server, port: (server.address() as AddressInfo).port };
   }
 
   #verify(room: Room, socket: DhtSocket, line: string): Did | undefined {
