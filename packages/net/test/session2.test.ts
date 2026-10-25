@@ -133,11 +133,33 @@ describe('PeerSession2: members-only sync', () => {
     const got: string[] = [];
     sx.on('data', (chunk) => got.push(chunk.toString()));
     // A tag for this space, but made with another connection's handshake hash (as a relay replaying someone's hello would).
-    const replayed = spaceTag(KEYS['group:a'], randomBytes(32));
+    const replayed = spaceTag(KEYS['group:a'], randomBytes(32), 'responder');
     sx.write(JSON.stringify({ t: 'hello', v: 2, tags: [replayed] }) + '\n');
     sx.write(JSON.stringify({ t: 'fetch', space: 'group:a', ids: a.replica.events().map((r) => r.id) }) + '\n');
     await settle(a);
     expect(got.join('')).not.toContain('"group:a","n"');
+    expect(got.join('')).not.toContain('secret');
+  });
+
+  it('takes no tags reflected back: a peer echoing our hello proves nothing (JXyGnTeb)', async () => {
+    const a = peer('group:a');
+    say(a, 'group:a', 'secret');
+    const [sa, sx] = duplexPair();
+    new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces } });
+    const got: string[] = [];
+    sx.on('data', (chunk) => {
+      got.push(chunk.toString());
+      // A peer with no key at all: it echoes every hello it gets, then asks for everything.
+      for (const line of chunk.toString().split('\n')) {
+        if (!line.startsWith('{"t":"hello"')) continue;
+        sx.write(line + '\n');
+        sx.write(JSON.stringify({ t: 'sync', space: 'group:a', since: '' }) + '\n');
+        sx.write(JSON.stringify({ t: 'fetch', space: 'group:a', ids: a.replica.events().map((r) => r.id) }) + '\n');
+      }
+    });
+    await settle(a);
+    expect(got.join('')).not.toContain('"group:a","n"');
+    expect(got.join('')).not.toContain('"t":"have"');
     expect(got.join('')).not.toContain('secret');
   });
 
