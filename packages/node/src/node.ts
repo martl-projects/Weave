@@ -6010,7 +6010,8 @@ export class WeaveNode implements Backend {
           ...(org.signIn ? { signIn: org.signIn } : {}),
         });
         // Published, so every node holds the company's accounts to it (and counts their links only while allowed).
-        if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy } });
+        // With the last number of each company account's keys it holds: what they sign past it is held to the policy, whatever date it claims.
+        if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy, from: this.#companyKeysUpTo() } });
         return;
       }
       case 'chat': {
@@ -6174,9 +6175,20 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- company policy (stage 11)
 
   /** Companies' published policies, by company. Read once, then kept up to date as policies arrive (it's asked while events are received). */
-  #policyCache?: Map<Did, CompanyPolicy & { time: string }>;
+  #policyCache?: Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }>;
 
-  #policies(): Map<Did, CompanyPolicy & { time: string }> {
+  /** The last number of every key of this company's accounts that this (the company's) node holds. */
+  #companyKeysUpTo(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const signer of this.replica.signers()) {
+      const person = this.replica.authority.personOf(signer);
+      if (person === this.identity.author || this.replica.authority.keys(person).org !== this.identity.author) continue;
+      out[signer] = this.replica.number(signer);
+    }
+    return out;
+  }
+
+  #policies(): Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }> {
     if (!this.#policyCache) {
       this.#policyCache = new Map();
       for (const r of this.replica.events((e) => e.kind === KIND_ORG_POLICY && e.scope === 'public')) this.#takePolicy(r);
@@ -6186,11 +6198,13 @@ export class WeaveNode implements Backend {
 
   #takePolicy(r: { author: Did; time: string; body: Json }): void {
     const before = this.#policyCache!.get(r.author);
-    if (!before || before.time <= r.time) this.#policyCache!.set(r.author, { ...readPolicy(r.body), time: r.time });
+    const from = (r.body as { from?: unknown } | null)?.from;
+    const upTo = from && typeof from === 'object' && !Array.isArray(from) ? new Map(Object.entries(from as Record<string, unknown>).filter((e): e is [Did, number] => isDid(e[0]) && Number.isSafeInteger(e[1]))) : undefined;
+    if (!before || before.time <= r.time) this.#policyCache!.set(r.author, { ...readPolicy(r.body), time: r.time, ...(upTo ? { from: upTo } : {}) });
   }
 
   /** A company account's company policy, if its company published one. */
-  #policyOf(person: Did): { org: Did; policy: CompanyPolicy & { time: string } } | undefined {
+  #policyOf(person: Did): { org: Did; policy: CompanyPolicy & { time: string; from?: Map<Did, number> } } | undefined {
     const org = this.replica.authority.keys(person).org;
     const policy = org ? this.#policies().get(org) : undefined;
     return org && policy ? { org, policy } : undefined;
@@ -6205,12 +6219,17 @@ export class WeaveNode implements Backend {
 
   /**
    * What a company account signs against its company's published policy, from
-   * the time it was published: refused by its own node when writing and by
-   * every node when receiving. Leaving, identity and keys are always allowed.
+   * when it was published: refused by its own node when writing and by every
+   * node when receiving. Leaving, identity and keys are always allowed. "From
+   * when" is by number where the policy names them (what each key had signed by
+   * then), so backdating doesn't get past it; by time for older policies.
    */
-  #policyRefuses(event: { author: Did; space: string; kind: string; time: string }, body: Json | undefined): string | undefined {
+  #policyRefuses(event: { author: Did; signer?: Did; n?: number; space: string; kind: string; time: string }, body: Json | undefined): string | undefined {
     const found = this.#policyOf(event.author);
-    if (!found || event.time < found.policy.time || ALWAYS_ALLOWED.has(event.kind)) return undefined;
+    if (!found || ALWAYS_ALLOWED.has(event.kind)) return undefined;
+    const from = found.policy.from;
+    const earlier = from && event.signer && event.n !== undefined ? event.n <= (from.get(event.signer) ?? 0) : event.time < found.policy.time;
+    if (earlier) return undefined;
     const { org, policy } = found;
     const who = this.nameOf(org) ?? 'The company';
     const colleague = (did: Did) => did === org || this.replica.authority.keys(did).org === org;
