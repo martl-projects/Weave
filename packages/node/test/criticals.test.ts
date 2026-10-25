@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
+import { isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
 import { loadSpaces, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 /* Regression tests from Julian's pre-release review: each one reproduces an issue and checks it stays fixed. */
@@ -151,7 +151,7 @@ describe('a removed member can\'t plant old-dated content at numbers the remover
     await bob.removeMember('Home', 'Alice');
     const s = bob.replica.store.contentCount(alice.identity.did, spaceScope(home));
     expect(plant(alice, bob, home, gap, 'planted, no number').status).toBe('accepted');
-    expect(plant(alice, bob, home, gap + 1, 'planted at a seen number', s).reason).toMatch(/fork/);
+    expect(plant(alice, bob, home, gap + 1, 'planted at a seen number', s)).toMatchObject({ reason: expect.stringMatching(/fork/) });
     expect(plant(alice, bob, home, gap - 1 > 0 ? gap - 1 : gap + 2, 'planted past the head', s + 1).status).toBe('accepted');
     const texts = (await bob.messages('Home')).map((m) => m.text);
     expect(texts).toEqual(expect.arrayContaining(['hi', 'bye']));
@@ -167,5 +167,51 @@ describe('a removed member can\'t plant old-dated content at numbers the remover
     const s = bob.replica.store.contentCount(alice.identity.did, spaceScope(home));
     expect(plant(alice, bob, home, gap, 'planted past the head', s + 1).status).toBe('accepted');
     expect((await bob.messages('Home')).map((m) => m.text).filter((t) => t.startsWith('planted'))).toEqual([]);
+  });
+});
+
+describe("a member's own rekey doesn't stop rotation after they leave (Gr9S4DLf)", () => {
+  const groupEpoch = async (node: WeaveNode) => (await node.spaces('group'))[0].epoch;
+
+  it('a future-dated rekey with no boxes, then a leave: the founder still rotates', async () => {
+    const [martin, lena] = [person('Martin'), person('Lena')];
+    const all = [martin, lena];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Synth friends');
+    await lena.joinSpace(await martin.invite('Synth friends'));
+    syncAll();
+    const space = stored(lena, 'Synth friends');
+    lena.replica.write(lena.identity, { kind: KIND_REKEY, scope: spaceScope(space), body: { epoch: 0, boxes: {} }, time: '2099-01-01T00:00:00.000Z' });
+    syncAll();
+    await lena.leave('Synth friends');
+    syncAll();
+    await martin.reconcile();
+    expect(await groupEpoch(martin)).toBe(1);
+    // Once: the rotation itself counts as the rekey after the leave.
+    await martin.reconcile();
+    expect(await groupEpoch(martin)).toBe(1);
+  });
+
+  it('a leave dated long before the last rekey still rotates once it arrives after it', async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Synth friends');
+    await lena.joinSpace(await martin.invite('Synth friends'));
+    await kofi.joinSpace(await martin.invite('Synth friends'));
+    syncAll();
+    await martin.removeMember('Synth friends', 'Kofi'); // a rekey, to epoch 1
+    syncAll();
+    expect(await groupEpoch(martin)).toBe(1);
+    lena.clock = () => Date.now() - 30 * 24 * 3600 * 1000;
+    const backdated = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    lena.replica.write(lena.identity, { ...sealFor(stored(lena, 'Synth friends'), { kind: 'weave.space.leave', body: {} }), time: backdated });
+    syncAll();
+    await martin.reconcile();
+    expect(await groupEpoch(martin)).toBe(2);
   });
 });
