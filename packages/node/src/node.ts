@@ -499,6 +499,7 @@ import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchai
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
+import { Apps, type AppsCore } from './apps.ts';
 import { Payments, type PaymentsCore } from './payments.ts';
 import { Badges, type BadgesCore } from './badges.ts';
 import { Companies, type CompaniesCore } from './companies.ts';
@@ -520,12 +521,6 @@ export const FOLLOWED_BOARDS = ['releases', 'showcase'];
 const SELF_SCOPE = 'self';
 
 
-/** A GitHub sign-in waiting for its code, or why the last one failed. */
-/** An app being installed from its release, or why that failed. */
-interface InstallJob {
-  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
-  error?: string;
-}
 
 interface GitHubLogin {
   code?: DeviceCode;
@@ -666,12 +661,12 @@ export class WeaveNode implements Backend {
       const grant = this.replica.authority.grant(signer);
       return grant && grant.revokedAfter !== undefined ? undefined : person;
     },
-    mayJoin: (room, person) => this.#mayJoin(room, person),
-    servicePort: (room) => this.#roomService(room)?.port,
-    personHeader: (room, person) => this.#personHeader(room, person),
-    seed: (roomId) => this.#roomSeed(roomId),
+    mayJoin: (room, person) => this.#appsHere.mayJoin(room, person),
+    servicePort: (room) => this.#appsHere.roomService(room)?.port,
+    personHeader: (room, person) => this.#appsHere.personHeader(room, person),
+    seed: (roomId) => this.#appsHere.roomSeed(roomId),
     nameOf: (did) => this.nameOf(did),
-    changed: () => this.#emitLive(),
+    changed: () => this.#appsHere.emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
   /** Watchers told where the app should take its person (see openInApp). */
@@ -707,9 +702,6 @@ export class WeaveNode implements Backend {
     docker: process.env.WEAVE_DOCKER?.trim().startsWith('[') ? (JSON.parse(process.env.WEAVE_DOCKER) as string[]) : [process.env.WEAVE_DOCKER || 'docker'],
   };
   #githubLogin?: GitHubLogin;
-  /** Apps being installed (or failed to), by project id. */
-  #installs = new Map<string, InstallJob>();
-  #installing = new Map<string, Promise<unknown>>();
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
   /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
@@ -724,13 +716,8 @@ export class WeaveNode implements Backend {
     name: () => this.nameOf(this.identity.author),
     call: (method, args) => (this[method] as (...a: unknown[]) => Promise<unknown>).apply(this, args),
     watch: (onItem, signal) => this.watch(onItem, signal),
-    roomPort: async (roomId) => this.#roomPort(roomId),
+    roomPort: async (roomId) => this.#appsHere.roomPort(roomId),
   });
-  /** Apps this node started for the person, by project id. */
-  #apps = new AppProcesses(() => this.#emitLive());
-  /** The app API (see appapi.ts), started when an app first needs it; its tokens, one per project, for this run. */
-  #appApi?: Promise<AppApiServer>;
-  #appTokens = new Map<string, string>();
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -817,6 +804,38 @@ export class WeaveNode implements Backend {
       invalidateDecoded: this.#invalidateDecoded.bind(this),
     });
     // More concern modules, each over its own narrow core:
+    this.#appsHere = new Apps(this, {
+      project: this.#project.bind(this),
+      agentMay: this.#agentMay.bind(this),
+      maintainerState: this.#maintainerState.bind(this),
+      state: this.#state.bind(this),
+      entries: this.#entries.bind(this),
+      get spaces() {
+        return node.#spaces;
+      },
+      githubAuth: this.#githubAuth.bind(this),
+      get live() {
+        return node.#live;
+      },
+      get payments() {
+        return node.#payments;
+      },
+      get badges() {
+        return node.#badges;
+      },
+      githubApp: this.#githubApp.bind(this),
+      get swarm() {
+        return node.#swarm;
+      },
+      space: this.#space.bind(this),
+      get managed() {
+        return node.#managed;
+      },
+      selfSecret: this.#selfSecret.bind(this),
+      get liveListeners() {
+        return node.#liveListeners;
+      },
+    });
     this.#payments = new Payments(this, {
       createSpace: this.#createSpace.bind(this),
       get encryptionKeyOf() {
@@ -865,7 +884,7 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#payments.gumroadFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
+    for (const file of [this.#githubFile, this.#payments.gumroadFile, this.#appsHere.appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
     this.#managed.loadHalves();
     // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
@@ -1172,16 +1191,12 @@ export class WeaveNode implements Backend {
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
-    for (const { room } of this.#allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
+    for (const { room } of this.#appsHere.allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
     await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
   }
 
   async goOffline(): Promise<void> {
-    this.#apps.stopAll();
-    const appApi = this.#appApi;
-    this.#appApi = undefined;
-    this.#appTokens.clear();
-    await (await appApi?.catch(() => undefined))?.close();
+    await this.#appsHere.shutdownApps();
     await this.#remote.close();
     await this.#live.close();
     await this.#swarm?.destroy();
@@ -2114,7 +2129,7 @@ export class WeaveNode implements Backend {
     const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: missing, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
     // Keep what's pending, and the last few answers.
     writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
-    this.#emitLive({
+    this.#appsHere.emitLive({
       type: 'permission',
       category: 'requests',
       title: `Your agent ${agent.name} asks for a permission`,
@@ -2151,7 +2166,7 @@ export class WeaveNode implements Backend {
     }
     request.state = input.allow ? 'allowed' : 'declined';
     writeJson(this.#requestsFile, requests);
-    this.#emitLive();
+    this.#appsHere.emitLive();
     return request;
   }
 
@@ -3001,719 +3016,86 @@ export class WeaveNode implements Backend {
       }));
   }
 
-  // ---------------------------------------------------------------- rooms and shared apps
+  // A project's app, installed and run by hosts, its API, settings and updates, and live rooms: apps.ts (Apps). The node delegates.
 
-  async projectApp(ref: string): Promise<AppManifest | null> {
-    return this.#app(this.#project(ref)) ?? null;
+  projectApp(...args: Parameters<Apps['projectApp']>): ReturnType<Apps['projectApp']> {
+    return this.#appsHere.projectApp(...args);
   }
 
-  async publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest> {
-    if (input.as) this.#agentMay(input.as, KIND_APP);
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    let manifest = parseManifest(input.manifest);
-    // weave.app.json usually doesn't list the release files ("weave app release" adds them): keep the ones published.
-    const before = this.#app(project)?.install;
-    if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
-    if (input.folder) this.#rememberAppFolder(project.id, input.folder);
-    return manifest;
+  publishApp(...args: Parameters<Apps['publishApp']>): ReturnType<Apps['publishApp']> {
+    return this.#appsHere.publishApp(...args);
   }
 
-  /** The command this computer starts a project's app with: its container when there's one and Docker runs, else its release build's when Weave installed one. */
-  #startCommand(project: StoredSpace, app: AppManifest | undefined): string[] | undefined {
-    if (this.#containerOf(app)) return this.#containerCommand(project, app!);
-    return startCommand(app, platformKey(), !!this.#installed(project.id));
+  appLaunch(...args: Parameters<Apps['appLaunch']>): ReturnType<Apps['appLaunch']> {
+    return this.#appsHere.appLaunch(...args);
   }
 
-  // ---------------------------------------------------------------- apps in containers (Weave and Docker)
-
-  /** Whether Docker answers on this computer: asked at most every 30 seconds. */
-  #dockerSeen?: { at: number; up: boolean };
-
-  #dockerUp(): boolean {
-    if (this.#dockerSeen && Date.now() - this.#dockerSeen.at < 30_000) return this.#dockerSeen.up;
-    const [program, ...first] = this.containerSetup.docker;
-    const probe = spawnSync(program, [...first, 'version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
-    const up = probe.status === 0 && !!probe.stdout.trim();
-    this.#dockerSeen = { at: Date.now(), up };
-    return up;
+  updateCheck(...args: Parameters<Apps['updateCheck']>): ReturnType<Apps['updateCheck']> {
+    return this.#appsHere.updateCheck(...args);
   }
 
-  /** The release's image, when it has one and Docker runs here. */
-  #containerOf(app: AppManifest | undefined): AppImage | undefined {
-    const image = app?.install?.image;
-    return image && app?.start?.image && this.#dockerUp() ? image : undefined;
+  appReleases(...args: Parameters<Apps['appReleases']>): ReturnType<Apps['appReleases']> {
+    return this.#appsHere.appReleases(...args);
   }
 
-  /** The container's name: one per project on this computer. */
-  #containerName(project: StoredSpace): string {
-    return `weave-${project.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`;
+  setAppFolder(...args: Parameters<Apps['setAppFolder']>): ReturnType<Apps['setAppFolder']> {
+    return this.#appsHere.setAppFolder(...args);
   }
 
-  /**
-   * How the app's container runs: by its digest, with only the services' ports (on 127.0.0.1; on Linux in the
-   * host's network, so tunnel ports stay as they are), no extra privileges, nothing of the computer mounted, and its
-   * settings and Weave's variables by name only (their values come from the environment, not the command line).
-   */
-  #containerCommand(project: StoredSpace, app: AppManifest): string[] {
-    const image = app.install!.image!;
-    const linux = process.platform === 'linux';
-    const network = linux ? ['--network', 'host'] : app.services.flatMap((s) => ['-p', `127.0.0.1:${s.port}:${s.port}${s.protocol === 'tcp' ? '/tcp' : ''}`]);
-    const names = [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT'];
-    return [
-      ...this.containerSetup.docker,
-      'run',
-      '--rm',
-      '--name',
-      this.#containerName(project),
-      '--cap-drop',
-      'ALL',
-      '--cap-add',
-      'NET_BIND_SERVICE',
-      '--security-opt',
-      'no-new-privileges',
-      ...(linux ? [] : ['--add-host', 'host.docker.internal:host-gateway']),
-      ...network,
-      ...names.flatMap((n) => ['-e', n]),
-      `${image.ref}@${image.digest}`,
-    ];
+  launchApp(...args: Parameters<Apps['launchApp']>): ReturnType<Apps['launchApp']> {
+    return this.#appsHere.launchApp(...args);
   }
 
-  async appLaunch(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    const app = this.#app(project);
-    const start = app?.start;
-    const command = this.#startCommand(project, app);
-    const install = this.#installInfo(project, app);
-    const folder = this.config.appFolders[project.id];
-    const run = this.#apps.status(project.id);
-    return {
-      ...(command ? { command } : {}),
-      ...(start?.hint ? { hint: start.hint } : {}),
-      ...(folder ? { folder } : {}),
-      approved: !!command && !!folder && this.config.approvedLaunches[project.id] === launchFingerprint(command, folder),
-      running: this.#apps.running(project.id),
-      ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
-      log: run?.log ?? [],
-      ...(app?.env ? { settings: app.env.map((e) => ({ ...e, set: !!this.#appSettings()[project.id]?.[e.name] })) } : {}),
-      ...(app ? { release: this.#releaseInfo(project, app) } : {}),
-      ...(install ? { install } : {}),
-      ...(app?.start?.image && app.install?.image
-        ? { container: { image: app.install.image.ref, tag: app.install.image.tag, digest: app.install.image.digest, docker: this.#dockerUp(), active: !!this.#containerOf(app) } }
-        : {}),
-    };
+  setAppSetting(...args: Parameters<Apps['setAppSetting']>): ReturnType<Apps['setAppSetting']> {
+    return this.#appsHere.setAppSetting(...args);
   }
 
-  /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
-  #releaseInfo(project: StoredSpace, app: AppManifest): { canRelease: boolean; repo?: string } {
-    const state = this.#state(project);
-    const linked = reposOf(this.#entries(project), (did) => mayAct(state, did, 'curate').ok);
-    const repo = app.install?.github ?? (linked.length === 1 ? linked[0].repo : undefined);
-    return { canRelease: mayAct(state, this.identity.author, 'curate').ok, ...(repo ? { repo } : {}) };
+  appEnv(...args: Parameters<Apps['appEnv']>): ReturnType<Apps['appEnv']> {
+    return this.#appsHere.appEnv(...args);
   }
 
-  // ---------------------------------------------------------------- updates
-
-  async updateCheck(input: { current: string }): Promise<UpdateInfo> {
-    const current = parseVersion(String(input?.current ?? ''));
-    if (!current) throw new Error(`"${input?.current}" isn't a version like 0.3.0`);
-    // A company's IT rolls out versions itself (managed settings): no prompts.
-    if (machinePolicy().updates === false) return { current: input.current } as UpdateInfo;
-    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
-    const found: NonNullable<UpdateInfo['latest']>[] = [];
-
-    // Release posts in the Weave project, signed by its maintainers: every member has them, no sign-in needed.
-    const project = this.#spaces.get(source.project);
-    if (project?.kind === 'project') {
-      const maintainers = this.#state(project).maintainers;
-      for (const post of await this.posts({ space: project.id, board: 'releases' })) {
-        const version = /^weave\b/i.test(post.title) ? parseVersion(post.title) : undefined;
-        if (!version || !maintainers.has(post.by.did)) continue;
-        found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
-      }
-    }
-    // The repository's releases, with your GitHub sign-in if you have one (the repository may be private).
-    try {
-      const auth = this.#githubAuth();
-      const releases = await withTimeout(new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(source.repo), 8000);
-      for (const r of releases) {
-        const version = parseVersion(r.tag);
-        if (version) found.push({ version: formatVersion(version), url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(r.tag)}`, ...(r.published ? { published: r.published } : {}), source: 'github' });
-      }
-    } catch {
-      // unreachable or private without access: the release posts are enough
-    }
-
-    // The newest version; for the same version, the release post (it has the notes) wins.
-    const latest = found.sort((a, b) => compareVersions(b.version, a.version) || (a.source === 'weave' ? -1 : 1))[0];
-    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
+  installApp(...args: Parameters<Apps['installApp']>): ReturnType<Apps['installApp']> {
+    return this.#appsHere.installApp(...args);
   }
 
-  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
-    const project = this.#project(ref);
-    const app = this.#app(project);
-    const repo = app ? this.#releaseInfo(project, app).repo : undefined;
-    if (!repo) throw new Error(`${project.name} has no GitHub repository to take releases from: link one in its settings`);
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const [releases, releaseWorkflow] = await Promise.all([client.releases(repo), client.hasReleaseWorkflow(repo)]);
-    return { repo, releases, ...(releaseWorkflow !== undefined ? { releaseWorkflow } : {}) };
+  installDone(...args: Parameters<Apps['installDone']>): ReturnType<Apps['installDone']> {
+    return this.#appsHere.installDone(...args);
   }
 
-  async setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    if (input.folder.trim()) this.#rememberAppFolder(project.id, input.folder.trim());
-    else {
-      const { [project.id]: _gone, ...rest } = this.config.appFolders;
-      this.config = { ...this.config, appFolders: rest };
-      saveConfig(this.home, this.config);
-    }
-    return this.appLaunch(project.id);
+  releaseApp(...args: Parameters<Apps['releaseApp']>): ReturnType<Apps['releaseApp']> {
+    return this.#appsHere.releaseApp(...args);
   }
 
-  async launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const command = this.#startCommand(project, app);
-    if (!app || !command) throw new Error(`${project.name}'s app has no start command; start it yourself${app?.start?.hint ? `: ${app.start.hint}` : ''}`);
-    const container = this.#containerOf(app);
-    // A container needs no copy of the app: it runs in Weave's own folder for the project.
-    const folder = container ? this.#appsDir(project.id) : this.config.appFolders[project.id];
-    if (!folder) throw new Error(`choose where ${app.name} is on this computer first (the folder with its weave.app.json)`);
-    if (container) mkdirSync(folder, { recursive: true });
-    else this.#checkAppFolder(project.id, folder);
-    const fingerprint = launchFingerprint(command, folder);
-    if (this.config.approvedLaunches[project.id] !== fingerprint) {
-      if (!input.approve) throw new Error(`approve the command first: Weave would run "${command.join(' ')}" in ${folder}`);
-      this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: fingerprint } };
-      saveConfig(this.home, this.config);
-    }
-    const values = this.#appSettings()[project.id] ?? {};
-    const missing = (app.env ?? []).filter((e) => !e.optional && !values[e.name]);
-    if (missing.length) throw new Error(`${app.name} needs ${missing.map((e) => e.label).join(', ')} first: fill ${missing.length === 1 ? 'it' : 'them'} in under Live (or weave app set ${missing[0].name} -p ${project.name})`);
-    // Only the settings this manifest names, and Weave's own variables last, so a setting can't stand in for them.
-    const settings = Object.fromEntries((app.env ?? []).filter((e) => values[e.name]).map((e) => [e.name, values[e.name]]));
-    const weave = await this.appEnv(project.id);
-    if (!container) {
-      this.#apps.start(project.id, command, folder, { ...settings, ...weave });
-      return this.appLaunch(project.id);
-    }
-    // In a container, Weave's app API is the host's: reached as host.docker.internal (on Linux the host's network is shared).
-    const api = process.platform === 'linux' ? weave.WEAVE_API : weave.WEAVE_API.replace('127.0.0.1', 'host.docker.internal');
-    const [docker, ...first] = this.containerSetup.docker;
-    const name = this.#containerName(project);
-    // One left from before (a crash, a stop that didn't reach Docker) would block the name.
-    spawnSync(docker, [...first, 'rm', '-f', name], { windowsHide: true, timeout: 20_000 });
-    this.#apps.start(project.id, command, folder, { ...settings, ...weave, WEAVE_API: api }, () => void spawnSync(docker, [...first, 'stop', '-t', '5', name], { windowsHide: true, timeout: 20_000 }));
-    return this.appLaunch(project.id);
+  stopApp(...args: Parameters<Apps['stopApp']>): ReturnType<Apps['stopApp']> {
+    return this.#appsHere.stopApp(...args);
   }
 
-  // ---------------------------------------------------------------- app settings
-
-  get #appSettingsFile(): string {
-    return joinPath(this.home.dir, 'app-settings.json');
+  rooms(...args: Parameters<Apps['rooms']>): ReturnType<Apps['rooms']> {
+    return this.#appsHere.rooms(...args);
   }
 
-  /** Values hosts typed for their apps' settings: project id → variable → value. This computer only. */
-  #appSettings(): Record<string, Record<string, string>> {
-    return readSecretJson<Record<string, Record<string, string>>>(this.home, this.#appSettingsFile) ?? {};
+  hostRoom(...args: Parameters<Apps['hostRoom']>): ReturnType<Apps['hostRoom']> {
+    return this.#appsHere.hostRoom(...args);
   }
 
-  async setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const setting = app?.env?.find((e) => e.name === input.name);
-    if (!app || !setting) throw new Error(`${app?.name ?? project.name} doesn't ask for ${input.name}${app?.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
-    const value = typeof input.value === 'string' ? input.value.trim() : '';
-    if (value.length > 4096 || value.includes('\0')) throw new Error(`${setting.label} is too long`);
-    const all = this.#appSettings();
-    const mine = { ...(all[project.id] ?? {}) };
-    if (value) mine[setting.name] = value;
-    else delete mine[setting.name];
-    if (Object.keys(mine).length) all[project.id] = mine;
-    else delete all[project.id];
-    writeSecretJson(this.home, this.#appSettingsFile, all);
-    this.#emitLive();
-    return this.appLaunch(project.id);
+  endRoom(...args: Parameters<Apps['endRoom']>): ReturnType<Apps['endRoom']> {
+    return this.#appsHere.endRoom(...args);
   }
 
-  // ---------------------------------------------------------------- app API
-
-  /** What a project's app needs to ask Weave who its players are: Weave passes it when it starts the app; `weave app env` prints it. */
-  async appEnv(ref: string): Promise<AppEnv> {
-    const project = this.#project(ref);
-    this.#appApi ??= startAppApi(
-      (token) => [...this.#appTokens].find(([, t]) => sameToken(t, token))?.[0],
-      (projectId, route, params) => this.#appAnswer(projectId, route, params),
-    );
-    const api = await this.#appApi;
-    let token = this.#appTokens.get(project.id);
-    if (!token) this.#appTokens.set(project.id, (token = b64u.encode(randomBytes(24))));
-    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: token, WEAVE_PROJECT: project.id };
+  joinRoom(...args: Parameters<Apps['joinRoom']>): ReturnType<Apps['joinRoom']> {
+    return this.#appsHere.joinRoom(...args);
   }
 
-  #appAnswer(projectId: string, route: string, params: URLSearchParams): unknown {
-    const project = this.#spaces.get(projectId);
-    if (!project) throw new AppApiError(404, 'this project is no longer here');
-    const me = this.identity.author;
-    if (route === '/v1/me') return this.#appPerson(project, me);
-    if (route === '/v1/who') {
-      const port = Number(params.get('port'));
-      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('port: the remote port of the connection (a number)');
-      const found = this.#live.personOnPort(port);
-      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.project.id === projectId);
-      if (!found || !room) throw new AppApiError(404, 'not a connection through one of this project’s rooms');
-      return { ...this.#appPerson(project, found.person), room: { id: room.room.id, name: room.room.name } };
-    }
-    if (route === '/v1/project') {
-      const rooms = this.#allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.#live.isHosting(r.room.id));
-      return {
-        id: project.id,
-        name: project.name,
-        host: { did: me, name: this.nameOf(me) },
-        rooms: rooms.map(({ room }) => ({ id: room.id, name: room.name, people: this.#live.peers(room.id).map((did) => this.#appPerson(project, did)) })),
-        groups: this.#appGroups(project).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
-      };
-    }
-    if (route === '/v1/access') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose access to look up');
-      const groups = this.#appGroups(project);
-      const group = params.get('group');
-      const asked = group ? groups.filter(({ space }) => space.id === group || space.name.toLowerCase() === group.toLowerCase()) : groups;
-      if (group && asked.length === 0) throw new AppApiError(404, `no group "${group}" here: only the project's groups and the host's own groups and tiers`);
-      return {
-        ...this.#appPerson(project, did as Did),
-        groups: asked.filter(({ state }) => state.members.has(did as Did)).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
-      };
-    }
-    if (route === '/v1/tickets') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose tickets to look up');
-      const now = new Date(this.clock());
-      return this.#payments.allShows()
-        .filter((s) => s.project === projectId && s.host === this.identity.author)
-        .flatMap((s) => (this.#payments.ticketRecords(s.id).some((r) => r.holder === did) ? [{ show: s.id, name: s.name, ...(s.room ? { room: s.room } : {}), starts: s.starts, ends: s.ends, open: showOpen(s, now), cancelled: s.cancelled }] : []));
-    }
-    if (route === '/v1/badges') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose badges to look up');
-      const { series, badges } = this.#badges.allBadges();
-      const ours = new Map(series.filter((s) => s.project?.id === projectId && s.project.checked && !s.broken).map((s) => [s.id, s]));
-      return badges
-        .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
-        .map((b) => {
-          const s = ours.get(b.series)!;
-          return { id: b.id, series: { id: s.id, name: s.name, symbol: s.symbol, ...(s.image ? { image: s.image } : {}), ...(s.limit ? { limit: s.limit } : {}) }, n: b.n, issuer: { did: b.issuer, name: this.nameOf(b.issuer) }, note: b.note, ...(b.ref ? { ref: b.ref } : {}), ...(b.personal?.published ? { personal: b.personal.published } : {}), time: b.time };
-        });
-    }
-    throw new AppApiError(404, `no route ${route}`);
+  leaveRoom(...args: Parameters<Apps['leaveRoom']>): ReturnType<Apps['leaveRoom']> {
+    return this.#appsHere.leaveRoom(...args);
   }
 
-  /**
-   * X-Weave-Person for a room's http service (Weave and Docker): who this player is, as the app API would say,
-   * the room, and the time, signed with the app's own token (HMAC-SHA256), which only Weave and the app know.
-   * Only for apps Weave gave a token (it started them, or weave app env): otherwise nobody could check it.
-   */
-  #personHeader(room: Room, person: Did): string | undefined {
-    if (this.#roomService(room)?.protocol !== 'http') return undefined;
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    const token = found && this.#appTokens.get(found.project.id);
-    if (!found || !token) return undefined;
-    const payload = Buffer.from(JSON.stringify({ ...this.#appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.clock() / 1000) })).toString('base64url');
-    return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
+  roomChat(...args: Parameters<Apps['roomChat']>): ReturnType<Apps['roomChat']> {
+    return this.#appsHere.roomChat(...args);
   }
 
-  /** A person as an app sees them: who they are and their place in the project. */
-  #appPerson(project: StoredSpace, did: Did): AppPerson {
-    const state = this.#state(project);
-    const name = this.nameOf(did);
-    return {
-      did,
-      ...(name ? { name } : {}),
-      host: did === this.identity.author,
-      member: state.members.has(did) || did === this.identity.author,
-      maintainer: state.maintainers.has(did),
-    };
-  }
-
-  /** Groups an app may ask about: the ones invited into the project, and the host's own groups and tiers. Nothing else of the host's. */
-  #appGroups(project: StoredSpace): Array<{ space: StoredSpace; state: SpaceState }> {
-    const invited = new Set(this.#state(project).groups.keys());
-    const out: Array<{ space: StoredSpace; state: SpaceState }> = [];
-    for (const space of this.#spaces.values()) {
-      if (space.kind !== 'group') continue;
-      const state = this.#state(space);
-      if (invited.has(space.id) || state.founder === this.identity.author) out.push({ space, state });
-    }
-    return out;
-  }
-
-  // ---------------------------------------------------------------- installing the app from its release
-
-  /** Where Weave keeps the apps it installed: apps/<project id>/<tag>. */
-  #appsDir(projectId: string): string {
-    return joinPath(this.home.dir, 'apps', projectId);
-  }
-
-  /** The release Weave installed for a project, while the project's app folder still points into it. */
-  #installed(projectId: string): { tag: string; folder: string } | undefined {
-    const record = readJson<{ tag?: string; folder?: string }>(joinPath(this.#appsDir(projectId), 'installed.json'));
-    return record?.tag && record.folder && this.config.appFolders[projectId] === record.folder ? { tag: record.tag, folder: record.folder } : undefined;
-  }
-
-  #installInfo(project: StoredSpace, app: AppManifest | undefined): AppLaunchInfo['install'] {
-    const install = app?.install;
-    const job = this.#installs.get(project.id);
-    if (!install && !job) return undefined;
-    const asset = install?.assets?.[platformKey()];
-    const installed = this.#installed(project.id);
-    return {
-      ...(install?.tag ? { version: install.tag } : {}),
-      ...(install?.github ? { repo: install.github } : {}),
-      ...(asset ? { asset: { file: asset.file, ...(asset.size ? { size: asset.size } : {}) } } : {}),
-      platform: platformKey(),
-      ...(installed ? { installed: installed.tag } : {}),
-      ...(job?.progress ? { progress: { ...job.progress } } : {}),
-      ...(job?.error ? { error: job.error } : {}),
-      ...(install?.steps ? { steps: install.steps } : {}),
-      ...(install?.app && install.app !== this.#githubApp().slug ? { otherApp: install.app } : {}),
-      ...(asset && startCommand(app, platformKey(), true) ? { command: startCommand(app, platformKey(), true) } : {}),
-    };
-  }
-
-  async installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const install = app?.install;
-    const asset = install?.assets?.[platformKey()];
-    if (!app || !install?.github || !install.tag || !asset) throw new Error(`${project.name} has no release file for this computer (${platformKey()})${install?.steps ? ': install it by hand or with your agent, following its steps' : ''}`);
-    if (install.app && install.app !== this.#githubApp().slug && this.#githubAuth())
-      throw new Error(`${app.name}'s releases go through the GitHub App "${install.app}", and you sign in through "${this.#githubApp().slug}": switch to it in Keys & devices → Linked accounts (https://github.com/apps/${install.app})`);
-    if (this.#installs.get(project.id)?.progress) throw new Error(`${app.name} is being installed already`);
-    if (this.#apps.running(project.id)) throw new Error(`stop ${app.name} first`);
-    const job: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
-    this.#installs.set(project.id, job);
-    const done = this.#installRelease(project, app, { github: install.github, tag: install.tag, asset }, input.approve === true).then(
-      () => this.#installs.delete(project.id),
-      (error: Error) => this.#installs.set(project.id, { error: error.message }),
-    );
-    this.#installing.set(project.id, done.finally(() => this.#emitLive()));
-    return this.appLaunch(project.id);
-  }
-
-  /** Resolves when the install running for a project ends (for tests and the CLI). */
-  async installDone(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    await this.#installing.get(project.id);
-    return this.appLaunch(project.id);
-  }
-
-  async #installRelease(project: StoredSpace, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, approve: boolean): Promise<void> {
-    const job = this.#installs.get(project.id)!;
-    const dir = this.#appsDir(project.id);
-    mkdirSync(dir, { recursive: true });
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const found = (await client.release(release.github, release.tag)).assets.find((a) => a.name === release.asset.file);
-    if (!found) throw new Error(`the release ${release.tag} on GitHub has no file ${release.asset.file}`);
-    const download = await client.download(release.github, found.id);
-    const total = release.asset.size ?? download.size ?? found.size;
-    job.progress = { state: 'downloading', done: 0, ...(total ? { total } : {}) };
-    const file = joinPath(dir, `.download-${release.asset.file}`);
-    await saveVerified(download.body, file, release.asset.sha256, (n) => {
-      job.progress!.done += n;
-    });
-    job.progress = { state: 'unpacking', done: job.progress.done, ...(total ? { total } : {}) };
-    const target = joinPath(dir, tagFolder(release.tag));
-    rmSync(target, { recursive: true, force: true });
-    const root = unpack(file, target);
-    rmSync(file, { force: true });
-    // The folder holds the project's app: say so the way a checkout would, with its manifest.
-    if (!existsSync(joinPath(root, 'weave.app.json'))) writeJson(joinPath(root, 'weave.app.json'), app);
-    this.#rememberAppFolder(project.id, root);
-    const command = startCommand(app, platformKey(), true);
-    if (approve && command) this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: launchFingerprint(command, root) } };
-    saveConfig(this.home, this.config);
-    writeJson(joinPath(dir, 'installed.json'), { tag: release.tag, folder: root, file: release.asset.file, sha256: release.asset.sha256, installed: new Date(this.clock()).toISOString() });
-    // Earlier versions Weave installed go.
-    for (const entry of readdirSync(dir)) if (entry !== tagFolder(release.tag) && entry !== 'installed.json' && !entry.startsWith('.')) rmSync(joinPath(dir, entry), { recursive: true, force: true });
-  }
-
-  async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
-    if (input.as) this.#agentMay(input.as, KIND_APP);
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const published = this.#app(project);
-    const linked = reposOf(this.#entries(project), (did) => mayAct(state, did, 'curate').ok);
-    const repo = input.repo?.trim() || published?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const release = await client.release(repo, input.tag.trim());
-    // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
-    const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
-    let app: AppManifest;
-    if (atTag) {
-      try {
-        app = parseManifest(JSON.parse(atTag));
-      } catch (error) {
-        throw new Error(`weave.app.json in ${repo} at ${release.tag} isn't right: ${(error as Error).message}`);
-      }
-      if (published && published.app !== app.app) throw new Error(`${repo} at ${release.tag} holds the app "${app.app}", but ${project.name}'s app is "${published.app}"`);
-    } else if (published) app = published;
-    else throw new Error(`${repo} has no weave.app.json at ${release.tag}: add one (app, name, services, start), tag again, and release`);
-    if (!release.assets.length && !app.start?.image)
-      throw new Error(
-        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com (or name a container image in weave.app.json: start.image)`,
-      );
-    // The release's container image, pinned by its digest: tagged like the release (v1.2.0, or 1.2.0).
-    let image: AppImage | undefined;
-    if (app.start?.image) {
-      const ref = app.start.image;
-      const tags = [...new Set([release.tag, release.tag.replace(/^v(?=\d)/, '')])];
-      const credentials = auth && imageLocation(ref).host === 'ghcr.io' ? { user: auth.login, token: auth.token } : undefined;
-      const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
-      image = { ref, tag: found.tag, digest: found.digest };
-    }
-    // Which file is for which platform: as given, or guessed from the names.
-    const chosen = new Map<string, ReleaseAsset>();
-    if (input.assets && Object.keys(input.assets).length) {
-      for (const [platform, name] of Object.entries(input.assets)) {
-        const asset = release.assets.find((a) => a.name === name);
-        if (!asset) throw new Error(`the release ${release.tag} has no file ${name}`);
-        chosen.set(platform, asset);
-      }
-    } else {
-      for (const asset of release.assets) {
-        const platform = guessPlatform(asset.name);
-        if (platform && !chosen.has(platform)) chosen.set(platform, asset);
-      }
-    }
-    if (!chosen.size && release.assets.length && !image) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
-    // Fingerprint each file once, so every host's node can check what it downloads.
-    const assets: Record<string, AppAsset> = {};
-    for (const [platform, asset] of chosen) {
-      const download = await client.download(repo, asset.id);
-      const hash = createHash('sha256');
-      const reader = download.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        hash.update(value);
-      }
-      assets[platform] = { file: asset.name, sha256: hash.digest('hex'), size: asset.size };
-    }
-    // Members download through the app the maintainer uses, when it's their own.
-    const own = this.config.githubApp?.slug;
-    const { app: _app, ...before } = { ...published?.install, ...app.install };
-    const { image: _image, assets: _assets, ...kept } = before as AppInstall;
-    const manifest = parseManifest({ ...app, install: { ...kept, github: repo, tag: release.tag, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}), ...(own ? { app: own } : {}) } });
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
-    return manifest;
-  }
-
-  async stopApp(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    this.#apps.stop(project.id);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return this.appLaunch(project.id);
-  }
-
-  #rememberAppFolder(projectId: string, folder: string): void {
-    const full = resolvePath(folder);
-    this.#checkAppFolder(projectId, full);
-    this.config = { ...this.config, appFolders: { ...this.config.appFolders, [projectId]: full } };
-    saveConfig(this.home, this.config);
-  }
-
-  /** The folder must hold this project's app: its weave.app.json with the same app id. */
-  #checkAppFolder(projectId: string, folder: string): void {
-    const file = joinPath(folder, 'weave.app.json');
-    if (!existsSync(file)) throw new Error(`there's no weave.app.json in ${folder}`);
-    let local: { app?: unknown };
-    try {
-      local = JSON.parse(readFileSync(file, 'utf8')) as { app?: unknown };
-    } catch {
-      throw new Error(`${file} isn't valid JSON`);
-    }
-    const published = this.#app(this.#project(projectId));
-    if (published && local.app !== published.app) throw new Error(`${folder} holds the app "${String(local.app)}", but this project's app is "${published.app}"`);
-  }
-
-
-  async rooms(ref?: string): Promise<RoomInfo[]> {
-    const only = ref ? this.#project(ref).id : undefined;
-    const rooms = this.#allRooms().filter(({ room, project }) => room.open && (!only || project.id === only));
-    return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
-  }
-
-  async hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    if (!app) throw new Error(`${project.name} has no app to share yet: a maintainer publishes one with "weave app publish"`);
-    if (!this.#swarm) throw new Error('rooms need your node online: keep the app (or "weave daemon") running');
-    const id = b64u.encode(randomBytes(12));
-    const name = input.name?.trim().slice(0, 60) || `${this.nameOf(this.identity.author) ?? 'Someone'}'s room`;
-    const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : 'participants';
-    const key = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
-    const show = input.show ? this.#payments.showRef(input.show) : undefined;
-    if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} hosts rooms for ${show.name}: they let ticket holders in`);
-    const groups = (input.groups ?? []).map((ref) => {
-      const group = this.#space(ref);
-      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
-      if (!this.#state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
-      return group.id;
-    });
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}), open: true } }));
-    const room = this.#roomById(id).room;
-    await this.#live.host(room);
-    return this.#roomInfo(room, project);
-  }
-
-  async endRoom(ref: string): Promise<void> {
-    const { room, project } = this.#roomById(ref);
-    if (room.host !== this.identity.author) throw new Error('only the host can end a room');
-    await this.#live.stopHosting(room.id);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ROOM, body: { room: room.id, open: false } }));
-  }
-
-  async joinRoom(ref: string): Promise<RoomInfo> {
-    const { room, project } = this.#roomById(ref);
-    if (!room.open) throw new Error('this room has ended');
-    if (room.host === this.identity.author) return this.#roomInfo(room, project);
-    if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show || room.groups ? "this room is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this room");
-    const app = this.#app(project);
-    if (!app) throw new Error(`${project.name} has no app`);
-    await this.#live.join(room, app.app);
-    return this.#roomInfo(room, project);
-  }
-
-  async leaveRoom(ref: string): Promise<void> {
-    await this.#live.leave(this.#roomById(ref).room.id);
-  }
-
-  async roomChat(ref: string): Promise<RoomChatMessage[]> {
-    const { room } = this.#roomById(ref);
-    return this.#live.chat(room.id).map((m) => ({ id: m.id, by: { did: m.from, name: this.nameOf(m.from) ?? m.name }, text: m.text, time: m.time, mine: m.from === this.identity.author }));
-  }
-
-  async sayInRoom(input: { room: string; text: string }): Promise<void> {
-    if (!input.text?.trim()) throw new Error('a message needs text');
-    this.#live.say(this.#roomById(input.room).room.id, input.text);
-  }
-
-  /** Where a room's app is reached on this computer while we're in the room: the same port its address (RoomInfo.url) has. */
-  #roomPort(roomId: string): number | undefined {
-    const found = this.#allRooms().find((r) => r.room.id === roomId && r.room.open);
-    if (!found) return undefined;
-    if (found.room.host !== this.identity.author) return this.#live.localPort(roomId);
-    return this.#live.isHosting(roomId) ? this.#roomService(found.room)?.port : undefined;
-  }
-
-  /** A room's key seed, from our own secret: the host can reopen its rooms after a restart. */
-  #roomSeed(roomId: string): Uint8Array {
-    return createHash('sha256').update('weave/room-seed/v1').update(this.#selfSecret()).update(roomId).digest();
-  }
-
-  /** The latest app manifest a maintainer published in a project. */
-  #app(project: StoredSpace): AppManifest | undefined {
-    const state = this.#state(project);
-    let app: AppManifest | undefined;
-    for (const e of this.#entries(project)) {
-      if (e.kind !== KIND_APP || !mayAct(state, e.event.author, 'curate').ok) continue;
-      try {
-        app = parseManifest(e.body);
-      } catch {
-        // a malformed manifest is ignored; the previous one stays
-      }
-    }
-    return app;
-  }
-
-  #allRooms(): Array<{ room: Room; project: StoredSpace }> {
-    const out: Array<{ room: Room; project: StoredSpace }> = [];
-    for (const project of this.#spaces.values()) {
-      if (project.kind !== 'project') continue;
-      for (const room of roomsOf(this.#entries(project))) out.push({ room, project });
-    }
-    return out;
-  }
-
-  #roomById(ref: string): { room: Room; project: StoredSpace } {
-    const matches = this.#allRooms().filter(({ room }) => room.id === ref || room.id.startsWith(ref) || room.name.toLowerCase() === ref.toLowerCase());
-    if (matches.length === 0) throw new Error(`no room "${ref}"`);
-    const open = matches.filter((m) => m.room.open);
-    if (open.length > 1) throw new Error(`several rooms match "${ref}": use its id`);
-    return open[0] ?? matches[0];
-  }
-
-  /** Participants of the room's project who are invited (or everyone, by default); the host always. */
-  #mayJoin(room: Room, person: Did): boolean {
-    if (person === room.host) return true;
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    if (!found || !this.#state(found.project).members.has(person)) return false;
-    if (room.show || room.groups?.length) {
-      // A ticketed room: a ticket while the show is on (the host checks its own records, a guest its ticket)…
-      const show = room.show ? this.#payments.allShows().find((s) => s.id === room.show && s.host === room.host) : undefined;
-      const ticket =
-        !!show &&
-        showOpen(show, new Date(this.clock())) &&
-        (person === this.identity.author ? this.#payments.myTickets().some((t) => t.show === show.id && t.host === show.host) : show.host === this.identity.author && this.#payments.ticketRecords(show.id).some((r) => r.holder === person));
-      // …or an active membership in one of its groups (a tier).
-      const member = (room.groups ?? []).some((id) => this.#activeMember(id, person));
-      if (!ticket && !member) return false;
-    }
-    return room.invite === 'participants' || room.invite.includes(person);
-  }
-
-  /** Whether someone is in a group right now (a tier's grant not run out). */
-  #activeMember(groupId: string, person: Did): boolean {
-    const group = this.#spaces.get(groupId);
-    const member = group && this.#state(group).members.get(person);
-    return !!member && (!member.until || member.until > new Date(this.clock()).toISOString());
-  }
-
-  #roomService(room: Room) {
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    const app = found && this.#app(found.project);
-    return app?.services.find((s) => s.id === room.service) ?? app?.services[0];
-  }
-
-  async #roomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
-    const me = this.identity.author;
-    const mine = room.host === me;
-    const app = this.#app(project);
-    const service = app?.services.find((s) => s.id === room.service) ?? app?.services[0];
-    const joined = mine ? this.#live.isHosting(room.id) : this.#live.isJoined(room.id);
-    const connected = this.#live.connected(room.id);
-    const ready = mine ? !!service && (await portOpen(service.port)) : this.#live.appReady(room.id);
-    const side = mine ? service?.open?.host : service?.open?.joiner;
-    const path = side?.path ?? '/';
-    const localPort = this.#live.localPort(room.id);
-    const url = mine ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && ready && app ? `http://${app.app}.weave.localhost:${localPort}${path}` : undefined;
-    return {
-      id: room.id,
-      project: { id: project.id, kind: 'project', name: project.name },
-      name: room.name,
-      host: { did: room.host, name: this.nameOf(room.host) },
-      mine,
-      open: room.open,
-      mayJoin: this.#mayJoin(room, me),
-      joined,
-      connected,
-      peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      ...(app ? { app: { app: app.app, name: app.name, ...(app.start?.hint ? { startHint: app.start.hint } : {}), ...(app.start?.command || app.start?.release ? { canLaunch: true } : {}) } } : {}),
-      ...(service ? { service: { id: service.id, label: side?.label ?? (mine ? 'Open' : 'Play'), ready } } : {}),
-      ...(url ? { url } : {}),
-      time: room.time,
-    };
-  }
-
-  /** Tell watchers something changed that isn't an event; with a notice, it may also show as a notification. */
-  #emitLive(notice?: Notice): void {
-    for (const listener of this.#liveListeners) listener(notice);
+  sayInRoom(...args: Parameters<Apps['sayInRoom']>): ReturnType<Apps['sayInRoom']> {
+    return this.#appsHere.sayInRoom(...args);
   }
 
   // ---------------------------------------------------------------- identity and keys
@@ -4818,6 +4200,9 @@ export class WeaveNode implements Backend {
   /** Company accounts, their sign-in, policy, audit streams, SCIM, the admin console (companies.ts). */
   #companies!: Companies;
   // (further concern modules)
+
+  /** A project's app, installed and run by hosts, its API, settings and updates, and live rooms (apps.ts). */
+  #appsHere!: Apps;
 
   /** Paid memberships, wallets, treasuries, Safe transactions and ticketed shows (payments.ts). */
   #payments!: Payments;
@@ -6433,14 +5818,10 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
-const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
+export const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
 /** Where the farewell to v0.3 peers sends them. */
 const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 
-/** A promise that gives up after `ms`. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([promise, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms).unref())]);
-}
 
 
 /** The start of a Markdown text as one plain line, for shares and older clients. */
