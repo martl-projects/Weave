@@ -214,7 +214,12 @@ export class PeerSession2 {
         return this.close();
       }
       if (!message || typeof message !== 'object') return this.close();
-      this.#handle(message);
+      // One message a peer sends must never take the process down: what can't be handled is dropped.
+      try {
+        this.#handle(message);
+      } catch {
+        // ignore this message
+      }
     }
   }
 

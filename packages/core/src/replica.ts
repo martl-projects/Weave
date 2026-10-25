@@ -131,9 +131,15 @@ export class Replica {
   }
 
   /** Take a v1 event, a v2 wire item `{e, b?}`, or a record of either. */
+  /** Take an event from a peer (or our own). Never throws on what a peer sends: whatever can't be read is rejected as malformed. */
   ingest(input: unknown): IngestResult {
-    const item = isRecord(input) ? input.wire : input;
-    const result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
+    let result: IngestResult;
+    try {
+      const item = isRecord(input) ? input.wire : input;
+      result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
+    } catch {
+      return { status: 'rejected', reason: 'malformed' };
+    }
     if (result.status === 'accepted') this.#drainPending();
     return result;
   }
