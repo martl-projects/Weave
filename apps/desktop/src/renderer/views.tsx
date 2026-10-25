@@ -826,16 +826,25 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
     <fieldset>
       <legend>Boards</legend>
       <table className="boards-table">
+        <thead>
+          <tr className="small muted">
+            <th />
+            <th>Name</th>
+            <th>Who</th>
+            <th>Posts stay</th>
+            <th>Sort</th>
+            <th />
+          </tr>
+        </thead>
         <tbody>
           {boards.map((b, i) => (
             <tr key={b.name}>
-              <td>
+              <td title={b.type}>
                 <Icon name={boardIcon(b)} />
               </td>
               <td>
                 <input defaultValue={b.title} aria-label={`Title of ${b.name}`} onBlur={(e) => e.target.value !== b.title && set(b.name, { title: e.target.value })} />
               </td>
-              <td className="small">{b.type}</td>
               <td>
                 <button className="small-btn access-btn" title="Who may read and write" onClick={() => setEditing(b)}>
                   {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
@@ -853,7 +862,7 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
                   <option value="top">top</option>
                 </select>
               </td>
-              <td>
+              <td className="board-actions">
                 <button className="small-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
                   ▲
                 </button>
@@ -889,46 +898,117 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
   );
 }
 
-export function ProjectSettings({ project, spaces, members, meDid }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string }) {
+const SETTINGS_TABS = [
+  ['page', 'Page'],
+  ['boards', 'Boards'],
+  ['people', 'People'],
+  ['github', 'GitHub'],
+  ['payments', 'Payments'],
+  ['ownership', 'Ownership'],
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number][0];
+
+/** A project's settings, one tab at a time (#/p/<id>/settings/<tab>): its page, boards, people (and what newcomers read), GitHub, payments, ownership. */
+export function ProjectSettings({ project, spaces, members, meDid, tab: asked }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string; tab?: string }) {
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: admissions } = useApi(() => api<Admission[]>('admissions', project.id), [project.id]);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
-  const [inviting, setInviting] = useState('');
   if (!info) return <Page title="Settings">{null}</Page>;
-  const myGroups = spaces.filter((s) => s.kind === 'group' && !info.groups.some((g) => g.id === s.id));
+  const waiting = info.maintainer ? (admissions?.length ?? 0) : 0;
+  const tabs = SETTINGS_TABS.filter(([key]) => key !== 'boards' || info.maintainer);
+  const tab: SettingsTab = tabs.find(([key]) => key === asked)?.[0] ?? (waiting ? 'people' : 'page');
   return (
     <Page title={<><Icon name="gear" /> Settings · p/{info.name}</>}>
-      {info.maintainer && (admissions?.length ?? 0) > 0 && (
+      <menu role="tablist">
+        {tabs.map(([key, label]) => (
+          <li key={key} role="tab" aria-selected={tab === key}>
+            <a href={`#/p/${project.id}/settings/${key}`}>
+              {label}
+              {key === 'people' && waiting > 0 && <span className="count"> {waiting}</span>}
+            </a>
+          </li>
+        ))}
+      </menu>
+      {tab === 'page' && (
+        <fieldset>
+          <legend>Page</legend>
+          {info.maintainer ? (
+            <PageEditor key={JSON.stringify(info.page)} info={info} />
+          ) : info.page.body ? (
+            <Markdown text={info.page.body} rich />
+          ) : (
+            <p className="small">No page yet.</p>
+          )}
+          <p className="small muted">Chat, boards and votes always stay among participants{info.page.public ? '; the title, subtitle and icon are public' : ''}.</p>
+        </fieldset>
+      )}
+      {tab === 'boards' && boards && <BoardSettings project={project} boards={boards} />}
+      {tab === 'people' && (
+        <>
+          <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
+          <NewcomerHistory space={project} canSet={info.maintainer} />
+        </>
+      )}
+      {tab === 'github' && <RepoSettings space={project} />}
+      {tab === 'payments' && <PaymentsSettings project={project} spaces={spaces} />}
+      {tab === 'ownership' && <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />}
+    </Page>
+  );
+}
+
+/** Who takes part: requests waiting, maintainers, and groups invited in. */
+function PeopleSettings({ project, info, spaces, members, meDid, admissions }: { project: SpaceInfo; info: ProjectInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string; admissions: Admission[] }) {
+  const [inviting, setInviting] = useState('');
+  const myGroups = spaces.filter((s) => s.kind === 'group' && !info.groups.some((g) => g.id === s.id));
+  return (
+    <>
+      {admissions.length > 0 && (
         <fieldset>
           <legend>Waiting for you</legend>
-          {admissions!.map((a) => (
+          {admissions.map((a) => (
             <AdmissionCard key={`${a.did}-${a.group.id}-${a.change}`} admission={a} />
           ))}
         </fieldset>
       )}
       <fieldset>
-        <legend>Page</legend>
-        {info.maintainer ? (
-          <PageEditor key={JSON.stringify(info.page)} info={info} />
-        ) : info.page.body ? (
-          <Markdown text={info.page.body} rich />
-        ) : (
-          <p className="small">No page yet.</p>
-        )}
-        <p className="small">Chat, boards and votes always stay among participants{info.page.public ? '; the title, subtitle and icon are public' : ''}.</p>
+        <legend>Participants</legend>
+        <table className="people-table">
+          <tbody>
+            {members.map((m) => (
+              <tr key={m.did}>
+                <td>
+                  <Avatar did={m.did} size={16} />
+                </td>
+                <td className="grow">
+                  {m.name ?? shortDid(m.did)}
+                  {m.did === meDid && <span className="muted"> (you)</span>}
+                  {m.via && <span className="small muted"> · via {m.via.name}</span>}
+                </td>
+                <td>{m.did === info.founder ? <span className="tag">owner</span> : m.maintainer && <span className="tag">maintainer</span>}</td>
+                <td>
+                  {info.maintainer && m.did !== info.founder && (
+                    <AsyncButton className="small-btn" onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>
+                      {m.maintainer ? 'Drop maintainer' : 'Make maintainer'}
+                    </AsyncButton>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="small muted">Maintainers decide who takes part, keep the boards and pin posts.</p>
       </fieldset>
-      {info.maintainer && boards && <BoardSettings project={project} boards={boards} />}
       <fieldset>
         <legend>Groups</legend>
         {info.groups.map((g) => {
           const id = `auto-${g.id}`;
           return (
             <div className="field-row" key={g.id}>
-              <Icon name="users" /> <b>{g.name}</b>
+              <Icon name="users" /> <b className="grow">{g.name}</b>
               {info.maintainer ? (
                 <>
                   <input id={id} type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} />
-                  <label htmlFor={id}>admit newcomers automatically</label>
+                  <label htmlFor={id}>admit its newcomers automatically</label>
                 </>
               ) : (
                 <span className="small">{g.auto ? 'newcomers admitted automatically' : 'newcomers are asked about'}</span>
@@ -936,7 +1016,7 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
             </div>
           );
         })}
-        {info.groups.length === 0 && <p className="small">No groups invited yet.</p>}
+        {info.groups.length === 0 && <p className="small muted">No groups invited. Invite one and all its members take part.</p>}
         {info.maintainer && myGroups.length > 0 && (
           <div className="field-row">
             <select value={inviting} onChange={(e) => setInviting(e.target.value)} aria-label="Group to invite">
@@ -954,32 +1034,12 @@ export function ProjectSettings({ project, spaces, members, meDid }: { project: 
                 setInviting('');
               }}
             >
-              Invite group
+              Invite
             </AsyncButton>
           </div>
         )}
       </fieldset>
-      <fieldset>
-        <legend>Maintainers</legend>
-        <p className="small">Maintainers decide who takes part, keep the boards and pin posts.</p>
-        {members.map((m) => (
-          <div className="field-row" key={m.did}>
-            <Avatar did={m.did} size={16} />
-            <span className="grow">
-              {m.name ?? shortDid(m.did)}
-              {m.did === meDid ? ' (you)' : ''} {m.maintainer && <span className="tag">maintainer</span>}
-            </span>
-            {info.maintainer && m.did !== info.founder && (
-              <AsyncButton onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>{m.maintainer ? 'Drop maintainer' : 'Make maintainer'}</AsyncButton>
-            )}
-          </div>
-        ))}
-      </fieldset>
-      <RepoSettings space={project} />
-      <PaymentsSettings project={project} spaces={spaces} />
-      <NewcomerHistory space={project} canSet={info.maintainer} />
-      <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />
-    </Page>
+    </>
   );
 }
 
@@ -1000,13 +1060,15 @@ export function NewcomerHistory({ space, canSet }: { space: SpaceInfo; canSet: b
     <fieldset>
       <legend>What newcomers read</legend>
       {HISTORY_CHOICES.map((c) => (
-        <label key={c.value} className="radio-row">
-          <input type="radio" name={`history-${space.id}`} checked={space.history === c.value} disabled={!canSet} onChange={() => void set(c.value)} />
-          <span>
-            <b>{c.label}</b>
-            <span className="small"> · {c.detail}</span>
-          </span>
-        </label>
+        <div key={c.value} className="field-row">
+          <input id={`history-${space.id}-${c.value}`} type="radio" name={`history-${space.id}`} checked={space.history === c.value} disabled={!canSet} onChange={() => void set(c.value)} />
+          <label htmlFor={`history-${space.id}-${c.value}`}>
+            <span>
+              <b>{c.label}</b>
+              <span className="small"> · {c.detail}</span>
+            </span>
+          </label>
+        </div>
       ))}
       <p className="small">
         {canSet

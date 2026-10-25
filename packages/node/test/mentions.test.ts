@@ -36,9 +36,12 @@ function collect(node: WeaveNode, count: number): Promise<MentionInfo[]> {
   });
 }
 
+/** Where the Claude Code session ran, as a path of this computer (sessions run where Weave does). */
+const SESSION_FOLDER = process.platform === 'win32' ? 'C:\\code\\weave' : '/code/weave';
+
 const line = (entry: object) => `${JSON.stringify(entry)}\n`;
 const answer = (text: string, extra: object = {}) =>
-  line({ type: 'assistant', sessionId: 'session-1', cwd: 'C:\\code\\weave', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text }] }, ...extra });
+  line({ type: 'assistant', sessionId: 'session-1', cwd: SESSION_FOLDER, message: { role: 'assistant', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text }] }, ...extra });
 
 describe('the Mentions panel', () => {
   it('shows posts an agent points to, newest first, on this computer only', async () => {

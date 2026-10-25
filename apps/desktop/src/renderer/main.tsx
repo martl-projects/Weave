@@ -314,7 +314,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   } else if (view === 'routines') {
     body = <RoutinesPage project={space} />;
   } else if (view === 'settings') {
-    body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} />;
+    body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} tab={arg} />;
   } else {
     body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} />;
   }
@@ -324,7 +324,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
       <div className="center">
         {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
         {mine.length > 0 && view !== 'settings' && (
-          <a className="notice" href={`${spaceHref(space)}/settings`}>
+          <a className="notice" href={`${spaceHref(space)}/settings/people`}>
             <Icon name="inbox" /> {mine[0].name ?? 'Someone'} from group {mine[0].group.name} is waiting to join{mine.length > 1 ? ` (+${mine.length - 1} more)` : ''}. Open Settings to decide.
           </a>
         )}

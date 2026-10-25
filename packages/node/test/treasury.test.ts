@@ -243,6 +243,11 @@ describe('ticketed shows', () => {
     ]);
     expect(payout.multiSend.data.startsWith('0x8d80ff0a')).toBe(true);
 
+    // Who gets what is decided after the show: the host gives the split when paying out, and the show keeps it.
+    const decided = await martin.settleShow({ show: show.id, action: 'payout', split: [{ to: 'Lena', share: 10000 }] });
+    expect(decided.calls.map((c) => [c.data.slice(34, 74), BigInt('0x' + c.data.slice(74))])).toEqual([[lenaWallet.address.slice(2).toLowerCase(), 3_000_000n]]);
+    expect((await martin.shows()).find((s) => s.id === show.id)?.split.map((p) => p.share)).toEqual([10000]);
+
     // Called off: no payout, everyone who paid gets their money back.
     await martin.cancelShow(show.id);
     await expect(martin.settleShow({ show: show.id, action: 'payout' })).rejects.toThrow(/called off/);

@@ -581,7 +581,7 @@ function HostDialog({ project, members, meDid, app, groups, shows, forShow, onCl
   const [show, setShow] = useState(forShow ?? mine[0]?.id ?? 'new');
   const [tiers, setTiers] = useState<string[]>([]);
   const payments = usePayments(project);
-  const newShow = useShowForm(project, members);
+  const newShow = useShowForm(project);
   const tierBoxes = (
     <>
       {groups.map((g) => (
@@ -657,7 +657,6 @@ function HostDialog({ project, members, meDid, app, groups, shows, forShow, onCl
                   ))}
                   <option value="new">A new show…</option>
                 </select>
-                <span className="small">they get in from an hour before it starts until it ends</span>
               </div>
               {show === 'new' && <div className="indent">{newShow.fields}</div>}
               {tierBoxes}
@@ -745,7 +744,7 @@ export function RoomsView({ project, members, meDid }: { project: SpaceInfo; mem
         <RoomCard key={room.id} room={room} shows={shows ?? []} />
       ))}
       {app && rooms?.length === 0 && <p className="empty">No open rooms. Host one to share {app.name}.</p>}
-      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} onHost={app ? (show) => setHosting(show) : undefined} />
+      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} onHost={app ? (show) => setHosting(show) : undefined} />
       {hosting !== false && app && (
         <HostDialog project={project} members={members} meDid={meDid} app={app} groups={info?.groups ?? []} shows={shows ?? []} forShow={typeof hosting === 'string' ? hosting : undefined} onClose={() => setHosting(false)} />
       )}

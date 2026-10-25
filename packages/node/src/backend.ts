@@ -1785,8 +1785,11 @@ export interface Backend {
   buyTicket(input: { show: string; payment: string }): Promise<void>;
   /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
   tickets(show: string): Promise<TicketInfo[]>;
-  /** The Safe transaction that pays a show out by its split (after it) or back to everyone who paid. */
-  settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement>;
+  /**
+   * The Safe transaction that pays a show out by its split (after it) or back to everyone who paid.
+   * Paying out, its host may give the split then: who gets what is decided after the show, and recorded on the show.
+   */
+  settleShow(input: { show: string; action: 'payout' | 'refund'; split?: Array<{ to: string; share: number }> }): Promise<ShowSettlement>;
   /** Move what's left on a space's retired treasuries to its treasury now: a proposal per old Safe holding money, for its old owners to sign. */
   sweepRetired(space: string): Promise<Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }>>;
   /** Announce a treasury publicly (maintainers or moderators), so people outside it can pay it and name it in their splits. */
