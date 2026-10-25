@@ -131,7 +131,7 @@ describe('tiers paid on chain', () => {
 
   it('reads a transfer from a receipt: to the tier, from one wallet, a month per price', () => {
     const price = { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: 'USDC', decimals: 6, to: '0x2222222222222222222222222222222222222222', amount: 5_000_000 };
-    const transfer = (from: string, to: string, value: number, token = TEST_USDC.token) => ({ address: token, topics: [TRANSFER_TOPIC, '0x' + from.slice(2).padStart(64, '0'), '0x' + to.slice(2).padStart(64, '0')], data: '0x' + value.toString(16).padStart(64, '0') });
+    const transfer = (from: string, to: string, value: number, token: string = TEST_USDC.token) => ({ address: token, topics: [TRANSFER_TOPIC, '0x' + from.slice(2).padStart(64, '0'), '0x' + to.slice(2).padStart(64, '0')], data: '0x' + value.toString(16).padStart(64, '0') });
     const lena = '0x1111111111111111111111111111111111111111';
     expect(readPayment({ status: '0x1', logs: [transfer(lena, price.to, 10_000_000)] }, price)).toMatchObject({ ok: true, months: 2, from: checksumAddress(lena) });
     expect(readPayment({ status: '0x1', logs: [transfer(lena, price.to, 1_000_000)] }, price)).toMatchObject({ ok: false, reason: expect.stringMatching(/a month is 5/) });
@@ -173,5 +173,70 @@ describe('tiers paid on chain', () => {
     expect(Date.parse(membership.membership!.until) - Date.now()).toBeGreaterThan(55 * 86400_000);
     expect((await martin.membershipRequests()).map((r) => [r.name, r.payment?.ok, r.payment?.reason])).toEqual([['Eve', false, 'that transaction already let Lena in']]);
     expect(read).toEqual([tx(1)]);
+  });
+});
+
+describe('ticketed shows', () => {
+  const tx = (n: number) => '0x' + String(n).padStart(64, '0');
+  const all = (nodes: WeaveNode[]) => {
+    for (let round = 0; round < 2; round++) for (const a of nodes) for (const b of nodes) if (a !== b) sync(a, b);
+  };
+  const linked = async (node: WeaveNode) => {
+    const w = wallet();
+    await node.linkWallet({ address: w.address, proof: w.sign(await node.walletMessage(w.address)) });
+    return w;
+  };
+
+  it('sells tickets into the show\'s Safe, lets holders in while it is on, and pays out or back', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    const kofi = person('Kofi');
+    const eve = person('Eve');
+    const nodes = [martin, lena, kofi, eve];
+    await martin.createProject({ name: 'Gameshow' });
+    all(nodes);
+    await expect(martin.createShow({ name: 'Finale live', project: 'Gameshow', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T22:00:00Z', price: 3_000_000 })).rejects.toThrow(/linked wallet/);
+    await linked(martin);
+    const lenaWallet = await linked(lena);
+    const kofiWallet = await linked(kofi);
+    await linked(eve);
+    all(nodes);
+
+    // Lena is the guest: 60% to her, 40% to the project's treasury; one seat left for this test.
+    const show = await martin.createShow({ name: 'Finale live', project: 'Gameshow', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T22:00:00Z', price: 3_000_000, capacity: 1, split: [{ to: 'Lena', share: 6000 }, { to: 'project', share: 4000 }] });
+    expect(show.safe.address).toBe(show.price.to);
+    expect(show.split.map((p) => [p.name, p.share, !!p.address])).toEqual([['Lena', 6000, true], ['Gameshow', 4000, true]]);
+
+    martin.checkPayment = async (_price, hash) => (hash === tx(1) ? { ok: true, from: kofiWallet.address, value: '3000000', months: 1 } : { ok: true, from: '0x9999999999999999999999999999999999999999', value: '3000000', months: 1 });
+    all(nodes);
+    await kofi.buyTicket({ show: show.id, payment: tx(1) });
+    await eve.buyTicket({ show: show.id, payment: tx(2) });
+    all(nodes);
+    await martin.reconcile();
+    all(nodes);
+
+    expect((await kofi.shows()).find((s) => s.id === show.id)?.ticket).toEqual({ tx: tx(1) });
+    const sold = await martin.tickets(show.id);
+    expect(sold.filter((t) => t.ok).map((t) => t.holder.name)).toEqual(['Kofi']);
+    expect(sold.find((t) => !t.ok)?.reason).toMatch(/all 1 tickets are gone|isn't .*linked wallet/);
+
+    // Paying out waits for the end; the Safe's balance comes from the chain.
+    martin.callChain = async () => '0x' + (3_000_000).toString(16).padStart(64, '0');
+    await expect(martin.settleShow({ show: show.id, action: 'payout' })).rejects.toThrow(/isn't over yet/);
+    martin.clock = () => Date.parse('2030-01-02T00:00:00Z');
+    const payout = await martin.settleShow({ show: show.id, action: 'payout' });
+    expect(payout.total).toBe('3000000');
+    expect(payout.calls.map((c) => [c.data.slice(34, 74), BigInt('0x' + c.data.slice(74))])).toEqual([
+      [lenaWallet.address.slice(2).toLowerCase(), 1_800_000n],
+      [show.split[1].address!.slice(2).toLowerCase(), 1_200_000n],
+    ]);
+    expect(payout.multiSend.data.startsWith('0x8d80ff0a')).toBe(true);
+
+    // Called off: no payout, everyone who paid gets their money back.
+    await martin.cancelShow(show.id);
+    await expect(martin.settleShow({ show: show.id, action: 'payout' })).rejects.toThrow(/called off/);
+    const refund = await martin.settleShow({ show: show.id, action: 'refund' });
+    expect(refund.calls.map((c) => [c.data.slice(34, 74), BigInt('0x' + c.data.slice(74))])).toEqual([[kofiWallet.address.slice(2).toLowerCase(), 3_000_000n]]);
+    expect(refund.batch).toMatchObject({ chainId: '84532', meta: { createdFromSafeAddress: show.safe.address } });
   });
 });

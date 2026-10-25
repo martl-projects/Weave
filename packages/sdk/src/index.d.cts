@@ -37,6 +37,18 @@ export interface Access extends Person {
 }
 
 /** A badge of the project: lasting recognition, signed by the maintainer who gave it. */
+/** A show someone holds a ticket to, as its host let them in. */
+export interface Ticket {
+  show: string;
+  name: string;
+  room?: string;
+  starts: string;
+  ends: string;
+  /** On right now (from an hour before the start to the end), and not called off. */
+  open: boolean;
+  cancelled: boolean;
+}
+
 export interface Badge {
   id: string;
   /** image: its picture (wblob: reference), shown next to the holder's name instead of the symbol. */
@@ -67,6 +79,8 @@ export declare class Weave {
   who(from: ConnectionLike): Promise<Player | undefined>;
   project(): Promise<Project>;
   access(did: string, options?: { group?: string }): Promise<Access>;
+  /** The project's shows someone has a ticket to (paid on chain), and whether each is on right now: let them in while `open`. */
+  tickets(did: string): Promise<Ticket[]>;
   /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
   badges(did: string): Promise<Badge[]>;
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
@@ -48,6 +48,7 @@ import {
   type BadgeInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
+  type ShowInfo,
   type SplitInfo,
   type TreasuryInfo,
   type WalletInfo,
@@ -252,6 +253,14 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
   treasury announce -p <project>  announce it publicly, so others can pay it and name it in their splits  [-r <community>]
   treasury deploy -p <project>    the transaction that puts the Safe on chain; any wallet can send it
   treasury split -p <project>     the project's split contract: its address, whether it exists, how to deploy it
+  show create <name> --starts <time> --ends <time> --usdc 3   a ticketed show (you host it): tickets go into its own Safe
+                             [-p <project>] [--room <id>] [--capacity 50] [--hosts <who>,<who>]
+                             [--split Lena=6000,project=4000: basis points, to people, the project's treasury or addresses]
+  shows [-p <project>]       shows this node knows: when, price, your ticket
+  ticket <show> --payment <tx hash>   ask for a ticket you paid from your linked wallet
+  tickets <show>             for the host: every ticket sold, and requests not let in
+  show cancel <show>         call it off: tickets stop letting people in
+  show settle <show> payout|refund [--file batch.json]   the Safe transaction that pays out by the split, or back
   label <address> endorse|block --text <why>   your label on an address or contract; "" withdraws it
   labels [address]           labels this node knows                     [--from <who>,<who>]
   split <preset> -p <project>  how income is split (maintainers): standard, community, solo or free  [-r <community>]
@@ -383,6 +392,12 @@ const { values, positionals } = parseArgs({
     'gumroad-token': { type: 'string' },
     license: { type: 'string' },
     usdc: { type: 'string' },
+    starts: { type: 'string' },
+    ends: { type: 'string' },
+    capacity: { type: 'string' },
+    hosts: { type: 'string' },
+    split: { type: 'string' },
+    room: { type: 'string' },
     'pay-to': { type: 'string' },
     payment: { type: 'string' },
     months: { type: 'string' },
@@ -484,6 +499,18 @@ const treasuryLine = (t: TreasuryInfo) =>
     ...(t.recipients?.length ? ['  pays:', ...t.recipients.map((r) => `    ${percent(r.share / 100)} ${r.name ?? (r.id || r.kind)} (${r.part})${r.address ? ` ${r.address}` : ' (no address yet: stays with a maker on chain)'}`)] : []),
     ...(t.address && !t.announced ? ['  not announced yet: weave treasury announce'] : []),
   ].join('\n');
+const showLine = (sh: ShowInfo) => {
+  const when = `${new Date(sh.starts).toLocaleString()} – ${new Date(sh.ends).toLocaleTimeString()}`;
+  const state = sh.cancelled ? 'CALLED OFF' : sh.open ? 'on now' : when;
+  const seats = sh.capacity ? ` · ${sh.sold ?? '?'}/${sh.capacity} sold` : sh.sold !== undefined ? ` · ${sh.sold} sold` : '';
+  return [
+    `${sh.name}  ${formatUnits(sh.price.amount, sh.price.decimals)} ${sh.price.symbol}  ${state}${seats}${sh.mine ? '' : `  — ${sh.host.name ?? sh.host.did}`}`,
+    `  ${sh.id}${sh.project ? ` · ${sh.project.name ?? sh.project.id}` : ''}${sh.room ? ` · room ${sh.room}` : ''}`,
+    `  Safe ${sh.safe.address} (${sh.safe.threshold} of ${sh.hosts.length} hosts sign): tickets are paid there`,
+    `  after it: ${sh.split.map((p) => `${(p.share / 100).toFixed(p.share % 100 ? 2 : 0)}% ${p.name ?? p.to}${p.address ? '' : ' (no address yet)'}`).join(', ')}`,
+    ...(sh.ticket ? [`  your ticket: ${sh.ticket.tx.slice(0, 12)}…`] : sh.mine || sh.cancelled ? [] : [`  pay ${formatUnits(sh.price.amount, sh.price.decimals)} ${sh.price.symbol} to the Safe from your linked wallet, then: weave ticket ${sh.id} --payment <tx hash>`]),
+  ].join('\n');
+};
 const labelLine = (l: LabelInfo) => `${l.label === 'block' ? 'BLOCK  ' : 'endorse'} ${l.target} by ${l.by.name ?? l.by.did}${l.reason ? `: ${l.reason}` : ''}`;
 
 const badgeLine = (b: BadgeInfo) => {
@@ -1953,6 +1980,51 @@ ${postLine(p)}`);
       }
       const t = args[0] === 'announce' ? await b.announceTreasury(space) : await b.treasury(space);
       return out(t, () => treasuryLine(t));
+    }
+
+    case 'show': {
+      const [sub, ref, action] = args;
+      const b = await backend();
+      if (sub === 'create' && ref) {
+        const price = values.usdc ? parseUnits(values.usdc, TEST_USDC.decimals) : undefined;
+        if (!price || !values.starts || !values.ends) throw new Error('usage: weave show create <name> --starts <time> --ends <time> --usdc <price>');
+        const split = values.split ? values.split.split(',').map((part) => { const [to, share] = part.split('='); return { to: to.trim(), share: Number(share) }; }) : undefined;
+        const sh = await b.createShow({ name: args.slice(1).join(' '), project: values.project, room: values.room, starts: values.starts, ends: values.ends, price, capacity: values.capacity ? Number(values.capacity) : undefined, hosts: values.hosts?.split(','), split });
+        return out(sh, () => `set up ${showLine(sh)}\n\nput its Safe on chain when you like (any wallet can send it): weave show safe ${sh.id}`);
+      }
+      if (sub === 'cancel' && ref) {
+        const sh = await b.cancelShow(ref);
+        return out(sh, () => `${showLine(sh)}\n\npay everyone back: weave show settle ${sh.id} refund`);
+      }
+      if (sub === 'safe' && ref) {
+        const sh = (await b.shows()).find((x) => x.id === ref || x.name.toLowerCase() === ref.toLowerCase());
+        if (!sh?.safe.deploy) throw new Error('no such show, or one of its hosts has no linked wallet');
+        const deploy = sh.safe.deploy;
+        return out(deploy, () => `send this from any wallet to put ${sh.safe.address} on chain (it belongs to the hosts):\n  to:   ${deploy.to}\n  data: ${deploy.data}`);
+      }
+      if (sub === 'settle' && ref && (action === 'payout' || action === 'refund')) {
+        const settlement = await b.settleShow({ show: ref, action });
+        if (values.file) writeFileSync(resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file), JSON.stringify(settlement.batch, null, 2));
+        return out(settlement, () => [`${action === 'refund' ? 'pay back' : 'pay out'} ${settlement.total} of ${settlement.balance} (smallest unit) from the Safe ${settlement.safe}, in ${settlement.calls.length} transfer${settlement.calls.length === 1 ? '' : 's'}`, values.file ? `wrote ${values.file}: load it in the Safe app's Transaction Builder (app.safe.global), check it, sign it in your wallets` : 'add --file batch.json for the Safe app'].join('\n'));
+      }
+      throw new Error('usage: weave show create|cancel|safe|settle — see "weave --help"');
+    }
+
+    case 'shows': {
+      const list = await (await backend()).shows(values.project);
+      return out(list, () => list.map(showLine).join('\n\n') || '(no shows)');
+    }
+
+    case 'ticket': {
+      const show = args.join(' ').trim();
+      if (!show || !values.payment) throw new Error('usage: weave ticket <show> --payment <tx hash>');
+      await (await backend()).buyTicket({ show, payment: values.payment });
+      return out({ requested: show }, () => "sent your payment: you're in once the host's node has read it on chain (weave shows)");
+    }
+
+    case 'tickets': {
+      const list = await (await backend()).tickets(args.join(' ').trim());
+      return out(list, () => list.map((t) => `${t.ok ? 'ticket ' : 'not let in'} ${t.holder.name ?? t.holder.did}  ${t.tx.slice(0, 12)}…${t.reason ? `: ${t.reason}` : ''}`).join('\n') || '(no tickets)');
     }
 
     case 'label': {

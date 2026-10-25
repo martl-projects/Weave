@@ -139,6 +139,27 @@ import {
   KIND_MEMBERSHIP_LICENSE,
   parseGumroadLink,
   parseOnchainPrice,
+  erc20BalanceOf,
+  erc20Transfer,
+  formatUnits,
+  KIND_SHOW,
+  KIND_TICKET,
+  KIND_TICKET_RECORD,
+  KIND_TICKET_REQUEST,
+  MULTI_SEND_CALL_ONLY,
+  multiSendData,
+  openTicket,
+  openTicketRequest,
+  parseShowSplit,
+  payouts,
+  safeBatch,
+  showOpen,
+  showSaltNonce,
+  showsOf,
+  TEST_USDC,
+  ticketFor,
+  ticketRequest,
+  type Show,
   isTxHash,
   type OnchainPrice,
   type PaymentCheck,
@@ -334,6 +355,9 @@ import {
   type BadgeInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
+  type ShowInfo,
+  type ShowSettlement,
+  type TicketInfo,
   type SplitContractInfo,
   type SplitInfo,
   type TreasuryInfo,
@@ -636,6 +660,10 @@ export class WeaveNode implements Backend {
   checkLicense: LicenseChecker = checkGumroadLicense;
   /** How payments on chain are checked (tests put a fake here). */
   checkPayment: PaymentChecker = checkOnchainPayment;
+  /** How contracts are read on chain (eth_call; tests put a fake here). */
+  callChain: typeof ethCall = ethCall;
+  /** Answers to ticket requests for our shows, so each is read once per run (request id → answer). */
+  #ticketChecks = new Map<string, { show: string; holder: Did; tx: string; ok: boolean; reason?: string } | 'checking'>();
   /** The chain's answers for paid requests, so each transaction is read once per run (request id → answer). */
   #paymentChecks = new Map<string, PaymentCheck | 'checking'>();
   /** How memberships are made on Gumroad (tests put a fake here). */
@@ -2312,7 +2340,7 @@ export class WeaveNode implements Backend {
     // A standby only follows: no duties, no keys, no writes.
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
@@ -3034,6 +3062,14 @@ export class WeaveNode implements Backend {
         ...this.#appPerson(project, did as Did),
         groups: asked.filter(({ state }) => state.members.has(did as Did)).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
       };
+    }
+    if (route === '/v1/tickets') {
+      const did = params.get('did') ?? '';
+      if (!did.startsWith('did:')) throw new Error('did: whose tickets to look up');
+      const now = new Date(this.clock());
+      return this.#allShows()
+        .filter((s) => s.project === projectId && s.host === this.identity.author)
+        .flatMap((s) => (this.#ticketRecords(s.id).some((r) => r.holder === did) ? [{ show: s.id, name: s.name, ...(s.room ? { room: s.room } : {}), starts: s.starts, ends: s.ends, open: showOpen(s, now), cancelled: s.cancelled }] : []));
     }
     if (route === '/v1/badges') {
       const did = params.get('did') ?? '';
@@ -4362,7 +4398,7 @@ export class WeaveNode implements Backend {
     if (!t.address || !t.allocations) throw new Error(`${t.project.name} has no treasury yet: a maintainer has to link a wallet first`);
     const salt = splitSalt(t.project.id);
     // The factory says where the split is and whether it exists: one read-only call answers both.
-    const answer = await ethCall(t.chain.id, splitDeployedCall(t.allocations, t.address, salt));
+    const answer = await this.callChain(t.chain.id, splitDeployedCall(t.allocations, t.address, salt));
     const address = checksumAddress('0x' + answer.slice(26, 66));
     return { chain: t.chain, address, deployed: BigInt('0x' + answer.slice(66, 130)) === 1n, deploy: splitDeployment(t.allocations, t.address, salt), allocations: t.allocations };
   }
@@ -4423,6 +4459,255 @@ export class WeaveNode implements Backend {
 
   #treasuries() {
     return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY));
+  }
+
+  // ---------------------------------------------------------------- ticketed events
+
+  async createShow(input: { name: string; project?: string; room?: string; starts: string; ends: string; price: number; capacity?: number; hosts?: string[]; split?: Array<{ to: string; share: number }> }): Promise<ShowInfo> {
+    const id = b64u.encode(randomBytes(16));
+    const project = input.project ? this.#project(input.project) : undefined;
+    const hosts = [...new Set([this.identity.author, ...(input.hosts ?? []).map((who) => this.resolve(who))])];
+    const wallets = this.#wallets();
+    const without = hosts.filter((did) => !wallets.get(did)?.verified);
+    if (without.length) throw new Error(`every host needs a linked wallet: the show's Safe is theirs (missing: ${without.map((did) => this.nameOf(did) ?? did).join(', ')})`);
+    const owners = hosts.map((did) => wallets.get(did)!.address);
+    const safe = safeAddress(owners, treasuryThreshold(owners.length), showSaltNonce(id));
+    if (!Number.isSafeInteger(input.price) || input.price < 1) throw new Error("a ticket's price is a whole number of the token's smallest unit (1 USDC = 1000000)");
+    // Without a split, everything goes to the project's treasury, or else to the host.
+    const split = (input.split?.length ? input.split : [{ to: project ? 'project' : this.identity.author, share: 10000 }]).map((part) => ({ to: this.#showRecipient(part.to, project), share: part.share }));
+    if (!parseShowSplit(split)) throw new Error('a split names people or addresses with whole basis points adding up to 10000');
+    const body: Record<string, Json> = {
+      show: id,
+      name: input.name.trim().slice(0, 80),
+      starts: new Date(input.starts).toISOString(),
+      ends: new Date(input.ends).toISOString(),
+      price: { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: TEST_USDC.symbol, decimals: TEST_USDC.decimals, to: safe, amount: input.price },
+      hosts,
+      split,
+    };
+    if (!body.name || Number.isNaN(Date.parse(input.starts)) || Number.isNaN(Date.parse(input.ends)) || input.ends <= input.starts) throw new Error('a show has a name, and a start before its end');
+    if (project) body.project = project.id;
+    if (input.room) body.room = input.room.slice(0, 100);
+    if (input.capacity) body.capacity = input.capacity;
+    this.replica.write(this.identity, { kind: KIND_SHOW, body });
+    return this.#showInfo(this.#showRef(id));
+  }
+
+  async cancelShow(ref: string): Promise<ShowInfo> {
+    const show = this.#showRef(ref);
+    if (show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} can call ${show.name} off`);
+    const { id, host: _host, time: _time, cancelled: _cancelled, ...rest } = show;
+    this.replica.write(this.identity, { kind: KIND_SHOW, body: { show: id, ...rest, cancelled: true } as unknown as Json });
+    return this.#showInfo(this.#showRef(id));
+  }
+
+  async shows(project?: string): Promise<ShowInfo[]> {
+    const id = project ? this.#project(project).id : undefined;
+    return this.#allShows()
+      .filter((s) => !id || s.project === id)
+      .map((s) => this.#showInfo(s));
+  }
+
+  async buyTicket(input: { show: string; payment: string }): Promise<void> {
+    const show = this.#showRef(input.show);
+    if (show.cancelled) throw new Error(`${show.name} is called off`);
+    if (Date.parse(show.ends) < this.clock()) throw new Error(`${show.name} is over`);
+    const payment = input.payment.trim().toLowerCase();
+    if (!isTxHash(payment)) throw new Error("a payment is the transaction's hash: 0x and 64 hex digits");
+    if (!this.#wallets().get(this.identity.author)?.verified) throw new Error('link the wallet you paid from first (weave wallet link): that is how the host knows the payment is yours');
+    await this.join(show.host);
+    this.replica.write(this.identity, ticketRequest(this.#encryptionKeyOf(show.host), { show: show.id, payment, entry: this.#entryPoint() }));
+  }
+
+  async tickets(ref: string): Promise<TicketInfo[]> {
+    const show = this.#showRef(ref);
+    const person = (did: Did) => ({ did, name: this.nameOf(did) });
+    if (show.host === this.identity.author) {
+      const out: TicketInfo[] = this.#ticketRecords(show.id).map((r) => ({ holder: person(r.holder), tx: r.tx, from: r.from, value: r.value, ok: true }));
+      for (const [request, answer] of this.#ticketChecks) {
+        if (answer === 'checking' || answer.show !== show.id || answer.ok) continue;
+        out.push({ holder: person(answer.holder), tx: answer.tx, ok: false, ...(answer.reason ? { reason: answer.reason } : {}), request });
+      }
+      return out;
+    }
+    return this.#myTickets()
+      .filter((t) => t.show === show.id)
+      .map((t) => ({ holder: person(this.identity.author), tx: t.tx, ok: true }));
+  }
+
+  async settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement> {
+    const show = this.#showRef(input.show);
+    if (!show.hosts.includes(this.identity.author)) throw new Error(`only the hosts of ${show.name} can settle it`);
+    const info = this.#showInfo(show);
+    const balance = BigInt(await this.callChain(show.price.chain, { to: show.price.token, data: erc20BalanceOf(info.safe.address) }));
+    let calls: Array<{ to: string; data: string }>;
+    if (input.action === 'refund') {
+      if (show.host !== this.identity.author) throw new Error(`${this.nameOf(show.host) ?? 'its host'} keeps who paid: ask them for the refund`);
+      calls = this.#ticketRecords(show.id).map((r) => ({ to: show.price.token, data: erc20Transfer(r.from, BigInt(r.value)) }));
+    } else {
+      if (show.cancelled) throw new Error(`${show.name} is called off: pay everyone back instead (refund)`);
+      if (Date.parse(show.ends) > this.clock()) throw new Error(`${show.name} isn't over yet: pay out after it (${show.ends})`);
+      const missing = info.split.filter((p) => !p.address);
+      if (missing.length) throw new Error(`no address yet for ${missing.map((p) => p.name ?? p.to).join(', ')}: they need a linked wallet or treasury`);
+      calls = payouts(balance, info.split.map((p) => ({ address: p.address!, share: p.share }))).map((p) => ({ to: show.price.token, data: erc20Transfer(p.address, p.amount) }));
+    }
+    const total = calls.reduce((sum, c) => sum + BigInt('0x' + c.data.slice(74)), 0n);
+    if (total > balance) throw new Error(`the Safe holds ${formatUnits(balance, show.price.decimals)} ${show.price.symbol}, the ${input.action} needs ${formatUnits(total, show.price.decimals)}`);
+    const name = `${show.name}: ${input.action === 'refund' ? 'pay everyone back' : 'pay out by the split'}`;
+    return {
+      safe: info.safe.address,
+      balance: balance.toString(),
+      total: total.toString(),
+      calls,
+      multiSend: { to: MULTI_SEND_CALL_ONLY, data: multiSendData(calls), operation: 1 },
+      batch: safeBatch({ chain: show.price.chain, safe: info.safe.address, name, description: `${calls.length} transfer${calls.length === 1 ? '' : 's'} of ${show.price.symbol}, prepared by Weave`, calls }),
+    };
+  }
+
+  /** Who a split part names: 'project' (its treasury), a person, or an address as it is. */
+  #showRecipient(to: string, project?: StoredSpace): string {
+    if (to === 'project') {
+      if (!project) throw new Error("'project' in a split needs the show to belong to a project");
+      return `project:${project.id}`;
+    }
+    return isAddress(to) ? to : this.resolve(to);
+  }
+
+  /** Let in everyone who paid for a ticket to one of our shows: read once on chain, from their own wallet, each transaction once. */
+  async #grantTickets(): Promise<number> {
+    const mine = new Map(this.#allShows().filter((s) => s.host === this.identity.author).map((s) => [s.id, s]));
+    if (!mine.size) return 0;
+    const used = new Set(this.#selfBodies(KIND_TICKET_RECORD).map((b) => b.tx));
+    let granted = 0;
+    for (const event of this.replica.events((e) => e.kind === KIND_TICKET_REQUEST && e.author !== this.identity.author)) {
+      if (this.#ticketChecks.has(event.id)) continue;
+      const request = this.#tryOpen((me) => openTicketRequest(event, me));
+      const show = request && mine.get(request.show);
+      if (!request || !show) continue;
+      const answer = (ok: boolean, reason?: string) => this.#ticketChecks.set(event.id, { show: show.id, holder: event.author, tx: request.payment, ok, ...(reason ? { reason } : {}) });
+      if (used.has(request.payment)) {
+        const first = this.#ticketRecords(show.id).find((r) => r.tx === request.payment);
+        if (first?.holder !== event.author) answer(false, `that transaction already got ${this.nameOf(first?.holder as Did) ?? 'someone'} in`);
+        else answer(true);
+        continue;
+      }
+      if (show.cancelled) {
+        answer(false, `${show.name} is called off`);
+        continue;
+      }
+      if (show.capacity && this.#ticketRecords(show.id).length >= show.capacity) {
+        answer(false, `all ${show.capacity} tickets are gone`);
+        continue;
+      }
+      this.#ticketChecks.set(event.id, 'checking');
+      let check: PaymentCheck;
+      try {
+        check = await this.checkPayment(show.price, request.payment);
+      } catch {
+        this.#ticketChecks.delete(event.id); // offline: try again next round
+        continue;
+      }
+      if (!check.ok && /pending/.test(check.reason ?? '')) {
+        this.#ticketChecks.delete(event.id);
+        continue;
+      }
+      const wallet = this.#wallets().get(event.author);
+      if (check.ok && (!wallet?.verified || wallet.address.toLowerCase() !== check.from?.toLowerCase())) check = { ok: false, reason: `paid from ${check.from}, which isn't ${this.nameOf(event.author) ?? 'their'}'s linked wallet` };
+      if (!check.ok) {
+        answer(false, check.reason);
+        continue;
+      }
+      // One ticket per price paid; what's paid on top stays in the Safe and is paid back on a refund.
+      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_TICKET_RECORD, body: { show: show.id, holder: event.author, tx: request.payment, from: check.from!, value: check.value! } }));
+      this.replica.write(this.identity, ticketFor(this.#encryptionKeyOf(event.author), { show: show.id, tx: request.payment }));
+      used.add(request.payment);
+      answer(true);
+      granted++;
+    }
+    return granted;
+  }
+
+  /** The tickets sold for one of our shows, as we recorded them. */
+  #ticketRecords(show: string): Array<{ holder: Did; tx: string; from: string; value: string }> {
+    return this.#selfBodies(KIND_TICKET_RECORD)
+      .filter((b) => b.show === show && isDid(b.holder) && typeof b.tx === 'string' && typeof b.from === 'string' && typeof b.value === 'string')
+      .map((b) => ({ holder: b.holder as Did, tx: b.tx as string, from: b.from as string, value: b.value as string }));
+  }
+
+  /** Tickets we hold, from what hosts boxed to us. */
+  #myTickets(): Array<{ show: string; tx: string; host: Did }> {
+    const out: Array<{ show: string; tx: string; host: Did }> = [];
+    for (const event of this.replica.events((e) => e.kind === KIND_TICKET && e.author !== this.identity.author)) {
+      const ticket = this.#tryOpen((me) => openTicket(event, me));
+      if (ticket) out.push({ ...ticket, host: event.author });
+    }
+    return out;
+  }
+
+  /** A project's or community's treasury address from its maintainers' linked wallets, as treasury() computes it. */
+  #treasuryAddressOf(space: StoredSpace): string | undefined {
+    const wallets = this.#wallets();
+    const owners = [...this.#state(space).maintainers].map((did) => wallets.get(did)).filter((w) => w?.verified).map((w) => w!.address);
+    return owners.length ? safeAddress(owners, treasuryThreshold(owners.length), treasurySaltNonce(space.id)) : undefined;
+  }
+
+  #allShows(): Show[] {
+    return showsOf(this.replica.events((e) => e.kind === KIND_SHOW));
+  }
+
+  /** A show by id, or by name (ours first). */
+  #showRef(ref: string): Show {
+    const all = this.#allShows();
+    const byId = all.find((s) => s.id === ref);
+    if (byId) return byId;
+    const named = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
+    const mine = named.filter((s) => s.host === this.identity.author);
+    const match = mine.length ? mine : named;
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several shows are named "${ref}" — use its id` : `no show "${ref}" is known`);
+  }
+
+  #showInfo(show: Show): ShowInfo {
+    const wallets = this.#wallets();
+    const person = (did: Did) => ({ did, name: this.nameOf(did) });
+    const owners = show.hosts.map((did) => wallets.get(did)).filter((w) => w?.verified).map((w) => w!.address);
+    const threshold = treasuryThreshold(owners.length || 1);
+    const treasuries = this.#treasuries();
+    const split = show.split.map((part) => {
+      if (part.to.startsWith('project:')) {
+        const id = part.to.slice('project:'.length);
+        const space = this.#spaces.get(id);
+        const announced = treasuries.get(id);
+        const address = space ? this.#treasuryAddressOf(space) : announced?.consistent ? announced.address : undefined;
+        return { to: part.to, name: space?.name ?? 'the project', share: part.share, ...(address ? { address } : {}) };
+      }
+      if (isDid(part.to)) {
+        const wallet = wallets.get(part.to);
+        return { to: part.to, name: this.nameOf(part.to), share: part.share, ...(wallet?.verified ? { address: wallet.address } : {}) };
+      }
+      return { to: part.to, share: part.share, address: part.to };
+    });
+    const mine = show.host === this.identity.author;
+    const ticket = this.#myTickets().find((t) => t.show === show.id && t.host === show.host);
+    return {
+      id: show.id,
+      name: show.name,
+      host: person(show.host),
+      ...(show.project ? { project: { id: show.project, name: this.#spaces.get(show.project)?.name } } : {}),
+      ...(show.room ? { room: show.room } : {}),
+      starts: show.starts,
+      ends: show.ends,
+      price: show.price,
+      ...(show.capacity ? { capacity: show.capacity } : {}),
+      ...(mine ? { sold: this.#ticketRecords(show.id).length } : {}),
+      hosts: show.hosts.map(person),
+      split,
+      safe: { address: show.price.to, threshold, ...(owners.length === show.hosts.length ? { deploy: safeDeployment(owners, threshold, showSaltNonce(show.id)) } : {}) },
+      cancelled: show.cancelled,
+      open: showOpen(show, new Date(this.clock())),
+      mine,
+      ...(ticket ? { ticket: { tx: ticket.tx } } : {}),
+    };
   }
 
   // ---------------------------------------------------------------- direct chats between friends

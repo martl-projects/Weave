@@ -566,6 +566,58 @@ export interface SplitContractInfo {
   allocations: Array<{ address: string; share: number }>;
 }
 
+/** A ticketed event, like a live stream with an entry price. Tickets are paid into the show's own Safe (its hosts' wallets own it) until it's over. */
+export interface ShowInfo {
+  id: string;
+  name: string;
+  host: Person;
+  project?: { id: string; name?: string };
+  /** The room it happens in. */
+  room?: string;
+  starts: string;
+  ends: string;
+  /** Per ticket; `to` is the show's Safe. */
+  price: OnchainPrice;
+  capacity?: number;
+  /** For the host: tickets sold. */
+  sold?: number;
+  hosts: Person[];
+  /** How the money is paid out after the show; `address` is missing while someone has no wallet or treasury yet. */
+  split: Array<{ to: string; name?: string; address?: string; share: number }>;
+  safe: { address: string; threshold: number; deploy?: { to: string; data: string } };
+  cancelled: boolean;
+  /** Tickets let people in right now (from an hour before the start to the end). */
+  open: boolean;
+  mine: boolean;
+  /** Your ticket, if you have one. */
+  ticket?: { tx: string };
+}
+
+/** A ticket to a show: for its host every one sold (and requests that weren't let in, with the reason), for others their own. */
+export interface TicketInfo {
+  holder: Person;
+  tx: string;
+  /** The wallet it was paid from, and how much (smallest unit). */
+  from?: string;
+  value?: string;
+  ok: boolean;
+  reason?: string;
+  request?: string;
+}
+
+/** What the show's Safe has to send to pay out (by the split) or pay back (to everyone who paid). The hosts sign it in their own wallets. */
+export interface ShowSettlement {
+  safe: string;
+  /** What the Safe holds now, and what this sends (smallest unit). */
+  balance: string;
+  total: string;
+  calls: Array<{ to: string; data: string }>;
+  /** All of them as one Safe transaction (operation 1: a delegatecall to MultiSendCallOnly). */
+  multiSend: { to: string; data: string; operation: number };
+  /** The same for the Safe app's Transaction Builder: load it at app.safe.global, check, sign. */
+  batch: unknown;
+}
+
 /** What someone thinks of an address or contract: endorse or block, and why. People choose whose labels they follow. */
 export interface LabelInfo {
   /** 'eip155:<chain id>:<address>' */
@@ -1475,6 +1527,19 @@ export interface Backend {
   treasury(space: string): Promise<TreasuryInfo>;
   /** The project's split contract: where it is (asked from the chain), whether it exists yet, and how to put it there. */
   splitContract(project: string): Promise<SplitContractInfo>;
+  // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
+  /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
+  createShow(input: { name: string; project?: string; room?: string; starts: string; ends: string; price: number; capacity?: number; hosts?: string[]; split?: Array<{ to: string; share: number }> }): Promise<ShowInfo>;
+  /** Call a show off: tickets stop letting people in; pay everyone back with settleShow. */
+  cancelShow(show: string): Promise<ShowInfo>;
+  /** Shows this node knows, or a project's. */
+  shows(project?: string): Promise<ShowInfo[]>;
+  /** Ask for a ticket with the transaction that paid it, from your linked wallet; the host's node reads it on chain. */
+  buyTicket(input: { show: string; payment: string }): Promise<void>;
+  /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
+  tickets(show: string): Promise<TicketInfo[]>;
+  /** The Safe transaction that pays a show out by its split (after it) or back to everyone who paid. */
+  settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement>;
   /** Announce a treasury publicly (maintainers or moderators), so people outside it can pay it and name it in their splits. */
   announceTreasury(space: string): Promise<TreasuryInfo>;
   /** Endorse or block an address or contract, saying why; label '' withdraws yours. */
@@ -1546,7 +1611,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
-  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'setSplit', 'label', 'labels',
+  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

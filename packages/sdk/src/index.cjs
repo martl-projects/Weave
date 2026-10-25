@@ -75,6 +75,11 @@ class Weave {
     return this.#get(`/v1/access?${query}`);
   }
 
+  /** The project's shows someone has a ticket to (paid on chain), and whether each is on right now: let them in while `open`. */
+  tickets(did) {
+    return this.#get(`/v1/tickets?${new URLSearchParams({ did: String(did) })}`);
+  }
+
   /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
   badges(did) {
     return this.#get(`/v1/badges?${new URLSearchParams({ did: String(did) })}`);

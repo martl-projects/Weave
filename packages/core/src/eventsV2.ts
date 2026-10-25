@@ -82,6 +82,8 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.treasury.split',
   'weave.treasury',
   'weave.label',
+  // ticketed events (tickets themselves are boxed content, like membership requests)
+  'weave.show',
   // project roles and rules
   'weave.project.admit',
   'weave.project.decline',

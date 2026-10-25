@@ -28,6 +28,7 @@ For http services, Weave also puts the player in every request as `X-Weave-Perso
 | `weave.me()` | The host. |
 | `weave.project()` | The project, its open rooms with the people in them, and its groups. |
 | `weave.access(did, { group })` | What someone is in the project, and which of its groups they're in. Groups are the ones invited into the project, plus the host's own groups and tiers. `group` (id or name) asks about one. |
+| `weave.tickets(did)` | The project's shows someone holds a ticket to (paid on chain into the show's Safe), each with `open` while it's on: let them into a paid live room while it's true. |
 | `weave.badges(did)` | The project's badges someone holds, like Super Supporter #7 of 20: only valid ones, checked against the signatures of the maintainer who gave them. Badges are recognition; show something special for them, never lock access behind them. |
 
 A person is `{ did, name?, host, member, maintainer }`. Use `did` as the player's id: it stays the same across devices and name changes, so a player who reconnects keeps their seat, and nobody needs a name form.

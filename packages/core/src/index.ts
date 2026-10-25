@@ -257,6 +257,29 @@ export {
   type Split,
   type SplitShares,
 } from './treasury.ts';
+export {
+  erc20BalanceOf,
+  erc20Transfer,
+  KIND_SHOW,
+  KIND_TICKET,
+  KIND_TICKET_RECORD,
+  KIND_TICKET_REQUEST,
+  MULTI_SEND_CALL_ONLY,
+  multiSendData,
+  openTicket,
+  openTicketRequest,
+  parseShowSplit,
+  payouts,
+  safeBatch,
+  showOpen,
+  showSaltNonce,
+  showsOf,
+  ticketFor,
+  ticketRequest,
+  type Show,
+  type ShowShare,
+  type TicketRequest,
+} from './tickets.ts';
 export { formatUnits, isTxHash, parseUnits, readPayment, TEST_USDC, TRANSFER_TOPIC, type PaymentCheck, type Receipt } from './payments.ts';
 export { badgesOf, BADGE_LIMIT_MAX, KIND_BADGE, KIND_BADGE_SERIES, KIND_BADGE_TRANSFER, parseBadgeLimit, type Badge, type BadgeSeries } from './badges.ts';
 export {
