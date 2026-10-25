@@ -83,7 +83,7 @@ function BuyTicket({ show }: { show: ShowInfo }) {
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
   if (!wallet) return <p className="small">Link your wallet (Keys & devices → Wallet) to buy a ticket from it.</p>;
   if (!paying) return <button className="default" onClick={() => setPaying(true)}>Get a ticket ({usdc(show.price.amount, show.price.decimals)})…</button>;
-  return <PayFromWallet show={show.id} payee={show.host.name ?? 'the host'} onDone={() => setPaying(false)} />;
+  return <PayFromWallet show={show.id} creator={show.host.did} payee={show.host.name ?? 'the host'} onDone={() => setPaying(false)} />;
 }
 
 function HostTools({ show }: { show: ShowInfo }) {

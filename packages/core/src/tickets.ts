@@ -76,7 +76,7 @@ export function parseShowSplit(value: unknown): ShowShare[] | undefined {
   return split.reduce((sum, p) => sum + p.share, 0) === 10000 ? split : undefined;
 }
 
-/** Every show from their hosts' public events, the latest per show and host winning. */
+/** Every show from their hosts' public events, the latest per host and show winning: someone else using a show's id makes a show of their own. */
 export function showsOf(events: EventView[]): Show[] {
   const latest = new Map<string, Show>();
   for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
@@ -87,10 +87,8 @@ export function showsOf(events: EventView[]): Show[] {
     const price = parseOnchainPrice(body.price);
     const split = parseShowSplit(body.split);
     if (!id || !name || !price || !split || !isTime(body.starts) || !isTime(body.ends)) continue;
+    // Only its host changes a show; someone else's event with the same id is another show (whatever date it claims).
     const key = `${event.author} ${id}`;
-    // Only its host changes a show; someone else's event with the same id is another show.
-    const before = [...latest.values()].find((s) => s.id === id);
-    if (before && before.host !== event.author) continue;
     const capacity = Number(body.capacity);
     const hosts = Array.isArray(body.hosts) ? body.hosts.filter(isDid).slice(0, 10) : [];
     const owners = Array.isArray(body.owners) ? body.owners.filter(isAddress).slice(0, 10).map(checksumAddress) : [];

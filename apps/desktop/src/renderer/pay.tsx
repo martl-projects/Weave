@@ -16,12 +16,12 @@ import { attempt, AsyncButton, toast } from './ui.tsx';
 type Ethereum = { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
 const browserWallet = (): Ethereum | undefined => (window as unknown as { ethereum?: Ethereum }).ethereum;
 
-export function PayFromWallet({ tier, show, payee, onDone }: { tier?: string; show?: string; payee: string; onDone(): void }) {
+export function PayFromWallet({ tier, creator, show, payee, onDone }: { tier?: string; creator?: string; show?: string; payee: string; onDone(): void }) {
   const [request, setRequest] = useState<PaymentRequestInfo>();
   const [error, setError] = useState('');
   const [svg, setSvg] = useState('');
   const [hash, setHash] = useState('');
-  const target = tier ? { tier } : { show };
+  const target = { ...(tier ? { tier } : { show }), ...(creator ? { creator } : {}) };
 
   useEffect(() => {
     let alive = true;
@@ -64,7 +64,7 @@ export function PayFromWallet({ tier, show, payee, onDone }: { tier?: string; sh
     };
   }, [request]);
 
-  const send = (payment: string) => attempt(() => api(tier ? 'requestMembership' : 'buyTicket', tier ? { tier, payment } : { show, payment }).then(bump), `Sent: you're in as soon as ${payee}'s Weave has read it on chain`).then((sent) => sent !== undefined && onDone());
+  const send = (payment: string) => attempt(() => api(tier ? 'requestMembership' : 'buyTicket', tier ? { ...target, payment } : { show, ...(creator ? { host: creator } : {}), payment }).then(bump), `Sent: you're in as soon as ${payee}'s Weave has read it on chain`).then((sent) => sent !== undefined && onDone());
 
   if (error) return <p className="small">{error}</p>;
   if (!request) return <p className="small">Preparing the payment…</p>;
