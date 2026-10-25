@@ -405,3 +405,25 @@ describe('smart wallets', () => {
     expect(asked).not.toContain(smart);
   });
 });
+
+describe('who may retire an address or announce a treasury', () => {
+  it("ignores a stranger retiring someone's wallet or announcing a space's treasury", async () => {
+    const martin = person('Martin');
+    const eve = person('Eve');
+    const project = await martin.createProject({ name: 'Kasse' });
+    const mw = wallet();
+    await martin.linkWallet({ address: mw.address, proof: mw.sign(await martin.walletMessage(mw.address)) });
+    const real = await martin.announceTreasury('Kasse');
+    sync(martin, eve);
+
+    // Eve says Martin's wallet is retired and should be paid at hers, and announces a treasury of her own for the project.
+    const ew = wallet();
+    eve.replica.write(eve.identity, { kind: 'weave.safe.retired', body: { safe: mw.address, successor: ew.address, kind: 'wallet', owners: [], threshold: 1 } });
+    eve.replica.write(eve.identity, { kind: 'weave.treasury', body: { space: project.id, kind: 'project', address: safeAddress([ew.address], 1, treasurySaltNonce(project.id)), owners: [ew.address], threshold: 1 } });
+    sync(eve, martin);
+
+    expect(await martin.labels({ target: mw.address })).toEqual([]);
+    expect((await martin.treasury('Kasse')).address).toBe(real.address);
+    expect((await martin.treasury('Kasse')).announced).toBe(true);
+  });
+});

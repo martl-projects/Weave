@@ -92,6 +92,7 @@ import {
   boardName,
   boardsOf,
   canManage,
+  rekeyCounts,
   canonicalKind,
   classOf,
   channelName,
@@ -1631,6 +1632,35 @@ export class WeaveNode implements Backend {
     return 1;
   }
 
+  /**
+   * Keys from rekeys that don't count after all (their author had lost the role
+   * by then, as a demotion or removal made at the same time shows): kept to read
+   * what was sealed with them, never used to seal. Whoever took one before
+   * hearing of the loss falls back to the key everyone else seals with.
+   */
+  #settleEpochKeys(space: StoredSpace): number {
+    if (space.kind === 'direct') return 0;
+    const state = this.#state(space);
+    if (!state.cutoffs?.some((c) => c.managed)) return 0;
+    const scope = spaceScope(space);
+    const counts = new Map<string, boolean>();
+    for (const e of this.replica.events((x) => x.scope === scope && canonicalKind(x.kind) === KIND_REKEY)) {
+      const opened = this.#tryOpen((me) => openRekey(e, me));
+      if (!opened) continue;
+      const epoch = String(opened.epoch);
+      counts.set(epoch, (counts.get(epoch) ?? false) || rekeyCounts(state, e));
+    }
+    let moved = 0;
+    for (const [epoch, ok] of counts) {
+      if (ok || !space.keys[epoch]) continue;
+      (space.alternates ??= {})[epoch] = [...new Set([...(space.alternates[epoch] ?? []), space.keys[epoch]])];
+      delete space.keys[epoch];
+      moved++;
+    }
+    if (moved) this.#saveSpace(space);
+    return moved;
+  }
+
   /** A new key for a space, boxed to everyone in it. */
   #rotateKey(space: StoredSpace): void {
     const { fields, epoch, key } = rekey(space, [...this.#state(space).members.keys()], this.#encryptionKeyOf);
@@ -1681,7 +1711,7 @@ export class WeaveNode implements Backend {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: {} }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
@@ -1699,7 +1729,7 @@ export class WeaveNode implements Backend {
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new Error("that's you");
     if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author) } }));
     return this.#spaceInfo(space);
   }
 
@@ -1747,7 +1777,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
     if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
@@ -2366,6 +2396,7 @@ export class WeaveNode implements Backend {
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
@@ -4126,7 +4157,7 @@ export class WeaveNode implements Backend {
       if (!state.tier) continue;
       const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
       if (!expired.length) continue;
-      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member } }));
+      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
       const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
@@ -4572,7 +4603,14 @@ export class WeaveNode implements Backend {
   }
 
   #retired() {
-    return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED));
+    const history = this.#walletHistory();
+    return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED), (r) => (r.kind === 'wallet' ? history.get(r.address.toLowerCase()) === r.by : !!r.space && this.#manages(r.space, r.by)));
+  }
+
+  /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
+  #manages(spaceId: string, did: Did): boolean {
+    const space = this.#spaces.get(spaceId);
+    return !!space && canManage(this.#state(space), did);
   }
 
   async label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined> {
@@ -4660,7 +4698,7 @@ export class WeaveNode implements Backend {
   }
 
   #treasuries() {
-    return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY));
+    return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY), (space, author) => this.#manages(space, author));
   }
 
   // ---------------------------------------------------------------- signing a Safe's transactions together
@@ -5426,7 +5464,7 @@ export class WeaveNode implements Backend {
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
     if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member) }) } }));
   }
 
   /** A board of a space, by name or title. */
@@ -6086,7 +6124,7 @@ export class WeaveNode implements Backend {
           }
           for (const did of state.maintainers) {
             if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false } }));
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did) } }));
             changed++;
           }
           state = this.#state(space);
@@ -7343,12 +7381,30 @@ export class WeaveNode implements Backend {
   #takeKeys(event: WeaveRecord): void {
     if (canonicalKind(event.kind) === KIND_REKEY) {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
-      if (!space || !canManage(this.#state(space), event.author)) return;
+      // Judged by whether its author managed the space when they made it, not today (a member back after a handover still takes it).
+      if (!space || !rekeyCounts(this.#state(space), event)) return;
       const opened = this.#tryOpen((me) => openRekey(event, me));
-      if (opened && !space.keys[String(opened.epoch)] && !space.shredded?.includes(opened.epoch)) {
-        space.keys[String(opened.epoch)] = opened.key;
+      if (!opened || space.shredded?.includes(opened.epoch)) return;
+      const epoch = String(opened.epoch);
+      if (!space.keys[epoch]) {
+        space.keys[epoch] = opened.key;
         this.#saveSpace(space);
+        return;
       }
+      if (space.keys[epoch] === opened.key || space.alternates?.[epoch]?.includes(opened.key)) return;
+      // Two managers rekeyed at once: keep every key of the epoch, and all seal with the one from the rekey with the lowest id.
+      const state = this.#state(space);
+      const all = this.replica
+        .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && rekeyCounts(state, e))
+        .flatMap((e) => {
+          const o = this.#tryOpen((me) => openRekey(e, me));
+          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key }] : [];
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+      const keys = [...new Set([...all.map((k) => k.key), space.keys[epoch], ...(space.alternates?.[epoch] ?? [])])];
+      space.keys[epoch] = all[0]?.key ?? space.keys[epoch];
+      (space.alternates ??= {})[epoch] = keys.filter((k) => k !== space.keys[epoch]);
+      this.#saveSpace(space);
       return;
     }
     const opened = this.#tryOpen((me) => openGift(event, me));
@@ -7372,6 +7428,22 @@ export class WeaveNode implements Backend {
       return;
     }
     void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
+  }
+
+  /**
+   * The last number of each of a person's keys (devices, agents) this node
+   * holds: what a removal, demotion, leave or handover names as counting before
+   * it. Whatever those keys sign numbered past it counts as after, whatever date
+   * it claims (Julian's backdating issue).
+   */
+  #upTo(person: Did): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const signer of this.replica.signers()) {
+      if (this.replica.authority.personOf(signer) !== person) continue;
+      const n = this.replica.number(signer);
+      if (n > 0) out[signer] = n;
+    }
+    return out;
   }
 
   #state(space: StoredSpace): SpaceState {
