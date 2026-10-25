@@ -24,7 +24,8 @@ export function duplexPair(): [Duplex, Duplex] {
   a = make(() => b);
   b = make(() => a);
   const handshakeHash = randomBytes(32);
-  Object.assign(a, { handshakeHash });
-  Object.assign(b, { handshakeHash });
+  // As a secret stream's two ends: the same handshake hash, one dialled and one answered.
+  Object.assign(a, { handshakeHash, isInitiator: true });
+  Object.assign(b, { handshakeHash, isInitiator: false });
   return [a, b];
 }
