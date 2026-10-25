@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
+import { gift, isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_REKEY, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
 import { loadSpaces, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 /* Regression tests from Julian's pre-release review: each one reproduces an issue and checks it stays fixed. */
@@ -213,5 +213,39 @@ describe("a member's own rekey doesn't stop rotation after they leave (Gr9S4DLf)
     syncAll();
     await martin.reconcile();
     expect(await groupEpoch(martin)).toBe(2);
+  });
+});
+
+describe("a gift can't poison a space's future epochs (8R9bN-yO)", () => {
+  it("someone in another group gifts garbage keys for a space Lena holds: she still reads its next epoch", async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    let all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martin.invite('Weave'));
+    await kofi.createGroup('Chess');
+    await lena.joinSpace(await kofi.invite('Chess'));
+    syncAll();
+    const projectId = (await martin.spaces('project'))[0].id;
+    const chess = stored(kofi, 'Chess');
+    const garbage = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const bogus = { ...loadSpaces(martin.home).find((s) => s.id === projectId)!, keys: { '1': garbage, '2': garbage }, boards: { issues: { '0': garbage } } };
+    kofi.replica.write(kofi.identity, gift(bogus, [lena.identity.author], spaceScope(chess), { topics: [], bootstrap: [] }, (d) => kofi.replica.authority.encryptionKey(d)));
+    syncAll();
+    const lenas = () => loadSpaces(lena.home).find((s) => s.id === projectId)!;
+    expect(Object.keys(lenas().keys)).toEqual(['0']);
+    expect(lenas().boards?.issues?.['0']).not.toBe(garbage);
+    const noah = person('Noah');
+    await noah.joinSpace(await martin.invite('Weave'));
+    all = [...all, noah];
+    syncAll();
+    await martin.removeMember('Weave', 'Noah');
+    await martin.say({ space: 'Weave', text: 'after Noah' });
+    syncAll();
+    expect((await martin.spaces('project'))[0].epoch).toBe(1);
+    expect(lenas().keys['1']).not.toBe(garbage);
+    expect((await lena.messages('Weave')).map((m) => m.text)).toContain('after Noah');
   });
 });
