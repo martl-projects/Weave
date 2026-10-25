@@ -352,3 +352,38 @@ describe("a shred keeps what the shredder's node didn't hold (zLqeyEBC)", { time
     for (const p of released) expect(titles).toContain(p.title);
   });
 });
+
+describe("a removed maintainer can't remove who removed them, however they name what they saw (H7hk7X9S, cpjHYTDQ)", () => {
+  const variants: Array<[string, (lena: WeaveNode) => Record<string, unknown>]> = [
+    ['no anchors', () => ({})],
+    ['empty anchors', () => ({ upTo: {}, at: {} })],
+    ['a bogus key', () => ({ upTo: { 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK': 1 }, at: {} })],
+    ['anchored low on purpose', (lena) => ({ upTo: { [lena.identity.did]: 1 }, at: { [lena.identity.did]: { c: 0, s: 0, n: 1 } } })],
+  ];
+  for (const [name, body] of variants) {
+    it(`Kofi's backdated removal of Lena: ${name}`, async () => {
+      const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+      const all = [martin, lena, kofi];
+      const syncAll = () => {
+        for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+      };
+      await martin.createProject({ name: 'Weave' });
+      await lena.joinSpace(await martin.invite('Weave'));
+      await kofi.joinSpace(await martin.invite('Weave'));
+      syncAll();
+      await martin.setMaintainer({ project: 'Weave', who: 'Lena', on: true });
+      await martin.setMaintainer({ project: 'Weave', who: 'Kofi', on: true });
+      syncAll();
+      const old = stored(kofi, 'Weave');
+      await lena.removeMember('Weave', 'Kofi');
+      syncAll();
+      kofi.replica.write(kofi.identity, { ...sealFor(old, { kind: 'weave.space.remove', body: { member: lena.identity.author, ...body(lena) } }), time: new Date(Date.now() - 60_000).toISOString() });
+      syncAll();
+      for (const node of all) await node.reconcile();
+      syncAll();
+      const members = await martin.members('Weave');
+      expect(members.map((m) => m.name).sort()).toEqual(['Lena', 'Martin']);
+      expect((await lena.members('Weave')).map((m) => m.name).sort()).toEqual(['Lena', 'Martin']);
+    });
+  }
+});

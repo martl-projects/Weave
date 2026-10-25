@@ -92,7 +92,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'order' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -122,6 +122,7 @@ export class SqliteStore implements LogStore {
       byId: this.#db.prepare('SELECT id, json FROM events2 WHERE id = ?'),
       byNumber: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? AND n = ?'),
       chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
+      order: this.#db.prepare('SELECT rowid AS n FROM events2 WHERE id = ?'),
       contentAt: this.#db.prepare("SELECT id, json FROM events2 WHERE signer = ? AND space = ? AND class = 'content' AND json_extract(json, '$.cs') = ?"),
       all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
       bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
@@ -212,6 +213,10 @@ export class SqliteStore implements LogStore {
 
   contentCount(signer: Did, space: string): number {
     return this.#contentCounts.get(`${signer} ${space}`) ?? 0;
+  }
+
+  order2(id: string): number | undefined {
+    return (this.#v2.order.get(id) as { n: number } | undefined)?.n;
   }
 
   all2(): StoredV2[] {
