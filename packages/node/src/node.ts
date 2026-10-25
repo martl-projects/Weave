@@ -7893,8 +7893,15 @@ export class WeaveNode implements Backend {
     const mine = company ? [] : this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
     if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
     const scope = spaceScope(space);
+    // Bodies are stored once per hash for every space: drop only this space's own. One counts as ours if it opens with this
+    // space's key of that epoch (a copy of another space's body under our scope doesn't), and no event elsewhere points to it.
+    const cipher = this.#cipher(space);
+    const elsewhere = new Set(this.replica.events((r) => r.scope !== scope && isWireItemV2(r.wire)).map((r) => (r.wire as WireItemV2).e.body as string));
     for (const r of this.replica.events((r) => r.scope === scope && r.class === 'content' && !r.missing)) {
-      if (doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) && isWireItemV2(r.wire)) this.replica.store.dropBody(r.wire.e.body as string);
+      if (!doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) || !isWireItemV2(r.wire)) continue;
+      const hash = r.wire.e.body as string;
+      if (elsewhere.has(hash) || !openIn(cipher, r)) continue;
+      this.replica.store.dropBody(hash);
     }
     for (const e of doomed) delete space.keys[String(e)];
     space.shredded = [...new Set([...(space.shredded ?? []), ...doomed])];
