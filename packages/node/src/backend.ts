@@ -1304,8 +1304,8 @@ export interface Profile {
   projects: PublicProject[];
   /** Accounts elsewhere they show on their hub, checked (one whose proof doesn't hold isn't shown). */
   accounts?: Array<{ platform: string; handle: string; url?: string; verified?: true }>;
-  /** A company-owned identity: the company that holds it. */
-  company?: { did: Did; name?: string; frozen?: true };
+  /** A company-owned identity: the company that holds it (unconfirmed: it says so, but this node can't see the company vouch for it). */
+  company?: { did: Did; name?: string; frozen?: true; unconfirmed?: true };
   /** Their other identities, where both sides say so. */
   links: LinkInfo[];
 }
@@ -1389,8 +1389,8 @@ export interface LinkInfo {
   since: string;
   /** When it stopped counting going forward: the company froze one side (it stays as history). */
   until?: string;
-  /** The other side is company-owned. */
-  company?: { did: Did; name?: string };
+  /** The other side is company-owned (unconfirmed: as it says, not seen vouched for here). */
+  company?: { did: Did; name?: string; unconfirmed?: true };
   /** Sealed into this space rather than public. */
   space?: string;
 }

@@ -2048,7 +2048,7 @@ export class WeaveNode implements Backend {
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
       ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
-      ...(this.replica.authority.keys(m.did).org ? { company: this.nameOf(this.replica.authority.keys(m.did).org!) ?? 'a company' } : {}),
+      ...(this.#companyVouchedOf(m.did) ? { company: this.nameOf(this.#companyVouchedOf(m.did)!) ?? 'a company' } : {}),
     }));
   }
 
@@ -3499,7 +3499,7 @@ export class WeaveNode implements Backend {
       contact: this.#contacts().has(did),
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
-      ...(this.replica.authority.keys(did).org ? { company: this.#companyOfPerson(did) } : {}),
+      ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.#companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.#companyClaim(did)),
       links: this.#linksOf(did).filter((l) => l.state === 'linked'),
     };
   }
@@ -6265,6 +6265,29 @@ export class WeaveNode implements Backend {
     return { did: org, name: this.nameOf(org), ...(this.replica.authority.frozen(did) ? { frozen: true as const } : {}) };
   }
 
+  /**
+   * The company someone belongs to, as far as this node can tell (MHV79Ro6):
+   * the one their identity names, if that company has them in its company
+   * group. Anyone can name a company in their identity; only the company puts
+   * them in its group. A bare claim counts only for what it costs the claimant
+   * (the company may freeze them; its policy holds them).
+   */
+  #companyVouchedOf(did: Did): Did | undefined {
+    const claim = this.#companyClaim(did);
+    return claim?.vouched ? claim.org : undefined;
+  }
+
+  /** The company someone's identity names, and whether it vouches for them as far as this node sees: yes, no (we hold its group), or can't tell. */
+  #companyClaim(did: Did): { org: Did; vouched?: boolean } | undefined {
+    const org = this.replica.authority.keys(did).org;
+    if (!org) return undefined;
+    // A freeze by that company is its word too: it held them.
+    if (this.replica.authority.frozen(did)) return { org, vouched: true };
+    const groups = [...this.#spaces.values()].filter((s) => s.kind === 'group' && s.founder === org && !!this.#orgOf(s));
+    if (!groups.length) return { org };
+    return { org, vouched: groups.some((g) => this.#state(g).members.has(did)) };
+  }
+
   async createCompany(input: CreateCompanyInput): Promise<CompanyInfo> {
     if (this.#companyGroups().length) throw new Error('this node already runs a company');
     if (!input.admins?.trim()) throw new Error("name the sign-in group of the company's admins");
@@ -6619,7 +6642,7 @@ export class WeaveNode implements Backend {
     if (earlier) return undefined;
     const { org, policy } = found;
     const who = this.nameOf(org) ?? 'The company';
-    const colleague = (did: Did) => did === org || this.replica.authority.keys(did).org === org;
+    const colleague = (did: Did) => did === org || this.#companyVouchedOf(did) === org;
     if (event.space === 'public') {
       if (policy.public) return undefined;
       const b = body as { subject?: unknown; on?: unknown } | null | undefined;
@@ -6635,7 +6658,7 @@ export class WeaveNode implements Backend {
       const other = !direct ? undefined : event.author === this.identity.author ? direct.peer : direct.peer === event.author ? this.identity.author : undefined;
       if (!other) return undefined;
       if (policy.directs === 'company' && !colleague(other)) return `${who}'s accounts chat directly only with colleagues`;
-      if (policy.chats && other !== org && this.replica.authority.keys(other).org === org) return `${who} keeps chats between colleagues in company chats (weave company chat <colleague>)`;
+      if (policy.chats && other !== org && colleague(other)) return `${who} keeps chats between colleagues in company chats (weave company chat <colleague>)`;
       return undefined;
     }
     if (policy.outside) return undefined;
@@ -6755,7 +6778,8 @@ export class WeaveNode implements Backend {
         return !!org && policy.get(org) === false;
       });
       const until = [did, other].map((x) => (this.replica.authority.frozen(x) ? frozenAt.get(x) : undefined)).filter((t): t is string => !!t).sort()[0];
-      const org = this.replica.authority.keys(other).org;
+      const claim = this.#companyClaim(other);
+      const org = claim && claim.vouched !== false ? claim.org : undefined;
       const space = mine?.space ?? theirs?.space;
       out.push({
         did: other,
@@ -6763,7 +6787,7 @@ export class WeaveNode implements Backend {
         state: refused ? 'refused' : mine?.on && theirs?.on ? 'linked' : mine?.on ? 'waiting' : 'asked',
         since: [mine?.on ? mine.time : '', theirs?.on ? theirs.time : ''].sort().at(-1)!,
         ...(until ? { until } : {}),
-        ...(org ? { company: { did: org, name: this.nameOf(org) } } : {}),
+        ...(org ? { company: { did: org, name: this.nameOf(org), ...(claim?.vouched ? {} : { unconfirmed: true as const }) } } : {}),
         ...(space ? { space: this.#spaces.get(space)?.name ?? space } : {}),
       });
     }
