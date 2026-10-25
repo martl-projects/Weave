@@ -1,12 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import type { Duplex } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
-import { connectTo, loadConfig, openTunnel, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, closeOpenStores } from '../src/index.ts';
+import { connectTo, loadConfig, openTunnel, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, type Tunnel, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -89,9 +88,13 @@ describe('phones using a node remotely', () => {
 });
 
 /** Send a raw HTTP/1.0 request down a connection; what came back before it closed. */
-function fetchThrough(socket: Duplex, path: string): Promise<string> {
+/** An HTTP request through a tunnel, and its whole answer ('' when the computer refused the tunnel). */
+async function fetchThrough(opening: Promise<Tunnel>, path: string): Promise<string> {
+  const tunnel = await opening.catch(() => undefined);
+  if (!tunnel) return '';
+  const { socket, rest } = tunnel;
   return new Promise((resolve) => {
-    let got = '';
+    let got = rest.toString('utf8');
     socket.on('data', (chunk: Buffer) => (got += chunk.toString('utf8')));
     socket.on('error', () => {});
     socket.on('close', () => resolve(got));
@@ -173,7 +176,7 @@ describe('a phone playing in a room its computer joined', () => {
     // Unpaired while a tunnel is open: it's cut at once.
     await session.call('joinRoom', room.id);
     await until(async () => (await computer.rooms('Pferderennen'))[0].url);
-    const open = openTunnel(dialer, paired, phoneKeys, room.id);
+    const { socket: open } = await openTunnel(dialer, paired, phoneKeys, room.id);
     const cut = new Promise<void>((resolve) => open.on('close', () => resolve()));
     open.on('error', () => {});
     open.write('GET /play HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n');

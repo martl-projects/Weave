@@ -11,6 +11,27 @@ import { decodePhoneLink } from './phone-link.ts';
 
 type KeyPair = { publicKey: Buffer; secretKey: Buffer };
 
+/**
+ * How long a new connection may stay silent before it counts as stalled. hyperdht sometimes settles on a way to
+ * the computer that leads nowhere and only gives up after about 12 s; a fresh attempt usually gets through at once.
+ */
+const STALL_MS = 4000;
+/** Attempts per connection, stalled ones included. */
+const ATTEMPTS = 3;
+
+class Stalled extends Error {}
+
+/** Try again when an attempt stalled; any other failure is the answer. */
+async function patiently<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let n = 1; ; n++) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!(error instanceof Stalled) || n >= ATTEMPTS) throw error;
+    }
+  }
+}
+
 /** The DHT calls this needs (hyperdht's). */
 export interface Dialer {
   connect(publicKey: Buffer, options?: { keyPair?: KeyPair }): DhtSocket;
@@ -45,19 +66,74 @@ export function connectTo(dht: Dialer, node: PairedNode, keyPair: KeyPair): Prom
   return open(dht, node.node, keyPair, { hello: 1 });
 }
 
+/** A way into a room, which the computer said yes to: its socket, and what came after that yes (the app's first bytes). */
+export interface Tunnel {
+  socket: DhtSocket;
+  rest: Buffer;
+}
+
 /**
- * One connection into a room the computer is in, for one TCP connection of the phone's browser: once this
- * returns, the socket carries that connection's bytes to the room's app (the node closes it if it can't).
+ * One connection into a room the computer is in, for one TCP connection of the phone's browser: once the computer
+ * says yes, the socket carries that connection's bytes to the room's app. Fails when the computer can't (it closes).
  */
-export function openTunnel(dht: Dialer, node: PairedNode, keyPair: KeyPair, roomId: string): DhtSocket {
-  const socket = dht.connect(Buffer.from(node.node, 'hex'), { keyPair });
-  socket.write(`${JSON.stringify({ tunnel: roomId })}\n`);
-  return socket;
+export function openTunnel(dht: Dialer, node: PairedNode, keyPair: KeyPair, roomId: string): Promise<Tunnel> {
+  return patiently(() => tunnelOnce(dht, node, keyPair, roomId));
+}
+
+function tunnelOnce(dht: Dialer, node: PairedNode, keyPair: KeyPair, roomId: string): Promise<Tunnel> {
+  return new Promise((resolve, reject) => {
+    const socket = dht.connect(Buffer.from(node.node, 'hex'), { keyPair });
+    let got = Buffer.alloc(0);
+    const done = () => {
+      clearTimeout(stall);
+      socket.removeListener('data', ondata);
+      socket.removeListener('close', onclose);
+      socket.removeListener('error', onerror);
+    };
+    const give = (error: Error) => {
+      done();
+      socket.on('error', () => {});
+      socket.destroy();
+      reject(error);
+    };
+    const stall = setTimeout(() => give(new Stalled('connection timed out')), STALL_MS);
+    const ondata = (chunk: Buffer) => {
+      got = Buffer.concat([got, chunk]);
+      const end = got.indexOf(10);
+      if (end < 0) return got.length > 4096 ? give(new Error('your computer answered something else')) : undefined;
+      let yes = false;
+      try {
+        yes = (JSON.parse(got.subarray(0, end).toString('utf8')) as { tunnel?: unknown }).tunnel === true;
+      } catch {
+        // not an answer this phone knows
+      }
+      if (!yes) return give(new Error('your computer answered something else'));
+      done();
+      socket.pause();
+      resolve({ socket, rest: got.subarray(end + 1) });
+    };
+    const onclose = () => give(new Error("your computer can't reach that room"));
+    const onerror = (error: Error) => give(error);
+    socket.on('data', ondata);
+    socket.on('close', onclose);
+    socket.on('error', onerror);
+    socket.write(`${JSON.stringify({ tunnel: roomId })}\n`);
+  });
 }
 
 function open(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<string, unknown>): Promise<RemoteSession> {
+  return patiently(() => openOnce(dht, nodeKey, keyPair, hello));
+}
+
+function openOnce(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<string, unknown>): Promise<RemoteSession> {
   return new Promise((resolve, reject) => {
     const socket = dht.connect(Buffer.from(nodeKey, 'hex'), { keyPair });
+    // No answer yet after a while: give this attempt up (the caller tries again).
+    const stall = setTimeout(() => {
+      if (ready) return;
+      reject(new Stalled('connection timed out'));
+      socket.destroy();
+    }, STALL_MS);
     const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
     const listeners = new Set<(item: FeedItem) => void>();
     const closers = new Set<() => void>();
@@ -82,6 +158,7 @@ function open(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<stri
     };
 
     const fail = (error: Error) => {
+      clearTimeout(stall);
       if (!ready) reject(error);
       for (const p of pending.values()) p.reject(new Error('the connection to your computer closed'));
       pending.clear();
@@ -114,6 +191,7 @@ function open(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<stri
             return;
           }
           ready = true;
+          clearTimeout(stall);
           if (typeof message.name === 'string') session.name = message.name;
           resolve(session);
         } else if ('event' in message) {

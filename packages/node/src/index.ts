@@ -93,7 +93,7 @@ export { resolveHome, type Home } from './home.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT, WeaveNode, type Bundle } from './node.ts';
 export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';
 export { decodePhoneLink, PHONE_METHODS, type PairedPhone, type PairingOffer, type PhoneLink } from './remote.ts';
-export { connectTo, openTunnel, pairWith, type Dialer, type PairedNode, type RemoteSession } from './remote-client.ts';
+export { connectTo, openTunnel, pairWith, type Dialer, type PairedNode, type RemoteSession, type Tunnel } from './remote-client.ts';
 export type { CompanyAction } from './company.ts';
 export { machinePolicy, type MachinePolicy } from './machine.ts';
 export { moveHomeKeyToKeyService, serverCredentials, unlockHomeKey } from './homekey.ts';

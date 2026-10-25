@@ -260,6 +260,8 @@ export class RemoteAccess {
     if (!port || socket.destroyed) return void socket.destroy();
     this.#tunnels.set(socket, phone);
     socket.on('close', () => this.#tunnels.delete(socket));
+    // Yes: the phone waits for this before it sends the browser's bytes on (and tries again if it doesn't come).
+    send(socket, { tunnel: true });
     const local = createConnection({ host: '127.0.0.1', port });
     local.on('error', () => socket.destroy());
     splice(socket, local, rest);

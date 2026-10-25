@@ -31,6 +31,7 @@ type KeyPair = { publicKey: Buffer; secretKey: Buffer };
 /** A connection's two directions, Node's or Bare's streams alike. */
 export interface Pipe {
   pipe(destination: Pipe): unknown;
+  write(data: Buffer): unknown;
   on(event: 'error' | 'close', listener: () => void): unknown;
   destroy(): void;
 }
@@ -179,19 +180,28 @@ export class Phone {
   #tunnel(room: string, local: Pipe): void {
     const node = this.#saved?.node;
     if (!node) return local.destroy();
-    const remote = openTunnel(this.#deps.dht(node.bootstrap), node, this.#keyPair(), room) as unknown as Pipe;
     this.#open.add(local);
+    let remote: Pipe | undefined;
     const end = () => {
       this.#open.delete(local);
       local.destroy();
-      remote.destroy();
+      remote?.destroy();
     };
-    for (const socket of [local, remote]) {
-      socket.on('error', end);
-      socket.on('close', end);
-    }
-    local.pipe(remote);
-    remote.pipe(local);
+    local.on('error', end);
+    local.on('close', end);
+    // What the browser sends meanwhile waits in the local socket until the computer has said yes.
+    openTunnel(this.#deps.dht(node.bootstrap), node, this.#keyPair(), room).then(
+      ({ socket, rest }) => {
+        remote = socket as unknown as Pipe;
+        if (!this.#open.has(local)) return remote.destroy();
+        remote.on('error', end);
+        remote.on('close', end);
+        if (rest.length) local.write(rest);
+        local.pipe(remote);
+        remote.pipe(local);
+      },
+      end,
+    );
   }
 
   #keyPair(): KeyPair {
