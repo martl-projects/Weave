@@ -12,7 +12,8 @@ public class WeaveWorkerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "WeaveWorkerPlugin"
     public let jsName = "WeaveWorker"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "post", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "post", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hold", returnType: CAPPluginReturnPromise)
     ]
 
     private var worklet: BareWorklet?
@@ -54,6 +55,12 @@ public class WeaveWorkerPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         send(Data((message + "\n").utf8))
+        call.resolve()
+    }
+
+    /// Android keeps the worker running under a room's browser tab; here the
+    /// browser opens inside the app, which stays in front, so nothing to do.
+    @objc func hold(_ call: CAPPluginCall) {
         call.resolve()
     }
 

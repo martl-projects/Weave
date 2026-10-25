@@ -633,6 +633,7 @@ export class WeaveNode implements Backend {
     name: () => this.nameOf(this.identity.author),
     call: (method, args) => (this[method] as (...a: unknown[]) => Promise<unknown>).apply(this, args),
     watch: (onItem, signal) => this.watch(onItem, signal),
+    roomPort: async (roomId) => this.#roomPort(roomId),
   });
   /** Apps this node started for the person, by project id. */
   #apps = new AppProcesses(() => this.#emitLive());
@@ -3284,6 +3285,14 @@ export class WeaveNode implements Backend {
   async sayInRoom(input: { room: string; text: string }): Promise<void> {
     if (!input.text?.trim()) throw new Error('a message needs text');
     this.#live.say(this.#roomById(input.room).room.id, input.text);
+  }
+
+  /** Where a room's app is reached on this computer while we're in the room: the same port its address (RoomInfo.url) has. */
+  #roomPort(roomId: string): number | undefined {
+    const found = this.#allRooms().find((r) => r.room.id === roomId && r.room.open);
+    if (!found) return undefined;
+    if (found.room.host !== this.identity.author) return this.#live.localPort(roomId);
+    return this.#live.isHosting(roomId) ? this.#roomService(found.room)?.port : undefined;
   }
 
   /** A room's key seed, from our own secret: the host can reopen its rooms after a restart. */

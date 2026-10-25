@@ -1,17 +1,19 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo } from '@weave/node';
+import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo, type RoomInfo } from '@weave/node';
 
 /*
  * The phone app's worker, packed as on the phone and run on real Bare: it
  * pairs with a desktop node, uses it, comes back after a restart without a
- * new code, and notices when it's unpaired.
+ * new code, and notices when it's unpaired; and it opens a room's app on
+ * the phone, through the computer.
  */
 
 const app = join(import.meta.dirname, '..');
@@ -130,5 +132,47 @@ describe('the phone app worker on Bare', () => {
     await phone.ask('forget');
     expect(await phone.ask('state')).toEqual({ paired: false, connected: false });
     phone.stop();
+  }, 90_000);
+
+  it("serves a room its computer joined on a local port, through the computer", async () => {
+    // Someone else hosts the room, with the project's app on their computer.
+    const app = createHttpServer((req, res) => res.end(`a horse race, at ${req.url}`));
+    await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
+    const hostDir = temp('weave-mobile-host-');
+    const host = WeaveNode.init('Lena', hostDir);
+    host.config = { ...loadConfig(resolveHome(hostDir)), bootstrap: testnet.bootstrap };
+    saveConfig(resolveHome(hostDir), host.config);
+    try {
+      await host.createProject({ name: 'Pferderennen' });
+      await host.publishApp({ project: 'Pferderennen', manifest: { app: 'pferderennen', name: 'Pferderennen', services: [{ id: 'race', port: (app.address() as AddressInfo).port, open: { joiner: { path: '/play' } } }] } });
+      await node.joinSpace(await host.invite('Pferderennen'));
+      await host.goOnline();
+      const hosted = await host.hostRoom({ project: 'Pferderennen', name: 'Derby' });
+
+      const phone = await worker(temp('weave-mobile-phone-'));
+      await phone.ask('pair', { link: (await node.pairPhone()).link, phoneName: 'iPhone' });
+      await until(async () => (await phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] })).length);
+      await expect(phone.ask('openRoom', { room: hosted.id })).rejects.toThrow(/no address/);
+      await phone.ask('call', { method: 'joinRoom', args: [hosted.id] });
+      let room: RoomInfo | undefined;
+      await vi.waitFor(async () => {
+        room = (await phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] }))[0];
+        expect(room.url).toBeTruthy();
+      }, { timeout: 30_000, interval: 200 });
+
+      // The phone's own address for it: the computer's port where it's free, and the path players open.
+      const local = await phone.ask<string>('openRoom', { room: room!.id, url: room!.url });
+      expect(local).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/play$/);
+      expect(await phone.ask('openRoom', { room: room!.id, url: room!.url })).toBe(local);
+      expect(await (await fetch(local)).text()).toBe('a horse race, at /play');
+
+      // Forgetting the computer closes it.
+      await phone.ask('forget');
+      await expect(fetch(local)).rejects.toThrow();
+      phone.stop();
+    } finally {
+      await host.close();
+      app.close();
+    }
   }, 90_000);
 });

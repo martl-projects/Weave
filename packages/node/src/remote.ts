@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { b64u } from '@weave/core';
-import { readLine, roomKeyPair, type DhtServer, type DhtSocket } from '@weave/net';
+import { createConnection } from 'node:net';
+import { readLine, roomKeyPair, splice, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
 import type { FeedItem, RpcMethod } from './backend.ts';
 import type { Home } from './home.ts';
@@ -26,6 +27,13 @@ import { readSecretJson, writeSecretJson } from './vault.ts';
  *   node → phone   {event}                  a new event, like the desktop's live updates
  * Calls a phone may not make (keys, agents, starting programs, pairing more
  * phones) are refused. The node signs what the phone posts, with its own key.
+ *
+ * Playing in a room: a paired phone opens one more connection per TCP
+ * connection its browser makes, starting with {tunnel: roomId}, and the node
+ * forwards the rest of it to the port the room's app has on this computer:
+ * the room's tunnel when this node joined it, the app itself when it hosts
+ * it. So the phone reaches only rooms its computer is in, as that person;
+ * the room's proof and invitation stay with the computer's node.
  */
 
 export interface PairedPhone {
@@ -84,6 +92,8 @@ export interface RemoteHost {
   name(): string | undefined;
   call(method: RpcMethod, args: unknown[]): Promise<unknown>;
   watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void>;
+  /** The local port a room's app is reached on from this node, while it's in the room (joined or hosting). */
+  roomPort(roomId: string): Promise<number | undefined>;
 }
 
 interface RemoteFile {
@@ -126,6 +136,8 @@ export class RemoteAccess {
   #server?: DhtServer;
   #offers = new Map<string, string>(); // secret → expires
   #sessions = new Map<DhtSocket, { phone: string; stop: AbortController }>();
+  /** Open room tunnels → the phone each belongs to. */
+  #tunnels = new Map<DhtSocket, string>();
 
   constructor(host: RemoteHost) {
     this.#host = host;
@@ -169,6 +181,8 @@ export class RemoteAccess {
       socket.destroy();
     }
     this.#sessions.clear();
+    for (const socket of this.#tunnels.keys()) socket.destroy();
+    this.#tunnels.clear();
     await this.#server?.close();
     this.#server = undefined;
   }
@@ -201,6 +215,7 @@ export class RemoteAccess {
       socket.destroy();
       this.#sessions.delete(socket);
     }
+    for (const [socket, phone] of this.#tunnels) if (phone === key) socket.destroy();
   }
 
   #isPaired(key: string): boolean {
@@ -217,7 +232,8 @@ export class RemoteAccess {
     socket.on('error', () => socket.destroy());
     const key = socket.remotePublicKey.toString('hex');
     const { line, rest } = await readLine(socket, 4096);
-    const hello = JSON.parse(line) as { pair?: unknown; name?: unknown; hello?: unknown };
+    const hello = JSON.parse(line) as { pair?: unknown; name?: unknown; hello?: unknown; tunnel?: unknown };
+    if (typeof hello.tunnel === 'string') return this.#tunnel(socket, key, hello.tunnel, rest);
     if (typeof hello.pair === 'string') {
       const expires = this.#takeOffer(hello.pair);
       if (!expires) {
@@ -235,6 +251,18 @@ export class RemoteAccess {
       send(socket, { hello: true, name: this.#host.name() ?? null });
     }
     this.#serve(socket, key, rest);
+  }
+
+  /** A room tunnel from a paired phone: the rest of the connection goes to the room's app, as this computer reaches it. */
+  async #tunnel(socket: DhtSocket, phone: string, roomId: string, rest: Buffer): Promise<void> {
+    socket.pause();
+    const port = this.#isPaired(phone) ? await this.#host.roomPort(roomId).catch(() => undefined) : undefined;
+    if (!port || socket.destroyed) return void socket.destroy();
+    this.#tunnels.set(socket, phone);
+    socket.on('close', () => this.#tunnels.delete(socket));
+    const local = createConnection({ host: '127.0.0.1', port });
+    local.on('error', () => socket.destroy());
+    splice(socket, local, rest);
   }
 
   /** Use up a pairing secret (compared in constant time); its expiry if it was valid. */

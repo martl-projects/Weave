@@ -1,10 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
-import { connectTo, loadConfig, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, closeOpenStores } from '../src/index.ts';
+import { connectTo, loadConfig, openTunnel, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -84,6 +86,102 @@ describe('phones using a node remotely', () => {
     expect(await node.phones()).toEqual([]);
     await expect(connectTo(dialer, paired, phoneKeys)).rejects.toThrow();
   }, 60_000);
+});
+
+/** Send a raw HTTP/1.0 request down a connection; what came back before it closed. */
+function fetchThrough(socket: Duplex, path: string): Promise<string> {
+  return new Promise((resolve) => {
+    let got = '';
+    socket.on('data', (chunk: Buffer) => (got += chunk.toString('utf8')));
+    socket.on('error', () => {});
+    socket.on('close', () => resolve(got));
+    socket.write(`GET ${path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n`);
+  });
+}
+
+describe('a phone playing in a room its computer joined', () => {
+  let testnet: Testnet;
+  let app: Server;
+  let appPort: number;
+  let dht: HyperDHT;
+  const nodes: WeaveNode[] = [];
+
+  beforeAll(async () => {
+    testnet = await createTestnet(3);
+    app = createServer((req, res) => res.end(`the host's app, at ${req.url}`));
+    await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', () => resolve()));
+    appPort = (app.address() as { port: number }).port;
+    dht = new HyperDHT({ bootstrap: testnet.bootstrap });
+  });
+
+  afterAll(async () => {
+    for (const node of nodes) await node.close();
+    await dht.destroy();
+    await new Promise<void>((resolve) => app.close(() => resolve()));
+    await testnet.destroy();
+  });
+
+  function person(name: string): WeaveNode {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-remote-room-'));
+    dirs.push(dir);
+    const node = WeaveNode.init(name, dir);
+    node.config = { ...loadConfig(resolveHome(dir)), bootstrap: testnet.bootstrap };
+    saveConfig(resolveHome(dir), node.config);
+    nodes.push(node);
+    return node;
+  }
+
+  it("reaches that room's app through the computer, and nothing else", async () => {
+    const host = person('Lena');
+    const computer = person('martl');
+    await host.createProject({ name: 'Pferderennen' });
+    await host.publishApp({ project: 'Pferderennen', manifest: { app: 'pferderennen', name: 'Pferderennen', services: [{ id: 'race', port: appPort, open: { joiner: { path: '/play' } } }] } });
+    await computer.joinSpace(await host.invite('Pferderennen'));
+    await host.goOnline();
+    await computer.goOnline();
+    const room = await host.hostRoom({ project: 'Pferderennen', name: 'Derby' });
+    await until(async () => (await computer.rooms('Pferderennen')).length);
+
+    const phoneKeys = HyperDHT.keyPair();
+    const dialer = dht as unknown as Dialer;
+    const { node: paired, session } = await pairWith(dialer, (await computer.pairPhone()).link, phoneKeys, 'iPhone');
+
+    // Not joined yet: the computer has no way into the room, so neither has the phone.
+    expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toBe('');
+
+    // Joined (from the phone, as it's allowed to): each connection reaches the host's app, through the computer's tunnel.
+    await session.call('joinRoom', room.id);
+    await until(async () => (await computer.rooms('Pferderennen'))[0].url);
+    expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toMatch(/^HTTP\/1\.1 200[\s\S]*the host's app, at \/play$/);
+    // The host sees the computer's person in the room, as ever: the phone is that person.
+    expect((await host.rooms('Pferderennen'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'martl']);
+
+    // A key that isn't paired is turned away; a room that doesn't exist reaches nothing.
+    expect(await fetchThrough(openTunnel(dialer, paired, HyperDHT.keyPair(), room.id), '/play')).toBe('');
+    expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, 'no-such-room'), '/play')).toBe('');
+
+    // A room the computer hosts itself: the phone reaches its app directly, as the host opens it.
+    await computer.createProject({ name: 'Solitaire' });
+    await computer.publishApp({ project: 'Solitaire', manifest: { app: 'solitaire', name: 'Solitaire', services: [{ id: 'game', port: appPort }] } });
+    const own = await computer.hostRoom({ project: 'Solitaire', name: 'Alone' });
+    expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, own.id), '/')).toMatch(/the host's app, at \/$/);
+
+    // Left on the computer: the way in is gone.
+    await session.call('leaveRoom', room.id);
+    expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toBe('');
+
+    // Unpaired while a tunnel is open: it's cut at once.
+    await session.call('joinRoom', room.id);
+    await until(async () => (await computer.rooms('Pferderennen'))[0].url);
+    const open = openTunnel(dialer, paired, phoneKeys, room.id);
+    const cut = new Promise<void>((resolve) => open.on('close', () => resolve()));
+    open.on('error', () => {});
+    open.write('GET /play HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n');
+    await new Promise<void>((resolve) => open.once('data', () => resolve()));
+    await computer.unpairPhone((await computer.phones())[0].key);
+    await cut;
+    session.close();
+  }, 90_000);
 });
 
 describe('what a phone may call', () => {

@@ -205,6 +205,26 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 // ---------------------------------------------------------------- spaces
 
+/** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
+function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
+  const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', space.id), [space.id]);
+  const base = spaceHref(space);
+  const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
+    <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
+      <Icon name={icon} />
+      <span className="tree-label">{label}</span>
+    </a>
+  );
+  return (
+    <nav className="project-sections mobile-only">
+      {link(base, 'hash', 'general', !view)}
+      {link(`${base}/live`, 'zap', `Live${rooms?.length ? ` (${rooms.length})` : ''}`, view === 'live', !!rooms?.length)}
+      {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
+      {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
+    </nav>
+  );
+}
+
 function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
@@ -295,6 +315,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   return (
     <>
       <div className="center">
+        {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings`}>
             <Icon name="inbox" /> {mine[0].name ?? 'Someone'} from group {mine[0].group.name} is waiting to join{mine.length > 1 ? ` (+${mine.length - 1} more)` : ''}. Open Settings to decide.
@@ -615,7 +636,8 @@ function App() {
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
-          <UpdatePrompt />
+          {/* A phone app is updated with the app itself, not from Weave's desktop releases. */}
+          {!bridge.phone && <UpdatePrompt />}
         </>
       )}
       <Toasts />

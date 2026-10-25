@@ -1,4 +1,5 @@
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import { Browser } from '@capacitor/browser';
 import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Device } from '@capacitor/device';
 import type { FeedItem } from '@weave/node/client';
@@ -13,6 +14,8 @@ import type { FeedItem } from '@weave/node/client';
 
 interface WorkerPlugin {
   post(options: { message: string }): Promise<void>;
+  /** Keep the worker running while the app is paused (Android: a room's app is open in a browser tab over it). */
+  hold(options: { on: boolean }): Promise<void>;
   addListener(event: 'message', listener: (data: { message: string }) => void): Promise<PluginListenerHandle>;
 }
 
@@ -43,6 +46,9 @@ const ask = <T>(op: string, fields: Record<string, unknown> = {}) =>
     pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
     post({ id, op, ...fields }).catch(reject);
   });
+
+// The room's app was closed: the worker may be suspended with the app again.
+void Browser.addListener('browserFinished', () => void Worker.hold({ on: false }).catch(() => {}));
 
 // Back in front: reconnect at once rather than at the next retry.
 document.addEventListener('visibilitychange', () => {
@@ -88,5 +94,12 @@ window.weave = {
       }
     },
     forget: () => ask('forget'),
+    async openRoom(room, url) {
+      // The worker serves the room's app on this phone, through your computer; it opens in a browser inside the
+      // app, which stays in front (iOS suspends the worker of an app in the background).
+      const local = await ask<string>('openRoom', { room, url });
+      await Worker.hold({ on: true });
+      await Browser.open({ url: local, presentationStyle: 'fullscreen' });
+    },
   },
 };

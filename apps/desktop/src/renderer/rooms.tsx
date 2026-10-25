@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Modal } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { Page } from './views.tsx';
 import { copy } from './posts.tsx';
 
@@ -12,7 +12,12 @@ import { copy } from './posts.tsx';
  * sees an address. Who is in a room and what they say there is never stored.
  */
 
-const play = (room: RoomInfo) => room.url && bridge.openApp(room.url, `${room.app?.name ?? 'App'} · ${room.name}`);
+const play = (room: RoomInfo) => {
+  if (!room.url) return;
+  // On a phone the address is the computer's own: the phone app reaches it through the computer.
+  if (bridge.phone) return void bridge.phone.openRoom(room.id, room.url).catch((error: Error) => toast(error.message, 'error'));
+  void bridge.openApp(room.url, `${room.app?.name ?? 'App'} · ${room.name}`);
+};
 
 function RoomChat({ room }: { room: RoomInfo }) {
   const { data: messages } = useApi(() => api<RoomChatMessage[]>('roomChat', room.id), [room.id]);

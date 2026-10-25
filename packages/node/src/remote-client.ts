@@ -45,6 +45,16 @@ export function connectTo(dht: Dialer, node: PairedNode, keyPair: KeyPair): Prom
   return open(dht, node.node, keyPair, { hello: 1 });
 }
 
+/**
+ * One connection into a room the computer is in, for one TCP connection of the phone's browser: once this
+ * returns, the socket carries that connection's bytes to the room's app (the node closes it if it can't).
+ */
+export function openTunnel(dht: Dialer, node: PairedNode, keyPair: KeyPair, roomId: string): DhtSocket {
+  const socket = dht.connect(Buffer.from(node.node, 'hex'), { keyPair });
+  socket.write(`${JSON.stringify({ tunnel: roomId })}\n`);
+  return socket;
+}
+
 function open(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<string, unknown>): Promise<RemoteSession> {
   return new Promise((resolve, reject) => {
     const socket = dht.connect(Buffer.from(nodeKey, 'hex'), { keyPair });
