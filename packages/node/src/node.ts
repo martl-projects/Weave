@@ -8083,8 +8083,8 @@ export class WeaveNode implements Backend {
       const { by: _by, time: _time, ...setting } = managed;
       this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: setting as unknown as Json }));
     }
-    const carried = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SHRED, body: { epochs: ended } }));
+    const { carried, dropped } = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SHRED, body: { epochs: ended, dropped } }));
     return { epochs: ended, carried };
   }
 
@@ -8093,19 +8093,26 @@ export class WeaveNode implements Backend {
    * keeps from those epochs: its control events and latest state, posts its
    * rules keep (and their chat), read-limited boards' with their own key.
    */
-  #carryForward(space: StoredSpace, epochs: Set<number>, dropBefore?: string): number {
+  #carryForward(space: StoredSpace, epochs: Set<number>, dropBefore?: string, skip?: Set<string>): { carried: number; dropped: string[] } {
     const posts = this.#spacePosts(space).posts;
     // A company's maximum (stage 11): chat and posts from before it go too, unless they stay for good (pinned, issues, proposals, releases).
     const forever = new Set(posts.filter((p) => p.lifetime && 'forever' in p.lifetime && p.lifetime.forever !== 'no-rule').map((p) => p.id));
     const gone = new Set(posts.filter((p) => (p.lifetime && isDue(p.lifetime, this.clock())) || (dropBefore && p.active < dropBefore && !forever.has(p.id))).map((p) => p.id));
     const around = this.#aroundPosts(this.#entries(space));
     const goneWith = new Set([...gone].flatMap((id) => (around.get(id)?.ids ?? []).map((x) => x.id)));
+    // What goes on purpose, by our rules and clock: named in the shred, so other nodes don't carry it forward after all.
+    const dropped: string[] = [];
     const items = this.#decodedIn(space.id).filter((d) => {
       const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
       const inEpochs = d.carried || (Number.isSafeInteger(epoch) && epochs.has(epoch as number));
-      if (dropBefore && d.inner.kind === KIND_MSG && d.event.time < dropBefore) return false;
-      return inEpochs && d.inner.kind !== KIND_CARRY && !gone.has(d.id) && !goneWith.has(d.id);
+      if (!inEpochs || d.inner.kind === KIND_CARRY || skip?.has(d.id)) return false;
+      if ((dropBefore && d.inner.kind === KIND_MSG && d.event.time < dropBefore) || gone.has(d.id) || goneWith.has(d.id)) {
+        dropped.push(d.id);
+        return false;
+      }
+      return true;
     });
+    if (!items.length) return { carried: 0, dropped };
     const byBoard = new Map<string, Decoded[]>();
     for (const d of items) byBoard.set(d.board ?? '', [...(byBoard.get(d.board ?? '') ?? []), d]);
     for (const [board, list] of byBoard) {
@@ -8115,7 +8122,7 @@ export class WeaveNode implements Backend {
       if (board && latest < 0) continue; // a board we can't read: we hold none of it to carry
       this.replica.write(this.identity, sealFor(this.#cipher(space), board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
     }
-    return items.length;
+    return { carried: items.length, dropped };
   }
 
   /** Apply the shreds of those who manage our spaces (each once: a shredded key is gone). */
@@ -8131,8 +8138,9 @@ export class WeaveNode implements Backend {
         const floor = this.#companyRetention(space)?.minDays;
         const kept = floor ? this.#endedWithin(space, floor) : undefined;
         const live = epochs.filter((e): e is number => Number.isSafeInteger(e) && !!space.keys[String(e)] && !kept?.has(e));
+        const dropped = (d.inner.body as { dropped?: unknown } | null)?.dropped;
         if (live.length) {
-          this.#applyShred(space, live);
+          this.#applyShred(space, live, Array.isArray(dropped) ? new Set(dropped.filter((x): x is string => typeof x === 'string')) : undefined);
           applied++;
         }
       }
@@ -8141,7 +8149,7 @@ export class WeaveNode implements Backend {
   }
 
   /** A shred from someone who manages the space: keep what we wrote, then let those keys go, with the bodies sealed with them. */
-  #applyShred(space: StoredSpace, epochs: number[]): void {
+  #applyShred(space: StoredSpace, epochs: number[], dropped?: Set<string>): void {
     if (this.#held(this.#state(space))) return; // on legal hold: keys stay
     const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
     if (!doomed.size) return;
@@ -8149,6 +8157,17 @@ export class WeaveNode implements Backend {
     const company = !!this.#managedRaw(space).setting?.company;
     const mine = company ? [] : this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
     if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
+    // The shredder's carry restates only what its node held (zLqeyEBC): what we hold of those epochs that no carry under a
+    // key that stays restates, and that the shred didn't drop on purpose, we carry forward ourselves before letting go.
+    // Anyone may: each item is checked by its author's signature. (A shred from before it named what it dropped: as it says.)
+    if (dropped && this.#state(space).members.has(this.identity.author)) {
+      const restated = new Set(
+        this.#decodedIn(space.id)
+          .filter((d) => d.inner.kind === KIND_CARRY && !d.carried && !doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)))
+          .flatMap((d) => this.#expandCarry(d, space).map((x) => x.id)),
+      );
+      this.#carryForward(space, doomed, undefined, new Set([...restated, ...dropped]));
+    }
     const scope = spaceScope(space);
     // Bodies are stored once per hash for every space: drop only this space's own. One counts as ours if it opens with this
     // space's key of that epoch (a copy of another space's body under our scope doesn't), and no event elsewhere points to it.
