@@ -6,8 +6,7 @@ import { closeOpenStores, WeaveNode } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
-  // The nodes' databases close first: Windows won't delete open files.
-  closeOpenStores();
+  closeOpenStores(); // weave.db stays open until then, and Windows won't delete it
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 

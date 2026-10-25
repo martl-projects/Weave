@@ -9,8 +9,7 @@ const dirs: string[] = [];
 const closers: Array<() => Promise<void>> = [];
 afterAll(async () => {
   await Promise.all(closers.map((close) => close()));
-  // The nodes' databases close first: Windows won't delete open files.
-  closeOpenStores();
+  closeOpenStores(); // weave.db stays open until then, and Windows won't delete it
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 

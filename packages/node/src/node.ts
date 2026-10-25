@@ -482,7 +482,7 @@ import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type 
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createPublicKey, createVerify, hkdfSync, createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
@@ -672,13 +672,6 @@ const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', descripti
  * peers. The CLI uses it directly when no daemon runs; the daemon wraps it
  * with networking and the HTTP API.
  */
-/** Why a person's repository can't follow a space, and what to do about it. */
-const personalRepo = (repo: string) =>
-  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again`;
-
-/** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
-const ONCHAIN_RECORD = 'tx:';
-
 /** The routines a new desk starts with. */
 const DESK_ROUTINES: Array<{ id: string; name: string; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }> = [
   {
@@ -737,6 +730,12 @@ mine now, change it as you learn how I work.)
 - When you mention a post, link it with its url.
 `;
 }
+/** Why a person's repository can't follow a space, and what to do about it. */
+const personalRepo = (repo: string) =>
+  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again`;
+
+/** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
+const ONCHAIN_RECORD = 'tx:';
 
 export class WeaveNode implements Backend {
   readonly home: Home;
@@ -1205,14 +1204,14 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
+    this.#follower?.stop();
+    this.#appLog?.stop();
     // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
     await Promise.race([Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id))), new Promise((r) => setTimeout(r, 15_000).unref())]);
     await this.#scimServer?.close();
     this.#scimServer = undefined;
     await this.#console?.close();
     this.#console = undefined;
-    this.#follower?.stop();
-    this.#appLog?.stop();
     await this.goOffline();
     this.#sqlite?.close();
     this.#releaseLock();
@@ -2319,7 +2318,7 @@ export class WeaveNode implements Backend {
     if (!create) throw new Error('say what the routine creates: a board and a title pattern ({date}, {day}, {weekday})');
     this.#board(space, this.#spacePosts(space).boards, create.board);
     const id = input.id?.trim() || randomUUID().slice(0, 8);
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
     return (await this.routines({ space: space.id })).find((r) => r.id === id)!;
   }
 
@@ -2327,7 +2326,7 @@ export class WeaveNode implements Backend {
     const space = this.#routineSpace(input.space);
     this.#maintainerState(space);
     if (!this.#routineRecords(space).some((r) => r.id === input.id)) throw new Error('no such routine');
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
   }
 
   async runRoutine(input: { space?: string; id: string }): Promise<PostInfo> {
@@ -8204,10 +8203,10 @@ export class WeaveNode implements Backend {
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
     const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
     const around = this.#aroundPosts(entries);
+    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
     const minDays = this.#companyRetention(space)?.minDays;
     // Each author's share of each board with a rule: their bytes against an even split (stage 8).
     const overuse = new Map<string, number>();

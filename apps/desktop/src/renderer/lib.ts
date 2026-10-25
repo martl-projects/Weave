@@ -228,6 +228,7 @@ export const postLink = (id: string) => `weave:post:${id}`;
 export const SPACE_LINK = /^weave:(project|group|community):([A-Za-z0-9_-]+)$/;
 export const spaceRoute = (kind: string, id: string) => `#/${({ project: 'p', group: 'g', community: 'r' } as Record<string, string>)[kind]}/${id}`;
 
+
 /**
  * A post's web address, http://weave.localhost:<any port>/project~id[/board/post[/title]]
  * or /@author/post[/title] (made by postUrl in @weave/core). Inside the app it is

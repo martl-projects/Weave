@@ -15,8 +15,12 @@ export interface Daemon {
 /**
  * Open the node in `dir`, go online and serve the local API. One daemon per home. `onStopRequest` runs when a
  * client asks it to stop (POST /v1/stop); `version`, `build` and `startedBy` go into daemon.json for clients.
+ * `linkPort`: where post addresses are served (default 7710, or WEAVE_LINK_PORT).
  */
-export async function startDaemon(dir?: string, options: { port?: number; linkPort?: number; onStopRequest?: () => void } & Pick<DaemonInfo, 'version' | 'build' | 'startedBy'> = {}): Promise<Daemon> {
+export async function startDaemon(
+  dir?: string,
+  options: { port?: number; linkPort?: number; onStopRequest?: () => void } & Pick<DaemonInfo, 'version' | 'build' | 'startedBy'> = {},
+): Promise<Daemon> {
   const home = resolveHome(dir);
   if (await connectDaemon(home)) throw new Error(`a daemon is already running for ${home.dir}`);
 

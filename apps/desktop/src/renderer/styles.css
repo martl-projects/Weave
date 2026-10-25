@@ -585,9 +585,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .release-list td { padding: 4px 2px; border-bottom: 1px solid #c0c0c0; }
 .release-list td:last-child { text-align: right; white-space: nowrap; }
 
-/* New Weave version (update.tsx) */
-.update-prompt { max-width: 520px; }
-.update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }
 .page > menu[role='tablist'] { flex-wrap: wrap; max-width: 100%; }
 .boards-table .board-actions { white-space: nowrap; text-align: right; }
 .boards-table .board-actions button { min-width: 0; padding: 0 5px; }
@@ -640,3 +637,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mention-when { display: block; color: #666; font-size: 11px; }
 .mention-note { font-family: var(--content-font); font-size: 12px; font-style: italic; margin-bottom: 4px; }
 .mentions-weave { align-self: flex-end; }
+/* New Weave version (update.tsx) */
+.update-prompt { max-width: 520px; }
+.update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }

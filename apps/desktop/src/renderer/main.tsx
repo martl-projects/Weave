@@ -382,6 +382,7 @@ const go = (hash: string) => (location.hash.startsWith('#/overlay') && bridge.ro
 
 /** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. Post addresses open here, not in a browser. */
 function openLink(link: string): void {
+  const ref = postRefOfHref(link);
   const space = SPACE_LINK.exec(link);
   if (space) return go(spaceRoute(space[1], space[2]));
   if (link.startsWith('weave:enroll:')) {
@@ -389,7 +390,6 @@ function openLink(link: string): void {
     else toast('This is a link to set up a company account. This computer has a Weave account already.');
     return;
   }
-  const ref = postRefOfHref(link);
   if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
