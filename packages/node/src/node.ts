@@ -624,6 +624,9 @@ function withoutSecrets(value: Json): Json {
   return value;
 }
 
+/** An escrow's key: its key service part and its company part, both needed. */
+const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
+
 /**
  * An event as a carry restates it: what it said, with its original signed
  * envelope (`e`) and the salt sealed with it, so that anyone can check the
@@ -1582,12 +1585,16 @@ export class WeaveNode implements Backend {
     if (!setting) throw new Error(`${space.name} isn't a company space: recovery words stay with you`);
     const words = normalizeWords(input.words);
     if (recoveryIdentity(words) !== this.identity.author) throw new Error("these words don't belong to this identity");
-    // The words are sealed with a fresh key; only that key goes through the key service (some can wrap only a key's worth).
-    const dataKey = new Uint8Array(randomBytes(32));
+    // The words are sealed with a fresh key made of two parts (XyMStMvo): one goes through the key service, so opening is in
+    // its audit; the other is boxed to the company itself (the space's owner). A key service context is no access rule:
+    // every employee may decrypt with it, so its part alone must not be enough. Only the company opens an escrow.
+    const kmsPart = new Uint8Array(randomBytes(32));
+    const companyPart = new Uint8Array(randomBytes(32));
     const context = this.#escrowContext(space, this.identity.author);
-    const sealed = seal(dataKey, words, `weave/escrow/v1:${context.space}`);
-    const wrapped = await this.#provider(setting).wrap(dataKey, context);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, wrapped, nonce: sealed.nonce, ct: sealed.ct } }));
+    const sealed = seal(escrowKey(kmsPart, companyPart), words, `weave/escrow/v2:${context.space}`);
+    const wrapped = await this.#provider(setting).wrap(kmsPart, context);
+    const boxed = boxTo(this.#encryptionKeyOf(space.founder), b64u.encode(companyPart));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, v: 2, wrapped, boxed: boxed as unknown as Json, nonce: sealed.nonce, ct: sealed.ct } }));
   }
 
   async openEscrow(input: { space: string; person: string; for?: string }): Promise<string> {
@@ -1601,11 +1608,27 @@ export class WeaveNode implements Backend {
       throw new Error(`${this.nameOf(person) ?? person}'s identity belongs to the company: its words go only to the new computer (there: weave recover-request; here: --for <request>)`);
     const escrow = this.#decodedIn(space.id)
       .filter((d) => d.inner.kind === KIND_ESCROW && d.event.author === person && (d.inner.body as { person?: unknown } | null)?.person === person)
-      .at(-1)?.inner.body as { wrapped: string; nonce: string; ct: string } | undefined;
+      .at(-1)?.inner.body as { v?: number; wrapped: string; boxed?: Box; nonce: string; ct: string } | undefined;
     if (!escrow) throw new Error(`${this.nameOf(person) ?? person} left no recovery words in ${space.name}`);
     const context = this.#escrowContext(space, person);
-    const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
-    const words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
+    let words: string;
+    if (escrow.v === 2) {
+      // The company's part first: without it, the key service's part opens nothing, and isn't asked.
+      const companyPart = escrow.boxed && this.#tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, escrow.boxed!) as string;
+        } catch {
+          return undefined;
+        }
+      });
+      if (typeof companyPart !== 'string') throw new Error(`only ${this.nameOf(space.founder) ?? 'the company'} opens recovery words: ask through the company's admin console`);
+      const kmsPart = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
+      words = open(escrowKey(kmsPart, b64u.decode(companyPart)), { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v2:${context.space}`) as string;
+    } else {
+      // Escrows from before v2 went through the key service alone (any employee could open them): leave new ones.
+      const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
+      words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
+    }
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person, ...(request ? { for: request } : {}) } }));
     return request ? encodeRecoveryAnswer(person, boxTo(request, { words }) as unknown as Json) : words;
   }

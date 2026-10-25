@@ -189,6 +189,10 @@ describe('managed spaces', { timeout: 120_000 }, () => {
     // Members see that it exists, not the words.
     expect(JSON.stringify(kofi.replica.events())).not.toContain(lenaMade.words.split(' ')[0] + ' ' + lenaMade.words.split(' ')[1]);
     await expect(kofi.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow(/manage/);
+    // Not even a maintainer with full key service rights (XyMStMvo): the key service's part alone opens nothing.
+    await martin.setMaintainer({ project: 'Acme', who: 'Kofi', on: true });
+    syncAll();
+    await expect(kofi.openEscrow({ space: 'Acme', person: 'Lena' })).rejects.toThrow(/only Martin opens recovery words/);
     const words = await martin.openEscrow({ space: 'Acme', person: 'Lena' });
     expect(words).toBe(lenaMade.words.trim().toLowerCase().split(/\s+/).join(' '));
     // Lena's laptop is lost: the words set up a new one.
