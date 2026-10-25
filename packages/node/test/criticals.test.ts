@@ -312,3 +312,43 @@ describe('board rights come only with a link or a group one really holds (99ZpCd
     expect(read).toEqual([]);
   });
 });
+
+describe("a shred keeps what the shredder's node didn't hold (zLqeyEBC)", { timeout: 180_000 }, () => {
+  it('a moderator who let go of bodies shreds: the owner carries the rest forward and keeps it', async () => {
+    const nodes = ['Martin', 'Lena', 'A', 'B', 'C'].map(person);
+    const [martin, lena, ...others] = nodes;
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) sync(from, to);
+    };
+    const holds = (node: WeaveNode, id: string) => {
+      const r = node.replica.record2(id);
+      return !!r && !r.missing && isWireItemV2(r.wire) && r.wire.b !== undefined;
+    };
+    await martin.createCommunity({ name: 'Synths' });
+    for (const node of nodes.slice(1)) await node.joinSpace(await martin.invite('Synths'));
+    syncAll();
+    await martin.setModerator({ community: 'Synths', who: 'Lena', on: true });
+    const posts = [];
+    for (let i = 0; i < 12; i++) posts.push(await others[i % others.length].submit({ space: 'Synths', title: `Post ${i}` }));
+    syncAll();
+    for (const node of nodes) node.pulledAbove = 2;
+    lena.clock = () => Date.now() + 21 * day;
+    await lena.reconcile();
+    const released = posts.filter((p) => !holds(lena, p.id));
+    expect(released.length).toBeGreaterThan(0);
+    for (const p of posts) expect(holds(martin, p.id)).toBe(true);
+    await martin.setHistory({ space: 'Synths', history: '30d' });
+    await martin.reconcile();
+    // To Lena without bodies: she keeps only her share (a sync would hand her the released ones again).
+    const bare = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(isWireItemV2(e.wire) ? { e: e.wire.e } : e));
+    for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) (to === lena ? bare : sync)(from, to);
+    expect(posts.filter((p) => !holds(lena, p.id)).length).toBe(released.length);
+    const done = await lena.shred({ space: 'Synths', before: new Date(Date.now() + 32 * day).toISOString() });
+    expect(done.epochs).toEqual([0]);
+    syncAll();
+    for (const node of nodes) await node.reconcile();
+    syncAll();
+    const titles = (await martin.posts({ space: 'Synths' })).map((p) => p.title);
+    for (const p of released) expect(titles).toContain(p.title);
+  });
+});
