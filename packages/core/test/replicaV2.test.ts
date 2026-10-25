@@ -10,6 +10,8 @@ import {
   Replica,
   revocation,
   signContentEventV2,
+  signEvent,
+  MemoryStore,
   signControlEventV2,
   type WeaveRecord,
 } from '../src/index.ts';
@@ -221,5 +223,38 @@ describe("a revoked key can't fill numbers it left unused (KgmsMa_g)", () => {
     // And its events in the space the revocation didn't see (the owner never held them) count for nothing.
     passOnly(replica, other, 'nothing');
     expect(other.eventsBy(laptop.did).filter((r) => r.scope === 'group:chess')).toEqual([]);
+  });
+});
+
+describe("nobody takes another's key by claiming it first (FTIDssuB)", () => {
+  it("a squatter's delegation of a victim's device: the device's own events say whose it is, live and after a restart", () => {
+    const attacker = createIdentity();
+    const victim = createIdentity();
+    const laptop = createSubKey(victim.did);
+    const store = new MemoryStore();
+    const other = new Replica(store);
+    other.append(attacker, delegation(laptop.did, 'device', [], 'squat'));
+    other.ingest(signEvent(victim, undefined, inception(createSubKey(victim.did).did, createSubKey(victim.did).did)));
+    expect(other.ingest(signEvent(victim, other.store.head(victim.did), delegation(laptop.did, 'device', ['*'], 'laptop'))).status).toBe('accepted');
+    expect(other.ingest(signEvent(laptop, undefined, { kind: 'weave.post', body: { text: 'hi' } })).status).toBe('accepted');
+    expect(other.authority.grant(laptop.did)?.author).toBe(victim.did);
+    expect(other.authority.personOf(laptop.did)).toBe(victim.did);
+    // A revocation by the squatter touches only the squatter's claim.
+    other.append(attacker, revocation(laptop.did, 0));
+    expect(other.events((r) => r.signer === laptop.did)).toHaveLength(1);
+    const again = new Replica(store);
+    expect(again.authority.grant(laptop.did)?.author).toBe(victim.did);
+    expect(again.events((r) => r.signer === laptop.did)).toHaveLength(1);
+  });
+
+  it("a person's identifier can't be delegated as someone's device", () => {
+    const attacker = createIdentity();
+    const victim = createIdentity();
+    const other = new Replica();
+    other.append(victim, inception(createSubKey(victim.did).did, createSubKey(victim.did).did));
+    other.append(victim, { kind: 'weave.post', body: { text: 'by my root' } });
+    other.append(attacker, delegation(victim.did, 'device', ['*'], 'hijack'));
+    expect(other.authority.personOf(victim.did)).toBe(victim.did);
+    expect(other.authority.grant(victim.did)).toBeUndefined();
   });
 });

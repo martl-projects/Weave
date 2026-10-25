@@ -68,14 +68,19 @@ export class Replica {
     this.store = store;
     // Replay key events in dependency order: identities, then rotations (each needs the one before),
     // then delegations and revocations of both versions (twice: devices delegate agents).
-    const keyEvents = store.signers().flatMap((signer) => store.range(signer, 1).filter((e) => KEY_KINDS.has(e.kind)));
+    const v1 = store.signers().flatMap((signer) => store.range(signer, 1));
+    const v2 = store.all2();
+    // What each key signed says whose it is (see Authority.vouch): whatever order the delegations come in.
+    for (const e of v1) this.authority.vouch(e.signer, e.author, e.seq);
+    for (const { event } of v2) this.authority.vouch(event.signer, event.author, event.n);
+    const keyEvents = v1.filter((e) => KEY_KINDS.has(e.kind));
     const byKind = (kind: string) => keyEvents.filter((e) => e.kind === kind);
     for (const event of byKind(KIND_IDENTITY)) this.authority.apply(event);
     const rotations = byKind(KIND_ROTATE);
     for (let round = 0; round < rotations.length; round++) for (const event of rotations) this.authority.apply(event);
     const grants = [
       ...keyEvents.filter((e) => e.kind === KIND_DELEGATE || e.kind === KIND_REVOKE),
-      ...store.all2().filter(({ event }) => isKeyEventV2(event)).map(({ id, event }) => recordOfV2(id, event)),
+      ...v2.filter(({ event }) => isKeyEventV2(event)).map(({ id, event }) => recordOfV2(id, event)),
     ];
     for (let round = 0; round < 2; round++) for (const event of grants) this.authority.apply(event);
   }
@@ -198,6 +203,7 @@ export class Replica {
     if (!isWellFormedEvent(input)) return { status: 'rejected', reason: 'malformed event' };
     const event = input;
     if (!verifyEventSignature(event)) return { status: 'rejected', reason: 'bad signature' };
+    this.authority.vouch(event.signer, event.author, event.seq);
 
     const head = this.store.head(event.signer);
     const expected = (head?.seq ?? 0) + 1;
@@ -228,6 +234,7 @@ export class Replica {
     const event = input;
     if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE) return { status: 'rejected', reason: `${event.kind} stays v1` };
     if (!verifyEventV2(event)) return { status: 'rejected', reason: 'bad signature' };
+    this.authority.vouch(event.signer, event.author, event.n);
     // A body that doesn't match is dropped; the event stands without it.
     const goodBody = event.class === 'content' && body !== undefined && !this.store.forgotten(event.body) && bodyMatches(event, body) ? body : undefined;
     const ownId = eventIdV2(event);

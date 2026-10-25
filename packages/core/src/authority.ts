@@ -167,7 +167,14 @@ const body = (event: Signed): Record<string, unknown> => (event.body && typeof e
  * events from a key retired or revoked later drop out of every view.
  */
 export class Authority {
-  #grants = new Map<Did, Grant>();
+  /**
+   * Every grant made for a key, by who made it. Anyone can claim any key in a
+   * delegation; the key itself says whose it is, by the author it names in what
+   * it signs (#vouched). That one counts, whatever came first (FTIDssuB).
+   */
+  #claims = new Map<Did, Map<Did, Grant & { delegated?: true }>>();
+  /** Each key's own word on whose it is: the author of the lowest-numbered event it signed. */
+  #vouched = new Map<Did, { author: Did; n: number }>();
   #people = new Map<Did, KeyState>();
   /** Root keys after the first, mapped to the person they act for. */
   #rootOf = new Map<Did, Did>();
@@ -180,13 +187,27 @@ export class Authority {
     return org ? this.#freezes.get(person)?.get(org) : undefined;
   }
 
+  /** A key signed an event for `author` (its signature checked): its own word on whose key it is. */
+  vouch(signer: Did, author: Did, n: number): void {
+    if (signer === author) return;
+    const before = this.#vouched.get(signer);
+    if (!before || n < before.n) this.#vouched.set(signer, { author, n });
+  }
+
+  /** The grant that counts for a key: the one by the person the key names itself, else the first delegation. Never for a person's own identifier. */
   grant(subject: Did): Grant | undefined {
-    return this.#grants.get(subject);
+    if (this.#people.has(subject) || this.#rootOf.has(subject)) return undefined;
+    const claims = this.#claims.get(subject);
+    if (!claims) return undefined;
+    const vouched = this.#vouched.get(subject)?.author;
+    if (vouched && claims.has(vouched)) return claims.get(vouched);
+    for (const g of claims.values()) if (g.delegated) return g;
+    return claims.values().next().value;
   }
 
   /** All device and agent keys delegated by a person, revoked ones included. */
   grantsOf(author: Did): Grant[] {
-    return [...this.#grants.values()].filter((g) => g.author === author);
+    return [...this.#claims.keys()].map((subject) => this.grant(subject)).filter((g): g is Grant => g?.author === author);
   }
 
   /** A person's key state; people who never published identity events have their identifier as root and encryption key. */
@@ -196,7 +217,7 @@ export class Authority {
 
   /** The person a key acts for: itself for a person's identifier, the author for devices, agents and later roots. */
   personOf(key: Did): Did {
-    return this.#rootOf.get(key) ?? this.#grants.get(key)?.author ?? key;
+    return this.#rootOf.get(key) ?? (this.#people.has(key) ? key : this.grant(key)?.author) ?? key;
   }
 
   /** Every encryption key a person named, oldest first. */
@@ -222,13 +243,13 @@ export class Authority {
     if (!grant.by) return true;
     const { signer, seq } = grant.by;
     if (this.#isRoot(grant.author, signer, seq)) return true;
-    const device = this.#grants.get(signer);
+    const device = this.grant(signer);
     return !!device && device.author === grant.author && device.role === 'device' && device.permissions.includes('*') && withinRevocation(device, grant.by) && this.#sourceValid(device);
   }
 
   /** May this device delegate (or revoke) agents? */
   #isDelegatingDevice(event: Signed): boolean {
-    const device = this.#grants.get(event.signer);
+    const device = this.grant(event.signer);
     return !!device && device.author === event.author && device.role === 'device' && device.permissions.includes('*') && this.check(event).ok;
   }
 
@@ -267,16 +288,20 @@ export class Authority {
       return;
     }
     if (event.kind !== KIND_DELEGATE && event.kind !== KIND_REVOKE) return;
-    if (!isDid(b.subject) || b.subject === event.author) return;
+    // A person's identifier is theirs, never someone's device or agent.
+    if (!isDid(b.subject) || b.subject === event.author || this.#people.has(b.subject) || this.#rootOf.has(b.subject)) return;
     const byRoot = this.#isRoot(event.author, event.signer, event.seq);
-    const existing = this.#grants.get(b.subject);
-    if (existing && existing.author !== event.author) return; // a key acts for one person only
+    // Each author's claim on the key is kept apart; which counts is the key's own word (see grant).
+    let claims = this.#claims.get(b.subject);
+    if (!claims) this.#claims.set(b.subject, (claims = new Map()));
+    const existing = claims.get(event.author);
 
     if (event.kind === KIND_DELEGATE) {
       const role = b.role === 'agent' ? 'agent' : 'device';
       if (!byRoot && !(role === 'agent' && this.#isDelegatingDevice(event))) return;
       const permissions = Array.isArray(b.permissions) ? b.permissions.filter((p): p is string => typeof p === 'string') : [];
-      this.#grants.set(b.subject, {
+      claims.set(event.author, {
+        delegated: true,
         author: event.author,
         subject: b.subject,
         role,
@@ -293,7 +318,7 @@ export class Authority {
       grant.revokedAfter = Math.min(grant.revokedAfter ?? Infinity, afterSeq);
       const heads = parseHeads(b.heads);
       if (heads) grant.heads = meetHeads(grant.heads, heads);
-      this.#grants.set(b.subject, grant);
+      claims.set(event.author, grant);
     }
   }
 
@@ -309,7 +334,7 @@ export class Authority {
       if (!state?.next) return { ok: false, reason: 'no next root key committed (yet)', retry: true };
       return keyCommitment(event.signer) === state.next ? { ok: true } : { ok: false, reason: 'not the committed next root key', retry: false };
     }
-    const grant = this.#grants.get(event.signer);
+    const grant = this.grant(event.signer);
     if (!grant || grant.author !== event.author) return { ok: false, reason: 'signer not delegated by author', retry: true };
     if (!withinRevocation(grant, event)) return { ok: false, reason: 'signer revoked', retry: false };
     if (!this.#sourceValid(grant)) return { ok: false, reason: 'delegated by a key that was retired or revoked', retry: false };
