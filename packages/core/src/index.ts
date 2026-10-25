@@ -113,6 +113,7 @@ export {
   spaceState,
   parseUpTo,
   parseAnchors,
+  KIND_SETTLE,
   inviteKeys,
   joinProof,
   joinProven,

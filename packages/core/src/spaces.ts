@@ -81,6 +81,8 @@ export const KIND_SHRED = 'weave.space.shred';
 export const KIND_MANAGED = 'weave.space.managed';
 /** `{epoch, wrapped}`: an epoch's company half, wrapped by the space's key provider. */
 export const KIND_KMS = 'weave.space.kms';
+/** The owner's word on which of two concurrent removals (or demotions) of each other came first: { first, second } event ids. */
+export const KIND_SETTLE = 'weave.space.settle';
 /** `{did, subject, email?, groups, until}`: the company's attestor vouches that this Weave person is this employee, until then. */
 export const KIND_ATTEST = 'weave.org.attest';
 /** `{box}`: an employee's sign-in (an OIDC ID token), boxed to the attestor. */
@@ -459,6 +461,8 @@ export interface SpaceState {
   approvedAgents?: Set<Did>;
   /** Keys cut off by a removal, demotion, leave or handover: what they sign numbered past `seq` counts from `time` on, whatever date it claims. */
   cutoffs?: Cutoff[];
+  /** Two people taking each other's role at once, ordered by this node's view alone: for the owner to settle (see orderLosses). */
+  unsettled?: Array<{ first: string; second: string }>;
 }
 
 /**
@@ -482,6 +486,13 @@ export interface Cutoff {
   time: string;
   /** The person managed the space until then: what they signed up to `seq` (a rekey, say) was a manager's. */
   managed?: true;
+  /**
+   * For the keys of `author` the anchor didn't name (`except` are those it did):
+   * anchored at 0, everything they sign in the space counts as after. Leaving a
+   * key out is never better than naming it (H7hk7X9S).
+   */
+  author?: Did;
+  except?: Did[];
 }
 
 /**
@@ -518,7 +529,8 @@ export function parseAnchors(body: Record<string, unknown> | null | undefined): 
 }
 
 /** Does a cut key's event count as after its cutoff? By its place in the space where it has one, else by its number. */
-export function isPast(cut: Cutoff, event: Pick<EventView, 'signer' | 'seq' | 'cseq' | 'cs'>): boolean {
+export function isPast(cut: Cutoff, event: Pick<EventView, 'signer' | 'seq' | 'cseq' | 'cs'> & { author?: Did }): boolean {
+  if (cut.author !== undefined) return event.author === cut.author && !cut.except?.includes(event.signer);
   if (cut.signer !== event.signer) return false;
   if (event.cseq !== undefined && cut.c !== undefined) return event.cseq > cut.c;
   if (event.cs !== undefined && cut.s !== undefined) return event.cs > cut.s;
@@ -544,10 +556,12 @@ const NAMES_SEEN = new Set([KIND_REMOVE, KIND_MAINTAINER, KIND_LEAVE, KIND_HANDO
  * previous event, never before what it says it saw (an upTo names events, so it
  * comes after them), and after any cutoff of its key it is past.
  */
-function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutoff[]): Placed[] {
+function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutoff[], firstOf: Map<EventView, EventView> = new Map()): Placed[] {
   const bySigner = new Map<Did, Placed[]>();
+  const placedOf = new Map<EventView, Placed>();
   for (const o of opened) {
     const p: Placed = { event: o.event, inner: o.inner, at: o.event.time, after: 0 };
+    placedOf.set(o.event, p);
     const list = bySigner.get(o.event.signer);
     if (list) list.push(p);
     else bySigner.set(o.event.signer, [p]);
@@ -565,7 +579,7 @@ function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutof
   for (let pass = 0; pass < 4; pass++) {
     let moved = false;
     for (const [signer, list] of bySigner) {
-      const cuts = cutoffs.filter((c) => c.signer === signer);
+      const cuts = cutoffs.filter((c) => c.signer === signer || c.author !== undefined);
       let last = { at: '', after: 0 };
       for (const p of list) {
         let place = { at: p.event.time, after: 0 };
@@ -577,6 +591,10 @@ function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutof
             if (before && !later(place, before)) place = { at: before.at, after: before.after + 1 };
           }
         }
+        // The second of two people taking each other's role comes after the first (see orderLosses).
+        const first = firstOf.get(p.event);
+        const firstPlaced = first && placedOf.get(first);
+        if (firstPlaced && !later(place, firstPlaced)) place = { at: firstPlaced.at, after: firstPlaced.after + 1 };
         if (place.at !== p.at || place.after !== p.after) moved = true;
         p.at = place.at;
         p.after = place.after;
@@ -588,7 +606,54 @@ function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutof
   return [...bySigner.values()].flat().sort(byPlace);
 }
 
-const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.every((c, i) => c.signer === b[i].signer && c.seq === b[i].seq && c.c === b[i].c && c.s === b[i].s && c.time === b[i].time);
+const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.every((c, i) => c.signer === b[i].signer && c.author === b[i].author && c.seq === b[i].seq && c.c === b[i].c && c.s === b[i].s && c.time === b[i].time);
+
+const idOf = (event: EventView) => (event as { id?: string }).id ?? `${event.signer}#${event.seq}`;
+
+/**
+ * Two people taking each other's role (a removal or a demotion each way): which
+ * came first (H7hk7X9S). If one names, in its anchor, the other as seen, the
+ * other came first. If neither does, they are concurrent, and a removed
+ * maintainer can always claim that: then the owner's settle decides, else the
+ * order in which this node got them (arrival), else claimed time and id. The
+ * second doesn't count, as its author had lost the role by then; the owner's
+ * node settles the order it saw, so every node ends up alike.
+ */
+function orderLosses(opened: Array<{ event: EventView; inner: Inner }>, founder: Did, arrival?: (event: EventView) => number | undefined): { firstOf: Map<EventView, EventView>; unsettled: Array<{ first: string; second: string }> } {
+  const losses: Array<{ event: EventView; by: Did; of: Did; anchors: Map<Did, Anchor> }> = [];
+  const settled = new Map<string, string>();
+  for (const { event, inner } of opened) {
+    const kind = canonicalKind(inner.kind);
+    const b = (inner.body ?? {}) as Record<string, unknown>;
+    if (kind === KIND_SETTLE && event.author === founder && typeof b.first === 'string' && typeof b.second === 'string') settled.set([b.first, b.second].sort().join(' '), b.first);
+    if ((kind === KIND_REMOVE || (kind === KIND_MAINTAINER && b.on === false)) && isDid(b.member)) losses.push({ event, by: event.author, of: b.member, anchors: new Map(parseAnchors(b).map((u) => [u.signer, u])) });
+  }
+  const saw = (x: (typeof losses)[number], y: (typeof losses)[number]) => {
+    const a = x.anchors.get(y.event.signer);
+    return !!a && (a.c !== undefined && y.event.cseq !== undefined ? a.c >= y.event.cseq : a.seq >= y.event.seq);
+  };
+  const firstOf = new Map<EventView, EventView>();
+  const unsettled: Array<{ first: string; second: string }> = [];
+  for (let i = 0; i < losses.length; i++) {
+    for (let j = i + 1; j < losses.length; j++) {
+      const [x, y] = [losses[i], losses[j]];
+      if (x.by !== y.of || y.by !== x.of || x.by === y.by) continue;
+      let first: (typeof losses)[number];
+      if (saw(x, y) !== saw(y, x)) first = saw(x, y) ? y : x;
+      else {
+        const settle = settled.get([idOf(x.event), idOf(y.event)].sort().join(' '));
+        if (settle) first = settle === idOf(x.event) ? x : y;
+        else {
+          const [ax, ay] = [arrival?.(x.event), arrival?.(y.event)];
+          first = ax !== undefined && ay !== undefined && ax !== ay ? (ax < ay ? x : y) : x.event.time !== y.event.time ? (x.event.time < y.event.time ? x : y) : idOf(x.event) < idOf(y.event) ? x : y;
+          unsettled.push({ first: idOf(first.event), second: idOf((first === x ? y : x).event) });
+        }
+      }
+      firstOf.set((first === x ? y : x).event, first.event);
+    }
+  }
+  return { firstOf, unsettled };
+}
 
 /**
  * Membership from a space's decrypted events, applied in time order. The rules
@@ -597,26 +662,29 @@ const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.eve
  * maintainers do both, invite whole groups, and set rules that let group
  * newcomers in automatically.
  */
-export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: EventView; inner: Inner }>): SpaceState {
+export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: EventView; inner: Inner }>, options: { arrival?: (event: EventView) => number | undefined } = {}): SpaceState {
+  const { firstOf, unsettled } = orderLosses(opened, founder, options.arrival);
   // Cutoffs come only from removals (and the like) that count, and they move events, which can change what counts: fold until it settles.
   // Each key's lowest n among its content numbered here (cs): see Cutoff.f.
   const firstCs = new Map<Did, number>();
   for (const { event } of opened) if (event.cs !== undefined && event.seq < (firstCs.get(event.signer) ?? Infinity)) firstCs.set(event.signer, event.seq);
   let cutoffs: Cutoff[] = [];
   for (let round = 0; ; round++) {
-    const { state, found } = foldSpace(kind, founder, place(opened, cutoffs), firstCs);
-    if (sameCutoffs(found, cutoffs) || round === 4) return found.length ? { ...state, cutoffs: found } : state;
+    const { state, found } = foldSpace(kind, founder, place(opened, cutoffs, firstOf), firstCs);
+    if (sameCutoffs(found, cutoffs) || round === 4) return { ...state, ...(found.length ? { cutoffs: found } : {}), ...(unsettled.length ? { unsettled } : {}) };
     cutoffs = found;
   }
 }
 
 function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map<Did, number> = new Map()): { state: SpaceState; found: Cutoff[] } {
   const found: Cutoff[] = [];
-  const cut = (at: string, anchors: Anchor[], managed = false) => {
+  const cut = (at: string, anchors: Anchor[], managed = false, person?: Did) => {
     for (const u of anchors) {
       const f = firstCs.get(u.signer);
       found.push({ ...u, ...(f !== undefined ? { f } : {}), time: at, ...(managed ? { managed: true as const } : {}) });
     }
+    // An anchor (at) names the person's keys it saw: any other key of theirs is anchored at 0.
+    if (person) found.push({ signer: person, seq: 0, c: 0, s: 0, author: person, except: anchors.map((u) => u.signer), time: at, ...(managed ? { managed: true as const } : {}) });
   };
   /** A leave's or handover's own key: cut at that event itself, with what it names of its other keys. */
   const own = (event: EventView, body: Record<string, unknown>): Anchor[] => {
@@ -625,30 +693,8 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
     return [{ ...mine, signer: event.signer, seq: event.seq, ...(event.cseq !== undefined ? { c: event.cseq } : {}) }, ...named.filter((u) => u.signer !== event.signer)];
   };
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map(), left: new Set() };
-  /** How managers lost their role: by which event, and up to which number of each of their keys it counted. */
-  const losses = new Map<Did, Array<{ by: Did; signer: Did; seq: number; cseq?: number; upTo: Map<Did, Anchor> }>>();
-  const lose = (person: Did, event: EventView, anchors: Anchor[]) => {
-    const list = losses.get(person) ?? [];
-    list.push({ by: event.author, signer: event.signer, seq: event.seq, ...(event.cseq !== undefined ? { cseq: event.cseq } : {}), upTo: new Map(anchors.map((u) => [u.signer, u])) });
-    losses.set(person, list);
-  };
-  /**
-   * Two managers removing (or demoting) each other at once: the one who lost the
-   * role first still removes the other, if they hadn't seen it (past that loss's
-   * cutoff, and not naming it). Only the one who took their role, nobody else:
-   * lying about what they saw only takes that one down too, never keeps them in
-   * and never lets them act on others.
-   */
-  const concurrent = (author: Did, event: EventView, body: Record<string, unknown>): boolean => {
-    const named = new Map(parseAnchors(body).map((u) => [u.signer, u]));
-    return (losses.get(author) ?? []).some((l) => {
-      if (body.member !== l.by) return false;
-      const cut = l.upTo.get(event.signer);
-      const saw = named.get(l.signer);
-      const sawLoss = !!saw && (saw.c !== undefined && l.cseq !== undefined ? saw.c >= l.cseq : saw.seq >= l.seq);
-      return cut !== undefined && isPast({ ...cut, time: '' }, event) && !sawLoss;
-    });
-  };
+  /** Anchored (at): its unnamed keys count as anchored at 0 too. Older removals cut only the keys they name. */
+  const anchored = (body: Record<string, unknown>) => !!body.at && typeof body.at === 'object';
   const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean }>();
   // Invites their makers closed: only who they name came in with them.
   const closes = new Map<string, { by: Did; joined: Set<Did> }>();
@@ -692,29 +738,25 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         break;
       }
       case KIND_REMOVE: {
-        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author) || concurrent(author, event, body);
+        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author);
         if (allowed && isDid(body.member) && body.member !== state.founder && state.members.has(body.member)) {
           const anchors = parseAnchors(body);
           const managed = state.maintainers.has(body.member);
-          if (managed) lose(body.member, event, anchors);
           state.members.delete(body.member);
           state.maintainers.delete(body.member);
           state.removed.set(body.member, at);
-          cut(at, anchors, managed);
-        } else if (allowed && isDid(body.member) && state.removed.has(body.member) && body.at) {
+          cut(at, anchors, managed, anchored(body) ? body.member : undefined);
+        } else if (allowed && isDid(body.member) && state.removed.has(body.member) && anchored(body)) {
           // Someone removed before removals named what they saw: anchored now, by what this one saw of them.
-          cut(at, parseAnchors(body));
+          cut(at, parseAnchors(body), false, body.member);
         }
         break;
       }
       case KIND_MAINTAINER:
-        if (kind !== 'group' && (state.maintainers.has(author) || (body.on === false && concurrent(author, event, body))) && isDid(body.member) && body.member !== state.founder) {
+        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== state.founder) {
           if (body.on === false) {
             const anchors = parseAnchors(body);
-            if (state.maintainers.delete(body.member)) {
-              lose(body.member, event, anchors);
-              cut(at, anchors, true);
-            }
+            if (state.maintainers.delete(body.member)) cut(at, anchors, true, anchored(body) ? body.member : undefined);
           } else if (state.members.has(body.member)) state.maintainers.add(body.member);
         }
         break;

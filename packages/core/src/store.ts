@@ -44,6 +44,8 @@ export interface LogStore {
   contentAt(signer: Did, space: string, cs: number): StoredV2 | undefined;
   /** The highest cs of a key's content in a space (0 if none). */
   contentCount(signer: Did, space: string): number;
+  /** The order this store took a v2 event in (arrival), lower first: undefined if it doesn't hold it. */
+  order2(id: string): number | undefined;
   /** Every v2 event (in no particular order), content events with their bodies where held. */
   all2(): StoredV2[];
   /** Keys with v2 events. */
@@ -77,6 +79,7 @@ export class MemoryV2 {
   #numbers = new Map<Did, number>();
   #chains = new Map<string, ControlEventV2[]>();
   #contents = new Map<string, StoredV2>();
+  #order = new Map<string, number>();
   #contentCounts = new Map<string, number>();
   #bodies = new Map<string, Json>();
   #forgotten = new Set<string>();
@@ -101,6 +104,7 @@ export class MemoryV2 {
       this.#contentCounts.set(pair, Math.max(this.#contentCounts.get(pair) ?? 0, event.cs));
     }
     this.#byId.set(id, { id, event });
+    this.#order.set(id, this.#order.size + 1);
     this.#byNumber.set(numberKey, { id, event });
     this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
   }
@@ -131,6 +135,10 @@ export class MemoryV2 {
 
   contentCount(signer: Did, space: string): number {
     return this.#contentCounts.get(`${signer} ${space}`) ?? 0;
+  }
+
+  order2(id: string): number | undefined {
+    return this.#order.get(id);
   }
 
   all2(): StoredV2[] {

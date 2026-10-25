@@ -92,6 +92,10 @@ export class FileStore implements LogStore {
     return this.#memory.contentCount(signer, space);
   }
 
+  order2(id: string): number | undefined {
+    return this.#memory.order2(id);
+  }
+
   all2(): StoredV2[] {
     return this.#memory.all2();
   }

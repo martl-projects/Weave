@@ -91,6 +91,14 @@ export class Replica {
     return () => this.#listeners.delete(listener);
   }
 
+  /** v1 events taken in this run, in order (v2 ones are ordered by the store). */
+  #taken1 = new Map<string, number>();
+
+  /** In what order this node got an event (lower first), as far as it knows: v2 by its store, v1 in this run. */
+  arrival(id: string): number | undefined {
+    return this.store.order2(id) ?? this.#taken1.get(id);
+  }
+
   /** Latest v1 seq per signer. */
   heads(): Record<Did, number> {
     const heads: Record<Did, number> = {};
@@ -223,6 +231,7 @@ export class Replica {
     if (!check.ok) return check.retry ? this.#park(pendingKey(event), event, check.reason) : { status: 'rejected', reason: check.reason };
 
     this.store.append(event);
+    this.#taken1.set(eventId(event), this.#taken1.size + 1);
     this.#pending.delete(pendingKey(event));
     if (KEY_KINDS.has(event.kind)) this.authority.apply(event);
     if (this.#listeners.size) this.#notify(recordOfV1(event));

@@ -41,6 +41,7 @@ import {
   type BoardRule,
   type Lifetime,
   KIND_CARRY,
+  KIND_SETTLE,
   joinProof,
   inviteKeys,
   type RevokedHead,
@@ -2504,6 +2505,7 @@ export class WeaveNode implements Backend {
     changed += await this.#applyDirectory();
     changed += await this.#offboard();
     changed += this.#anchorRemovals();
+    changed += this.#settleLosses();
     changed += await this.#orgDuties();
     changed += await this.#continueEnrollment();
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
@@ -7276,6 +7278,25 @@ export class WeaveNode implements Backend {
    * hour to sign in.
    */
   /**
+   * Two people who took each other's role at once (each removal or demotion
+   * not naming the other as seen): as the owner, say which came first, by the
+   * order this node got them, so every node ends up alike (H7hk7X9S).
+   */
+  #settleLosses(): number {
+    let settled = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (space.founder !== this.identity.author || this.#directs.has(space.id)) continue;
+      const state = this.#state(space);
+      if (state.founder !== this.identity.author) continue;
+      for (const pair of state.unsettled ?? []) {
+        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SETTLE, body: pair }));
+        settled++;
+      }
+    }
+    return settled;
+  }
+
+  /**
    * People removed before removals named what they saw (an anchor, see
    * spaces.ts): whoever manages the space anchors them now, once, by what this
    * node holds of them. What they sign past it counts as after their removal.
@@ -7823,7 +7844,7 @@ export class WeaveNode implements Backend {
     const key = `${this.#decodedGeneration}:${this.#controlRevision.get(space.id) ?? 0}`;
     const kept = this.#stateCache.get(space.id);
     if (kept?.key === key) return kept.state;
-    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id));
+    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id), { arrival: (e) => this.replica.arrival((e as { id?: string }).id ?? '') });
     this.#stateCache.set(space.id, { key, state });
     return state;
   }
