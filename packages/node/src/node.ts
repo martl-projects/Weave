@@ -821,7 +821,7 @@ export class WeaveNode implements Backend {
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
-      if (event.kind === KIND_SEALED) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
+      if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
@@ -1670,14 +1670,28 @@ export class WeaveNode implements Backend {
     return [...this.#spaces.values()].filter((s) => this.#state(s).managed && !this.#state(s).approvedAgents?.has(key)).map((s) => ({ id: s.id, name: s.name }));
   }
 
-  /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
-  #epochStarts(space: StoredSpace): Map<number, string> {
+  /**
+   * The rekeys that count in a space (Gr9S4DLf): by someone who managed it as
+   * of the rekey (rekeyCounts), for an epoch we hold. Rekeys are in the clear:
+   * anyone in the space can write one, dated as they like. Its time is its date,
+   * but never later than when it got here.
+   */
+  #countingRekeys(space: StoredSpace, state: SpaceState = this.#state(space)): Array<{ epoch: number; time: string; seen: string }> {
     const scope = spaceScope(space);
+    return this.replica
+      .events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)
+      .flatMap((e) => {
+        const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
+        if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) return [];
+        const seen = this.#seenAt(e);
+        return [{ epoch: epoch as number, time: e.time < seen ? e.time : seen, seen }];
+      });
+  }
+
+  /** When each of a space's epochs began: the earliest rekey to it that counts (the epoch number is in the clear). */
+  #epochStarts(space: StoredSpace): Map<number, string> {
     const starts = new Map<number, string>();
-    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
-      const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
-      if (Number.isSafeInteger(epoch) && !starts.has(epoch as number)) starts.set(epoch as number, e.time);
-    }
+    for (const r of this.#countingRekeys(space)) if (!(starts.get(r.epoch)! <= r.time)) starts.set(r.epoch, r.time);
     return starts;
   }
 
@@ -1816,10 +1830,17 @@ export class WeaveNode implements Backend {
   /** After people leave, a node that may rotate the key does: they can't read what comes next. */
   #rotateAfterLeaving(space: StoredSpace, state: SpaceState): number {
     if (space.kind === 'direct' || !canManage(state, this.identity.author) || !state.left.size) return 0;
-    const lastLeft = [...state.left].map((did) => state.removed.get(did) ?? '').reduce((a, b) => (b > a ? b : a), '');
-    const scope = spaceScope(space);
-    const lastRekey = this.replica.events((e) => canonicalKind(e.kind) === KIND_REKEY && e.scope === scope).reduce((a, e) => (e.time > a ? e.time : a), '');
-    if (lastLeft <= lastRekey) return 0;
+    // A leave and a rekey after it, by their dates (never later than they got here) and by when they got here: a
+    // leaver can date their leave early, but not make it arrive early; and only rekeys that count count (Gr9S4DLf).
+    const latest = (times: string[]) => times.reduce((a, b) => (b > a ? b : a), '');
+    const leaves = this.#decodedIn(space.id)
+      .filter((d) => canonicalKind(d.inner.kind) === KIND_LEAVE && state.left.has(d.event.author))
+      .map((d) => {
+        const seen = this.#seenAt(d.event);
+        return { time: d.event.time < seen ? d.event.time : seen, seen };
+      });
+    const rekeys = this.#countingRekeys(space, state);
+    if (latest(leaves.map((l) => l.time)) <= latest(rekeys.map((r) => r.time)) && latest(leaves.map((l) => l.seen)) <= latest(rekeys.map((r) => r.seen))) return 0;
     const { fields, epoch, key } = rekey(space, [...state.members.keys()], this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
