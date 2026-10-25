@@ -396,3 +396,4 @@ export {
   type RepoLink,
   type SyncPlan,
 } from './github.ts';
+export { mayAct, mayActAt, type Decision, type SpaceAction } from './authz.ts';

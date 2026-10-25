@@ -7,6 +7,7 @@ import type { EventFields, SigningIdentity } from './events.ts';
 import type { EventView } from './records.ts';
 import { generateKeyPair, isDid, sign, verify, type Did, type KeyPair } from './keys.ts';
 import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
+import { mayAct } from './authz.ts';
 
 /*
  * Spaces are the encrypted rooms of Weave. There are three kinds:
@@ -697,7 +698,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
   const anchored = (body: Record<string, unknown>) => !!body.at && typeof body.at === 'object';
   const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean; at: string; managing: boolean }>();
   /** Who may let back in someone who was removed (not left): someone who could remove them, after the removal (_Ak3UUmp, odfs7haI). */
-  const mayReadmit = (by: Did, since: string, who: Did) => !state.removed.has(who) || state.left.has(who) || (canManage(state, by) && since > state.removed.get(who)!);
+  const mayReadmit = (by: Did, since: string, who: Did) => !state.removed.has(who) || state.left.has(who) || (mayAct(state, by, 'remove').ok && since > state.removed.get(who)!);
   // Invites their makers closed: only who they name came in with them.
   const closes = new Map<string, { by: Did; joined: Set<Did> }>();
   for (const { event, inner } of placed) {
@@ -708,7 +709,6 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
     const close = closes.get(`${by} ${invite}`);
     return !!close && !close.joined.has(who);
   };
-  const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === state.founder : state.members.has(author));
   const admit = (did: Did, time: string, invitedBy?: Did, via?: string, invite?: string) => {
     state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}), ...(invite ? { invite } : {}) });
     state.removed.delete(did);
@@ -728,7 +728,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_INVITE:
-        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true, at, managing: canManage(state, author) });
+        if (mayAct(state, author, 'invite').ok && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true, at, managing: mayAct(state, author, 'remove').ok });
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
@@ -742,7 +742,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         break;
       }
       case KIND_REMOVE: {
-        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author);
+        const allowed = mayAct(state, author, 'remove').ok;
         if (allowed && isDid(body.member) && body.member !== state.founder && state.members.has(body.member)) {
           const anchors = parseAnchors(body);
           const managed = state.maintainers.has(body.member);
@@ -757,7 +757,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         break;
       }
       case KIND_MAINTAINER:
-        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== state.founder) {
+        if (mayAct(state, author, 'promote').ok && isDid(body.member) && body.member !== state.founder) {
           if (body.on === false) {
             const anchors = parseAnchors(body);
             if (state.maintainers.delete(body.member)) cut(at, anchors, true, anchored(body) ? body.member : undefined);
@@ -765,14 +765,14 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_PROJECT_GROUP:
-        if (kind === 'project' && state.maintainers.has(author) && typeof body.group === 'string') {
+        if (mayAct(state, author, 'group').ok && typeof body.group === 'string') {
           if (body.on === false) state.groups.delete(body.group);
           else state.groups.set(body.group, { id: body.group, name: typeof body.name === 'string' ? body.name : 'group', auto: state.groups.get(body.group)?.auto ?? false });
         }
         break;
       case KIND_RULE: {
         const group = typeof body.group === 'string' ? state.groups.get(body.group) : undefined;
-        if (kind === 'project' && state.maintainers.has(author) && group) group.auto = body.auto === true;
+        if (mayAct(state, author, 'group').ok && group) group.auto = body.auto === true;
         break;
       }
       case KIND_ADMIT: {
@@ -786,18 +786,18 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         const via = typeof body.via === 'string' ? body.via : undefined;
         // By a group's rule: only from someone who came in by that group themselves (99ZpCdH6). Anyone else can't know who's in it.
         const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.get(author)?.via === via;
-        // In groups (not tiers), their owner admits directly: a company putting its people in (stage 10).
-        const admits = kind === 'project' || (kind === 'group' && !state.tier && author === state.founder);
+        // Directly (project maintainers; in groups, not tiers, their owner: a company putting its people in, stage 10), or by a project's rule.
+        const direct = mayAct(state, author, 'admit').ok;
         // By a rule, never someone removed (unless they left): only a maintainer lets them back, deliberately.
-        const readmits = isDid(body.member) && (ruled && !state.maintainers.has(author) ? !state.removed.has(body.member) || state.left.has(body.member) : mayReadmit(author, at, body.member));
-        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member) && readmits) {
+        const readmits = isDid(body.member) && (!direct ? !state.removed.has(body.member) || state.left.has(body.member) : mayReadmit(author, at, body.member));
+        if ((direct || (kind === 'project' && ruled)) && isDid(body.member) && !state.members.has(body.member) && readmits) {
           admit(body.member, at, author, via);
         }
         break;
       }
       case KIND_MEMBERSHIP:
         // A tier's founder admits or renews a member until a date (see memberships.ts).
-        if (kind === 'group' && author === state.founder && isMembershipBody(body)) {
+        if (kind === 'group' && mayAct(state, author, 'own').ok && isMembershipBody(body)) {
           if (!state.members.has(body.member)) admit(body.member, at, founder);
           state.members.get(body.member)!.until = body.until;
         }
@@ -813,7 +813,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_HANDOVER:
-        if (author === state.founder && !state.tier && isDid(body.to) && body.to !== author && state.members.has(body.to)) {
+        if (mayAct(state, author, 'own').ok && !state.tier && isDid(body.to) && body.to !== author && state.members.has(body.to)) {
           state.founder = body.to;
           state.maintainers.add(body.to);
           // In groups only the owner manages: handing it over ends that. In projects and communities they stay a maintainer.
@@ -821,31 +821,31 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_CLOSE:
-        if (canManage(state, author)) state.closed = body.closed === false ? undefined : { by: author, time: at };
+        if (mayAct(state, author, 'manage').ok) state.closed = body.closed === false ? undefined : { by: author, time: at };
         break;
       case KIND_MANAGED: {
         const ttl = Number(body.ttlMinutes);
         const grace = Number(body.graceHours);
-        if (kind !== 'direct' && author === state.founder && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
+        if (mayAct(state, author, 'own').ok && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
           state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), ...(Number.isSafeInteger(body.from) ? { from: body.from as number } : {}), by: author, time: at };
         break;
       }
       case KIND_AGENT_APPROVE:
-        if (canManage(state, author) && isDid(body.agent)) {
+        if (mayAct(state, author, 'manage').ok && isDid(body.agent)) {
           state.approvedAgents ??= new Set();
           if (body.on === false) state.approvedAgents.delete(body.agent);
           else state.approvedAgents.add(body.agent);
         }
         break;
       case KIND_HOLD:
-        if (author === state.founder && typeof body.until === 'string' && !Number.isNaN(Date.parse(body.until)))
+        if (mayAct(state, author, 'own').ok && typeof body.until === 'string' && !Number.isNaN(Date.parse(body.until)))
           state.hold = { until: body.until, reason: typeof body.reason === 'string' ? body.reason.slice(0, 200) : '', by: author, time: at };
         break;
       case KIND_HISTORY:
-        if (kind !== 'direct' && canManage(state, author) && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: at };
+        if (mayAct(state, author, 'manage').ok && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: at };
         break;
       case KIND_DECLINE:
-        if (kind === 'project' && state.maintainers.has(author) && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {
+        if (mayAct(state, author, 'group').ok && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {
           state.declined.set(body.member, body.via);
         }
         break;
@@ -865,13 +865,5 @@ export function visibleIn(state: SpaceState, event: EventView, inner: Inner): bo
   return event.time < removedAt;
 }
 
-/**
- * Does a rekey count? Its author manages the space today, or managed it as of
- * the rekey's own number (they lost the role later, past it): judged by when it
- * was made, not by today. One numbered past their loss doesn't.
- */
-export const rekeyCounts = (state: SpaceState, event: Pick<EventView, 'author' | 'signer' | 'seq' | 'cseq' | 'cs'>): boolean =>
-  canManage(state, event.author) || !!state.cutoffs?.some((c) => c.managed && c.signer === event.signer && !isPast(c, event));
-
-/** May this person remove members and rotate keys (and, in projects and communities, curate boards)? */
-export const canManage = (state: SpaceState, did: Did): boolean => (state.kind === 'group' ? did === state.founder : state.maintainers.has(did));
+// Who may do what: authz.ts (mayAct, mayActAt; canManage and rekeyCounts on top of them).
+export { canManage, rekeyCounts } from './authz.ts';
