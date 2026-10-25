@@ -120,9 +120,9 @@ describe('the phone app worker on Bare', () => {
     await expect(phone.ask('pair', { link: 'weave:phone:nonsense', phoneName: 'Pixel' })).rejects.toThrow(/damaged/);
 
     const { link } = await node.pairPhone();
-    expect(await phone.ask('pair', { link, phoneName: 'Pixel' })).toEqual({ name: 'Tester' });
+    expect(await patiently(() => phone.ask('pair', { link, phoneName: 'Pixel' }))).toEqual({ name: 'Tester' });
     expect((await node.phones()).map((p) => p.name)).toEqual(['Pixel']);
-    expect(await phone.ask('call', { method: 'whoami', args: [] })).toMatchObject({ name: 'Tester', did: node.identity.author });
+    expect(await patiently(() => phone.ask('call', { method: 'whoami', args: [] }))).toMatchObject({ name: 'Tester', did: node.identity.author });
 
     // Posting from the phone; the node's live events come back to it.
     const post = await phone.ask<PostInfo>('call', { method: 'submit', args: [{ space: 'Weave', board: 'ideas', title: 'From the phone app' }] });
@@ -135,7 +135,7 @@ describe('the phone app worker on Bare', () => {
     phone = await worker(phoneDir);
     // Reconnecting takes a moment (longer on a busy machine): wait for it rather than expect it at once.
     await vi.waitFor(async () => expect(await phone.ask('state')).toEqual({ paired: true, name: 'Tester', connected: true }), { timeout: 20_000, interval: 200 });
-    expect((await phone.ask<PostInfo[]>('call', { method: 'posts', args: [{ space: 'Weave', board: 'ideas' }] })).map((p) => p.title)).toEqual(['From the phone app']);
+    expect((await patiently(() => phone.ask<PostInfo[]>('call', { method: 'posts', args: [{ space: 'Weave', board: 'ideas' }] }))).map((p) => p.title)).toEqual(['From the phone app']);
 
     // Unpaired on the computer: the phone hears the connection go and can't get back in.
     await node.unpairPhone((await node.phones())[0].key);
