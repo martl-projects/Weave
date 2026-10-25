@@ -92,11 +92,12 @@ describe('backdated events of a removed member', () => {
     post(founder, { kind: KIND_INVITE, body: { invite: 'i1', expires: at(50) } }, at(1));
     post(eve, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(2));
     post(founder, { kind: KIND_REMOVE, body: { member: eve.did, upTo: upTo(eve) } }, at(10));
-    // The founder leaves "removed" behind with a fresh invite; Eve joins with it later. That's a leave-and-rejoin path, not removed → in:
-    // a removed member only comes back once they left on their own, as before. Here: she was removed, so she stays out, whatever the date.
+    // Her old link doesn't bring her back; a fresh one from the founder, made after the removal, does (_Ak3UUmp).
+    post(eve, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(15));
+    expect(state().members.has(eve.did)).toBe(false);
     post(founder, { kind: KIND_INVITE, body: { invite: 'i2', expires: at(50) } }, at(20));
     post(eve, { kind: KIND_JOIN, body: { invite: 'i2' } }, at(21));
-    expect(state().members.has(eve.did)).toBe(false);
+    expect(state().members.has(eve.did)).toBe(true);
   });
 
   it('two maintainers removing each other at once: the one this node got first counts, until the owner settles which', () => {

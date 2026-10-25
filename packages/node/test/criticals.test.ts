@@ -387,3 +387,58 @@ describe("a removed maintainer can't remove who removed them, however they name 
     });
   }
 });
+
+describe('removed means out until someone who could remove asks you back (_Ak3UUmp, odfs7haI)', () => {
+  const names = async (node: WeaveNode, space: string) => (await node.members(space)).map((m) => m.name).sort();
+
+  it('a removed member comes back with a new link from the owner, and not with one made before', async () => {
+    const [martin, lena] = [person('Martin'), person('Lena')];
+    const all = [martin, lena];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Synth friends');
+    const early = await martin.invite('Synth friends');
+    await lena.joinSpace(early);
+    syncAll();
+    await martin.removeMember('Synth friends', 'Lena');
+    syncAll();
+    await lena.joinSpace(early); // the old link: no way back
+    syncAll();
+    expect(await names(martin, 'Synth friends')).toEqual(['Martin']);
+    await lena.joinSpace(await martin.invite('Synth friends'));
+    syncAll();
+    expect(await names(martin, 'Synth friends')).toEqual(['Lena', 'Martin']);
+    await martin.say({ space: 'Synth friends', text: 'welcome back' });
+    syncAll();
+    expect((await lena.messages('Synth friends')).map((m) => m.text)).toContain('welcome back');
+  });
+
+  it("removing someone who came by an auto-admitted group isn't undone by the next reconcile", async () => {
+    const [martin, kofi] = [person('Martin'), person('Kofi')];
+    const all = [martin, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Core');
+    await kofi.joinSpace(await martin.invite('Core'));
+    syncAll();
+    await martin.createProject({ name: 'Weave' });
+    await martin.inviteGroup({ project: 'Weave', group: 'Core' });
+    await martin.setRule({ project: 'Weave', group: 'Core', auto: true });
+    syncAll();
+    for (const node of all) await node.reconcile();
+    syncAll();
+    expect(await names(martin, 'Weave')).toEqual(['Kofi', 'Martin']);
+    await martin.removeMember('Weave', 'Kofi');
+    const epoch = (await martin.spaces('project'))[0].epoch;
+    for (const node of all) await node.reconcile();
+    syncAll();
+    expect(await names(martin, 'Weave')).toEqual(['Martin']);
+    expect((await martin.spaces('project'))[0].epoch).toBe(epoch);
+    await martin.say({ space: 'Weave', text: 'after removing Kofi' });
+    syncAll();
+    const read = await kofi.messages('Weave').then((m) => m.map((x) => x.text), () => []);
+    expect(read).not.toContain('after removing Kofi');
+  });
+});
