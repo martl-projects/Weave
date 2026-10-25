@@ -642,11 +642,11 @@ export interface SafeProposalInfo {
   signedByMe: boolean;
 }
 
-/** What someone thinks of an address or contract: endorse or block, and why. People choose whose labels they follow. */
+/** What someone thinks of an address or contract: endorse or block, and why; or, from its owners, that it's retired. People choose whose labels they follow. */
 export interface LabelInfo {
   /** 'eip155:<chain id>:<address>' */
   target: string;
-  label: 'endorse' | 'block';
+  label: 'endorse' | 'block' | 'retired';
   reason: string;
   by: Person;
   time: string;
@@ -679,6 +679,8 @@ export interface TreasuryInfo {
   deploy?: { to: string; data: string };
   /** The transaction that puts the project's split contract on chain (owned by the treasury): payments to it are divided by `allocations`. */
   splitDeploy?: { to: string; data: string };
+  /** Its earlier addresses, retired when owners changed wallets: money still sent there is moved on with sweepRetired. */
+  retired: Array<{ address: string; successor: string; time: string }>;
   /** Its latest public announcement has this address: people outside the space can pay it and name it in their splits. */
   announced: boolean;
   /** You maintain (or moderate) it and may change its split. */
@@ -1572,6 +1574,8 @@ export interface Backend {
   tickets(show: string): Promise<TicketInfo[]>;
   /** The Safe transaction that pays a show out by its split (after it) or back to everyone who paid. */
   settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement>;
+  /** Move what's left on a space's retired treasuries to its treasury now: a proposal per old Safe holding money, for its old owners to sign. */
+  sweepRetired(space: string): Promise<Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }>>;
   /** Announce a treasury publicly (maintainers or moderators), so people outside it can pay it and name it in their splits. */
   announceTreasury(space: string): Promise<TreasuryInfo>;
   /** Endorse or block an address or contract, saying why; label '' withdraws yours. */
@@ -1643,7 +1647,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'badges', 'transferBadge',
-  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals',
+  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',

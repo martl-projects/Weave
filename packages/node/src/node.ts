@@ -201,6 +201,9 @@ import {
   checksumAddress,
   isAddress,
   KIND_LABEL,
+  KIND_SAFE_RETIRED,
+  retiredOf,
+  walletHistoryOf,
   KIND_TREASURY,
   KIND_TREASURY_SPLIT,
   KIND_WALLET,
@@ -4043,8 +4046,8 @@ export class WeaveNode implements Backend {
         this.#paymentChecks.delete(request.id); // offline, or the chain's node down: try again later
         continue;
       }
-      const wallet = this.#wallets().get(request.did);
-      if (check.ok && (!wallet?.verified || wallet.address.toLowerCase() !== check.from?.toLowerCase())) {
+      // From a wallet they linked, now or before (they may have moved on since paying).
+      if (check.ok && this.#walletHistory().get(check.from?.toLowerCase() ?? '') !== request.did) {
         check = { ...check, ok: false, reason: `paid from ${check.from}, which isn't ${request.name ?? 'their'}'s linked wallet` };
       }
       if (!check.ok && /pending/.test(check.reason ?? '')) {
@@ -4354,8 +4357,27 @@ export class WeaveNode implements Backend {
     const address = checksumAddress(input.address);
     if (!input.proof) throw new Error(`sign this with the wallet (personal_sign), then pass the signature as proof:\n${walletMessage(this.identity.author, address)}`);
     if (!verifyWalletProof(this.identity.author, address, input.proof)) throw new Error(`that signature isn't from ${address} over:\n${walletMessage(this.identity.author, address)}`);
+    const before = this.#wallets().get(this.identity.author);
     this.replica.write(this.identity, { kind: KIND_WALLET, body: { chain: `eip155:${TREASURY_CHAIN.id}`, address, proof: input.proof } });
+    if (before?.verified && before.address !== address) await this.#movedWallet(before.address, address);
     return this.wallet();
+  }
+
+  /**
+   * After a new wallet: the old one is retired (people paying it are warned),
+   * our tiers paid there now ask for the new one, and the treasuries we
+   * maintain that were announced get their new address, the old one retired.
+   */
+  async #movedWallet(old: string, now: string): Promise<void> {
+    this.replica.write(this.identity, { kind: KIND_SAFE_RETIRED, body: { safe: old, successor: now, kind: 'wallet', owners: [], threshold: 1 } });
+    for (const tier of this.#tierOffers(this.identity.author)) {
+      if (tier.onchain?.to.toLowerCase() === old.toLowerCase()) await this.setTier({ tier: tier.id, onchain: { ...tier.onchain, to: now } });
+    }
+    const announced = this.#treasuries();
+    for (const space of this.#spaces.values()) {
+      if ((space.kind !== 'project' && space.kind !== 'community') || !this.#state(space).maintainers.has(this.identity.author) || !announced.has(space.id)) continue;
+      await this.announceTreasury(space.id).catch(() => undefined);
+    }
   }
 
   async wallet(who?: string): Promise<WalletInfo | undefined> {
@@ -4406,6 +4428,7 @@ export class WeaveNode implements Backend {
       ...(address ? { deploy: safeDeployment(ownerAddresses, threshold, treasurySaltNonce(space.id)) } : {}),
       ...(address && allocations ? { splitDeploy: splitDeployment(allocations, address, splitSalt(space.id)) } : {}),
       announced: !!address && announced.get(space.id)?.address === address,
+      retired: [...this.#retired().values()].filter((r) => r.kind === 'treasury' && r.space === space.id).map((r) => ({ address: r.address, successor: r.successor, time: r.time })),
       maintainer: state.maintainers.has(this.identity.author),
     };
   }
@@ -4427,8 +4450,41 @@ export class WeaveNode implements Backend {
     this.#maintainerState(space);
     const treasury = await this.treasury(space.id);
     if (!treasury.address) throw new Error(`${space.name} has no treasury yet: its ${space.kind === 'community' ? 'moderators' : 'maintainers'} need to link a wallet first`);
-    if (!treasury.announced) this.replica.write(this.identity, { kind: KIND_TREASURY, body: { space: space.id, kind: treasury.kind, address: treasury.address, owners: treasury.owners.map((o) => o.address), threshold: treasury.threshold } });
+    if (!treasury.announced) {
+      // Its owners changed wallets: the treasury announced before is retired, and says where money goes now.
+      const before = this.#treasuries().get(space.id);
+      if (before && before.address !== treasury.address) {
+        this.replica.write(this.identity, { kind: KIND_SAFE_RETIRED, body: { safe: before.address, successor: treasury.address, kind: 'treasury', space: space.id, owners: before.owners, threshold: before.threshold } });
+      }
+      this.replica.write(this.identity, { kind: KIND_TREASURY, body: { space: space.id, kind: treasury.kind, address: treasury.address, owners: treasury.owners.map((o) => o.address), threshold: treasury.threshold } });
+    }
     return this.treasury(space.id);
+  }
+
+  async sweepRetired(ref: string): Promise<Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }>> {
+    const space = this.#space(ref);
+    const current = (await this.treasury(space.id)).address;
+    const out: Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }> = [];
+    for (const retired of this.#retired().values()) {
+      if (retired.kind !== 'treasury' || retired.space !== space.id) continue;
+      const to = retired.successor || current;
+      if (!to) continue;
+      const balance = BigInt(await this.callChain(TEST_USDC.chain, { to: TEST_USDC.token, data: erc20BalanceOf(retired.address) }));
+      // An old Safe that was never put on chain has to be deployed first, with its old owners, before it can send anything.
+      const deploy = safeDeployment(retired.owners, retired.threshold, treasurySaltNonce(space.id));
+      if (!balance) {
+        out.push({ safe: retired.address, balance: '0', deploy });
+        continue;
+      }
+      const open = this.#allSafeProposals().find((p) => p.safe === retired.address && p.title.startsWith('Move what is left'));
+      const proposal = open ? this.#safeProposalInfo(open.id) : await this.proposeSafeTx({ safe: retired.address, tx: { to: TEST_USDC.token, data: erc20Transfer(to, balance) }, title: `Move what is left (${formatUnits(balance, TEST_USDC.decimals)} USDC) to ${to}` });
+      out.push({ safe: retired.address, balance: balance.toString(), proposal, deploy });
+    }
+    return out;
+  }
+
+  #retired() {
+    return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED));
   }
 
   async label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined> {
@@ -4444,7 +4500,9 @@ export class WeaveNode implements Backend {
   async labels(input: { target?: string; by?: string[] } = {}): Promise<LabelInfo[]> {
     const target = input.target ? (isAddress(input.target) ? labelTarget(input.target) : parseLabelTarget(input.target)) : undefined;
     const by = input.by ? new Set(input.by.map((who) => this.resolve(who))) : undefined;
-    return labelsOf(this.replica.events((e) => e.kind === KIND_LABEL))
+    // Retired addresses are labels too, from their owners: whoever pays them is warned and told where to pay instead.
+    const retired = [...this.#retired().values()].map((r) => ({ target: labelTarget(r.address), label: 'retired' as const, reason: r.successor ? `retired: pay ${r.successor} instead` : 'retired', by: r.by, time: r.time }));
+    return [...labelsOf(this.replica.events((e) => e.kind === KIND_LABEL)), ...retired]
       .filter((l) => (!target || l.target === target) && (!by || by.has(l.by)))
       .map((l) => ({ ...l, by: { did: l.by, name: this.nameOf(l.by) }, mine: l.by === this.identity.author }));
   }
@@ -4474,6 +4532,10 @@ export class WeaveNode implements Backend {
 
   #wallets() {
     return walletsOf(this.replica.events((e) => e.kind === KIND_WALLET));
+  }
+
+  #walletHistory() {
+    return walletHistoryOf(this.replica.events((e) => e.kind === KIND_WALLET));
   }
 
   #treasuries() {
@@ -4517,8 +4579,11 @@ export class WeaveNode implements Backend {
   /** The Safes this node knows the owners of: the treasuries of its projects and communities, and the shows' Safes. */
   #knownSafes(): Array<{ address: string; label: string; owners: Array<{ did: Did; address: string }>; threshold: number }> {
     const wallets = this.#wallets();
+    const history = this.#walletHistory();
     const out: Array<{ address: string; label: string; owners: Array<{ did: Did; address: string }>; threshold: number }> = [];
     const ownersOf = (dids: Iterable<Did>) => [...dids].flatMap((did) => (wallets.get(did)?.verified ? [{ did, address: wallets.get(did)!.address }] : []));
+    // Recorded owners: the wallets a Safe was made for, whoever linked them, even if they moved on since.
+    const recorded = (addresses: string[]) => addresses.flatMap((address) => (history.get(address.toLowerCase()) ? [{ did: history.get(address.toLowerCase())!, address }] : []));
     for (const space of this.#spaces.values()) {
       if (space.kind !== 'project' && space.kind !== 'community') continue;
       const owners = ownersOf(this.#state(space).maintainers);
@@ -4526,8 +4591,17 @@ export class WeaveNode implements Backend {
       if (address) out.push({ address, label: `${space.name}'s treasury`, owners, threshold: treasuryThreshold(owners.length) });
     }
     for (const show of this.#allShows()) {
-      const owners = ownersOf(show.hosts);
-      if (owners.length === show.hosts.length) out.push({ address: show.price.to, label: `the Safe of ${show.name}`, owners, threshold: treasuryThreshold(owners.length) });
+      if (show.owners) out.push({ address: show.price.to, label: `the Safe of ${show.name}`, owners: recorded(show.owners), threshold: show.threshold ?? treasuryThreshold(show.owners.length) });
+      else {
+        // Shows from before owners were recorded: their hosts' wallets now.
+        const owners = ownersOf(show.hosts);
+        if (owners.length === show.hosts.length) out.push({ address: show.price.to, label: `the Safe of ${show.name}`, owners, threshold: treasuryThreshold(owners.length) });
+      }
+    }
+    for (const retired of this.#retired().values()) {
+      if (retired.kind !== 'treasury' || out.some((s) => s.address === retired.address)) continue;
+      const space = retired.space ? this.#spaces.get(retired.space) : undefined;
+      out.push({ address: retired.address, label: `${space?.name ?? 'a'} retired treasury`, owners: recorded(retired.owners), threshold: retired.threshold });
     }
     return out;
   }
@@ -4599,6 +4673,9 @@ export class WeaveNode implements Backend {
       ends: new Date(input.ends).toISOString(),
       price: { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: TEST_USDC.symbol, decimals: TEST_USDC.decimals, to: safe, amount: input.price },
       hosts,
+      // The wallets the Safe is made for: its owners from now on, whatever wallets the hosts link later.
+      owners,
+      threshold: treasuryThreshold(owners.length),
       split,
     };
     if (!body.name || Number.isNaN(Date.parse(input.starts)) || Number.isNaN(Date.parse(input.ends)) || input.ends <= input.starts) throw new Error('a show has a name, and a start before its end');
@@ -4731,8 +4808,7 @@ export class WeaveNode implements Backend {
         this.#ticketChecks.delete(event.id);
         continue;
       }
-      const wallet = this.#wallets().get(event.author);
-      if (check.ok && (!wallet?.verified || wallet.address.toLowerCase() !== check.from?.toLowerCase())) check = { ok: false, reason: `paid from ${check.from}, which isn't ${this.nameOf(event.author) ?? 'their'}'s linked wallet` };
+      if (check.ok && this.#walletHistory().get(check.from?.toLowerCase() ?? '') !== event.author) check = { ok: false, reason: `paid from ${check.from}, which isn't ${this.nameOf(event.author) ?? 'their'}'s linked wallet` };
       if (!check.ok) {
         answer(false, check.reason);
         continue;
@@ -4790,8 +4866,8 @@ export class WeaveNode implements Backend {
   #showInfo(show: Show): ShowInfo {
     const wallets = this.#wallets();
     const person = (did: Did) => ({ did, name: this.nameOf(did) });
-    const owners = show.hosts.map((did) => wallets.get(did)).filter((w) => w?.verified).map((w) => w!.address);
-    const threshold = treasuryThreshold(owners.length || 1);
+    const owners = show.owners ?? show.hosts.map((did) => wallets.get(did)).filter((w) => w?.verified).map((w) => w!.address);
+    const threshold = show.threshold ?? treasuryThreshold(owners.length || 1);
     const treasuries = this.#treasuries();
     const split = show.split.map((part) => {
       if (part.to.startsWith('project:')) {

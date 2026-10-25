@@ -253,6 +253,7 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
   treasury -p <project>      the project's treasury: its address, owners, split and who it pays  [-r <community> instead]
   treasury announce -p <project>  announce it publicly, so others can pay it and name it in their splits  [-r <community>]
   treasury deploy -p <project>    the transaction that puts the Safe on chain; any wallet can send it
+  treasury sweep -p <project>     move what's left on its retired treasuries (after wallets changed) to the treasury now
   treasury split -p <project>     the project's split contract: its address, whether it exists, how to deploy it
   show create <name> --starts <time> --ends <time> --usdc 3   a ticketed show (you host it): tickets go into its own Safe
                              [-p <project>] [--room <id>] [--capacity 50] [--hosts <who>,<who>]
@@ -504,6 +505,7 @@ const treasuryLine = (t: TreasuryInfo) =>
     ...(t.pending ? [`  from ${t.pending.from.slice(0, 10)}: ${splitLine(t.pending, t.pending.community)}`] : []),
     ...(t.recipients?.length ? ['  pays:', ...t.recipients.map((r) => `    ${percent(r.share / 100)} ${r.name ?? (r.id || r.kind)} (${r.part})${r.address ? ` ${r.address}` : ' (no address yet: stays with a maker on chain)'}`)] : []),
     ...(t.address && !t.announced ? ['  not announced yet: weave treasury announce'] : []),
+    ...t.retired.map((r) => `  retired: ${r.address}${r.successor ? ` (now ${r.successor})` : ''}: weave treasury sweep moves what's left there`),
   ].join('\n');
 const showLine = (sh: ShowInfo) => {
   const when = `${new Date(sh.starts).toLocaleString()} – ${new Date(sh.ends).toLocaleTimeString()}`;
@@ -526,7 +528,7 @@ const safeProposalLine = (pr: SafeProposalInfo) =>
     ...(pr.waiting.length ? [`  waiting for: ${pr.waiting.map((x) => x.name ?? x.did).join(', ')}`] : []),
     ...(pr.exec ? [`  send from any wallet to run it:`, `    to:   ${pr.exec.to}`, `    data: ${pr.exec.data}`] : pr.mine && !pr.signedByMe ? [`  sign: weave safe show ${pr.id} --file typed.json, sign it in your wallet, then weave safe sign ${pr.id} --signature <0x…>`] : []),
   ].join('\n');
-const labelLine = (l: LabelInfo) => `${l.label === 'block' ? 'BLOCK  ' : 'endorse'} ${l.target} by ${l.by.name ?? l.by.did}${l.reason ? `: ${l.reason}` : ''}`;
+const labelLine = (l: LabelInfo) => `${l.label === 'block' ? 'BLOCK  ' : l.label === 'retired' ? 'RETIRED' : 'endorse'} ${l.target} by ${l.by.name ?? l.by.did}${l.reason ? `: ${l.reason}` : ''}`;
 
 const badgeLine = (b: BadgeInfo) => {
   const name = `${b.series.symbol ? `${b.series.symbol} ` : ''}${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}`;
@@ -1988,6 +1990,10 @@ ${postLine(p)}`);
         const deploy = t.deploy;
         if (!deploy) throw new Error(`${t.project.name} has no treasury yet: a maintainer has to link a wallet first`);
         return out(deploy, () => `send this from any wallet on ${t.chain.name} to put ${t.address} on chain (it belongs to its owners alone):\n  to:   ${deploy.to}\n  data: ${deploy.data}`);
+      }
+      if (args[0] === 'sweep') {
+        const swept = await b.sweepRetired(space);
+        return out(swept, () => swept.map((x) => (x.proposal ? `${x.safe}: ${x.balance} (smallest unit) to move: its old owners sign it (weave safe sign ${x.proposal.id} …)${x.proposal.exec ? ' — ready' : ''}` : `${x.safe}: nothing left there`)).join('\n') || '(no retired treasuries)');
       }
       if (args[0] === 'split') {
         const c = await b.splitContract(space);

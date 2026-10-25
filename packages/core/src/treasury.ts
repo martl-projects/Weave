@@ -27,6 +27,11 @@ import type { EventView } from './records.ts';
  *                          computed it, so people outside the space can pay it and include it in
  *                          their own splits. Anyone can check the address against the owners'
  *                          linked wallets; that the owners maintain the space only its members can.
+ *   weave.safe.retired     {safe, successor, kind, space, owners, threshold}
+ *                          public, by an owner: an address that isn't used any more (a treasury
+ *                          whose owners changed wallets, or someone's old wallet), and the one that
+ *                          replaced it. Money sent there is moved on by its owners; for a treasury,
+ *                          owners and threshold say who still signs for the old Safe.
  *   weave.label            {target, label, reason}
  *                          public, by anyone: what they think of an address or contract
  *                          (target 'eip155:<chain>:<address>'): endorse or block, and why.
@@ -42,6 +47,7 @@ export const KIND_WALLET = 'weave.wallet';
 export const KIND_TREASURY_SPLIT = 'weave.treasury.split';
 export const KIND_TREASURY = 'weave.treasury';
 export const KIND_LABEL = 'weave.label';
+export const KIND_SAFE_RETIRED = 'weave.safe.retired';
 
 /**
  * The Weave Foundation's project, whose treasury gets the foundation part of
@@ -476,4 +482,54 @@ export function splitAddressCall(allocations: Array<{ address: string; share: nu
 export function splitDeployedCall(allocations: Array<{ address: string; share: number }>, owner: string, salt: string): { to: string; data: string } {
   const data = selector('isDeployed((address[],uint256[],uint256,uint16),address,bytes32)') + uint(3 * 32) + word(owner) + word(salt) + splitParamsData(allocations);
   return { to: SPLITS.pushFactory, data: '0x' + data };
+}
+
+// ---------------------------------------------------------------- retired addresses
+
+export interface RetiredAddress {
+  address: string;
+  /** The address that replaced it ('' when nothing did). */
+  successor: string;
+  kind: 'treasury' | 'wallet';
+  /** For a treasury: its space, and the wallets that still sign for the old Safe. */
+  space?: string;
+  owners: string[];
+  threshold: number;
+  by: Did;
+  time: string;
+}
+
+/** Retired addresses by address (lowercase), the latest retirement of each counting. */
+export function retiredOf(events: EventView[]): Map<string, RetiredAddress> {
+  const out = new Map<string, RetiredAddress>();
+  for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
+    if (event.kind !== KIND_SAFE_RETIRED) continue;
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    if (!isAddress(body.safe)) continue;
+    const owners = Array.isArray(body.owners) ? body.owners.filter(isAddress).slice(0, 50).map(checksumAddress) : [];
+    const threshold = Number(body.threshold);
+    out.set(body.safe.toLowerCase(), {
+      address: checksumAddress(body.safe),
+      successor: isAddress(body.successor) ? checksumAddress(body.successor) : '',
+      kind: body.kind === 'wallet' ? 'wallet' : 'treasury',
+      ...(typeof body.space === 'string' && body.space ? { space: body.space.slice(0, 100) } : {}),
+      owners,
+      threshold: Number.isInteger(threshold) && threshold >= 1 && threshold <= Math.max(owners.length, 1) ? threshold : 1,
+      by: event.author,
+      time: event.time,
+    });
+  }
+  return out;
+}
+
+/** Every wallet anyone ever linked with a valid signature, by address (lowercase): who it belongs to, even after they moved on. */
+export function walletHistoryOf(events: EventView[]): Map<string, Did> {
+  const out = new Map<string, Did>();
+  for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
+    if (event.kind !== KIND_WALLET) continue;
+    const body = (event.body ?? {}) as Record<string, unknown>;
+    if (!isAddress(body.address) || typeof body.proof !== 'string' || out.has(body.address.toLowerCase())) continue;
+    if (verifyWalletProof(event.author, body.address, body.proof)) out.set(body.address.toLowerCase(), event.author);
+  }
+  return out;
 }

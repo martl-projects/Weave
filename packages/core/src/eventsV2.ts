@@ -82,6 +82,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.treasury.split',
   'weave.treasury',
   'weave.label',
+  'weave.safe.retired',
   // ticketed events (tickets themselves are boxed content, like membership requests)
   'weave.show',
   // a Safe's transactions, signed together

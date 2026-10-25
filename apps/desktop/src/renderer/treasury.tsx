@@ -4,7 +4,7 @@ import { Icon } from './icons.tsx';
 import { api, bump, shortDid, useApi } from './lib.ts';
 import { copy } from './posts.tsx';
 import { SafeProposals } from './shows.tsx';
-import { attempt, AsyncButton } from './ui.tsx';
+import { attempt, AsyncButton, toast } from './ui.tsx';
 
 /*
  * A project's treasury: a Safe its maintainers' own wallets own, and how its
@@ -171,6 +171,28 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
         </div>
       ))}
       {treasury.address && <SafeProposals safe={treasury.address} />}
+      {treasury.retired.map((r) => (
+        <div key={r.address}>
+          <div className="field-row small">
+            <span className="grow">
+              Retired: <code>{r.address}</code> (a wallet changed). People paying it are told to pay the new address.
+            </span>
+            {treasury.maintainer && (
+              <AsyncButton
+                onClick={async () => {
+                  const swept = await attempt(() => api<Array<{ balance: string }>>('sweepRetired', treasury.project.id));
+                  if (!swept) return;
+                  bump();
+                  toast(swept.some((x) => x.balance !== '0') ? 'Proposed: its old owners sign the move below' : 'Nothing left there');
+                }}
+              >
+                Move what's left…
+              </AsyncButton>
+            )}
+          </div>
+          <SafeProposals safe={r.address} />
+        </div>
+      ))}
       {treasury.maintainer && <WalletLink wallet={wallet} />}
       <h4>Split</h4>
       {treasury.split ? <SplitBar shares={treasury.split.shares} /> : <p className="small">No split yet.</p>}

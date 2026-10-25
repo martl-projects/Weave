@@ -16,7 +16,8 @@ import { checksumAddress, isAddress } from './treasury.ts';
  * payments from the chain and prepares those transactions; the hosts sign them
  * in their own wallets.
  *
- *   weave.show            {show, name, project, room, starts, ends, price, capacity, hosts, split, cancelled}
+ *   weave.show            {show, name, project, room, starts, ends, price, capacity, hosts, owners, threshold, split, cancelled}
+ *                         owners/threshold: the wallets its Safe was made for, kept when hosts change wallets
  *                         public, by its host: the event. price is an onchain price per ticket,
  *                         paid to the event's Safe; split: [{to: did | address, share}] in basis
  *                         points, how the money is paid out after it. The latest one counts.
@@ -51,6 +52,9 @@ export interface Show {
   capacity?: number;
   /** Who owns the Safe with the host: their wallets sign together. */
   hosts: Did[];
+  /** The wallets its Safe was made for, and how many of them sign: the Safe's owners, whatever wallets the hosts link later. */
+  owners?: string[];
+  threshold?: number;
   split: ShowShare[];
   cancelled: boolean;
   time: string;
@@ -89,6 +93,8 @@ export function showsOf(events: EventView[]): Show[] {
     if (before && before.host !== event.author) continue;
     const capacity = Number(body.capacity);
     const hosts = Array.isArray(body.hosts) ? body.hosts.filter(isDid).slice(0, 10) : [];
+    const owners = Array.isArray(body.owners) ? body.owners.filter(isAddress).slice(0, 10).map(checksumAddress) : [];
+    const threshold = Number(body.threshold);
     latest.set(key, {
       id,
       host: event.author,
@@ -100,6 +106,7 @@ export function showsOf(events: EventView[]): Show[] {
       price,
       ...(Number.isInteger(capacity) && capacity > 0 ? { capacity } : {}),
       hosts: hosts.includes(event.author) ? hosts : [event.author, ...hosts],
+      ...(owners.length && Number.isInteger(threshold) && threshold >= 1 && threshold <= owners.length ? { owners, threshold } : {}),
       split,
       cancelled: body.cancelled === true,
       time: event.time,

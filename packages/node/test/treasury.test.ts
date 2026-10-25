@@ -293,3 +293,45 @@ describe('signing a Safe transaction together', () => {
     expect((await lena.safeProposals(show.safe.address))[0].exec?.data).toBe(done.exec?.data);
   });
 });
+
+describe('changing wallets', () => {
+  it('retires the old addresses, points tiers and treasuries to the new one, and moves what is left with the old owners', async () => {
+    const martin = person('Martin');
+    await martin.createProject({ name: 'Rennbahn' });
+    const link = async (w: ReturnType<typeof wallet>) => martin.linkWallet({ address: w.address, proof: w.sign(await martin.walletMessage(w.address)) });
+    const first = wallet();
+    await link(first);
+    const before = await martin.setSplit({ project: 'Rennbahn', preset: 'solo' });
+    expect(before.announced).toBe(true);
+    const price = { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: 'USDC', decimals: 6, to: first.address, amount: 5_000_000 };
+    const tier = await martin.createTier({ name: 'Fans', onchain: price });
+    const show = await martin.createShow({ name: 'Derby', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T21:00:00Z', price: 1_000_000 });
+
+    const second = wallet();
+    await link(second);
+    const after = await martin.treasury('Rennbahn');
+    expect(after.address).not.toBe(before.address);
+    expect(after.announced).toBe(true);
+    expect(after.retired).toEqual([{ address: before.address, successor: after.address, time: expect.any(String) }]);
+    // Whoever looks the old addresses up is told where to pay instead.
+    expect((await martin.labels({ target: before.address! })).map((l) => [l.label, l.reason])).toEqual([['retired', `retired: pay ${after.address} instead`]]);
+    expect((await martin.labels({ target: first.address })).map((l) => l.reason)).toEqual([`retired: pay ${second.address} instead`]);
+    expect((await martin.tiers()).find((t) => t.id === tier.id)?.onchain?.to).toBe(second.address);
+
+    // 5 USDC still arrived at the old treasury: its old owner moves it on, signing with the old wallet.
+    martin.callChain = async (_chain, call) => '0x' + (call.data === '0xaffed0e0' ? 0 : call.data.includes(before.address!.slice(2).toLowerCase()) ? 5_000_000 : 0).toString(16).padStart(64, '0');
+    const [swept] = await martin.sweepRetired('Rennbahn');
+    expect(swept).toMatchObject({ safe: before.address, balance: '5000000', proposal: { safe: { address: before.address, threshold: 1 } } });
+    expect(swept.deploy.data.startsWith('0x1688f0b9')).toBe(true);
+    await expect(martin.signSafeTx({ proposal: swept.proposal!.id, signature: second.signHash(swept.proposal!.hash) })).rejects.toThrow(/owners/);
+    const signed = await martin.signSafeTx({ proposal: swept.proposal!.id, signature: first.signHash(swept.proposal!.hash) });
+    expect(signed.exec?.to).toBe(before.address);
+    // Asking again doesn't propose it twice.
+    expect((await martin.sweepRetired('Rennbahn'))[0].proposal?.id).toBe(swept.proposal!.id);
+
+    // The show's Safe keeps the wallet it was made for.
+    const kept = (await martin.shows()).find((x) => x.id === show.id)!;
+    expect(kept.safe.address).toBe(show.safe.address);
+    expect(kept.safe.deploy?.data).toBe(show.safe.deploy?.data);
+  });
+});
