@@ -121,6 +121,8 @@ export interface ManagedSetting {
   attestor?: Did;
   /** A company space's company group (stage 10): where the attestor vouches for people. */
   company?: string;
+  /** The first epoch under the company's key service: from it on, an epoch without its company half is locked, never the Weave half alone. */
+  from?: number;
   by: Did;
   time: string;
 }
@@ -173,6 +175,8 @@ export interface SpaceKeys {
    * Everyone seals with `keys` (the rekey with the lowest id) and reads with all.
    */
   alternates?: Record<string, string[]>;
+  /** Epoch number → who made the rekey whose key everyone seals with: in a managed space, only their company half counts. */
+  rekeyers?: Record<string, Did>;
 }
 
 export interface Inner {
@@ -249,7 +253,10 @@ const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave
 /** Event fields for an encrypted event in a space, sealed with the current epoch key. */
 export function sealFor(space: SpaceKeys, inner: Inner): EventFields {
   const epoch = currentEpoch(space);
-  const key = b64u.decode(space.keys[String(epoch)]);
+  const newest = space.keys[String(epoch)];
+  // A newest key that isn't here (a managed epoch still locked): nothing goes out under an older one instead.
+  if (!newest) throw new Error(`the newest key of ${space.name} is locked: nothing can be written there until it unlocks`);
+  const key = b64u.decode(newest);
   // A secret salt sealed inside, and the salted hash signed outside: a carry can restate it checkably (see innerHash).
   const sealed = { kind: inner.kind, body: inner.body, salt: b64u.encode(randomBytes(16)) };
   return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), ih: innerHash(sealed), body: { epoch, ...seal(key, sealed as unknown as Json, context(space, epoch)) } };
@@ -772,7 +779,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         const ttl = Number(body.ttlMinutes);
         const grace = Number(body.graceHours);
         if (kind !== 'direct' && author === state.founder && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
-          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), by: author, time: at };
+          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), ...(Number.isSafeInteger(body.from) ? { from: body.from as number } : {}), by: author, time: at };
         break;
       }
       case KIND_AGENT_APPROVE:

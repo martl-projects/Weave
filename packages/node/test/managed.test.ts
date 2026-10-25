@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { WeaveNode, closeOpenStores, signInNonce } from '../src/index.ts';
+import { KIND_KMS, sealFor } from '@weave/core';
+import { WeaveNode, closeOpenStores, loadSpaces, signInNonce } from '../src/index.ts';
 import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
@@ -255,5 +256,69 @@ describe('managed spaces', { timeout: 120_000 }, () => {
     } finally {
       await azure.stop();
     }
+  });
+});
+
+describe('company halves: who publishes them, the gap before one arrives, and a restart before it is published', { timeout: 120_000 }, () => {
+  const settle = () => new Promise((r) => setTimeout(r, 300));
+
+  it("a member's planted half for the next epoch doesn't lock everyone out (WUCPqIBs)", async () => {
+    const { martin, lena, kofi, syncAll } = await company('acme-kms', 0);
+    const space = loadSpaces(kofi.home).find((s) => s.name === 'Acme')!;
+    const next = Math.max(...Object.keys(space.keys).map(Number)) + 1;
+    kofi.replica.write(kofi.identity, sealFor(space, { kind: KIND_KMS, body: { epoch: next, wrapped: 'vault:v1:' + Buffer.alloc(48, 7).toString('base64') } }));
+    syncAll();
+    await martin.removeMember('Acme', 'Kofi');
+    await martin.say({ space: 'Acme', text: 'after kofi left' });
+    await settle();
+    syncAll();
+    await lena.reconcile();
+    expect(await texts(lena)).toContain('after kofi left');
+    expect((await lena.spaces('project'))[0].managed?.problem).toBeUndefined();
+  });
+
+  it('nothing is written with the Weave half alone before a new epoch has its company half (yHsKySEi)', async () => {
+    vault.createKey('acme-gap');
+    const [martin, lena] = [person('Martin'), person('Lena')];
+    martin.kmsCredentials = { token: vault.rootToken };
+    lena.kmsCredentials = { idToken: () => oidc.token({ sub: 'lena-gap', groups: ['employees'] }) };
+    await martin.createProject({ name: 'Acme' });
+    await lena.joinSpace(await martin.invite('Acme'));
+    sync(martin, lena);
+    sync(lena, martin);
+    await martin.manageSpace({ space: 'Acme', provider: { kind: 'vault', address: vault.address, key: 'acme-gap', jwt: { role: 'employees' } } });
+    sync(martin, lena); // the rekey, not yet the half
+    await expect(lena.say({ space: 'Acme', text: 'written in the gap' })).rejects.toThrow(/locked/);
+    await settle();
+    sync(martin, lena);
+    await lena.reconcile();
+    await lena.say({ space: 'Acme', text: 'written once it unlocked' });
+    sync(lena, martin);
+    expect(await texts(martin)).toContain('written once it unlocked');
+    for (const node of [martin, lena]) await node.close();
+  });
+
+  it('a half the key service refused to wrap is kept over a restart and published then (AsPMzM8O)', async () => {
+    const { martin, lena, all, syncAll } = await company('acme-lost', 0);
+    martin.kmsCredentials = { token: 'expired' };
+    await martin.removeMember('Acme', 'Kofi');
+    await martin.say({ space: 'Acme', text: 'written after the rotation' });
+    await settle();
+    expect((await martin.spaces('project'))[0].managed?.problem).toMatch(/wrap/);
+    const dir = martin.home.dir;
+    await martin.close();
+    const again = WeaveNode.open(dir);
+    again.kmsCredentials = { token: vault.rootToken };
+    await again.reconcile();
+    expect((await again.spaces('project'))[0].managed?.problem).toBeUndefined();
+    expect(await texts(again)).toContain('written after the rotation');
+    for (const node of all.filter((n) => n !== martin)) {
+      sync(again, node);
+      sync(node, again);
+    }
+    void syncAll;
+    await lena.reconcile();
+    expect(await texts(lena)).toContain('written after the rotation');
+    await again.close();
   });
 });
