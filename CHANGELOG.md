@@ -2,6 +2,21 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.3 · 2026-10-25
+
+- Run the phone worker's test on its own in CI, with time limits
+- Let the phone room test reload when the way to the room isn't up yet
+- Let the phone room test ask again when the test network is slow
+- Pay from a wallet without copying anything; tiers open live rooms; shows in Live
+- Changing wallets: retire old addresses, keep Safes' owners, move what's left
+- Sign Safe transactions together in Weave; ticketed rooms; shows and USDC tiers in the app
+- Ticketed shows: entry paid into the show's own Safe, paid out or back after
+- Treasuries: project wallets, splits and paid group access on chain
+- Connect Gumroad in the browser instead of pasting an access token
+- Make the Gumroad product from the tier dialog too
+- Count a badge series for a project only while its issuer maintains it
+- Badges: lasting, verifiable recognition from a project
+
 ## v0.19.2 · 2026-10-25
 
 - Bring the lockfile in line with the phone app's dependencies
