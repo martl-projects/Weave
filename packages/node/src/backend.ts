@@ -35,12 +35,12 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge';
   category: NoticeCategory;
   title: string;
   text: string;
-  /** Where it leads: the Inbox, a space's channel, or a post (by id). */
-  open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string };
+  /** Where it leads: the Inbox, a space's channel, a post (by id), or someone's hub. */
+  open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string; hub?: Did };
 }
 
 export type NoticeCategory = 'messages' | 'requests' | 'activity';

@@ -13,6 +13,7 @@ import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, space
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
 import { TreasurySettings } from './treasury.tsx';
+import { HubBadges } from './badges.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -159,6 +160,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
             </div>
           )}
         </header>
+        <HubBadges did={p.did} me={p.me} name={name} />
         <SupportBox did={p.did} name={name} me={p.me} />
         {p.me && <MyProjects name={name} />}
         {!p.me && p.projects.length > 0 && (
