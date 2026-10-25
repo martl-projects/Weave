@@ -510,7 +510,7 @@ import { acquireLock } from './lock.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
 import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
-import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
+import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, signInNonce, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLabels, imageLocation } from './registry.ts';
@@ -557,6 +557,8 @@ const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.deleg
 /** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
 interface Sso {
   idToken: string;
+  /** The salt the ID token's nonce was made with for this identity (signInNonce). */
+  salt?: string;
   expires?: number;
   refreshToken?: string;
   issuer?: string;
@@ -717,7 +719,7 @@ interface KeepState {
  * issuer's published keys (RS256), the issuer, the audience, the expiry.
  * Returns its claims, or throws.
  */
-export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[] }> {
+export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[]; nonce?: string }> {
   const [h, b, sig] = token.split('.');
   if (!h || !b || !sig) throw new Error('not a token');
   const header = JSON.parse(Buffer.from(h, 'base64url').toString()) as { alg?: string; kid?: string };
@@ -727,12 +729,12 @@ export async function verifyIdToken(token: string, issuer: string, audience: str
   const jwk = keys.find((k) => !header.kid || k.kid === header.kid);
   if (!jwk) throw new Error('unknown signing key');
   if (!createVerify('RSA-SHA256').update(`${h}.${b}`).verify(createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))) throw new Error('bad signature');
-  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown };
+  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown; nonce?: unknown };
   if (claims.iss !== issuer) throw new Error('wrong issuer');
   if (!(Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(audience)) throw new Error('wrong audience');
   if (!claims.exp || claims.exp * 1000 < Date.now()) throw new Error('expired');
   if (!claims.sub) throw new Error('no subject');
-  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [] };
+  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [], ...(typeof claims.nonce === 'string' ? { nonce: claims.nonce } : {}) };
 }
 
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
@@ -1071,13 +1073,13 @@ export class WeaveNode implements Backend {
    * next root) and this device's key; after that, only the device key is on disk.
    * `writeVersion: 1` writes as v0.3 did, for tests that need an older home.
    */
-  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2; org?: Did } = {}): { node: WeaveNode; words: string } {
+  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2; org?: Did; words?: string } = {}): { node: WeaveNode; words: string } {
     const home = resolveHome(dir);
     if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
     const managed = machinePolicy();
     if (managed.companyOnly && !options.org) throw new Error('this computer is managed by a company: only company accounts are set up here (weave enroll)');
     if (options.org && managed.companies?.length && !managed.companies.includes(options.org)) throw new Error("this computer is managed by another company: its accounts aren't set up here");
-    const words = newRecoveryWords();
+    const words = options.words ?? newRecoveryWords();
     const root = recoveryRoot(words, 0);
     const person: SigningIdentity = { author: root.did, did: root.did, keys: root };
     const device = createSubKey(root.did);
@@ -1144,22 +1146,30 @@ export class WeaveNode implements Backend {
    * deleted (see #continueEnrollment). The app's bundle isn't applied; the
    * company's starting setup is.
    */
-  static async enroll(link: string, dir: string | undefined, options: { idToken?: string; name?: string; open?: (url: string) => void | Promise<void> }): Promise<WeaveNode> {
+  static async enroll(link: string, dir: string | undefined, options: { idToken?: string | ((bind: { nonce: string }) => string); name?: string; open?: (url: string) => void | Promise<void> }): Promise<WeaveNode> {
     const enrollment = decodeEnrollment(link);
+    // The identity's words first: the sign-in is asked for it (its nonce names it, see signInNonce).
+    const fresh = newRecoveryWords();
+    const author = recoveryRoot(fresh, 0).did;
     // Without a token: the company's sign-in, in the browser (its refresh token keeps the account signed in).
     let tokens: SignInTokens | undefined;
-    if (!options.idToken) {
+    if (typeof options.idToken === 'function') {
+      const salt = b64u.encode(new Uint8Array(randomBytes(16)));
+      tokens = { idToken: options.idToken({ nonce: signInNonce(author, salt) }), salt, expires: 0 };
+    } else if (options.idToken) {
+      tokens = { idToken: options.idToken, expires: 0 };
+    } else {
       if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: give your company sign-in token (--id-token)");
-      tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser);
+      tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser, { for: author });
     }
-    const idToken = options.idToken ?? tokens!.idToken;
+    const { idToken, salt } = tokens;
     const name = options.name?.trim() || nameFromToken(idToken) || 'New colleague';
-    const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company });
-    node.#saveSso({ idToken, expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
+    const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company, words: fresh });
+    node.#saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
     const { invite } = await node.#takeInvite(enrollment.invite);
-    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken } satisfies Enrolling);
+    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
     await node.#continueEnrollment();
     return node;
   }
@@ -5906,10 +5916,10 @@ export class WeaveNode implements Backend {
     const sso = this.#sso();
     const config = sso?.issuer && sso.clientId ? { issuer: sso.issuer, clientId: sso.clientId } : here?.org.signIn;
     if (!group || !config) throw new Error("this isn't a company account, or its company hasn't said where to sign in");
-    const tokens = await browserSignIn(config, openInBrowser, { ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
+    const tokens = await browserSignIn(config, openInBrowser, { for: this.identity.author, ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
     this.#saveSso({ ...tokens, ...config });
     this.#signInProblem = undefined;
-    await this.signIn({ space: group.id, idToken: tokens.idToken });
+    await this.signIn({ space: group.id, idToken: tokens.idToken, ...(tokens.salt ? { salt: tokens.salt } : {}) });
     return this.signInStatus();
   }
 
@@ -6529,7 +6539,7 @@ export class WeaveNode implements Backend {
     const group = this.#spaces.get(pending.group);
     if (!group || !this.#managedRaw(group).setting?.attestor) return 0;
     let changed = 0;
-    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
+    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, salt: pending.salt, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
     await this.#unlock(group);
     if (this.#managedProblems.has(group.id)) return 0;
     if (!pending.joined) {
@@ -6538,8 +6548,9 @@ export class WeaveNode implements Backend {
       changed++;
     }
     if (pending.idToken) {
-      await this.signIn({ space: group.id, idToken: pending.idToken });
+      await this.signIn({ space: group.id, idToken: pending.idToken, ...(pending.salt ? { salt: pending.salt } : {}) });
       delete pending.idToken;
+      delete pending.salt;
       changed++;
     }
     if (pending.words) {
@@ -6996,7 +7007,7 @@ export class WeaveNode implements Backend {
       .filter((did) => did !== group.founder)
       .map((did) => {
         const a = attested.get(did);
-        const refused = this.#deviceRefused.get(did);
+        const refused = this.#deviceRefused.get(did) ?? this.#signInRefused.get(did);
         return {
           did,
           ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}),
@@ -7166,21 +7177,27 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- SSO (stage 6.3)
 
-  async signIn(input: { space: string; idToken: string }): Promise<void> {
+  async signIn(input: { space: string; idToken: string; salt?: string }): Promise<void> {
     const space = this.#space(input.space);
     const setting = this.#state(space).managed;
     if (!setting?.attestor) throw new Error(`${space.name} has no company sign-in`);
+    const sso = this.#sso();
+    // A token keeps its salt (a refreshed one too, while the company's sign-in keeps its nonce).
+    const salt = input.salt ?? sso?.salt;
     // Kept for the key service too (Vault's JWT auth), sealed at rest.
-    this.#saveSso({ ...(this.#sso() ?? {}), idToken: input.idToken, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
+    this.#saveSso({ ...(sso ?? {}), idToken: input.idToken, salt, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
     await this.#unlock(space);
     const device = this.#deviceProof(input.idToken);
-    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, ...(device ? { device: device as unknown as Json } : {}) });
+    // Who hands it in, and the salt that ties the token to them (0siqvEzB).
+    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, did: this.identity.author, ...(salt ? { salt } : {}), ...(device ? { device: device as unknown as Json } : {}) });
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
   }
 
   /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
   /** Sign-ins the company didn't vouch for because of the computer they came from (stage 15): person → why, and when. */
   #deviceRefused = new Map<Did, { problem: string; time: string }>();
+  /** Sign-ins the company didn't vouch for because they weren't the identity's own (0siqvEzB): person → why, and when. */
+  #signInRefused = new Map<Did, { problem: string; time: string }>();
 
   #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }> {
     const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }>();
@@ -7211,6 +7228,26 @@ export class WeaveNode implements Backend {
         if (typeof opened?.idToken !== 'string') continue;
         const claims = await verifyIdToken(opened.idToken, config.issuer, config.audience).catch(() => undefined);
         if (!claims) continue;
+        // The sign-in must be this identity's own (0siqvEzB): colleagues read the sealed sign-ins and could copy a box, and
+        // whoever sees a token (the key service takes it too) could hand it in as theirs. The token's nonce names the
+        // identity it was asked for; one without (a refreshed token) only renews who it vouched for already.
+        const handedIn = opened as { did?: unknown; salt?: unknown };
+        const salt = typeof handedIn.salt === 'string' ? handedIn.salt : undefined;
+        const bound = !!salt && claims.nonce === signInNonce(d.event.author, salt);
+        const renews = attested.get(d.event.author)?.subject === claims.sub;
+        const now = new Date(this.clock()).toISOString();
+        const taken = [...attested].some(([did, a]) => did !== d.event.author && a.subject === claims.sub && a.until > now);
+        const problem =
+          handedIn.did !== d.event.author ? 'this sign-in was handed in by someone else'
+          : salt && claims.nonce !== undefined && !bound ? 'this sign-in was made for another identity'
+          : !bound && !renews ? "this sign-in isn't tied to this identity: sign in from Weave on this computer"
+          : taken ? `${claims.email ?? claims.sub} is vouched for as another identity: that one has to lapse or be removed first`
+          : undefined;
+        if (problem) {
+          this.#signInRefused.set(d.event.author, { problem, time: d.event.time });
+          continue;
+        }
+        this.#signInRefused.delete(d.event.author);
         // With SCIM on, the directory decides: deactivated or unknown people aren't vouched for, and its groups count (stage 12).
         let groups = claims.groups;
         if (this.config.scim) {

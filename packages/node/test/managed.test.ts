@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { WeaveNode, closeOpenStores, signInNonce } from '../src/index.ts';
 import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
@@ -110,8 +110,9 @@ describe('managed spaces', { timeout: 120_000 }, () => {
     await new Promise((r) => setTimeout(r, 300));
     syncAll();
 
-    // Lena signs in with her company account; a forged token gets nothing.
-    await lena.signIn({ space: 'Acme', idToken: oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees'] }) });
+    // Lena signs in with her company account (its nonce names her identity); a forged token gets nothing.
+    const lenasToken = oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees'], nonce: signInNonce(lena.identity.author, 'lena-salt') });
+    await lena.signIn({ space: 'Acme', idToken: lenasToken, salt: 'lena-salt' });
     const { generateKeyPairSync } = await import('node:crypto');
     kofi.kmsCredentials = { token: vault.rootToken };
     await kofi.signIn({ space: 'Acme', idToken: oidc.token({ sub: 'kofi@acme', signWith: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey }) });
@@ -121,6 +122,22 @@ describe('managed spaces', { timeout: 120_000 }, () => {
     const attested = new Map((await martin.members('Acme')).map((m) => [m.name, m.attested]));
     expect(attested.get('Lena')).toMatchObject({ subject: 'lena@acme', email: 'lena@acme.example', groups: ['employees'] });
     expect(attested.get('Kofi')).toBeUndefined();
+
+    // Kofi got hold of Lena's token (0siqvEzB: the key service sees it too): handed in as his, it vouches for nobody,
+    // whether with her salt, with his own, or a token without a nonce at all.
+    for (const [idToken, salt] of [[lenasToken, 'lena-salt'], [lenasToken, 'kofi-salt'], [oidc.token({ sub: 'lena@acme', groups: ['employees', 'weave-admins'] }), undefined]] as const) {
+      await kofi.signIn({ space: 'Acme', idToken, ...(salt ? { salt } : {}) });
+      syncAll();
+      await attestor.reconcile();
+      syncAll();
+      expect((await martin.members('Acme')).find((m) => m.name === 'Kofi')?.attested).toBeUndefined();
+    }
+    // Lena's own renewal with a refreshed token (no nonce) still holds: it renews who was vouched for already.
+    await lena.signIn({ space: 'Acme', idToken: oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees'] }) });
+    syncAll();
+    await attestor.reconcile();
+    syncAll();
+    expect((await martin.members('Acme')).find((m) => m.name === 'Lena')?.attested).toMatchObject({ subject: 'lena@acme' });
 
     // Two hours on: Kofi, never vouched for, is removed; Lena stays while her attestation holds.
     martin.clock = () => Date.now() + 2 * 3_600_000;

@@ -59,8 +59,8 @@ describe('company accounts', { timeout: 120_000 }, () => {
     expect(link).toMatch(/^weave:enroll:/);
 
     const lenaDir = dir();
-    const lena = await WeaveNode.enroll(link, lenaDir, { idToken: oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees', 'engineering', 'weave-admins'] }), name: 'Lena' });
-    const kofi = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'kofi@acme', email: 'kofi@acme.example', groups: ['employees'] }) });
+    const lena = await WeaveNode.enroll(link, lenaDir, { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees', 'engineering', 'weave-admins'] }), name: 'Lena' });
+    const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', email: 'kofi@acme.example', groups: ['employees'] }) });
     const all = [acme, ceo, lena, kofi];
     // The words wait, sealed, until the company group is here; then they go to the company and are deleted.
     expect(existsSync(join(lenaDir, 'enroll.json'))).toBe(true);
@@ -106,8 +106,8 @@ describe('company accounts', { timeout: 120_000 }, () => {
   it('recovers a company-owned identity on a new computer without showing the words, and freezes it when someone leaves', async () => {
     const acme = await company('acme-recovery');
     const link = await acme.enrollLink();
-    const kofi = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
-    const lena = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'lena@acme', groups: ['employees'] }), name: 'Lena' });
+    const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
+    const lena = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', groups: ['employees'] }), name: 'Lena' });
     const all = [acme, kofi, lena];
     syncAll(all);
     for (const node of [kofi, lena]) await node.reconcile();

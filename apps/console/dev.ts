@@ -41,7 +41,7 @@ const people = [
   { name: 'Sam Ortiz', sub: 'sam', groups: ['employees', 'weave-helpdesk'] },
 ];
 const nodes: WeaveNode[] = [];
-for (const p of people) nodes.push(await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: p.sub, email: `${p.sub}@acme.example`, groups: p.groups }), name: p.name }));
+for (const p of people) nodes.push(await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: p.sub, email: `${p.sub}@acme.example`, groups: p.groups }), name: p.name }));
 const all = [acme, ...nodes];
 sync(all);
 for (const n of nodes) await n.reconcile();

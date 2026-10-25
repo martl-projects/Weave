@@ -40,8 +40,8 @@ async function company(key: string) {
   await acme.createCompany({ name: 'Acme', provider: { kind: 'vault', address: vault.address, key, jwt: { role: 'employees' } }, issuer: oidc.issuer, audience: 'weave', admins: 'weave-admins' });
   await settle();
   const link = await acme.enrollLink();
-  const lena = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'lena@acme', groups: ['employees', 'weave-admins'] }), name: 'Lena' });
-  const kofi = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
+  const lena = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', groups: ['employees', 'weave-admins'] }), name: 'Lena' });
+  const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
   const bob = WeaveNode.init('Bob', dir());
   const all = [acme, lena, kofi, bob];
   syncAll(all);
