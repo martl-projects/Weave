@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { closingUpTo, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_VOTE, tally, type Entry } from '../src/index.ts';
-import { KIND_INVITE_CLOSE } from '../src/index.ts';
+import { boardRulesOf, KIND_BOARD_RULE, KIND_INVITE_CLOSE, KIND_TREASURY_SPLIT, splitOf } from '../src/index.ts';
 import { createIdentity, KIND_INVITE, KIND_JOIN, KIND_MAINTAINER, KIND_REMOVE, KIND_SPACE_CREATE, newSpace, openIn, Replica, sealFor, spaceState, visibleIn, type Inner, type SigningIdentity, type SpaceKind } from '../src/index.ts';
 
 /*
@@ -157,5 +157,28 @@ describe('backdated joins with an expired invite', () => {
     post(late, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(20));
     expect(state().members.has(ana.did)).toBe(true);
     expect(state().members.has(late.did)).toBe(false);
+  });
+});
+
+describe('notice periods dated back', () => {
+  const entry = (who: SigningIdentity, seq: number, kind: string, body: Record<string, unknown>, time: string) =>
+    ({ id: `${who.did}#${seq}`, kind, body, event: { author: who.did, signer: who.did, seq, kind, scope: 'project:x', body: null, time } }) as unknown as Entry;
+  const year = (t: string) => new Date(Date.parse(t) - 365 * 86_400_000).toISOString();
+
+  it("a board rule counts from when this node first saw it, not from the date it claims", () => {
+    const ana = createIdentity();
+    const rule = entry(ana, 1, KIND_BOARD_RULE, { board: 'ideas', keepDays: 1, maxMB: null }, year(at(0)));
+    const rules = boardRulesOf([rule], new Set([ana.did]), () => at(0));
+    expect(rules.get('ideas')?.time).toBe(at(0));
+  });
+
+  it("a split change waits its notice from when this node first saw it, however far back it's dated", () => {
+    const ana = createIdentity();
+    const first = entry(ana, 1, KIND_TREASURY_SPLIT, { preset: 'standard', shares: { makers: 8400, treasury: 1000, community: 500, foundation: 100 } }, at(0));
+    const change = entry(ana, 2, KIND_TREASURY_SPLIT, { preset: 'free', shares: { makers: 10000 } }, year(at(5)));
+    const seen = (e: Entry) => (e === change ? at(5) : e.event.time);
+    const { current, pending } = splitOf([first, change], new Set([ana.did]), new Date(at(10)), seen);
+    expect(current?.preset).toBe('standard');
+    expect(pending?.preset).toBe('free');
   });
 });

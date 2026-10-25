@@ -278,7 +278,7 @@ export function parseShares(value: unknown): SplitShares | undefined {
 }
 
 /** A project's split today, and a changed one still waiting for its notice to pass. Only maintainers' splits count. */
-export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date()): { current?: Split; pending?: Split } {
+export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date(), seenAt: (entry: Entry) => string = (e) => e.event.time): { current?: Split; pending?: Split } {
   const splits: Split[] = [];
   for (const e of entries) {
     if (e.kind !== KIND_TREASURY_SPLIT || !maintainers.has(e.event.author)) continue;
@@ -291,7 +291,9 @@ export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date(
           return isDid(did) && Number.isInteger(share) && (share as number) > 0 ? [{ did, share: share as number }] : [];
         })
       : [];
-    const from = splits.length ? new Date(Date.parse(e.event.time) + SPLIT_NOTICE_DAYS * 86_400_000).toISOString() : e.event.time;
+    // The notice counts from when it was made, as claimed, but never before this node first saw it: a change dated back can't skip it.
+    const seen = seenAt(e) > e.event.time ? seenAt(e) : e.event.time;
+    const from = splits.length ? new Date(Date.parse(seen) + SPLIT_NOTICE_DAYS * 86_400_000).toISOString() : e.event.time;
     splits.push({
       preset: typeof body.preset === 'string' ? body.preset.slice(0, 20) : 'custom',
       shares,

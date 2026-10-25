@@ -31,8 +31,13 @@ export interface BoardRule {
 const field = (body: Json, key: string): unknown => (body && typeof body === 'object' && !Array.isArray(body) ? body[key] : undefined);
 const limit = (value: unknown, max: number): number | null | undefined => (value === null ? null : typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= max ? value : undefined);
 
-/** Each board's latest rule by someone who manages the space; a rule with neither limit is no rule. */
-export function boardRulesOf(entries: Entry[], managers: Set<Did>): Map<string, BoardRule> {
+/**
+ * Each board's latest rule by someone who manages the space; a rule with
+ * neither limit is no rule. A rule's time counts from when it was set, as its
+ * author claims, but never before this node first saw it (`seenAt`): a rule
+ * dated back can't skip the grace before others' posts are forgotten.
+ */
+export function boardRulesOf(entries: Entry[], managers: Set<Did>, seenAt: (entry: Entry) => string = (e) => e.event.time): Map<string, BoardRule> {
   const rules = new Map<string, BoardRule>();
   const sorted = entries.filter((e) => e.kind === KIND_BOARD_RULE && managers.has(e.event.author)).sort((a, b) => a.event.time.localeCompare(b.event.time));
   for (const e of sorted) {
@@ -41,7 +46,10 @@ export function boardRulesOf(entries: Entry[], managers: Set<Did>): Map<string, 
     const maxMB = limit(field(e.body, 'maxMB'), 1_000_000);
     if (!board || keepDays === undefined || maxMB === undefined) continue;
     if (keepDays === null && maxMB === null) rules.delete(board);
-    else rules.set(board, { board, keepDays, maxMB, by: e.event.author, time: e.event.time });
+    else {
+      const seen = seenAt(e);
+      rules.set(board, { board, keepDays, maxMB, by: e.event.author, time: seen > e.event.time ? seen : e.event.time });
+    }
   }
   return rules;
 }

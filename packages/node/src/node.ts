@@ -801,6 +801,8 @@ export class WeaveNode implements Backend {
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
+      // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
+      if (event.kind === KIND_SEALED) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
@@ -1627,7 +1629,7 @@ export class WeaveNode implements Backend {
   /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
   #rotateMonthly(space: StoredSpace): number {
     const state = this.#state(space);
-    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state)).values()].some((r) => r.keepDays)) || !!this.#companyRetention(space)?.maxDays;
+    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companyRetention(space)?.maxDays;
     if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !canManage(state, this.identity.author)) return 0;
     const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
     if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
@@ -2148,7 +2150,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
     const me = this.identity.author;
-    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state));
+    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt);
     return boards
       .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
       .map((b) => {
@@ -4529,7 +4531,7 @@ export class WeaveNode implements Backend {
     const ownerAddresses = owners.map((o) => o.address);
     const address = owners.length ? safeAddress(ownerAddresses, threshold, treasurySaltNonce(space.id)) : undefined;
     const announced = this.#treasuries();
-    const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers) : {};
+    const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers, new Date(this.clock()), this.#seenAt) : {};
     const splitInfo = (split: Split): SplitInfo => ({ ...split, makers: split.makers.map((m) => ({ person: person(m.did), share: m.share })), by: person(split.by) });
     const recipients = current
       ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: announced, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
@@ -4611,6 +4613,25 @@ export class WeaveNode implements Backend {
     const history = this.#walletHistory();
     return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED), (r) => (r.kind === 'wallet' ? history.get(r.address.toLowerCase()) === r.by : !!r.space && this.#manages(r.space, r.by)));
   }
+
+  /** When sealed events arrived in this run. */
+  #arrivals = new Map<string, string>();
+  /**
+   * When this node first saw an event, kept in the home once a notice period
+   * asks: where it must not depend on the date its author claims. Events from
+   * before this run count from when they're first asked about: later, never sooner.
+   */
+  #seen?: Record<string, string>;
+  #seenAt = (entry: { id: string }): string => {
+    const file = joinPath(this.home.dir, 'seen.json');
+    this.#seen ??= readSecretJson<Record<string, string>>(this.home, file) ?? {};
+    let at = this.#seen[entry.id];
+    if (!at) {
+      at = this.#seen[entry.id] = this.#arrivals.get(entry.id) ?? new Date(this.clock()).toISOString();
+      writeSecretJson(this.home, file, this.#seen);
+    }
+    return at;
+  };
 
   /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
   #manages(spaceId: string, did: Did): boolean {
@@ -7647,7 +7668,7 @@ export class WeaveNode implements Backend {
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
-    const rules = boardRulesOf(entries, this.#managers(state));
+    const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
     const around = this.#aroundPosts(entries);
     const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
     const minDays = this.#companyRetention(space)?.minDays;
