@@ -394,6 +394,9 @@ export {
   planSync,
   reposOf,
   type RepoAccess,
+  type RepoCollaborators,
+  REPO_ACCESS,
+  MAX_WRITERS,
   type RepoLink,
   type SyncPlan,
 } from './github.ts';

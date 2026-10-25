@@ -827,10 +827,19 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Link a repository',
       description:
-        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). Members who give the space their GitHub account get read access. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository, which must belong to a GitHub organization (a personal account's repositories can't give read-only access).",
-      inputSchema: { space: z.string(), repo: z.string().describe('owner/name or its github.com link'), board: z.string().optional().describe('In a project: only the readers of this board'), on: z.boolean().default(true) },
+        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). An organization's repository: members who give the space their GitHub account get read access. A personal account's repository can't give read-only access: link it with access none (just linked, nobody gets anything) or write (writers: people in the space personally, never through a group or tier, picked one by one; ask your person whom), or suggest moving it to an organization. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository.",
+      inputSchema: {
+        space: z.string(),
+        repo: z.string().describe('owner/name or its github.com link'),
+        board: z.string().optional().describe('In a project: only the readers of this board (read access only)'),
+        access: z.enum(['read', 'none', 'write']).optional().describe("read for an organization's repository (the default there); none or write for a personal one"),
+        writers: z.array(z.string()).optional().describe('With access write: the people who may write, by name or did'),
+        on: z.boolean().default(true),
+      },
     },
-    run(async ({ space, repo, board, on }: { space: string; repo: string; board?: string; on: boolean }) => backend.linkRepo({ space, repo, board, on, as })),
+    run(async ({ space, repo, board, access, writers, on }: { space: string; repo: string; board?: string; access?: 'read' | 'none' | 'write'; writers?: string[]; on: boolean }) =>
+      backend.linkRepo({ space, repo, board, access, writers, on, as }),
+    ),
   );
 
   server.registerTool(

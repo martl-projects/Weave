@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -211,6 +211,11 @@ export interface RepoInfo {
   url: string;
   /** Only readers of this board, not the whole project. */
   board?: string;
+  /** read: members get read access; none: just linked; write: the people picked (writers) can write. */
+  access: RepoAccess;
+  writers?: Actor[];
+  /** It gives you access, once you give the space your GitHub account. */
+  forYou?: true;
   /** Who linked it; their node invites and removes people. */
   by: Actor;
   /** You linked it: your GitHub sign-in keeps it in step. */
@@ -230,6 +235,8 @@ export interface SpaceRepos {
   missing?: Actor[];
   /** For whoever linked a repo: members and the accounts they gave. */
   accounts?: Array<{ who: Actor; login: string }>;
+  /** For those who may link: the members who may be picked to write (in personally, not through a group or tier). */
+  mayWrite?: Actor[];
 }
 
 /** What to say when someone acts as an agent this node doesn't have (often an MCP server started with an old --as). */
@@ -1490,10 +1497,16 @@ export interface Backend {
   setGithubApp(app: string | null): Promise<GitHubInfo>;
   /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
   githubRepos(): Promise<string[]>;
+  /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
+  githubRepoOwner(repo: string): Promise<'organization' | 'personal'>;
   /** A space's repositories, and whether you gave it your GitHub account. */
   spaceRepos(space: string): Promise<SpaceRepos>;
   /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
-  linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos>;
+  /**
+   * Let a repository follow a space (on: false unlinks it). An organization's: members get read access. A person's:
+   * access none (just linked) or write (writers: people in the space personally, picked one by one).
+   */
+  linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
   shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
@@ -1841,7 +1854,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
+  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

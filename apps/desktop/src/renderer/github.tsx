@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { AppOpen, BoardInfo, GitHubInfo, Profile, SpaceInfo, SpaceRepos } from '@weave/node/client';
+import type { Actor, AppOpen, BoardInfo, GitHubInfo, Profile, RepoInfo, SpaceInfo, SpaceRepos } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { copy, spaceHref } from './posts.tsx';
@@ -244,7 +244,8 @@ function whoSeesIt(data: SpaceRepos, space: SpaceInfo): string {
 export function RepoBanner({ space }: { space: SpaceInfo }) {
   const { data } = useApi(() => api<SpaceRepos>('spaceRepos', space.id).catch(() => undefined), [space.id]);
   const { share, dialog } = useShare(space);
-  const theirs = data?.repos.filter((r) => !r.mine) ?? [];
+  const theirs = data?.repos.filter((r) => r.forYou) ?? [];
+  const writes = theirs.some((r) => r.access === 'write');
   if (!data || data.shared || !theirs.length) return dialog || null;
   return (
     <div className="repo-banner">
@@ -257,7 +258,7 @@ export function RepoBanner({ space }: { space: SpaceInfo }) {
         ) : (
           <>{theirs.length} GitHub repositories</>
         )}{' '}
-        follow{theirs.length === 1 ? 's' : ''} this {space.kind}. Give it your GitHub account to get read access.
+        follow{theirs.length === 1 ? 's' : ''} this {space.kind}. Give it your GitHub account to get {writes ? 'access (you were picked to write)' : 'read access'}.
         <div className="small muted">{whoSeesIt(data, space)}</div>
       </span>
       <AsyncButton className="default" onClick={share}>
@@ -303,7 +304,7 @@ export function startAppOpens(): void {
 /** In a space's settings: its repositories, linking more (owner, maintainers), and your account. */
 export function RepoSettings({ space }: { space: SpaceInfo }) {
   const { data } = useApi(() => api<SpaceRepos>('spaceRepos', space.id), [space.id]);
-  const [linking, setLinking] = useState<false | { repo?: string }>(false);
+  const [linking, setLinking] = useState<false | { repo?: string; link?: RepoInfo }>(false);
   // An agent asked for this space's link dialog: open it, with its repository.
   const wanted = useSyncExternalStore(subscribeLink, () => wantedLink);
   useEffect(() => {
@@ -324,10 +325,13 @@ export function RepoSettings({ space }: { space: SpaceInfo }) {
               {r.repo}
             </a>
             {r.board && <span className="small muted"> · readers of {r.board}</span>}
+            {r.access === 'none' && <span className="small muted"> · linked only, nobody gets access</span>}
+            {r.access === 'write' && <span className="small muted"> · can write: {(r.writers ?? []).map((w) => w.name ?? shortDid(w.did)).join(', ')}</span>}
             <span className="small muted"> · linked by {r.mine ? 'you' : (r.by.name ?? shortDid(r.by.did))}</span>
             {r.mine && r.synced && !r.problem && <span className="small muted"> · in step {ago(r.synced)}</span>}
             {r.problem && <div className="small error-text">{r.problem}</div>}
           </span>
+          {r.mine && r.access === 'write' && <button onClick={() => setLinking({ repo: r.repo, link: r })}>Who can write…</button>}
           {(r.mine || data.canLink) && (
             <AsyncButton onClick={async () => (await ask(`Unlink ${r.repo}? Access Weave gave is taken back${r.mine ? '' : ' (by whoever linked it)'}.`, 'Unlink')) && attempt(() => api('linkRepo', { space: space.id, repo: r.repo, on: false }).then(bump), `${r.repo} unlinked`)}>
               Unlink
@@ -359,19 +363,38 @@ export function RepoSettings({ space }: { space: SpaceInfo }) {
           <button onClick={() => setLinking({})}>Link a repository…</button>
         </div>
       )}
-      {linking && <LinkRepoDialog space={space} initialRepo={linking.repo} onClose={() => setLinking(false)} />}
+      {linking && <LinkRepoDialog space={space} initialRepo={linking.repo} link={linking.link} mayWrite={data.mayWrite ?? []} onClose={() => setLinking(false)} />}
       {dialog}
     </fieldset>
   );
 }
 
-function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; initialRepo?: string; onClose(): void }) {
+/** Where a person's repository can move to give all members read access: a new (free) organization, and the repository's Transfer. */
+function MoveToOrganization({ repo }: { repo: string }) {
+  return (
+    <p className="small">
+      For read access for everyone in it, move the repository to a GitHub organization:{' '}
+      <a href="https://github.com/account/organizations/new" target="_blank" rel="noopener noreferrer">
+        create one
+      </a>{' '}
+      (free), then{' '}
+      <a href={`https://github.com/${repo}/settings`} target="_blank" rel="noopener noreferrer">
+        transfer it
+      </a>{' '}
+      (Settings → Danger Zone → Transfer), add it to the app there and link it again. Issues, stars and links come along; Pages addresses, package names (ghcr.io/…) and your local remotes change.
+    </p>
+  );
+}
+
+function LinkRepoDialog({ space, initialRepo, link, mayWrite, onClose }: { space: SpaceInfo; initialRepo?: string; link?: RepoInfo; mayWrite: Actor[]; onClose(): void }) {
   const { data: github, reload } = useApi(() => api<GitHubInfo>('github'), []);
   const { data: repos, error, reload: reloadRepos } = useApi(() => (github?.login ? api<string[]>('githubRepos') : Promise.resolve(undefined)), [github?.login]);
   const { data: boards } = useApi(() => (space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
   const [repo, setRepo] = useState(initialRepo ?? '');
   const [board, setBoard] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [access, setAccess] = useState<'none' | 'write'>(link?.access === 'write' ? 'write' : 'none');
+  const [writers, setWriters] = useState<string[]>(link?.writers?.map((w) => w.did) ?? []);
   // Coming back from GitHub (after adding a repository to the app): look again.
   useEffect(() => {
     window.addEventListener('focus', reloadRepos);
@@ -380,6 +403,10 @@ function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; ini
   const known = (r: string) => repos?.find((x) => x.toLowerCase() === r.toLowerCase());
   const missing = repo && repos && !known(repo) ? repo : undefined;
   const chosen = (repo && known(repo)) || (missing ? '' : repos?.[0]) || '';
+  // A person's repository can't give read-only access: link it only, or let people picked one by one write.
+  const { data: owner } = useApi(() => (chosen ? api<'organization' | 'personal'>('githubRepoOwner', chosen) : Promise.resolve(undefined)), [chosen]);
+  const personal = owner === 'personal';
+  const pick = (did: string, on: boolean) => setWriters((list) => (on ? [...list, did] : list.filter((d) => d !== did)));
 
   if (github && !github.login)
     return connecting ? (
@@ -405,7 +432,8 @@ function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; ini
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          const done = await attempt(() => api('linkRepo', { space: space.id, repo: chosen, board: board || undefined, on: true }).then(bump), `${chosen} now follows ${space.name}`);
+          const how = personal ? { access, ...(access === 'write' ? { writers } : {}) } : { board: board || undefined };
+          const done = await attempt(() => api('linkRepo', { space: space.id, repo: chosen, ...how, on: true }).then(bump), link ? `Who can write to ${chosen} changed` : `${chosen} now follows ${space.name}`);
           if (done !== undefined) onClose();
         }}
       >
@@ -451,7 +479,33 @@ function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; ini
                 (Only select repositories, then tick it).
               </span>
             </div>
-            {space.kind === 'project' && boards && boards.length > 0 && (
+            {personal && (
+              <div className="field-row-stacked">
+                <label>{chosen} is yours, not an organization's: GitHub gives its collaborators write access, never read-only.</label>
+                <div className="field-row">
+                  <input type="radio" id="repo-none" checked={access === 'none'} onChange={() => setAccess('none')} />
+                  <label htmlFor="repo-none">Link it only: it shows here, and Weave gives nobody access. You add people on GitHub yourself.</label>
+                </div>
+                <div className="field-row">
+                  <input type="radio" id="repo-write" checked={access === 'write'} onChange={() => setAccess('write')} />
+                  <label htmlFor="repo-write">Let people I pick write to it: push, delete branches, close issues.</label>
+                </div>
+                {access === 'write' && (
+                  <div className="sunken" style={{ padding: 6 }}>
+                    {mayWrite.length === 0 && <p className="small">Nobody to pick yet: only people in {space.name} personally can write, not those in through a group or tier. Invite them personally first.</p>}
+                    {mayWrite.map((m) => (
+                      <div className="field-row" key={m.did}>
+                        <input type="checkbox" id={`writer-${m.did}`} checked={writers.includes(m.did)} onChange={(e) => pick(m.did, e.target.checked)} />
+                        <label htmlFor={`writer-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
+                      </div>
+                    ))}
+                    <p className="small muted">Only people in {space.name} personally, never through a group or tier: nobody gets write access by joining something. They get an invitation once they give {space.name} their GitHub account; leaving, or unticking them here, takes it back.</p>
+                  </div>
+                )}
+                <MoveToOrganization repo={chosen} />
+              </div>
+            )}
+            {!personal && space.kind === 'project' && boards && boards.length > 0 && (
               <div className="field-row-stacked">
                 <label>Who gets access</label>
                 <select value={board} onChange={(e) => setBoard(e.target.value)}>
@@ -464,7 +518,7 @@ function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; ini
                 </select>
               </div>
             )}
-            <p className="small">Members who give their GitHub account get read access and an invitation from GitHub. When they leave, Weave takes it back. People you added on GitHub yourself stay.</p>
+            {!personal && <p className="small">Members who give their GitHub account get read access and an invitation from GitHub. When they leave, Weave takes it back. People you added on GitHub yourself stay.</p>}
             <AppTrust github={github} />
           </>
         )}
@@ -472,8 +526,8 @@ function LinkRepoDialog({ space, initialRepo, onClose }: { space: SpaceInfo; ini
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="default" disabled={!chosen}>
-            Link
+          <button className="default" disabled={!chosen || !owner || (personal && access === 'write' && writers.length === 0)}>
+            {link ? 'Save' : 'Link'}
           </button>
         </div>
       </form>

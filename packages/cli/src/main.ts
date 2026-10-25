@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { formatUnits, isAddress, parseUnits, TEST_USDC } from '@weave/core';
+import { formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -194,6 +194,7 @@ github — repositories that follow a group, tier or project (members who give t
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
+                             a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
   repo unlink <space> <owner/name>   stop it (access Weave gave is taken back)
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
@@ -422,6 +423,8 @@ const { values, positionals } = parseArgs({
     symbol: { type: 'string' },
     ref: { type: 'string' },
     personal: { type: 'string' },
+    access: { type: 'string' },
+    writers: { type: 'string' },
     name: { type: 'string' },
     'id-token': { type: 'string' },
     'client-id': { type: 'string' },
@@ -1349,7 +1352,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const b = await backend();
       const show = (r: SpaceRepos) =>
         [
-          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
+          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}${x.access === 'none' ? ' (linked only)' : x.access === 'write' ? ` (can write: ${(x.writers ?? []).map(actor).join(', ')})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
           r.repos.length ? '' : '(no repositories)',
           r.shared ? `you gave it your GitHub account ${r.shared}` : r.repos.length ? 'you haven\'t given it your GitHub account (weave github share)' : '',
           r.missing?.length ? `without a GitHub account here: ${r.missing.map(actor).join(', ')}` : '',
@@ -1361,10 +1364,12 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(r, () => show(r));
       }
       if ((sub === 'link' || sub === 'unlink') && ref && repo) {
-        const r = await b.linkRepo({ space: ref, repo, board: values.board, on: sub === 'link' });
+        const access = values.access as RepoAccess | undefined;
+        const writers = values.writers?.split(',').map((w) => w.trim()).filter(Boolean);
+        const r = await b.linkRepo({ space: ref, repo, board: values.board, ...(access ? { access } : {}), ...(writers ? { writers } : {}), on: sub === 'link' });
         return out(r, () => show(r));
       }
-      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] | repo unlink <space> <owner/name>');
+      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] [--access none|write --writers <who,…>] | repo unlink <space> <owner/name>');
     }
 
     case 'home': {
