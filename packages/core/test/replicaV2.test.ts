@@ -188,3 +188,38 @@ describe('peer input that can\'t be read (KixI_JwE)', () => {
     expect(other.ingest({ e: event, b: { x: Number.POSITIVE_INFINITY } }).status).not.toBe('accepted');
   });
 });
+
+describe("a revoked key can't fill numbers it left unused (KgmsMa_g)", () => {
+  it('neither delegates an agent nor posts at a gap below its cutoff, once the revocation names where it saw the key', () => {
+    const { root, laptop, replica } = person();
+    const other = new Replica();
+    const passOnly = (from: Replica, to: Replica, scope: string) => from.events().filter((r) => r.scope !== scope).forEach((r) => to.ingest(r));
+    replica.append2(laptop, { kind: 'weave.post', space: 'public', body: { title: 'one' } });
+    replica.append2(laptop, { kind: 'weave.post', space: 'group:chess', body: { title: 'elsewhere' } });
+    replica.append2(laptop, { kind: 'weave.post', space: 'group:chess', body: { title: 'elsewhere too' } });
+    replica.append2(laptop, { kind: 'weave.post', space: 'public', body: { title: 'two' } });
+    passOnly(replica, other, 'group:chess');
+    const gaps = replica.events((r) => r.scope === 'group:chess').map((r) => r.seq);
+    expect(gaps.every((n) => !other.store.byNumber(laptop.did, n))).toBe(true);
+    // The owner revokes the laptop after its last event, naming where it saw it.
+    const held = other.events((r) => r.signer === laptop.did && r.scope === 'public' && r.v === 2);
+    const heads = { public: { c: other.store.chainHead(laptop.did, 'public')?.seq ?? 0, s: other.store.contentCount(laptop.did, 'public'), f: Math.min(...held.map((r) => r.seq)) } };
+    replica.append(root, revocation(laptop.did, other.number(laptop.did), heads));
+    passOnly(replica, other, 'group:chess');
+
+    // A thief with the laptop: an agent delegated at a gap number, posts at the other.
+    const agent = createSubKey(root.did);
+    const del = signControlEventV2(laptop, other.store.chainHead(laptop.did, 'public'), { n: gaps[0], kind: 'weave.delegate', space: 'public', body: { subject: agent.did, role: 'agent', permissions: ['*'] } });
+    expect(other.ingest({ e: del })).toMatchObject({ status: 'rejected', reason: 'signer revoked' });
+    expect(other.authority.grant(agent.did)).toBeUndefined();
+    const numbered = signContentEventV2(laptop, { n: gaps[1], cs: heads.public.s + 1, kind: 'weave.post', space: 'public', body: { title: 'as the victim' } });
+    expect(other.ingest({ e: numbered.event, b: numbered.body })).toMatchObject({ status: 'rejected', reason: 'signer revoked' });
+    const unnumbered = signContentEventV2(laptop, { n: gaps[1], kind: 'weave.post', space: 'public', body: { title: 'as the victim, unnumbered' } });
+    expect(other.ingest({ e: unnumbered.event, b: unnumbered.body })).toMatchObject({ status: 'rejected', reason: 'signer revoked' });
+    // What it really wrote before stays.
+    expect(other.events((r) => r.signer === laptop.did && r.scope === 'public').length).toBe(2);
+    // And its events in the space the revocation didn't see (the owner never held them) count for nothing.
+    passOnly(replica, other, 'nothing');
+    expect(other.eventsBy(laptop.did).filter((r) => r.scope === 'group:chess')).toEqual([]);
+  });
+});
