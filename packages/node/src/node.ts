@@ -4720,8 +4720,17 @@ export class WeaveNode implements Backend {
     const announced = this.#treasuries();
     const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers, new Date(this.clock()), this.#seenAt) : {};
     const splitInfo = (split: Split): SplitInfo => ({ ...split, makers: split.makers.map((m) => ({ person: person(m.did), share: m.share })), by: person(split.by) });
+    // A space this node holds pays its treasury as computed here from its maintainers' wallets, never as someone announced it (7iriYk4C).
+    const paid = new Map(announced);
+    for (const id of [current?.community, WEAVE_FOUNDATION_PROJECT]) {
+      const held = id ? this.#spaces.get(id) : undefined;
+      if (!id || !held) continue;
+      const own = this.#treasuryAddressOf(held);
+      if (own) paid.set(id, { space: id, kind: held.kind === 'community' ? 'community' : 'project', address: own, owners: [], threshold: 0, by: this.identity.author, time: '', consistent: true });
+      else paid.delete(id);
+    }
     const recipients = current
-      ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: announced, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
+      ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: paid, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
       : undefined;
     const allocations = recipients && splitAllocations(recipients);
     const recipientName = (r: { kind: string; id: string }) => (r.kind === 'person' ? this.nameOf(r.id as Did) : r.kind === 'foundation' ? 'Weave Foundation' : this.#spaces.get(r.id)?.name);

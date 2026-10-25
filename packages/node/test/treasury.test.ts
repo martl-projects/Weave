@@ -5,7 +5,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { afterAll, describe, expect, it } from 'vitest';
-import { checksumAddress, contractWalletCheck, EIP1271_MAGIC, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
+import { checksumAddress, contractWalletCheck, EIP1271_MAGIC, KIND_TREASURY, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -481,5 +481,43 @@ describe("someone else's show id", () => {
     expect((await bob.paymentRequest({ show: show.id, creator: martin.identity.author })).to).toBe(show.safe.address);
     // Martin's own lookups find his.
     expect((await martin.cancelShow(show.id)).host.did).toBe(martin.identity.author);
+  });
+});
+
+describe("someone else's treasury for a space (7iriYk4C)", () => {
+  it("pays a held community's treasury as computed here: neither a stranger's nor a moderator's own Safe", async () => {
+    const [alice, mallory] = [person('Alice'), person('Mallory')];
+    const both = () => {
+      for (let round = 0; round < 2; round++) {
+        sync(alice, mallory);
+        sync(mallory, alice);
+      }
+    };
+    const w = wallet();
+    await alice.linkWallet({ address: w.address, proof: w.sign(await alice.walletMessage(w.address)) });
+    await alice.createProject({ name: 'P' });
+    const c = await alice.createCommunity({ name: 'C' });
+    await alice.announceTreasury('C');
+    const own = (await alice.treasury('C')).address!;
+    await alice.setSplit({ project: 'P', preset: 'community', community: 'C' });
+    const community = async () => (await alice.treasury('P')).recipients!.find((r) => r.part === 'community')!.address;
+    expect(await community()).toBe(own);
+    // A stranger announces a Safe of her own for C, consistent by construction.
+    const mw = wallet();
+    const safe = safeAddress([mw.address], 1, treasurySaltNonce(c.id));
+    const announce = () => mallory.replica.write(mallory.identity, { kind: KIND_TREASURY, body: { space: c.id, kind: 'community', address: safe, owners: [mw.address], threshold: 1 } });
+    both();
+    announce();
+    both();
+    expect(await community()).toBe(own);
+    // As a moderator of C, later than Alice: still not what Alice's project pays.
+    await mallory.joinSpace(await alice.invite('C'));
+    both();
+    await alice.setModerator({ community: 'C', who: 'Mallory', on: true });
+    both();
+    announce();
+    both();
+    expect(await community()).not.toBe(safe);
+    expect((await alice.treasury('P')).allocations!.some((a) => a.address.toLowerCase() === safe.toLowerCase())).toBe(false);
   });
 });
