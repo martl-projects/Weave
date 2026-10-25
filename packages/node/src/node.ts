@@ -1465,14 +1465,23 @@ export class WeaveNode implements Backend {
    * newcomers read stays near 30 days. Rotating is for those who manage the
    * space (only their new keys count).
    */
+  /** Does letting someone in now need a fresh key, so they don't read what came before (history joining, or 30d with an older key)? */
+  #needsFreshKey(space: StoredSpace, state: SpaceState = this.#state(space)): boolean {
+    const history = state.history?.value ?? 'all';
+    const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
+    return history === 'joining' || (history === '30d' && start < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString());
+  }
+
   #keysForNewcomers(space: StoredSpace): SpaceKeys {
     const state = this.#state(space);
     const history = state.history?.value ?? 'all';
     const starts = this.#epochStarts(space);
-    const current = currentEpoch(space);
-    const old = (starts.get(current) ?? '') < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-    // Only a manager's new key counts for the others; a group member inviting hands over what the setting allows without one.
-    if (canManage(state, this.identity.author) && (history === 'joining' || (history === '30d' && old))) {
+    // Only a manager's new key counts for the others (T3a83nLy): when one is needed, nobody else lets people in, or they'd read it all.
+    const fresh = this.#needsFreshKey(space, state);
+    if (fresh && !canManage(state, this.identity.author)) {
+      throw new Error(`${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
+    }
+    if (fresh) {
       this.#rotateKey(space);
       starts.set(currentEpoch(space), new Date().toISOString());
     }
@@ -7740,6 +7749,8 @@ export class WeaveNode implements Backend {
   /** Record admissions into a project and hand the newcomers its keys through the group they came by. */
   #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
     if (!dids.length) return;
+    // Letting them in would need a new key we can't give: someone who manages the project does it.
+    if (!canManage(this.#state(project), this.identity.author) && this.#needsFreshKey(project)) return;
     for (const member of dids) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
     this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }

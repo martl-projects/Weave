@@ -442,3 +442,27 @@ describe('removed means out until someone who could remove asks you back (_Ak3UU
     expect(read).not.toContain('after removing Kofi');
   });
 });
+
+describe("history 'joining' holds when a plain member would invite (T3a83nLy)", () => {
+  it("a plain member's link isn't made; the owner's is, with a fresh key", async () => {
+    const [martin, lena, kofi] = [person('Martin'), person('Lena'), person('Kofi')];
+    const all = [martin, lena, kofi];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    await martin.createGroup('Synth friends');
+    await lena.joinSpace(await martin.invite('Synth friends'));
+    syncAll();
+    await martin.setHistory({ space: 'Synth friends', history: 'joining' });
+    await martin.say({ space: 'Synth friends', text: 'before Kofi' });
+    syncAll();
+    await expect(lena.invite('Synth friends')).rejects.toThrow(/only those who manage it/);
+    await kofi.joinSpace(await martin.invite('Synth friends'));
+    syncAll();
+    await martin.say({ space: 'Synth friends', text: 'after Kofi' });
+    syncAll();
+    const texts = (await kofi.messages('Synth friends')).map((m) => m.text);
+    expect(texts).toContain('after Kofi');
+    expect(texts).not.toContain('before Kofi');
+  });
+});
