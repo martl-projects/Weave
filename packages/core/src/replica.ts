@@ -1,10 +1,25 @@
 import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_ORG_FREEZE, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
-import type { Json } from './bytes.ts';
+import { canonicalJson, type Json } from './bytes.ts';
 import { eventId, isWellFormedEvent, signEvent, verifyEventSignature, type EventFields, type SigningIdentity, type WeaveEvent } from './events.ts';
-import { bodyMatches, canonicalIdV2, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
+import { bodyHash, bodyMatches, canonicalIdV2, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
 import type { Did } from './keys.ts';
 import { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
 import { MemoryStore, type LogStore, type StoredV2 } from './store.ts';
+
+/**
+ * Does a v2 event restate this v1 event, as a key re-signing its own history
+ * does: same author, number, time, kind, space (or public, for scopes v2 doesn't
+ * know) and body? Only then may it carry the v1 event's id.
+ */
+function restatesV1(v1: WeaveEvent, e: EventV2): boolean {
+  const space = /^(public|self|[a-z]+:[A-Za-z0-9_-]{1,64})$/.test(v1.scope) ? v1.scope : 'public';
+  if (v1.author !== e.author || v1.seq !== e.n || v1.time !== e.time || v1.kind !== e.kind || space !== e.space) return false;
+  try {
+    return e.class === 'content' ? bodyHash(v1.body) === e.body : canonicalJson(v1.body) === canonicalJson((e as { body?: Json }).body ?? null);
+  } catch {
+    return false;
+  }
+}
 
 export type IngestResult =
   | { status: 'accepted' }
@@ -228,7 +243,11 @@ export class Replica {
       return { status: 'duplicate' };
     }
     const v1 = this.store.get(event.signer, event.n);
-    if (v1 && event.was !== eventId(v1)) return this.#fork(event.signer);
+    if (event.was !== undefined) {
+      // `was` lets a key re-sign its own v1 event under its old id, and nothing else: it waits for that event, and must restate it.
+      if (!v1) return this.#park(`v2 ${ownId}`, wireItem(event, goodBody), 'was: waiting for the v1 event it restates');
+      if (event.was !== eventId(v1) || !restatesV1(v1, event)) return { status: 'rejected', reason: "was names an event it doesn't restate" };
+    } else if (v1) return this.#fork(event.signer);
     const id = canonicalIdV2(event);
     // Another event already answers to this id (a `was` naming another key's event).
     if (this.store.get2(id)) return { status: 'rejected', reason: 'id already taken' };

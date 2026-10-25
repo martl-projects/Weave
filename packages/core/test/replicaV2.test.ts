@@ -5,6 +5,7 @@ import {
   createSubKey,
   delegation,
   eventId,
+  eventIdV2,
   inception,
   Replica,
   revocation,
@@ -113,18 +114,34 @@ describe('v2 events in the replica', () => {
     const posts = replica.events((r) => r.kind === 'weave.post');
     expect(posts.map((r) => [r.v, r.id])).toEqual([[2, eventId(v1)]]);
     expect(replica.forks.size).toBe(0);
-    // And in the other order: the v2 one first, then the v1 event it re-signs.
+    // And in the other order: the v2 one first waits for the v1 event it re-signs, then takes its place.
     const { laptop: l2, replica: r2 } = person();
     const early = r2.append(l2, { kind: 'weave.post', body: { title: 'x' } });
     const fresh = new Replica();
     for (const r of r2.events((r) => r.kind !== 'weave.post')) fresh.ingest(r);
-    const again = signContentEventV2(l2, { n: early.seq, kind: 'weave.post', space: 'public', body: { title: 'x' }, was: eventId(early) });
-    expect(fresh.ingest({ e: again.event, b: again.body }).status).toBe('accepted');
+    const again = signContentEventV2(l2, { n: early.seq, kind: 'weave.post', space: 'public', body: { title: 'x' }, time: early.time, was: eventId(early) });
+    expect(fresh.ingest({ e: again.event, b: again.body }).status).toBe('pending');
     expect(fresh.ingest(early).status).toBe('accepted');
     expect(fresh.events((r) => r.kind === 'weave.post').map((r) => r.v)).toEqual([2]);
-    // A `was` that names an id another event already holds.
+    // A `was` at another number names no v1 event of this key there: it waits, and takes nothing.
     const thief = signContentEventV2(l2, { n: 9, kind: 'weave.post', space: 'public', body: {}, was: eventId(early) });
-    expect(fresh.ingest({ e: thief.event, b: thief.body })).toEqual({ status: 'rejected', reason: 'id already taken' });
+    expect(fresh.ingest({ e: thief.event, b: thief.body }).status).toBe('pending');
+    expect(fresh.events((r) => r.id === eventId(early)).map((r) => r.body)).toEqual([{ title: 'x' }]);
+    // Re-signing its own v1 event with another body, kind or space is refused: a rewrite isn't a restatement.
+    const rewrite = signContentEventV2(l2, { n: early.seq, kind: 'weave.msg', space: 'public', body: { text: 'rewritten' }, time: early.time, was: eventId(early) });
+    expect(fresh.ingest({ e: rewrite.event, b: rewrite.body }).status).not.toBe('accepted');
+  });
+
+  it("doesn't let another key take an event's id with was (94YOOwAC)", () => {
+    const victim = person();
+    const other = new Replica();
+    for (const r of victim.replica.events()) other.ingest(r);
+    const real = signContentEventV2(victim.laptop, { n: 3, kind: 'weave.post', space: 'public', body: { text: 'mine' } });
+    const attacker = createIdentity();
+    const squat = signContentEventV2(attacker, { n: 1, kind: 'weave.post', space: 'public', body: { text: 'squat' }, was: eventIdV2(real.event) });
+    expect(other.ingest({ e: squat.event, b: squat.body }).status).not.toBe('accepted');
+    expect(other.ingest({ e: real.event, b: real.body }).status).toBe('accepted');
+    expect(other.record2(eventIdV2(real.event))?.author).toBe(victim.laptop.author);
   });
 
   it('voids a revoked key’s v2 events after the cutoff, by number', () => {
