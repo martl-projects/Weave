@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { KIND_BADGE, KIND_BADGE_NOTE, KIND_BADGE_SERIES, KIND_BADGE_TRANSFER } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
@@ -236,5 +236,22 @@ describe('badges', () => {
     // A badge without one has none; a note too long is refused.
     expect((await martin.giveBadge({ series: 'Super Supporter', who: 'Ada' })).personal).toBeUndefined();
     await expect(martin.giveBadge({ series: 'Super Supporter', who: 'Ada', personal: 'x'.repeat(2001) })).rejects.toThrow(/at most 2000/);
+  });
+
+  it('tells you when someone gives you a badge, with a way to your hub', async () => {
+    const { martin, lena } = await setup();
+    const items: Array<{ kind: string; notice?: { type: string; title: string; text: string; open: unknown } }> = [];
+    const stop = new AbortController();
+    const watching = lena.watch((item) => items.push(item), stop.signal);
+    const badge = await martin.giveBadge({ series: 'Super Supporter', who: 'Lena', note: 'One of the first', personal: 'Thank you, Lena.' });
+    await martin.giveBadge({ series: 'Super Supporter', who: 'Ada' });
+    sync(martin, lena);
+    await vi.waitFor(() => expect(items.some((i) => i.notice)).toBe(true));
+    const notices = items.filter((i) => i.notice).map((i) => i.notice);
+    // Only hers: Ada's badge is no news to Lena.
+    expect(notices).toEqual([{ type: 'badge', category: 'activity', title: 'Martin gave you 🌟 Super Supporter #1 of 3', text: '“One of the first” With a personal note for you.', open: { hub: lena.identity.author } }]);
+    expect(badge.n).toBe(1);
+    stop.abort();
+    await watching;
   });
 });

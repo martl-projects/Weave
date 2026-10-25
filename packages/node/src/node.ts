@@ -5475,6 +5475,16 @@ export class WeaveNode implements Backend {
       const knock = (await this.knocks()).find((k) => k.id === item.id);
       if (knock) return { type: 'knock', category: 'requests', title: `${knock.name ?? who} asks to join ${knock.space.name}`, text: snippet(knock.note), open: { inbox: true } };
     }
+    // A badge given or passed on to you: it shows on your hub, with its personal note if it has one.
+    if ((item.kind === KIND_BADGE || item.kind === KIND_BADGE_TRANSFER) && body.to === me) {
+      const badge = this.#allBadges().badges.find((b) => b.id === (item.kind === KIND_BADGE ? item.id : body.badge));
+      if (!badge || badge.invalid || badge.holder !== me) return undefined;
+      const series = this.#allBadges().series.find((s) => s.id === badge.series);
+      if (!series || series.broken) return undefined;
+      const name = `${series.symbol ? `${series.symbol} ` : ''}${series.name} #${badge.n}${series.limit ? ` of ${series.limit}` : ''}`;
+      const text = item.kind === KIND_BADGE ? [badge.note ? `“${badge.note}”` : '', badge.personal ? 'With a personal note for you.' : ''].filter(Boolean).join(' ') : '';
+      return { type: 'badge', category: 'activity', title: item.kind === KIND_BADGE ? `${who} gave you ${name}` : `${who} passed ${name} on to you`, text: snippet(text), open: { hub: me } };
+    }
     if (item.kind === KIND_MEMBERSHIP_REQUEST) {
       const request = (await this.membershipRequests()).find((r) => r.id === item.id);
       if (request) return { type: 'membership', category: 'requests', title: `${request.name ?? who} asks for ${request.tier.name}`, text: snippet(request.note), open: { inbox: true } };

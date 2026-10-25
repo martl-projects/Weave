@@ -86,7 +86,7 @@ function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
   const picture = useBlobUrl(badge.series.image);
   const publish = (on: boolean) => attempt(() => api('publishBadgeNote', { badge: badge.id, on }), on ? 'Published: everyone can read it now' : 'Taken back');
   return (
-    <Modal title={`${badge.series.symbol ? `${badge.series.symbol} ` : ''}${badge.series.name} #${badge.n}`} onClose={onClose}>
+    <Modal title={`${badge.series.symbol ? `${badge.series.symbol} ` : ''}${badge.series.name} #${badge.n}${badge.series.limit ? ` of ${badge.series.limit}` : ''}`} onClose={onClose}>
       {picture && <img className="badge-picture" src={picture} alt={badge.series.name} width={128} height={128} />}
       <p className="small muted">
         {badge.series.limit ? `Number ${badge.n} of ${badge.series.limit}` : `Number ${badge.n}`}
@@ -104,6 +104,35 @@ function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
         </fieldset>
       )}
     </Modal>
+  );
+}
+
+/** Every badge someone holds, on their hub: big, with what each is and who gave it; a click shows it in full. */
+export function HubBadges({ did, me, name }: { did: string; me: boolean; name: string }) {
+  const badges = useHeldBadges(did);
+  if (!badges.length) return null;
+  return (
+    <section className="space-box">
+      <h3>{me ? 'My badges' : `${name}'s badges`}</h3>
+      <div className="hub-badges">
+        {badges.map((b) => (
+          <div className="hub-badge" key={b.id} title={badgeTitle(b)}>
+            <BadgeMark badge={b} size={40} />
+            <div>
+              <b>
+                {b.series.name} #{b.n}
+                {b.series.limit ? ` of ${b.series.limit}` : ''}
+              </b>
+              <div className="small muted">
+                from {b.issuer.name ?? 'its issuer'}
+                {b.series.project ? ` · ${b.series.project.name}` : ''}
+                {me && b.personal && !b.personal.published ? ' · a personal note for you' : ''}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
