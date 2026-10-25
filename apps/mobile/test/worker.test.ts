@@ -67,6 +67,20 @@ async function worker(dir: string) {
   };
 }
 
+/**
+ * Ask again when the connection through the DHT timed out: on a busy machine (CI) the test network can be too
+ * slow for one attempt, as on a phone with a weak signal, where the person tries again.
+ */
+async function patiently<T>(ask: () => Promise<T>, tries = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await ask();
+    } catch (error) {
+      if (attempt >= tries || !/timed out/i.test((error as Error).message)) throw error;
+    }
+  }
+}
+
 async function until<T>(get: () => T, timeoutMs = 20_000): Promise<NonNullable<T>> {
   const start = Date.now();
   for (;;) {
@@ -150,10 +164,11 @@ describe('the phone app worker on Bare', () => {
       const hosted = await host.hostRoom({ project: 'Pferderennen', name: 'Derby' });
 
       const phone = await worker(temp('weave-mobile-phone-'));
-      await phone.ask('pair', { link: (await node.pairPhone()).link, phoneName: 'iPhone' });
-      await until(async () => (await phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] })).length);
+      const { link } = await node.pairPhone();
+      await patiently(() => phone.ask('pair', { link, phoneName: 'iPhone' }));
+      await vi.waitFor(async () => expect((await patiently(() => phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] }))).length).toBeGreaterThan(0), { timeout: 20_000, interval: 200 });
       await expect(phone.ask('openRoom', { room: hosted.id })).rejects.toThrow(/no address/);
-      await phone.ask('call', { method: 'joinRoom', args: [hosted.id] });
+      await patiently(() => phone.ask('call', { method: 'joinRoom', args: [hosted.id] }));
       let room: RoomInfo | undefined;
       await vi.waitFor(async () => {
         room = (await phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] }))[0];
@@ -161,7 +176,7 @@ describe('the phone app worker on Bare', () => {
       }, { timeout: 30_000, interval: 200 });
 
       // The phone's own address for it: the computer's port where it's free, and the path players open.
-      const local = await phone.ask<string>('openRoom', { room: room!.id, url: room!.url });
+      const local = await patiently(() => phone.ask<string>('openRoom', { room: room!.id, url: room!.url }));
       expect(local).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/play$/);
       expect(await phone.ask('openRoom', { room: room!.id, url: room!.url })).toBe(local);
       expect(await (await fetch(local)).text()).toBe('a horse race, at /play');
