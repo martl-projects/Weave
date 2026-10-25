@@ -82,7 +82,7 @@ A company's own projects and groups are its company spaces.
 
   init <name>                create your identity; shows your 24 recovery words once, and applies
                              weave.bundle.json (contacts and free tiers the app ships with) unless --bare
-  enroll <link> --id-token <token> [--name <name>]
+  enroll <link> [--name <name>]
                              set up a company account: the company holds it and its recovery (no words shown)
   recover-request / recover <answer>   a company account on a new computer: ask, then set up from the company's answer
   restore                    set up this computer as another device of your identity, from your recovery words
@@ -1930,7 +1930,7 @@ ${postLine(p)}`);
       }
       if (!space) throw new Error('usage: weave sso <space> <id token>');
       await b.signIn({ space, idToken: token });
-      return out({ ok: true }, () => `signed in to ${space}: the company's attestor vouches for you once it has checked it`);
+      return out({ ok: true }, () => `handed in for ${space}: a token from elsewhere only renews a sign-in the company vouches for already (a first one goes through "weave sso", in the browser)`);
     }
 
     case 'audit': {
@@ -1959,7 +1959,7 @@ ${postLine(p)}`);
       // The company's link from the computer's managed settings, unless one is given.
       const link = args[0] ?? machinePolicy().enroll;
       const idToken = values['id-token'] ?? process.env.WEAVE_ID_TOKEN;
-      if (!link) throw new Error('usage: weave enroll <enrollment link> [--name <name>]   (signs in with your company account in the browser; or --id-token <token>)');
+      if (!link) throw new Error('usage: weave enroll <enrollment link> [--name <name>]   (signs in with your company account in the browser)');
       const node = await WeaveNode.enroll(link, home.dir, {
         ...(idToken ? { idToken } : {}),
         ...(values.name ? { name: values.name } : {}),
@@ -2027,7 +2027,7 @@ ${postLine(p)}`);
         }
         case 'link': {
           const link = await b.enrollLink(values.days ? { days: Number(values.days) } : {});
-          return out({ link }, () => `for a new colleague (weave enroll <link> --id-token <their sign-in>):\n${link}`);
+          return out({ link }, () => `for a new colleague (weave enroll <link>):\n${link}`);
         }
         case 'invite': {
           if (!rest[0]) throw new Error('usage: weave company invite <email> [--days n]');
