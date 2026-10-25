@@ -731,7 +731,9 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map(), left: new Set() };
   /** Anchored (at): its unnamed keys count as anchored at 0 too. Older removals cut only the keys they name. */
   const anchored = (body: Record<string, unknown>) => !!body.at && typeof body.at === 'object';
-  const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean }>();
+  const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean; at: string; managing: boolean }>();
+  /** Who may let back in someone who was removed (not left): someone who could remove them, after the removal (_Ak3UUmp, odfs7haI). */
+  const mayReadmit = (by: Did, since: string, who: Did) => !state.removed.has(who) || state.left.has(who) || (canManage(state, by) && since > state.removed.get(who)!);
   // Invites their makers closed: only who they name came in with them.
   const closes = new Map<string, { by: Did; joined: Set<Did> }>();
   for (const { event, inner } of placed) {
@@ -762,7 +764,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_INVITE:
-        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true });
+        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true, at, managing: canManage(state, author) });
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
@@ -770,7 +772,9 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         // A link with a key: the join must prove it holds it (xQ0as76W). One without (older links): nobody comes back with it after leaving,
         // since its id is in the space for every member to read and cite.
         const proven = !!invite && (invite.keyed ? joinProven(body.invite as string, body.proof, event.scope, author) : !state.left.has(author));
-        if (live && proven && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, at, invite.by, undefined, body.invite as string);
+        // Someone removed comes back only with a link made after the removal by someone who could remove them.
+        const back = !state.removed.has(author) || state.left.has(author) || (!!invite && invite.managing && invite.at > state.removed.get(author)!);
+        if (live && proven && !invite.accept && !state.members.has(author) && back) admit(author, at, invite.by, undefined, body.invite as string);
         break;
       }
       case KIND_REMOVE: {
@@ -812,7 +816,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         if (typeof body.invite === 'string') {
           const invite = invites.get(body.invite);
           const live = invite && invite.by === author && invite.expires >= at && state.members.has(author) && !(isDid(body.member) && closedTo(body.invite, author, body.member));
-          if (live && isDid(body.member) && !state.members.has(body.member)) admit(body.member, at, author, undefined, body.invite);
+          if (live && isDid(body.member) && !state.members.has(body.member) && mayReadmit(author, at, body.member)) admit(body.member, at, author, undefined, body.invite);
           break;
         }
         const via = typeof body.via === 'string' ? body.via : undefined;
@@ -820,7 +824,9 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.get(author)?.via === via;
         // In groups (not tiers), their owner admits directly: a company putting its people in (stage 10).
         const admits = kind === 'project' || (kind === 'group' && !state.tier && author === state.founder);
-        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {
+        // By a rule, never someone removed (unless they left): only a maintainer lets them back, deliberately.
+        const readmits = isDid(body.member) && (ruled && !state.maintainers.has(author) ? !state.removed.has(body.member) || state.left.has(body.member) : mayReadmit(author, at, body.member));
+        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member) && readmits) {
           admit(body.member, at, author, via);
         }
         break;

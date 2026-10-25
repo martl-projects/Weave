@@ -1596,7 +1596,17 @@ export class WeaveNode implements Backend {
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
   async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
     const invite = decodeInvite(text);
-    if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
+    const held = this.#spaces.get(invite.space.id);
+    if (held) {
+      // Removed, and asked back with a new link (_Ak3UUmp): the space as it is now, keys added to the ones we kept.
+      const state = this.#state(held);
+      if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new Error(`you are already in ${invite.space.name}`);
+      for (const [epoch, key] of Object.entries(invite.space.keys)) if (!held.keys[epoch]) held.keys[epoch] = key;
+      held.via = invite.inviter;
+      if (invite.boards) for (const [board, epochs] of Object.entries(invite.boards)) held.boards = { ...held.boards, [board]: { ...held.boards?.[board], ...epochs } };
+      this.#saveSpace(held);
+      return { space: held, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(held), this.identity.author) } : {}) };
+    }
     const inside = this.#insideOnly(invite.space.founder);
     if (inside) throw new Error(inside);
     this.#adoptBootstrap(invite.entry);
@@ -7883,7 +7893,9 @@ export class WeaveNode implements Backend {
       const groupMembers = this.#state(group).members;
       const groupRef: SpaceRef = { id: group.id, kind: 'group', name: group.name };
       for (const did of groupMembers.keys()) {
-        if (!state.members.has(did) && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
+        // Someone removed from the project stays out, whatever groups they're in (unless they left on their own).
+        const removed = state.removed.has(did) && !state.left.has(did);
+        if (!state.members.has(did) && !removed && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
       }
       for (const member of state.members.values()) {
         if (member.via === group.id && !groupMembers.has(member.did) && member.did !== state.founder) {
