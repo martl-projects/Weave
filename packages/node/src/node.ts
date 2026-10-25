@@ -499,6 +499,7 @@ import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchai
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
+import { Badges, type BadgesCore } from './badges.ts';
 import { Companies, type CompaniesCore } from './companies.ts';
 export { verifyIdToken } from './companies.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
@@ -823,6 +824,19 @@ export class WeaveNode implements Backend {
       rotateKey: this.#rotateKey.bind(this),
       spaceInfo: this.#spaceInfo.bind(this),
       invalidateDecoded: this.#invalidateDecoded.bind(this),
+    });
+    // More concern modules, each over its own narrow core:
+    this.#badges = new Badges(this, {
+      project: this.#project.bind(this),
+      maintainerState: this.#maintainerState.bind(this),
+      get encryptionKeyOf() {
+        return node.#encryptionKeyOf;
+      },
+      tryOpen: this.#tryOpen.bind(this),
+      get spaces() {
+        return node.#spaces;
+      },
+      state: this.#state.bind(this),
     });
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
     if (loadConfig(home).standby) this.#companies.refuseWrites();
@@ -2435,7 +2449,7 @@ export class WeaveNode implements Backend {
       }
     }
     // Badge pictures are public: holders show them next to their name.
-    for (const series of this.#allBadges().series) {
+    for (const series of this.#badges.allBadges().series) {
       const ref = parseBlobRef(series.image);
       if (!ref || this.#prefetched.has(ref.hash) || this.blobs.has(ref.hash)) continue;
       this.#prefetched.add(ref.hash);
@@ -3264,7 +3278,7 @@ export class WeaveNode implements Backend {
     if (route === '/v1/badges') {
       const did = params.get('did') ?? '';
       if (!did.startsWith('did:')) throw new Error('did: whose badges to look up');
-      const { series, badges } = this.#allBadges();
+      const { series, badges } = this.#badges.allBadges();
       const ours = new Map(series.filter((s) => s.project?.id === projectId && s.project.checked && !s.broken).map((s) => [s.id, s]));
       return badges
         .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
@@ -4415,193 +4429,34 @@ export class WeaveNode implements Backend {
     }
   }
 
-  /** Bodies of your own self-sealed events of one kind. */
-  #selfBodies(kind: string): Array<Record<string, unknown>> {
-    return this.#memo(`self:${kind}`, () =>
-      this.#decodeAll()
-        .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
-        .map((d) => d.inner.body as Record<string, unknown>),
-    );
+  // Badges: series, badges given, transferred, notes: badges.ts (Badges). The node delegates.
+
+  createBadgeSeries(...args: Parameters<Badges['createBadgeSeries']>): ReturnType<Badges['createBadgeSeries']> {
+    return this.#badges.createBadgeSeries(...args);
   }
 
-  // ---------------------------------------------------------------- badges
-
-  async createBadgeSeries(input: { project: string; name: string; symbol?: string; image?: string; description?: string; limit?: number }): Promise<BadgeSeriesInfo> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const limit = input.limit === undefined ? undefined : parseBadgeLimit(input.limit);
-    if (input.limit !== undefined && !limit) throw new Error(`a limit is a whole number from 1 to ${BADGE_LIMIT_MAX}`);
-    const id = b64u.encode(randomBytes(16));
-    this.#publishBadgeSeries(id, { name: input.name, symbol: input.symbol ?? '', image: input.image ?? '', description: input.description ?? '' }, { project: { id: project.id, name: project.name }, ...(limit ? { limit } : {}) });
-    return this.#badgeSeriesInfo(this.#badgeSeriesRef(id));
+  setBadgeSeries(...args: Parameters<Badges['setBadgeSeries']>): ReturnType<Badges['setBadgeSeries']> {
+    return this.#badges.setBadgeSeries(...args);
   }
 
-  async setBadgeSeries(input: { series: string; name?: string; symbol?: string; image?: string; description?: string }): Promise<BadgeSeriesInfo> {
-    const before = this.#badgeSeriesRef(input.series);
-    if (before.issuer !== this.identity.author) throw new Error(`only ${this.nameOf(before.issuer) ?? 'its issuer'} can change ${before.name}`);
-    this.#publishBadgeSeries(before.id, { name: input.name ?? before.name, symbol: input.symbol ?? before.symbol, image: input.image ?? before.image ?? '', description: input.description ?? before.description }, {});
-    return this.#badgeSeriesInfo(this.#badgeSeriesRef(before.id));
+  badgeSeries(...args: Parameters<Badges['badgeSeries']>): ReturnType<Badges['badgeSeries']> {
+    return this.#badges.badgeSeries(...args);
   }
 
-  async badgeSeries(project?: string): Promise<BadgeSeriesInfo[]> {
-    const id = project === undefined ? undefined : this.#project(project).id;
-    return this.#allBadges()
-      .series.filter((s) => !id || s.project?.id === id)
-      .sort((a, b) => a.time.localeCompare(b.time))
-      .map((s) => this.#badgeSeriesInfo(s));
+  giveBadge(...args: Parameters<Badges['giveBadge']>): ReturnType<Badges['giveBadge']> {
+    return this.#badges.giveBadge(...args);
   }
 
-  async giveBadge(input: { series: string; who: string; note?: string; ref?: string; personal?: string }): Promise<BadgeInfo> {
-    const series = this.#badgeSeriesRef(input.series);
-    if (series.issuer !== this.identity.author) throw new Error(`only ${this.nameOf(series.issuer) ?? 'its issuer'} can give ${series.name}`);
-    if (series.broken) throw new Error(`${series.name} is broken: it has more badges than its limit, or a number twice`);
-    if (series.limit && series.given >= series.limit) throw new Error(`all ${series.limit} of ${series.name} are given`);
-    const to = this.resolve(input.who);
-    const taken = new Set(this.#allBadges().badges.filter((b) => b.series === series.id).map((b) => b.n));
-    let n = 1;
-    while (taken.has(n)) n++;
-    const note = input.note?.trim().slice(0, 500) ?? '';
-    const ref = input.ref?.trim().slice(0, 200) ?? '';
-    // A personal note: boxed to them (and to us, to read it again); only its hash is public, so they can prove our words if they publish it.
-    const text = input.personal?.trim() ?? '';
-    if (text.length > BADGE_NOTE_MAX) throw new Error(`a personal note is at most ${BADGE_NOTE_MAX} characters`);
-    const salt = b64u.encode(randomBytes(16));
-    const personal = text
-      ? { hash: badgeNoteHash(text, salt), boxes: [...new Set([to, this.identity.author])].map((did) => boxTo(this.#encryptionKeyOf(did), { text, salt })) as unknown as Json[] }
-      : undefined;
-    const event = this.replica.write(this.identity, { kind: KIND_BADGE, body: { series: series.id, n, to, ...(note ? { note } : {}), ...(ref ? { ref } : {}), ...(personal ? { personal } : {}) } });
-    return this.#badgeInfo(this.#badgeRef(event.id));
+  badges(...args: Parameters<Badges['badges']>): ReturnType<Badges['badges']> {
+    return this.#badges.badges(...args);
   }
 
-  async badges(who?: string): Promise<BadgeInfo[]> {
-    const holder = who ? this.resolve(who) : this.identity.author;
-    return this.#allBadges()
-      .badges.filter((b) => b.holder === holder)
-      .sort((a, b) => a.time.localeCompare(b.time))
-      .map((b) => this.#badgeInfo(b));
+  transferBadge(...args: Parameters<Badges['transferBadge']>): ReturnType<Badges['transferBadge']> {
+    return this.#badges.transferBadge(...args);
   }
 
-  async transferBadge(input: { badge: string; to: string }): Promise<BadgeInfo> {
-    const badge = this.#badgeRef(input.badge);
-    if (badge.holder !== this.identity.author) throw new Error("you don't hold that badge");
-    if (badge.invalid) throw new Error("that badge isn't valid: its issuer gave more than the limit, or its number twice");
-    const to = this.resolve(input.to);
-    if (to === this.identity.author) throw new Error('you hold it already');
-    this.replica.write(this.identity, { kind: KIND_BADGE_TRANSFER, body: { badge: badge.id, from: badge.head, to } });
-    return this.#badgeInfo(this.#badgeRef(badge.id));
-  }
-
-  /** Make the personal note on a badge you were given public, or (on: false) take it back. */
-  async publishBadgeNote(input: { badge: string; on?: boolean }): Promise<BadgeInfo> {
-    const badge = this.#badgeRef(input.badge);
-    if (badge.to !== this.identity.author) throw new Error('only the one a badge was given to can publish its personal note');
-    if (!badge.personal) throw new Error('that badge has no personal note');
-    if (input.on === false) {
-      this.replica.write(this.identity, { kind: KIND_BADGE_NOTE, body: { badge: badge.id, on: false } });
-    } else {
-      const opened = this.#openBadgeNote(badge);
-      if (!opened) throw new Error("this node can't open the personal note");
-      this.replica.write(this.identity, { kind: KIND_BADGE_NOTE, body: { badge: badge.id, text: opened.text, salt: opened.salt, on: true } });
-    }
-    return this.#badgeInfo(this.#badgeRef(badge.id));
-  }
-
-  /** A badge's personal note, if one of its boxes is ours and it matches the hash its issuer signed. */
-  #openBadgeNote(badge: Badge): { text: string; salt: string } | undefined {
-    for (const box of badge.personal?.boxes ?? []) {
-      const opened = this.#tryOpen((me) => {
-        try {
-          return openBox(me.keys.secretKey, me.keys.publicKey, box) as { text?: unknown; salt?: unknown };
-        } catch {
-          return undefined;
-        }
-      });
-      if (typeof opened?.text === 'string' && typeof opened.salt === 'string' && badgeNoteHash(opened.text, opened.salt) === badge.personal!.hash) return { text: opened.text, salt: opened.salt };
-    }
-    return undefined;
-  }
-
-  #publishBadgeSeries(id: string, fields: { name: string; symbol: string; image: string; description: string }, first: { project?: { id: string; name: string }; limit?: number }): void {
-    const name = fields.name.trim();
-    if (!name || name.length > 40) throw new Error('badge names are 1 to 40 characters');
-    const symbol = fields.symbol.trim();
-    if (symbol.length > 8) throw new Error('a badge symbol is short: an emoji or two');
-    if (fields.image && !parseBlobRef(fields.image)) throw new Error('a badge picture is an uploaded image (wblob: reference)');
-    const body: Record<string, Json> = { series: id, name, symbol, description: fields.description.trim().slice(0, 1000) };
-    if (fields.image) body.image = fields.image;
-    if (first.project) body.project = first.project;
-    if (first.limit) body.limit = first.limit;
-    this.replica.write(this.identity, { kind: KIND_BADGE_SERIES, body });
-  }
-
-  /**
-   * Every badge series and badge this node holds the events of, checked against each other.
-   * A series counts for a project only if its issuer maintains it: in projects this node is in,
-   * one whose issuer doesn't is a false claim and left out with its badges; elsewhere the claim
-   * shows as unchecked.
-   */
-  #allBadges(): { series: BadgeSeries[]; badges: Badge[] } {
-    const all = badgesOf(this.replica.events((e) => e.kind === KIND_BADGE_SERIES || e.kind === KIND_BADGE || e.kind === KIND_BADGE_TRANSFER || e.kind === KIND_BADGE_NOTE));
-    const claimed = new Set<string>();
-    const series = all.series.flatMap((s): BadgeSeries[] => {
-      if (!s.project) return [s];
-      const project = this.#spaces.get(s.project.id);
-      if (project?.kind !== 'project') return [{ ...s, project: { ...s.project, checked: false } }];
-      if (mayAct(this.#state(project), s.issuer, 'curate').ok) return [{ ...s, project: { id: project.id, name: project.name, checked: true } }];
-      claimed.add(s.id);
-      return [];
-    });
-    return { series, badges: claimed.size ? all.badges.filter((b) => !claimed.has(b.series)) : all.badges };
-  }
-
-  /** A series by id, or by name (yours first). */
-  #badgeSeriesRef(ref: string): BadgeSeries {
-    const all = this.#allBadges().series;
-    const byId = all.find((s) => s.id === ref);
-    if (byId) return byId;
-    const named = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
-    const mine = named.filter((s) => s.issuer === this.identity.author);
-    const match = mine.length ? mine : named;
-    if (match.length === 1) return match[0];
-    throw new Error(match.length ? `several badges are named "${ref}" — use its id` : `no badge "${ref}" is known`);
-  }
-
-  /** A badge by id or the start of it. */
-  #badgeRef(ref: string): Badge {
-    const all = this.#allBadges().badges;
-    const match = all.filter((b) => b.id === ref || (ref.length >= 6 && b.id.startsWith(ref)));
-    if (match.length === 1) return match[0];
-    throw new Error(match.length ? `several badges start with "${ref}" — use more of its id` : `no badge "${ref}" is known`);
-  }
-
-  #personalInfo(badge: Badge): NonNullable<BadgeInfo['personal']> {
-    const published = badge.personal?.published;
-    const text = published ?? this.#openBadgeNote(badge)?.text;
-    return { ...(text !== undefined ? { text } : {}), published: published !== undefined, mayPublish: badge.to === this.identity.author };
-  }
-
-  #badgeSeriesInfo(series: BadgeSeries): BadgeSeriesInfo {
-    return { ...series, issuer: { did: series.issuer, name: this.nameOf(series.issuer) }, mine: series.issuer === this.identity.author };
-  }
-
-  #badgeInfo(badge: Badge): BadgeInfo {
-    const series = this.#badgeSeriesRef(badge.series);
-    const person = (did: Did) => ({ did, name: this.nameOf(did) });
-    return {
-      id: badge.id,
-      series: { id: series.id, name: series.name, symbol: series.symbol, ...(series.image ? { image: series.image } : {}), ...(series.limit ? { limit: series.limit } : {}), broken: series.broken, ...(series.project ? { project: series.project } : {}) },
-      issuer: person(badge.issuer),
-      n: badge.n,
-      holder: person(badge.holder),
-      holders: badge.holders.map(person),
-      note: badge.note,
-      ...(badge.ref ? { ref: badge.ref } : {}),
-      ...(badge.personal ? { personal: this.#personalInfo(badge) } : {}),
-      time: badge.time,
-      ...(badge.invalid ? { invalid: badge.invalid } : {}),
-      ...(badge.contested ? { contested: true as const } : {}),
-      mine: badge.holder === this.identity.author,
-    };
+  publishBadgeNote(...args: Parameters<Badges['publishBadgeNote']>): ReturnType<Badges['publishBadgeNote']> {
+    return this.#badges.publishBadgeNote(...args);
   }
 
   // ---------------------------------------------------------------- treasuries
@@ -4766,25 +4621,6 @@ export class WeaveNode implements Backend {
     const history = this.#walletHistory();
     return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED), (r) => (r.kind === 'wallet' ? history.get(r.address.toLowerCase()) === r.by : !!r.space && this.#manages(r.space, r.by)));
   }
-
-  /** When sealed events arrived in this run. */
-  #arrivals = new Map<string, string>();
-  /**
-   * When this node first saw an event, kept in the home once a notice period
-   * asks: where it must not depend on the date its author claims. Events from
-   * before this run count from when they're first asked about: later, never sooner.
-   */
-  #seen?: Record<string, string>;
-  #seenAt = (entry: { id: string }): string => {
-    const file = joinPath(this.home.dir, 'seen.json');
-    this.#seen ??= readSecretJson<Record<string, string>>(this.home, file) ?? {};
-    let at = this.#seen[entry.id];
-    if (!at) {
-      at = this.#seen[entry.id] = this.#arrivals.get(entry.id) ?? new Date(this.clock()).toISOString();
-      writeSecretJson(this.home, file, this.#seen);
-    }
-    return at;
-  };
 
   /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
   #manages(spaceId: string, did: Did): boolean {
@@ -5632,9 +5468,9 @@ export class WeaveNode implements Backend {
     }
     // A badge given or passed on to you: it shows on your hub, with its personal note if it has one.
     if ((item.kind === KIND_BADGE || item.kind === KIND_BADGE_TRANSFER) && body.to === me) {
-      const badge = this.#allBadges().badges.find((b) => b.id === (item.kind === KIND_BADGE ? item.id : body.badge));
+      const badge = this.#badges.allBadges().badges.find((b) => b.id === (item.kind === KIND_BADGE ? item.id : body.badge));
       if (!badge || badge.invalid || badge.holder !== me) return undefined;
-      const series = this.#allBadges().series.find((s) => s.id === badge.series);
+      const series = this.#badges.allBadges().series.find((s) => s.id === badge.series);
       if (!series || series.broken) return undefined;
       const name = `${series.symbol ? `${series.symbol} ` : ''}${series.name} #${badge.n}${series.limit ? ` of ${series.limit}` : ''}`;
       const text = item.kind === KIND_BADGE ? [badge.note ? `“${badge.note}”` : '', badge.personal ? 'With a personal note for you.' : ''].filter(Boolean).join(' ') : '';
@@ -5654,6 +5490,34 @@ export class WeaveNode implements Backend {
   }
 
   // ---------------------------------------------------------------- internals: spaces
+
+  /** Bodies of your own self-sealed events of one kind. */
+  #selfBodies(kind: string): Array<Record<string, unknown>> {
+    return this.#memo(`self:${kind}`, () =>
+      this.#decodeAll()
+        .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
+        .map((d) => d.inner.body as Record<string, unknown>),
+    );
+  }
+
+  /** When sealed events arrived in this run. */
+  #arrivals = new Map<string, string>();
+  /**
+   * When this node first saw an event, kept in the home once a notice period
+   * asks: where it must not depend on the date its author claims. Events from
+   * before this run count from when they're first asked about: later, never sooner.
+   */
+  #seen?: Record<string, string>;
+  #seenAt = (entry: { id: string }): string => {
+    const file = joinPath(this.home.dir, 'seen.json');
+    this.#seen ??= readSecretJson<Record<string, string>>(this.home, file) ?? {};
+    let at = this.#seen[entry.id];
+    if (!at) {
+      at = this.#seen[entry.id] = this.#arrivals.get(entry.id) ?? new Date(this.clock()).toISOString();
+      writeSecretJson(this.home, file, this.#seen);
+    }
+    return at;
+  };
 
   /** A space by id or name, optionally of one kind. */
   #space(ref: string, kind?: SpaceKind): StoredSpace {
@@ -5932,6 +5796,10 @@ export class WeaveNode implements Backend {
 
   /** Company accounts, their sign-in, policy, audit streams, SCIM, the admin console (companies.ts). */
   #companies!: Companies;
+  // (further concern modules)
+
+  /** Badges: series, badges given, transferred, notes (badges.ts). */
+  #badges!: Badges;
 
   /** Decoded views go stale (keys came or went, bodies were dropped): decode again when next asked. */
   #invalidateDecoded(): void {

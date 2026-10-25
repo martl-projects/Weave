@@ -19,6 +19,7 @@ import { type AuditSink, type AuditSinkInput, newSink, sendLines, sinkTarget, ty
 import { machinePolicy } from './machine.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, type ScimDirectory, scimHandle, type ScimRequest, type ScimResponse, startScimServer, tokenMatches } from './scim.ts';
 import { type WeaveNode, DAY_MS, type Decoded, withoutSecrets } from './node.ts';
+
 /*
  * Company accounts (stages 10 to 15): a company's group and spaces, the accounts
  * it owns and their sign-in, its attestor, policy and retention, the audit in
@@ -26,8 +27,6 @@ import { type WeaveNode, DAY_MS, type Decoded, withoutSecrets } from './node.ts'
  * by mayAct (core) and by the company's own vouching here. It sees the node's
  * internals only through CompaniesCore.
  */
-
-
 
 /** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
 const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
@@ -205,7 +204,6 @@ export class Companies {
       ...(this.signInProblem ? { problem: this.signInProblem } : {}),
     };
   }
-
 
   // ---------------------------------------------------------------- company accounts (stage 10)
 
@@ -904,7 +902,6 @@ export class Companies {
 
   // ---------------------------------------------------------------- SCIM and devices (stage 12)
 
-
   deviceProof(idToken: string): unknown {
     let creds = this.node.deviceCredentials;
     const managed = machinePolicy();
@@ -1264,7 +1261,6 @@ export class Companies {
     }
     return changed;
   }
-
 
   // ---------------------------------------------------------------- SSO (stage 6.3)
 
