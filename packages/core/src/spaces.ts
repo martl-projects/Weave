@@ -5,7 +5,7 @@ import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
 import type { EventFields, SigningIdentity } from './events.ts';
 import type { EventView } from './records.ts';
-import { isDid, type Did, type KeyPair } from './keys.ts';
+import { generateKeyPair, isDid, sign, verify, type Did, type KeyPair } from './keys.ts';
 import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 
 /*
@@ -384,6 +384,33 @@ export interface Invite {
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
   /** Keys of read-limited boards the link gives access to: board → epoch → key. */
   boards?: Record<string, Record<string, string>>;
+  /** The link's own key (see inviteKeys): `invite` is its public half, which everyone in the space reads. */
+  key?: string;
+}
+
+/**
+ * An invite link's key pair (xQ0as76W). The invite event in the space names only
+ * its public half (the invite's id), which every member reads; the link holds
+ * the secret half, and a join signs who joins with it. So a join proves it came
+ * with the link, and nobody else in the space can cite the link as theirs.
+ */
+export function inviteKeys(): { invite: string; key: string } {
+  const pair = generateKeyPair();
+  return { invite: b64u.encode(pair.publicKey), key: b64u.encode(pair.secretKey) };
+}
+
+const joinMessage = (scope: string, joiner: Did) => utf8(`weave/join/v1\n${scope}\n${joiner}`);
+
+/** A join's proof that it holds the link: who joins which space, signed with the link's key. */
+export const joinProof = (key: string, scope: string, joiner: Did): string => b64u.encode(sign(joinMessage(scope, joiner), b64u.decode(key)));
+
+export function joinProven(invite: string, proof: unknown, scope: string, joiner: Did): boolean {
+  if (typeof proof !== 'string') return false;
+  try {
+    return verify(b64u.decode(proof), joinMessage(scope, joiner), b64u.decode(invite));
+  } catch {
+    return false;
+  }
 }
 
 const INVITE_PREFIX = 'weave:invite:';
@@ -651,7 +678,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
       return cut !== undefined && isPast({ ...cut, time: '' }, event) && !sawLoss;
     });
   };
-  const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
+  const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean }>();
   // Invites their makers closed: only who they name came in with them.
   const closes = new Map<string, { by: Did; joined: Set<Did> }>();
   for (const { event, inner } of placed) {
@@ -682,12 +709,15 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         }
         break;
       case KIND_INVITE:
-        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true });
+        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true });
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
         const live = invite && invite.expires >= at && state.members.has(invite.by) && !closedTo(body.invite as string, invite.by, author);
-        if (live && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, at, invite.by, undefined, body.invite as string);
+        // A link with a key: the join must prove it holds it (xQ0as76W). One without (older links): nobody comes back with it after leaving,
+        // since its id is in the space for every member to read and cite.
+        const proven = !!invite && (invite.keyed ? joinProven(body.invite as string, body.proof, event.scope, author) : !state.left.has(author));
+        if (live && proven && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, at, invite.by, undefined, body.invite as string);
         break;
       }
       case KIND_REMOVE: {
@@ -737,7 +767,8 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
           break;
         }
         const via = typeof body.via === 'string' ? body.via : undefined;
-        const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.has(author);
+        // By a group's rule: only from someone who came in by that group themselves (99ZpCdH6). Anyone else can't know who's in it.
+        const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.get(author)?.via === via;
         // In groups (not tiers), their owner admits directly: a company putting its people in (stage 10).
         const admits = kind === 'project' || (kind === 'group' && !state.tier && author === state.founder);
         if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {

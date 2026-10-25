@@ -28,6 +28,8 @@ import {
   overBudget,
   type BoardRule,
   KIND_CARRY,
+  joinProof,
+  inviteKeys,
   type RevokedHead,
   canonicalJson,
   verifyEventV2,
@@ -1169,8 +1171,8 @@ export class WeaveNode implements Backend {
     node.#saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
-    const { invite } = await node.#takeInvite(enrollment.invite);
-    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
+    const { invite, proof } = await node.#takeInvite(enrollment.invite);
+    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, ...(proof ? { proof } : {}), words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
     await node.#continueEnrollment();
     return node;
   }
@@ -1553,9 +1555,10 @@ export class WeaveNode implements Backend {
     if (options.access?.length && space.kind !== 'project') throw new Error('board rights are for projects');
     const boards = space.kind === 'project' ? this.#spacePosts(space).boards : [];
     const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
-    const invite = b64u.encode(randomBytes(12));
+    // The space reads the link's public key as its id; the link keeps the secret one (inviteKeys).
+    const { invite, key } = inviteKeys();
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
-    const body: Record<string, Json> = { invite, expires };
+    const body: Record<string, Json> = { invite, expires, key: true };
     if (access.length) body.access = access as unknown as Json;
     if (options.accept) body.accept = true;
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE, body }));
@@ -1571,18 +1574,18 @@ export class WeaveNode implements Backend {
       });
     }
     const boardKeys = this.#boardKeysFor(space, access);
-    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, key, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
   }
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
     if (isKnockLink(text)) return this.#knock(text, note ?? '');
-    const { space, invite } = await this.#takeInvite(text);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite } }));
+    const { space, invite, proof } = await this.#takeInvite(text);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
     return this.#spaceInfo(space);
   }
 
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
-  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string }> {
+  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
     const invite = decodeInvite(text);
     if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
     const inside = this.#insideOnly(invite.space.founder);
@@ -1590,7 +1593,7 @@ export class WeaveNode implements Backend {
     this.#adoptBootstrap(invite.entry);
     const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
     await this.#addSpace(space);
-    return { space, invite: invite.invite };
+    return { space, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(space), this.identity.author) } : {}) };
   }
 
   /** Ask to be let in with a link that needs the inviter's OK. */
@@ -6583,7 +6586,7 @@ export class WeaveNode implements Backend {
     await this.#unlock(group);
     if (this.#managedProblems.has(group.id)) return 0;
     if (!pending.joined) {
-      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite } }));
+      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite, ...(pending.proof ? { proof: pending.proof } : {}) } }));
       pending.joined = true;
       changed++;
     }
