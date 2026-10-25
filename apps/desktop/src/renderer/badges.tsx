@@ -82,9 +82,11 @@ export function BadgeMark({ badge, size = 16 }: { badge: BadgeInfo; size?: numbe
 function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
   const issuer = badge.issuer.name ?? 'its issuer';
   const personal = badge.personal;
+  const picture = useBlobUrl(badge.series.image);
   const publish = (on: boolean) => attempt(() => api('publishBadgeNote', { badge: badge.id, on }), on ? 'Published: everyone can read it now' : 'Taken back');
   return (
     <Modal title={`${badge.series.symbol ? `${badge.series.symbol} ` : ''}${badge.series.name} #${badge.n}`} onClose={onClose}>
+      {picture && <img className="badge-picture" src={picture} alt={badge.series.name} width={128} height={128} />}
       <p className="small muted">
         {badge.series.limit ? `Number ${badge.n} of ${badge.series.limit}` : `Number ${badge.n}`}
         {badge.series.project ? ` · ${badge.series.project.name}` : ''}, from {issuer}, held by {badge.holder.name ?? 'someone'}.
