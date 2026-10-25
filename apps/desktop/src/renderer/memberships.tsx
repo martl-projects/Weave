@@ -5,6 +5,7 @@ import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
+import { WalletNeeded } from './wallet.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
@@ -107,12 +108,7 @@ function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   // null: no wallet linked; undefined: still asking.
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   if (wallet === undefined) return null;
-  if (!wallet)
-    return (
-      <p className="small">
-        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (Keys &amp; devices → Wallet), so {creator} knows the payment is yours.
-      </p>
-    );
+  if (!wallet) return <WalletNeeded why={`Paying in ${tier.onchain!.symbol} goes from your own wallet, so ${creator} knows the payment is yours.`} />;
   return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;
 }
 
@@ -347,7 +343,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
             </>
           ) : null}
           <div className="field-row">
-            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you or a project's split (test network)</label>
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you (test network)</label>
           </div>
           {onChain ? (
             <>
@@ -360,7 +356,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 <input id="tier-payto" spellCheck={false} placeholder={wallet ? `your wallet ${wallet.address}` : '0x… (link your wallet, or give an address)'} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
               </div>
               <p className="small">
-                Empty: your linked wallet. Or a project's split contract (CLI: weave treasury split), so payments are divided as the project's split says. Supporters pay from their linked wallet and send the transaction; your Weave reads it on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can.
+                Empty: your linked wallet. Supporters pay from their linked wallet; your Weave reads the payment on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can. (To divide payments among a project's makers, give its split contract here: <code>weave treasury split</code>, once the project's payments are on.)
               </p>
             </>
           ) : null}

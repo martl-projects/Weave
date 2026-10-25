@@ -1,20 +1,26 @@
 import { useState, type FormEvent } from 'react';
-import type { SafeProposalInfo, ShowInfo, SpaceInfo, TicketInfo, WalletInfo } from '@weave/node/client';
-import { formatUnits, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
+import type { MemberInfo, RoomInfo, SafeProposalInfo, ShowInfo, SpaceInfo, TicketInfo, WalletInfo } from '@weave/node/client';
+import { formatUnits, isHexAddress, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
+import { Icon } from './icons.tsx';
 import { api, bump, shortDid, useApi } from './lib.ts';
 import { PayFromWallet } from './pay.tsx';
 import { copy } from './posts.tsx';
-import { ask, attempt, AsyncButton } from './ui.tsx';
+import { WalletNeeded } from './wallet.tsx';
+import { ask, attempt, AsyncButton, toast } from './ui.tsx';
 
 /*
  * Ticketed shows (a live stream with an entry price): tickets are paid into the
  * show's own Safe, which its hosts' wallets own; after the show they pay out by
  * its split, or back if it's called off. Paying out is a Safe transaction the
- * hosts sign together, here, each in their own wallet.
+ * hosts sign together, here, each in their own wallet. A show happens in a room
+ * of the project's app that lets its ticket holders in while it's on.
  */
 
-const when = (show: ShowInfo) => `${new Date(show.starts).toLocaleString()} – ${new Date(show.ends).toLocaleTimeString()}`;
+const when = (show: ShowInfo) =>
+  `${new Date(show.starts).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} – ${new Date(show.ends).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 const usdc = (amount: number | string, decimals: number = TEST_USDC.decimals) => `${formatUnits(amount, decimals)} USDC`;
+const person = (p: { did: string; name?: string }) => p.name ?? shortDid(p.did);
+const pct = (bp: number) => `${(bp / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
 
 /** Transactions waiting for a Safe's owners: sign here (your wallet signs the hash), send once enough signed. */
 export function SafeProposals({ safe }: { safe: string }) {
@@ -78,27 +84,71 @@ function SafeProposalCard({ proposal: p }: { proposal: SafeProposalInfo }) {
   );
 }
 
+/** Where a show stands, by this computer's clock. */
+function stage(show: ShowInfo): { label: string; tag: string } {
+  const now = Date.now();
+  if (show.cancelled) return { label: 'Called off', tag: 'rejected' };
+  if (now > Date.parse(show.ends)) return { label: 'Over', tag: '' };
+  if (now >= Date.parse(show.starts)) return { label: 'On now', tag: 'status-active' };
+  if (show.open) return { label: 'Doors open', tag: 'status-active' };
+  const days = Math.round((Date.parse(show.starts) - now) / 86_400_000);
+  return { label: days < 1 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`, tag: '' };
+}
+
 function BuyTicket({ show }: { show: ShowInfo }) {
   const [paying, setPaying] = useState(false);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
-  if (!wallet) return <p className="small">Link your wallet (Keys & devices → Wallet) to buy a ticket from it.</p>;
-  if (!paying) return <button className="default" onClick={() => setPaying(true)}>Get a ticket ({usdc(show.price.amount, show.price.decimals)})…</button>;
-  return <PayFromWallet show={show.id} payee={show.host.name ?? 'the host'} onDone={() => setPaying(false)} />;
+  if (!paying)
+    return (
+      <div className="buttons">
+        <button className="default" onClick={() => setPaying(true)}>
+          Get a ticket · {usdc(show.price.amount, show.price.decimals)}
+        </button>
+      </div>
+    );
+  if (!wallet) return <WalletNeeded why={`Tickets are paid from your own wallet, so ${person(show.host)} knows the payment is yours.`} />;
+  return <PayFromWallet show={show.id} payee={person(show.host)} onDone={() => setPaying(false)} />;
 }
 
-function HostTools({ show }: { show: ShowInfo }) {
+/** The split as rows to edit: the project's treasury, people, addresses. */
+const rowsOf = (split: ShowInfo['split']): Part[] =>
+  split.map((p) => ({ to: p.to.startsWith('project:') ? 'project' : p.to.startsWith('0x') ? 'address' : p.to, address: p.to.startsWith('0x') ? p.to : '', percent: String(p.share / 100) }));
+
+/** After the show, its host decides who gets what, and the hosts sign that payout. */
+function PayOut({ show, members, onDone }: { show: ShowInfo; members: MemberInfo[]; onDone(): void }) {
+  const [parts, setParts] = useState(() => rowsOf(show.split));
+  const pay = async () => {
+    if (parts.some((p) => p.to === 'address' && !isHexAddress(p.address))) return toast("That's not an address: 0x and 40 hex digits", 'error');
+    const split = parts.map((p) => ({ to: p.to === 'address' ? p.address : p.to, share: Math.round(percent(p.percent) * 100) }));
+    if (split.reduce((sum, p) => sum + p.share, 0) !== 10000) return toast('It has to add up to 100%', 'error');
+    if ((await attempt(() => api('settleShow', { show: show.id, action: 'payout', split }).then(bump), 'Proposed: the hosts sign the payout below')) !== undefined) onDone();
+  };
+  return (
+    <div className="sunken" style={{ padding: 8, margin: '6px 0' }}>
+      <SplitRows projectName={show.project?.name} members={members} parts={parts} onChange={setParts} />
+      <div className="buttons">
+        <button onClick={onDone}>Cancel</button>
+        <AsyncButton className="default" onClick={pay}>
+          Pay out
+        </AsyncButton>
+      </div>
+    </div>
+  );
+}
+
+/** The host's side: who has a ticket, calling it off, paying out or back. */
+function HostTools({ show, members }: { show: ShowInfo; members: MemberInfo[] }) {
   const { data: tickets } = useApi(() => api<TicketInfo[]>('tickets', show.id), [show.id]);
+  const [paying, setPaying] = useState(false);
   const over = Date.parse(show.ends) < Date.now();
+  const sold = (tickets ?? []).filter((t) => t.ok);
+  const refused = (tickets ?? []).filter((t) => !t.ok);
   return (
     <>
-      {tickets && tickets.length > 0 && (
-        <p className="small">
-          Tickets: {tickets.filter((t) => t.ok).map((t) => t.holder.name ?? shortDid(t.holder.did)).join(', ') || 'none yet'}
-          {tickets.some((t) => !t.ok) && <> · not let in: {tickets.filter((t) => !t.ok).map((t) => `${t.holder.name ?? shortDid(t.holder.did)} (${t.reason})`).join('; ')}</>}
-        </p>
-      )}
+      {sold.length > 0 && <p className="small">Tickets: {sold.map((t) => person(t.holder)).join(', ')}</p>}
+      {refused.length > 0 && <p className="small">Not let in: {refused.map((t) => `${person(t.holder)} (${t.reason})`).join('; ')}</p>}
       <div className="buttons">
-        {!show.cancelled && (
+        {!show.cancelled && !over && (
           <AsyncButton
             onClick={async () => {
               if (await ask(`Call ${show.name} off? Tickets stop letting people in; then pay everyone back.`, 'Call it off')) await attempt(() => api('cancelShow', show.id).then(bump), 'Called off');
@@ -112,108 +162,199 @@ function HostTools({ show }: { show: ShowInfo }) {
             Pay everyone back…
           </AsyncButton>
         ) : (
-          over && (
-            <AsyncButton className="default" onClick={() => attempt(() => api('settleShow', { show: show.id, action: 'payout' }).then(bump), 'Proposed: the hosts sign the payout below')}>
-              Pay out by the split…
-            </AsyncButton>
+          over &&
+          !paying && (
+            <button className="default" onClick={() => setPaying(true)}>
+              Pay out…
+            </button>
           )
         )}
       </div>
+      {paying && <PayOut show={show} members={members} onDone={() => setPaying(false)} />}
     </>
   );
 }
 
-function ShowCard({ show }: { show: ShowInfo }) {
-  const status = show.cancelled ? 'called off' : show.open ? 'on now' : when(show);
+function ShowCard({ show, rooms, members, onHost }: { show: ShowInfo; rooms: RoomInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
+  const { label, tag } = stage(show);
+  const over = show.cancelled || Date.parse(show.ends) < Date.now();
+  const room = rooms.find((r) => r.show === show.id);
+  const tickets = show.sold !== undefined ? `${show.sold}${show.capacity ? ` of ${show.capacity}` : ''} tickets` : show.capacity ? `${show.capacity} seats` : '';
   return (
-    <div className="sunken" style={{ padding: 8, margin: '6px 0' }}>
-      <div className="field-row">
-        <b className="grow">{show.name}</b>
-        <span className="tag">{usdc(show.price.amount, show.price.decimals)}</span>
-        <span className="small">{status}</span>
+    <article className="room window">
+      <div className="title-bar">
+        <div className="title-bar-text">
+          {show.name} · {usdc(show.price.amount, show.price.decimals)}
+        </div>
       </div>
-      <div className="small">
-        by {show.host.name ?? shortDid(show.host.did)}
-        {show.capacity ? ` · ${show.sold ?? '?'}/${show.capacity} tickets` : show.sold !== undefined ? ` · ${show.sold} tickets` : ''} · after it:{' '}
-        {show.split.map((p) => `${p.share / 100}% ${p.name ?? p.to.slice(0, 10)}${p.address ? '' : ' (no address yet)'}`).join(', ')}
+      <div className="window-body">
+        <div className="field-row">
+          <span className={`tag ${tag}`}>{label}</span>
+          <span className="grow small">
+            {when(show)} · by {person(show.host)}
+            {tickets && ` · ${tickets}`}
+          </span>
+          {show.ticket && <span className="tag passed">✓ Your ticket</span>}
+        </div>
+        {!over && (
+          <p className="small">
+            {room ? (
+              <>
+                <Icon name="zap" /> In the room <b>{room.name}</b>
+                {show.mine ? '.' : show.ticket ? (show.open ? ': join it below.' : ': it lets you in from an hour before the start.') : ': ticket holders get in from an hour before the start.'}
+              </>
+            ) : show.mine ? (
+              <>No room yet. Open one for it when you're ready: its ticket holders get in from an hour before the start.</>
+            ) : (
+              <>Its room opens when {person(show.host)} starts it; with a ticket you get in from an hour before the start.</>
+            )}
+          </p>
+        )}
+        {!show.ticket && !show.mine && !over && <BuyTicket show={show} />}
+        {show.mine && !room && !over && onHost && (
+          <div className="buttons">
+            <button className="default" onClick={() => onHost(show.id)}>
+              <Icon name="plus" /> Open its room…
+            </button>
+          </div>
+        )}
+        {show.mine && <HostTools show={show} members={members} />}
+        <details>
+          <summary className="small">Where the money is</summary>
+          <p className="small">
+            In the show's own Safe <code>{show.safe.address}</code>, owned by {show.hosts.map(person).join(', ')} ({show.safe.threshold} of {show.hosts.length} sign). After the show its hosts pay it out as {person(show.host)} decides then ({show.split.map((p) => `${pct(p.share)} ${p.name ?? `${p.to.slice(0, 8)}…`}`).join(', ')} so far); called off, it pays everyone back. {TREASURY_CHAIN.name} is a test network: no real money.
+          </p>
+        </details>
+        {show.hosts.length > 0 && <SafeProposals safe={show.safe.address} />}
       </div>
-      <div className="small">
-        Safe <code>{show.safe.address}</code> ({show.safe.threshold} of {show.hosts.length} hosts sign)
-      </div>
-      {show.ticket ? <p className="small">You have a ticket.</p> : !show.mine && !show.cancelled && <BuyTicket show={show} />}
-      {show.mine && <HostTools show={show} />}
-      {show.hosts.length > 0 && <SafeProposals safe={show.safe.address} />}
-    </div>
+    </article>
   );
 }
 
-function NewShow({ project, onDone }: { project: SpaceInfo; onDone(): void }) {
-  const [name, setName] = useState('');
-  const [starts, setStarts] = useState('');
-  const [ends, setEnds] = useState('');
+/** A part of the split as typed: the project, a person or an address, and a percentage. */
+type Part = { to: string; address: string; percent: string };
+
+const percent = (text: string) => Number(text.replace(',', '.')) || 0;
+
+function SplitRows({ projectName, members, parts, onChange }: { projectName?: string; members: MemberInfo[]; parts: Part[]; onChange(parts: Part[]): void }) {
+  const total = parts.reduce((sum, p) => sum + percent(p.percent), 0);
+  const set = (i: number, part: Partial<Part>) => onChange(parts.map((p, j) => (i === j ? { ...p, ...part } : p)));
+  return (
+    <fieldset>
+      <legend>Who gets what</legend>
+      {parts.map((p, i) => (
+        <div className="field-row" key={i}>
+          <select value={p.to} onChange={(e) => set(i, { to: e.target.value })} aria-label="Who gets this part">
+            {projectName && <option value="project">p/{projectName}'s treasury</option>}
+            {members.map((m) => (
+              <option key={m.did} value={m.did}>
+                {m.name ?? shortDid(m.did)}
+              </option>
+            ))}
+            <option value="address">An address…</option>
+          </select>
+          {p.to === 'address' ? <input type="text" className="grow" spellCheck={false} placeholder="0x…" value={p.address} onChange={(e) => set(i, { address: e.target.value.trim() })} aria-label="Address" /> : <span className="grow" />}
+          <input type="text" inputMode="decimal" style={{ width: 56 }} value={p.percent} onChange={(e) => set(i, { percent: e.target.value })} aria-label="Percent" />%
+          {parts.length > 1 && (
+            <button type="button" className="small-btn" title="Remove" onClick={() => onChange(parts.filter((_, j) => j !== i))}>
+              ✕
+            </button>
+          )}
+        </div>
+      ))}
+      <div className="field-row">
+        <button type="button" onClick={() => onChange([...parts, { to: members[0]?.did ?? 'address', address: '', percent: String(Math.max(0, 100 - total)) }])}>
+          Add someone
+        </button>
+        <span className="grow small">{Math.abs(total - 100) < 0.001 ? 'People are paid to their linked wallet, the project to its treasury.' : `Adds up to ${total}%: it has to be 100%.`}</span>
+      </div>
+    </fieldset>
+  );
+}
+
+/** For datetime-local inputs: a time in this computer's zone. */
+const local = (time: number) => new Date(time - new Date(time).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+
+/**
+ * Setting up a show along with the room it happens in (the Host room dialog):
+ * when and the ticket. Who gets the money is decided after the show, paying
+ * out. `create` sets it up and gives its id, or nothing when something's
+ * missing (and says what).
+ */
+export function useShowForm(project: SpaceInfo) {
+  const [start] = useState(() => {
+    const now = new Date();
+    now.setSeconds(0, 0);
+    return now.getTime();
+  });
+  const [starts, setStarts] = useState(local(start));
+  const [ends, setEnds] = useState(local(start + 2 * 3600_000));
   const [price, setPrice] = useState('3');
   const [capacity, setCapacity] = useState('');
-  const [split, setSplit] = useState('project=10000');
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    const amount = parseUnits(price, TEST_USDC.decimals);
-    if (!amount) return;
-    const parts = split
-      .split(',')
-      .map((part) => part.split('='))
-      .filter(([to, share]) => to?.trim() && share)
-      .map(([to, share]) => ({ to: to.trim(), share: Number(share) }));
-    const made = await attempt(
-      () => api('createShow', { name, project: project.id, starts: new Date(starts).toISOString(), ends: new Date(ends).toISOString(), price: amount, ...(capacity ? { capacity: Number(capacity) } : {}), split: parts }).then(bump),
-      `${name} is set up: tickets go into its Safe`,
-    );
-    if (made !== undefined) onDone();
+  // Moving the start moves the end with it, keeping how long the show is.
+  const moveStart = (value: string) => {
+    const length = Date.parse(ends) - Date.parse(starts);
+    setStarts(value);
+    if (value && length > 0) setEnds(local(Date.parse(value) + length));
   };
-  return (
-    <form className="form" onSubmit={submit}>
+  const create = async (name: string): Promise<string | undefined> => {
+    const amount = parseUnits(price.replace(',', '.'), TEST_USDC.decimals);
+    if (!amount) return void toast('Give the ticket price in USDC, like 3 or 2.50', 'error');
+    const show = await attempt(() =>
+      api<ShowInfo>('createShow', { name: name.trim() || 'Show', project: project.id, starts: new Date(starts).toISOString(), ends: new Date(ends).toISOString(), price: amount, ...(capacity ? { capacity: Number(capacity) } : {}) }),
+    );
+    return show?.id;
+  };
+  const fields = (
+    <>
       <div className="field-row">
-        <input className="grow" required placeholder="Name, e.g. Finale live" value={name} onChange={(e) => setName(e.target.value)} aria-label="Show name" />
+        <input id="show-starts" type="datetime-local" required value={starts} onChange={(e) => moveStart(e.target.value)} aria-label="Starts" />
+        <span>to</span>
+        <input id="show-ends" type="datetime-local" required value={ends} onChange={(e) => setEnds(e.target.value)} aria-label="Ends" />
       </div>
       <div className="field-row">
-        <label htmlFor="show-starts">From</label>
-        <input id="show-starts" type="datetime-local" required value={starts} onChange={(e) => setStarts(e.target.value)} />
-        <label htmlFor="show-ends">to</label>
-        <input id="show-ends" type="datetime-local" required value={ends} onChange={(e) => setEnds(e.target.value)} />
+        <input id="show-price" type="text" inputMode="decimal" style={{ width: 56 }} value={price} onChange={(e) => setPrice(e.target.value)} aria-label="Ticket price" />
+        <label htmlFor="show-price">USDC a ticket,</label>
+        <input id="show-capacity" type="text" inputMode="numeric" style={{ width: 48 }} placeholder="any" value={capacity} onChange={(e) => setCapacity(e.target.value)} />
+        <label htmlFor="show-capacity">seats</label>
       </div>
-      <div className="field-row">
-        <label htmlFor="show-price">Ticket (USDC)</label>
-        <input id="show-price" inputMode="decimal" size={5} value={price} onChange={(e) => setPrice(e.target.value)} />
-        <label htmlFor="show-capacity">Seats</label>
-        <input id="show-capacity" inputMode="numeric" size={4} placeholder="any" value={capacity} onChange={(e) => setCapacity(e.target.value)} />
-      </div>
-      <div className="field-row-stacked">
-        <label htmlFor="show-split">Split after the show (basis points, 10000 = 100%): people, project, or addresses</label>
-        <input id="show-split" spellCheck={false} value={split} onChange={(e) => setSplit(e.target.value)} placeholder="Lena=6000, project=4000" />
-      </div>
-      <p className="small">The money stays in the show's own Safe until it's over: then the hosts pay it out by the split, or back to everyone if it's called off. Test network: no real money.</p>
-      <div className="buttons">
-        <button type="button" onClick={onDone}>
-          Cancel
-        </button>
-        <button className="default">Set up show</button>
-      </div>
-    </form>
+      <p className="small muted">The money waits in the show's own Safe; after it, you decide who gets what. Test network.</p>
+    </>
   );
+  return { fields, create };
 }
 
-/** In a project's Live: its ticketed shows, to get a ticket for, or (hosts) to set up, call off and pay out. */
-export function ShowsSection({ project, maintainer }: { project: SpaceInfo; maintainer: boolean }) {
-  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
-  const [adding, setAdding] = useState(false);
-  if (!shows) return null;
+/**
+ * In a project's Live, under its rooms: one folded line for its ticketed
+ * shows, opened to get a ticket or (hosts) to open its room, call it off and
+ * pay out. It opens by itself only while a show of yours is on. Shows are set
+ * up with their room, in Host room.
+ */
+export function ShowsSection({ rooms, shows, members, onHost }: { rooms: RoomInfo[]; shows: ShowInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
+  const [opened, setOpened] = useState<boolean>();
+  if (!shows.length) return null;
+  // Hosts keep shows that are over in sight (they still pay out); everyone else sees what's coming.
+  const done = (s: ShowInfo) => s.cancelled || Date.parse(s.ends) < Date.now();
+  const coming = shows.filter((s) => !done(s) || s.mine);
+  const gone = shows.filter((s) => done(s) && !s.mine);
+  const next = coming.find((s) => !done(s));
+  const open = opened ?? coming.some((s) => s.open && (s.mine || s.ticket));
+  const summary = next ? `${next.name} · ${stage(next).label.toLowerCase()}${coming.length > 1 ? ` · ${coming.length - 1} more` : ''}` : coming.length ? `${coming.length} to settle` : 'none coming';
   return (
-    <section>
-      <h3>Shows</h3>
-      {shows.length === 0 && !adding && <p className="small">One-off events with tickets, like a live stream. Tickets are paid into the show's own Safe until it's over; its room lets ticket holders in while it's on.</p>}
-      {shows.map((s) => (
-        <ShowCard key={s.id} show={s} />
-      ))}
-      {maintainer && (adding ? <NewShow project={project} onDone={() => setAdding(false)} /> : <button onClick={() => setAdding(true)}>New show…</button>)}
+    <section className="shows">
+      <div className="field-row">
+        <button className="link grow" style={{ textAlign: 'left' }} aria-expanded={open} onClick={() => setOpened(!open)}>
+          {open ? '▾' : '▸'} 🎟 Shows <span className="small muted">{summary}</span>
+        </button>
+      </div>
+      {open && (
+        <>
+          {coming.map((s) => (
+            <ShowCard key={s.id} show={s} rooms={rooms} members={members} onHost={onHost} />
+          ))}
+          {gone.length > 0 && <p className="small muted">{gone.length} past show{gone.length === 1 ? '' : 's'}.</p>}
+        </>
+      )}
     </section>
   );
 }
