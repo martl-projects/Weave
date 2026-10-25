@@ -2,6 +2,16 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.19.4 · 2026-10-25
+
+- Give up stalled phone connections after 4 s and try again
+- Notice periods count from when a node first saw the change
+- Votes, badges and invites: decide by number where a date is only a claim
+- Company policy: hold accounts to it by number, not by claimed time
+- Backdating: cut removed members off by number, settle concurrent rekeys
+- Show badges on the hub, and tell people when they get one
+- A wallet section in Keys & devices; smart wallets (EIP-1271)
+
 ## v0.19.3 · 2026-10-25
 
 - Run the phone worker's test on its own in CI, with time limits
