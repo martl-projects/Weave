@@ -961,9 +961,10 @@ export class WeaveNode implements Backend {
       const salt = b64u.encode(new Uint8Array(randomBytes(16)));
       tokens = { idToken: options.idToken({ nonce: signInNonce(author, salt) }), salt, expires: 0 };
     } else if (options.idToken) {
-      tokens = { idToken: options.idToken, expires: 0 };
+      // A token from elsewhere can't name this new identity in its nonce: the company would never vouch for it (0siqvEzB).
+      throw new Error("a new company account signs in through the company's sign-in page: run weave enroll <link> without a token");
     } else {
-      if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: give your company sign-in token (--id-token)");
+      if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: ask your company for a new link");
       tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser, { for: author });
     }
     const { idToken, salt } = tokens;
