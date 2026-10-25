@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { signEventV2 } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { OidcStub, VaultStub } from './helpers/stubs.ts';
 
@@ -61,6 +62,17 @@ async function company(key: string) {
 
 // Many sync and reconcile rounds against the HTTP stand-ins: slow on CI runners.
 describe('company policy', { timeout: 120_000 }, () => {
+  it('holds a company account to the policy even for what it backdates to before it', async () => {
+    const { acme, kofi, bob, all, round } = await company('acme-backdate');
+    await acme.companyAction({ action: 'settings', outside: true, directs: 'all', public: false, chats: false });
+    syncAll(all);
+    await round();
+    // A modified client: Kofi's key signs a public post dated a year before the policy.
+    const { event, body } = signEventV2(kofi.identity, undefined, { kind: 'weave.post', space: 'public', n: kofi.replica.number(kofi.identity.did) + 1, time: new Date(Date.now() - 365 * day).toISOString(), body: { text: 'old news, honest' } });
+    const result = bob.replica.ingest({ e: event, ...(body !== undefined ? { b: body } : {}) });
+    expect(result.status).not.toBe('accepted');
+  });
+
   it('keeps company accounts to the company’s policy, on their own nodes and on everyone else’s', async () => {
     const { acme, lena, kofi, bob, all, round } = await company('acme-policy');
     const bobsGroup = await bob.createGroup('Bobs');

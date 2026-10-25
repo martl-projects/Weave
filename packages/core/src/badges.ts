@@ -168,24 +168,30 @@ export function badgesOf(events: WeaveRecord[]): { series: BadgeSeries[]; badges
     badges.set(badge.id, badge);
   }
 
-  // Follow each badge from holder to holder: a transfer counts if its signer holds the badge and it continues from the latest step.
-  const taken = new Map<string, Did>();
+  // Follow each badge from holder to holder: from each step, the holder's transfer counts. Passed on twice from one
+  // point, the one their key numbered first counts (its date is only their claim), and the badge shows as contested.
+  const steps = new Map<string, WeaveRecord[]>();
   for (const event of sorted) {
     if (event.kind !== KIND_BADGE_TRANSFER) continue;
     const body = bodyOf(event);
-    const badge = badges.get(str(body.badge, 100));
-    if (!badge || !isDid(body.to)) continue;
-    const step = `${badge.id}:${str(body.from, 100)}`;
-    const by = taken.get(step);
-    if (by) {
-      if (by === event.author) badge.contested = true; // the same holder passed it on twice from one point
-      continue;
+    if (!isDid(body.to)) continue;
+    const step = `${str(body.badge, 100)}:${str(body.from, 100)}`;
+    const list = steps.get(step);
+    if (list) list.push(event);
+    else steps.set(step, [event]);
+  }
+  const firstOf = (a: WeaveRecord, b: WeaveRecord) => (a.signer === b.signer ? a.seq - b.seq : recordOrder(a, b));
+  for (const badge of badges.values()) {
+    for (let hops = 0; hops < 10_000; hops++) {
+      const from = (steps.get(`${badge.id}:${badge.head}`) ?? []).filter((e) => e.author === badge.holder);
+      if (!from.length) break;
+      const [next, ...others] = [...from].sort(firstOf);
+      if (others.length) badge.contested = true; // the same holder passed it on twice from one point
+      const to = bodyOf(next).to as Did;
+      badge.head = next.id;
+      badge.holder = to;
+      badge.holders.push(to);
     }
-    if (event.author !== badge.holder || body.from !== badge.head) continue;
-    taken.set(step, event.author);
-    badge.head = event.id;
-    badge.holder = body.to;
-    badge.holders.push(body.to);
   }
 
   // Personal notes made public (or taken back) by the one the badge was given to, if they match what the issuer signed.

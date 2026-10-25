@@ -30,12 +30,14 @@ import type { EventView } from './records.ts';
  *                          public, by a maintainer (or moderator): the space's treasury as they
  *                          computed it, so people outside the space can pay it and include it in
  *                          their own splits. Anyone can check the address against the owners'
- *                          linked wallets; that the owners maintain the space only its members can.
+ *                          linked wallets; that the author manages the space only its members can,
+ *                          so only they take it: outsiders get no address rather than a wrong one.
  *   weave.safe.retired     {safe, successor, kind, space, owners, threshold}
  *                          public, by an owner: an address that isn't used any more (a treasury
  *                          whose owners changed wallets, or someone's old wallet), and the one that
  *                          replaced it. Money sent there is moved on by its owners; for a treasury,
- *                          owners and threshold say who still signs for the old Safe.
+ *                          owners and threshold say who still signs for the old Safe. Counts only
+ *                          from the wallet's owner, or from someone who manages the treasury's space.
  *   weave.label            {target, label, reason}
  *                          public, by anyone: what they think of an address or contract
  *                          (target 'eip155:<chain>:<address>'): endorse or block, and why.
@@ -276,7 +278,7 @@ export function parseShares(value: unknown): SplitShares | undefined {
 }
 
 /** A project's split today, and a changed one still waiting for its notice to pass. Only maintainers' splits count. */
-export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date()): { current?: Split; pending?: Split } {
+export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date(), seenAt: (entry: Entry) => string = (e) => e.event.time): { current?: Split; pending?: Split } {
   const splits: Split[] = [];
   for (const e of entries) {
     if (e.kind !== KIND_TREASURY_SPLIT || !maintainers.has(e.event.author)) continue;
@@ -289,7 +291,9 @@ export function splitOf(entries: Entry[], maintainers: Set<Did>, now = new Date(
           return isDid(did) && Number.isInteger(share) && (share as number) > 0 ? [{ did, share: share as number }] : [];
         })
       : [];
-    const from = splits.length ? new Date(Date.parse(e.event.time) + SPLIT_NOTICE_DAYS * 86_400_000).toISOString() : e.event.time;
+    // The notice counts from when it was made, as claimed, but never before this node first saw it: a change dated back can't skip it.
+    const seen = seenAt(e) > e.event.time ? seenAt(e) : e.event.time;
+    const from = splits.length ? new Date(Date.parse(seen) + SPLIT_NOTICE_DAYS * 86_400_000).toISOString() : e.event.time;
     splits.push({
       preset: typeof body.preset === 'string' ? body.preset.slice(0, 20) : 'custom',
       shares,
@@ -321,12 +325,14 @@ export interface AnnouncedTreasury {
 }
 
 /** The latest treasury each space's maintainers announced, checked against its owners and threshold. */
-export function treasuriesOf(events: EventView[]): Map<string, AnnouncedTreasury> {
+export function treasuriesOf(events: EventView[], manages: (space: string, author: Did) => boolean): Map<string, AnnouncedTreasury> {
   const latest = new Map<string, AnnouncedTreasury>();
   for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
     if (event.kind !== KIND_TREASURY) continue;
     const body = (event.body ?? {}) as Record<string, unknown>;
     const space = typeof body.space === 'string' ? body.space.slice(0, 100) : '';
+    // Anyone can announce owners whose Safe matches its address: only someone who manages the space says whose it is.
+    if (!space || !manages(space, event.author)) continue;
     const owners = Array.isArray(body.owners) ? body.owners.filter(isAddress).slice(0, 50) : [];
     const threshold = Number(body.threshold);
     if (!space || !isAddress(body.address) || !owners.length || !Number.isInteger(threshold) || threshold < 1 || threshold > owners.length) continue;
@@ -547,8 +553,12 @@ export interface RetiredAddress {
   time: string;
 }
 
-/** Retired addresses by address (lowercase), the latest retirement of each counting. */
-export function retiredOf(events: EventView[]): Map<string, RetiredAddress> {
+/**
+ * Retired addresses by address (lowercase), the latest retirement of each
+ * counting; only those `trusted` says may retire it (a wallet's owner, a
+ * treasury's managers), or a stranger could send its payers elsewhere.
+ */
+export function retiredOf(events: EventView[], trusted: (retired: RetiredAddress) => boolean): Map<string, RetiredAddress> {
   const out = new Map<string, RetiredAddress>();
   for (const event of [...events].sort((a, b) => a.time.localeCompare(b.time))) {
     if (event.kind !== KIND_SAFE_RETIRED) continue;
@@ -556,7 +566,7 @@ export function retiredOf(events: EventView[]): Map<string, RetiredAddress> {
     if (!isAddress(body.safe)) continue;
     const owners = Array.isArray(body.owners) ? body.owners.filter(isAddress).slice(0, 50).map(checksumAddress) : [];
     const threshold = Number(body.threshold);
-    out.set(body.safe.toLowerCase(), {
+    const retired: RetiredAddress = {
       address: checksumAddress(body.safe),
       successor: isAddress(body.successor) ? checksumAddress(body.successor) : '',
       kind: body.kind === 'wallet' ? 'wallet' : 'treasury',
@@ -565,7 +575,8 @@ export function retiredOf(events: EventView[]): Map<string, RetiredAddress> {
       threshold: Number.isInteger(threshold) && threshold >= 1 && threshold <= Math.max(owners.length, 1) ? threshold : 1,
       by: event.author,
       time: event.time,
-    });
+    };
+    if (trusted(retired)) out.set(body.safe.toLowerCase(), retired);
   }
   return out;
 }

@@ -19,6 +19,9 @@ import type { Did } from './keys.ts';
  *   weave.issue.status  {issue, status}                   open | in-progress | done | closed
  *   weave.proposal      {title, text, deadline, quorum}   put something to a vote
  *   weave.vote          {proposal, choice}                yes | no | abstain; latest before the deadline counts
+ *   weave.proposal.close {proposal, upTo}                 by its proposer, after the deadline: the last number of each
+ *                                                         voting key that counts. Votes are dated by their authors, so
+ *                                                         once closed only these count, whatever date a later one claims
  *   weave.vote.delegate {to}                              my vote in this group follows `to` unless I vote myself
  */
 export const KIND_THREAD = 'weave.thread';
@@ -35,6 +38,7 @@ export const KIND_ISSUE_STATUS = 'weave.issue.status';
 export const KIND_PROPOSAL = 'weave.proposal';
 export const KIND_VOTE = 'weave.vote';
 export const KIND_VOTE_DELEGATE = 'weave.vote.delegate';
+export const KIND_PROPOSAL_CLOSE = 'weave.proposal.close';
 
 export const ISSUE_STATUSES = ['open', 'in-progress', 'done', 'closed'] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
@@ -316,16 +320,20 @@ export interface Proposal {
 export function tally(proposal: Entry, entries: Entry[], members: Set<Did>, now = new Date().toISOString()): Tally {
   const deadline = str(proposal.body, 'deadline', 40);
   const closed = deadline !== '' && now >= deadline;
+  // Closed by its proposer: what counts is what they counted, by number; until then, by the date votes claim.
+  const close = entries.find((x) => x.kind === KIND_PROPOSAL_CLOSE && str(x.body, 'proposal', 200) === proposal.id && x.event.author === proposal.event.author);
+  const upTo = close ? new Map(Object.entries((field(close.body, 'upTo') ?? {}) as Record<string, unknown>).filter((e): e is [string, number] => Number.isSafeInteger(e[1]))) : undefined;
+  const counts = (e: Entry) => (upTo ? (upTo.get(e.event.signer) ?? -1) >= e.event.seq : !(deadline && e.event.time > deadline));
   const direct = new Map<Did, Choice>();
   for (const e of entries.filter((x) => x.kind === KIND_VOTE && str(x.body, 'proposal', 200) === proposal.id).sort(byTime)) {
     const choice = str(e.body, 'choice', 10) as Choice;
     if (!CHOICES.includes(choice) || !members.has(e.event.author)) continue;
-    if (deadline && e.event.time > deadline) continue;
+    if (!counts(e)) continue;
     direct.set(e.event.author, choice);
   }
   const delegateTo = new Map<Did, Did>();
   for (const e of entries.filter((x) => x.kind === KIND_VOTE_DELEGATE).sort(byTime)) {
-    if (deadline && e.event.time > deadline) continue;
+    if (!counts(e)) continue;
     const to = field(e.body, 'to');
     if (typeof to === 'string' && to !== e.event.author) delegateTo.set(e.event.author, to as Did);
     else delegateTo.delete(e.event.author);
@@ -360,6 +368,16 @@ export function tally(proposal: Entry, entries: Entry[], members: Set<Did>, now 
 }
 
 /** `members`: who may vote, for all proposals or per proposal (e.g. the writers of its board). */
+/** What a proposal's close names (upTo): per key that voted on it or delegated, the last number held now. */
+export function closingUpTo(proposal: Entry, entries: Entry[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of entries) {
+    const relevant = (e.kind === KIND_VOTE && str(e.body, 'proposal', 200) === proposal.id) || e.kind === KIND_VOTE_DELEGATE;
+    if (relevant && e.event.seq > (out[e.event.signer] ?? -1)) out[e.event.signer] = e.event.seq;
+  }
+  return out;
+}
+
 export function proposalsOf(entries: Entry[], members: Set<Did> | ((proposal: Entry) => Set<Did>), now?: string): Proposal[] {
   const replies = repliesByTarget(entries);
   return entries

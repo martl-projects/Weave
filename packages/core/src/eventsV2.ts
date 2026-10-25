@@ -71,6 +71,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.group.rekey',
   'weave.group.remove',
   'weave.invite',
+  'weave.invite.close',
   'weave.membership',
   'weave.tier',
   // badges: lasting recognition, checkable by anyone

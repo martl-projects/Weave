@@ -92,6 +92,7 @@ import {
   boardName,
   boardsOf,
   canManage,
+  rekeyCounts,
   canonicalKind,
   classOf,
   channelName,
@@ -128,6 +129,7 @@ import {
   KIND_FOLLOW,
   KIND_GIFT,
   KIND_INVITE,
+  KIND_INVITE_CLOSE,
   KIND_ISSUE,
   KIND_ISSUE_CLAIM,
   KIND_ISSUE_STATUS,
@@ -187,6 +189,8 @@ import {
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
+  KIND_PROPOSAL_CLOSE,
+  closingUpTo,
   KIND_REACT,
   KIND_REKEY,
   KIND_REMOVE,
@@ -797,6 +801,8 @@ export class WeaveNode implements Backend {
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
+      // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
+      if (event.kind === KIND_SEALED) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
@@ -1623,12 +1629,41 @@ export class WeaveNode implements Backend {
   /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
   #rotateMonthly(space: StoredSpace): number {
     const state = this.#state(space);
-    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state)).values()].some((r) => r.keepDays)) || !!this.#companyRetention(space)?.maxDays;
+    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companyRetention(space)?.maxDays;
     if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !canManage(state, this.identity.author)) return 0;
     const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
     if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
     this.#rotateKey(space);
     return 1;
+  }
+
+  /**
+   * Keys from rekeys that don't count after all (their author had lost the role
+   * by then, as a demotion or removal made at the same time shows): kept to read
+   * what was sealed with them, never used to seal. Whoever took one before
+   * hearing of the loss falls back to the key everyone else seals with.
+   */
+  #settleEpochKeys(space: StoredSpace): number {
+    if (space.kind === 'direct') return 0;
+    const state = this.#state(space);
+    if (!state.cutoffs?.some((c) => c.managed)) return 0;
+    const scope = spaceScope(space);
+    const counts = new Map<string, boolean>();
+    for (const e of this.replica.events((x) => x.scope === scope && canonicalKind(x.kind) === KIND_REKEY)) {
+      const opened = this.#tryOpen((me) => openRekey(e, me));
+      if (!opened) continue;
+      const epoch = String(opened.epoch);
+      counts.set(epoch, (counts.get(epoch) ?? false) || rekeyCounts(state, e));
+    }
+    let moved = 0;
+    for (const [epoch, ok] of counts) {
+      if (ok || !space.keys[epoch]) continue;
+      (space.alternates ??= {})[epoch] = [...new Set([...(space.alternates[epoch] ?? []), space.keys[epoch]])];
+      delete space.keys[epoch];
+      moved++;
+    }
+    if (moved) this.#saveSpace(space);
+    return moved;
   }
 
   /** A new key for a space, boxed to everyone in it. */
@@ -1681,7 +1716,7 @@ export class WeaveNode implements Backend {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: {} }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
@@ -1699,7 +1734,7 @@ export class WeaveNode implements Backend {
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new Error("that's you");
     if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author) } }));
     return this.#spaceInfo(space);
   }
 
@@ -1747,7 +1782,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
     if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
@@ -2115,7 +2150,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
     const me = this.identity.author;
-    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state));
+    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt);
     return boards
       .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
       .map((b) => {
@@ -2366,6 +2401,9 @@ export class WeaveNode implements Backend {
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
+    changed += await this.#closeProposals();
+    for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
@@ -4126,7 +4164,7 @@ export class WeaveNode implements Backend {
       if (!state.tier) continue;
       const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
       if (!expired.length) continue;
-      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member } }));
+      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
       const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
@@ -4493,7 +4531,7 @@ export class WeaveNode implements Backend {
     const ownerAddresses = owners.map((o) => o.address);
     const address = owners.length ? safeAddress(ownerAddresses, threshold, treasurySaltNonce(space.id)) : undefined;
     const announced = this.#treasuries();
-    const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers) : {};
+    const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers, new Date(this.clock()), this.#seenAt) : {};
     const splitInfo = (split: Split): SplitInfo => ({ ...split, makers: split.makers.map((m) => ({ person: person(m.did), share: m.share })), by: person(split.by) });
     const recipients = current
       ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: announced, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
@@ -4572,7 +4610,33 @@ export class WeaveNode implements Backend {
   }
 
   #retired() {
-    return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED));
+    const history = this.#walletHistory();
+    return retiredOf(this.replica.events((e) => e.kind === KIND_SAFE_RETIRED), (r) => (r.kind === 'wallet' ? history.get(r.address.toLowerCase()) === r.by : !!r.space && this.#manages(r.space, r.by)));
+  }
+
+  /** When sealed events arrived in this run. */
+  #arrivals = new Map<string, string>();
+  /**
+   * When this node first saw an event, kept in the home once a notice period
+   * asks: where it must not depend on the date its author claims. Events from
+   * before this run count from when they're first asked about: later, never sooner.
+   */
+  #seen?: Record<string, string>;
+  #seenAt = (entry: { id: string }): string => {
+    const file = joinPath(this.home.dir, 'seen.json');
+    this.#seen ??= readSecretJson<Record<string, string>>(this.home, file) ?? {};
+    let at = this.#seen[entry.id];
+    if (!at) {
+      at = this.#seen[entry.id] = this.#arrivals.get(entry.id) ?? new Date(this.clock()).toISOString();
+      writeSecretJson(this.home, file, this.#seen);
+    }
+    return at;
+  };
+
+  /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
+  #manages(spaceId: string, did: Did): boolean {
+    const space = this.#spaces.get(spaceId);
+    return !!space && canManage(this.#state(space), did);
   }
 
   async label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined> {
@@ -4660,7 +4724,7 @@ export class WeaveNode implements Backend {
   }
 
   #treasuries() {
-    return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY));
+    return treasuriesOf(this.replica.events((e) => e.kind === KIND_TREASURY), (space, author) => this.#manages(space, author));
   }
 
   // ---------------------------------------------------------------- signing a Safe's transactions together
@@ -5253,6 +5317,49 @@ export class WeaveNode implements Backend {
     return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
   }
 
+  /** Close our invites that expired, naming who came in with each: later joins with them don't count, whatever date they claim. */
+  #closeInvites(space: StoredSpace): number {
+    if (space.kind === 'direct') return 0;
+    const now = new Date(this.clock()).toISOString();
+    const decoded = this.#decodedIn(space.id);
+    const closed = new Set(decoded.filter((d) => d.inner.kind === KIND_INVITE_CLOSE && d.event.author === this.identity.author).map((d) => (d.inner.body as { invite?: unknown } | null)?.invite));
+    let n = 0;
+    for (const d of decoded) {
+      if (canonicalKind(d.inner.kind) !== KIND_INVITE || d.event.author !== this.identity.author) continue;
+      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown };
+      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || b.expires > now || closed.has(b.invite)) continue;
+      const state = this.#state(space);
+      const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
+      this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
+      closed.add(b.invite);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * Close our proposals whose deadline passed: name the last number of each
+   * voting key we hold, so votes signed later don't count, whatever date they
+   * claim. Votes still on their way when we close don't count either.
+   */
+  async #closeProposals(): Promise<number> {
+    const now = new Date(this.clock()).toISOString();
+    let closed = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (space.kind !== 'project') continue;
+      const entries = this.#entries(space);
+      for (const p of entries) {
+        if (p.kind !== KIND_PROPOSAL || p.event.author !== this.identity.author) continue;
+        const deadline = typeof (p.body as { deadline?: unknown } | null)?.deadline === 'string' ? (p.body as { deadline: string }).deadline : '';
+        if (!deadline || deadline > now) continue;
+        if (entries.some((e) => e.kind === KIND_PROPOSAL_CLOSE && e.event.author === this.identity.author && (e.body as { proposal?: unknown } | null)?.proposal === p.id)) continue;
+        await this.publish({ kind: KIND_PROPOSAL_CLOSE, body: { proposal: p.id, upTo: closingUpTo(p, entries) }, space: space.id });
+        closed++;
+      }
+    }
+    return closed;
+  }
+
   async delegateVote(input: { project: string; who?: string }): Promise<void> {
     const project = this.#project(input.project);
     const to = input.who ? this.resolve(input.who) : null;
@@ -5436,7 +5543,7 @@ export class WeaveNode implements Backend {
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
     if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member) }) } }));
   }
 
   /** A board of a space, by name or title. */
@@ -5982,7 +6089,8 @@ export class WeaveNode implements Backend {
           ...(org.signIn ? { signIn: org.signIn } : {}),
         });
         // Published, so every node holds the company's accounts to it (and counts their links only while allowed).
-        if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy } });
+        // With the last number of each company account's keys it holds: what they sign past it is held to the policy, whatever date it claims.
+        if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy, from: this.#companyKeysUpTo() } });
         return;
       }
       case 'chat': {
@@ -6096,7 +6204,7 @@ export class WeaveNode implements Backend {
           }
           for (const did of state.maintainers) {
             if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false } }));
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did) } }));
             changed++;
           }
           state = this.#state(space);
@@ -6146,9 +6254,20 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- company policy (stage 11)
 
   /** Companies' published policies, by company. Read once, then kept up to date as policies arrive (it's asked while events are received). */
-  #policyCache?: Map<Did, CompanyPolicy & { time: string }>;
+  #policyCache?: Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }>;
 
-  #policies(): Map<Did, CompanyPolicy & { time: string }> {
+  /** The last number of every key of this company's accounts that this (the company's) node holds. */
+  #companyKeysUpTo(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const signer of this.replica.signers()) {
+      const person = this.replica.authority.personOf(signer);
+      if (person === this.identity.author || this.replica.authority.keys(person).org !== this.identity.author) continue;
+      out[signer] = this.replica.number(signer);
+    }
+    return out;
+  }
+
+  #policies(): Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }> {
     if (!this.#policyCache) {
       this.#policyCache = new Map();
       for (const r of this.replica.events((e) => e.kind === KIND_ORG_POLICY && e.scope === 'public')) this.#takePolicy(r);
@@ -6158,11 +6277,13 @@ export class WeaveNode implements Backend {
 
   #takePolicy(r: { author: Did; time: string; body: Json }): void {
     const before = this.#policyCache!.get(r.author);
-    if (!before || before.time <= r.time) this.#policyCache!.set(r.author, { ...readPolicy(r.body), time: r.time });
+    const from = (r.body as { from?: unknown } | null)?.from;
+    const upTo = from && typeof from === 'object' && !Array.isArray(from) ? new Map(Object.entries(from as Record<string, unknown>).filter((e): e is [Did, number] => isDid(e[0]) && Number.isSafeInteger(e[1]))) : undefined;
+    if (!before || before.time <= r.time) this.#policyCache!.set(r.author, { ...readPolicy(r.body), time: r.time, ...(upTo ? { from: upTo } : {}) });
   }
 
   /** A company account's company policy, if its company published one. */
-  #policyOf(person: Did): { org: Did; policy: CompanyPolicy & { time: string } } | undefined {
+  #policyOf(person: Did): { org: Did; policy: CompanyPolicy & { time: string; from?: Map<Did, number> } } | undefined {
     const org = this.replica.authority.keys(person).org;
     const policy = org ? this.#policies().get(org) : undefined;
     return org && policy ? { org, policy } : undefined;
@@ -6177,12 +6298,17 @@ export class WeaveNode implements Backend {
 
   /**
    * What a company account signs against its company's published policy, from
-   * the time it was published: refused by its own node when writing and by
-   * every node when receiving. Leaving, identity and keys are always allowed.
+   * when it was published: refused by its own node when writing and by every
+   * node when receiving. Leaving, identity and keys are always allowed. "From
+   * when" is by number where the policy names them (what each key had signed by
+   * then), so backdating doesn't get past it; by time for older policies.
    */
-  #policyRefuses(event: { author: Did; space: string; kind: string; time: string }, body: Json | undefined): string | undefined {
+  #policyRefuses(event: { author: Did; signer?: Did; n?: number; space: string; kind: string; time: string }, body: Json | undefined): string | undefined {
     const found = this.#policyOf(event.author);
-    if (!found || event.time < found.policy.time || ALWAYS_ALLOWED.has(event.kind)) return undefined;
+    if (!found || ALWAYS_ALLOWED.has(event.kind)) return undefined;
+    const from = found.policy.from;
+    const earlier = from && event.signer && event.n !== undefined ? event.n <= (from.get(event.signer) ?? 0) : event.time < found.policy.time;
+    if (earlier) return undefined;
     const { org, policy } = found;
     const who = this.nameOf(org) ?? 'The company';
     const colleague = (did: Did) => did === org || this.replica.authority.keys(did).org === org;
@@ -7353,12 +7479,30 @@ export class WeaveNode implements Backend {
   #takeKeys(event: WeaveRecord): void {
     if (canonicalKind(event.kind) === KIND_REKEY) {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
-      if (!space || !canManage(this.#state(space), event.author)) return;
+      // Judged by whether its author managed the space when they made it, not today (a member back after a handover still takes it).
+      if (!space || !rekeyCounts(this.#state(space), event)) return;
       const opened = this.#tryOpen((me) => openRekey(event, me));
-      if (opened && !space.keys[String(opened.epoch)] && !space.shredded?.includes(opened.epoch)) {
-        space.keys[String(opened.epoch)] = opened.key;
+      if (!opened || space.shredded?.includes(opened.epoch)) return;
+      const epoch = String(opened.epoch);
+      if (!space.keys[epoch]) {
+        space.keys[epoch] = opened.key;
         this.#saveSpace(space);
+        return;
       }
+      if (space.keys[epoch] === opened.key || space.alternates?.[epoch]?.includes(opened.key)) return;
+      // Two managers rekeyed at once: keep every key of the epoch, and all seal with the one from the rekey with the lowest id.
+      const state = this.#state(space);
+      const all = this.replica
+        .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && rekeyCounts(state, e))
+        .flatMap((e) => {
+          const o = this.#tryOpen((me) => openRekey(e, me));
+          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key }] : [];
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+      const keys = [...new Set([...all.map((k) => k.key), space.keys[epoch], ...(space.alternates?.[epoch] ?? [])])];
+      space.keys[epoch] = all[0]?.key ?? space.keys[epoch];
+      (space.alternates ??= {})[epoch] = keys.filter((k) => k !== space.keys[epoch]);
+      this.#saveSpace(space);
       return;
     }
     const opened = this.#tryOpen((me) => openGift(event, me));
@@ -7382,6 +7526,22 @@ export class WeaveNode implements Backend {
       return;
     }
     void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
+  }
+
+  /**
+   * The last number of each of a person's keys (devices, agents) this node
+   * holds: what a removal, demotion, leave or handover names as counting before
+   * it. Whatever those keys sign numbered past it counts as after, whatever date
+   * it claims (Julian's backdating issue).
+   */
+  #upTo(person: Did): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const signer of this.replica.signers()) {
+      if (this.replica.authority.personOf(signer) !== person) continue;
+      const n = this.replica.number(signer);
+      if (n > 0) out[signer] = n;
+    }
+    return out;
   }
 
   #state(space: StoredSpace): SpaceState {
@@ -7518,7 +7678,7 @@ export class WeaveNode implements Backend {
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
-    const rules = boardRulesOf(entries, this.#managers(state));
+    const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
     const around = this.#aroundPosts(entries);
     const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
     const minDays = this.#companyRetention(space)?.minDays;
