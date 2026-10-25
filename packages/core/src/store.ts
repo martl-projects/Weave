@@ -40,6 +40,10 @@ export interface LogStore {
   chainAt(signer: Did, space: string, seq: number): ControlEventV2 | undefined;
   /** A key's latest control event in a space. */
   chainHead(signer: Did, space: string): ControlEventV2 | undefined;
+  /** A key's content event numbered `cs` in a space. */
+  contentAt(signer: Did, space: string, cs: number): StoredV2 | undefined;
+  /** The highest cs of a key's content in a space (0 if none). */
+  contentCount(signer: Did, space: string): number;
   /** Every v2 event (in no particular order), content events with their bodies where held. */
   all2(): StoredV2[];
   /** Keys with v2 events. */
@@ -72,6 +76,8 @@ export class MemoryV2 {
   #byNumber = new Map<string, StoredV2>();
   #numbers = new Map<Did, number>();
   #chains = new Map<string, ControlEventV2[]>();
+  #contents = new Map<string, StoredV2>();
+  #contentCounts = new Map<string, number>();
   #bodies = new Map<string, Json>();
   #forgotten = new Set<string>();
   #kept = new Map<string, Map<string, string>>();
@@ -86,6 +92,13 @@ export class MemoryV2 {
       if (event.seq !== chain.length + 1) throw new Error(`out-of-order control event: seq ${event.seq} after ${chain.length}`);
       chain.push(event);
       this.#chains.set(`${event.signer} ${event.space}`, chain);
+    }
+    if (event.class === 'content' && event.cs !== undefined) {
+      const key = `${event.signer} ${event.space} ${event.cs}`;
+      if (this.#contents.has(key)) throw new Error(`${event.signer} already has content numbered ${event.cs} in ${event.space}`);
+      this.#contents.set(key, { id, event });
+      const pair = `${event.signer} ${event.space}`;
+      this.#contentCounts.set(pair, Math.max(this.#contentCounts.get(pair) ?? 0, event.cs));
     }
     this.#byId.set(id, { id, event });
     this.#byNumber.set(numberKey, { id, event });
@@ -110,6 +123,14 @@ export class MemoryV2 {
 
   chainHead(signer: Did, space: string): ControlEventV2 | undefined {
     return this.#chains.get(`${signer} ${space}`)?.at(-1);
+  }
+
+  contentAt(signer: Did, space: string, cs: number): StoredV2 | undefined {
+    return this.#contents.get(`${signer} ${space} ${cs}`);
+  }
+
+  contentCount(signer: Did, space: string): number {
+    return this.#contentCounts.get(`${signer} ${space}`) ?? 0;
   }
 
   all2(): StoredV2[] {

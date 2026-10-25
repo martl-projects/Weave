@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS events2 (
 );
 CREATE INDEX IF NOT EXISTS events2_space ON events2 (space, time);
 CREATE UNIQUE INDEX IF NOT EXISTS events2_chain ON events2 (signer, space, seq) WHERE seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS events2_cs ON events2 (signer, space, json_extract(json, '$.cs')) WHERE class = 'content';
 CREATE TABLE IF NOT EXISTS bodies (hash TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS forgotten (hash TEXT PRIMARY KEY, time TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS keep (stream TEXT NOT NULL, tag TEXT NOT NULL, data TEXT NOT NULL, time TEXT NOT NULL, PRIMARY KEY (stream, tag));
@@ -91,10 +92,12 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
+  /** Each key's highest content number (cs) per space. */
+  readonly #contentCounts = new Map<string, number>();
 
   constructor(path: string, options: { readOnly?: boolean } = {}) {
     this.path = path;
@@ -119,6 +122,7 @@ export class SqliteStore implements LogStore {
       byId: this.#db.prepare('SELECT id, json FROM events2 WHERE id = ?'),
       byNumber: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? AND n = ?'),
       chainAt: this.#db.prepare('SELECT json FROM events2 WHERE signer = ? AND space = ? AND seq = ?'),
+      contentAt: this.#db.prepare("SELECT id, json FROM events2 WHERE signer = ? AND space = ? AND class = 'content' AND json_extract(json, '$.cs') = ?"),
       all: this.#db.prepare('SELECT e.id, e.json, b.json AS body FROM events2 e LEFT JOIN bodies b ON b.hash = e.body'),
       bySigner: this.#db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
       inSpace: this.#db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time'),
@@ -139,6 +143,8 @@ export class SqliteStore implements LogStore {
       const event = JSON.parse(row.json) as ControlEventV2;
       this.#chainHeads.set(`${event.signer} ${event.space}`, event);
     }
+    const counts = this.#db.prepare("SELECT signer, space, MAX(json_extract(json, '$.cs')) AS cs FROM events2 WHERE class = 'content' GROUP BY signer, space").all() as Array<{ signer: Did; space: string; cs: number | null }>;
+    for (const row of counts) if (row.cs) this.#contentCounts.set(`${row.signer} ${row.space}`, row.cs);
     open.add(this);
   }
 
@@ -176,6 +182,7 @@ export class SqliteStore implements LogStore {
     this.#v2.insert.run(id, eventIdV2(event), event.class, event.author, event.signer, event.space, event.n, seq, event.time, event.kind, event.class === 'content' ? event.body : null, JSON.stringify(event));
     this.#numbers.set(event.signer, Math.max(this.#numbers.get(event.signer) ?? 0, event.n));
     if (event.class === 'control') this.#chainHeads.set(chainKey, event);
+    if (event.class === 'content' && event.cs !== undefined) this.#contentCounts.set(chainKey, Math.max(this.#contentCounts.get(chainKey) ?? 0, event.cs));
   }
 
   get2(id: string): StoredV2 | undefined {
@@ -197,6 +204,14 @@ export class SqliteStore implements LogStore {
 
   chainHead(signer: Did, space: string): ControlEventV2 | undefined {
     return this.#chainHeads.get(`${signer} ${space}`);
+  }
+
+  contentAt(signer: Did, space: string, cs: number): StoredV2 | undefined {
+    return stored(this.#v2.contentAt.get(signer, space, cs));
+  }
+
+  contentCount(signer: Did, space: string): number {
+    return this.#contentCounts.get(`${signer} ${space}`) ?? 0;
   }
 
   all2(): StoredV2[] {
@@ -300,6 +315,7 @@ export class SqliteStore implements LogStore {
     const heads = new Map(this.#heads);
     const numbers = new Map(this.#numbers);
     const chainHeads = new Map(this.#chainHeads);
+    const contentCounts = new Map(this.#contentCounts);
     this.#db.exec('BEGIN');
     try {
       const result = fn();
@@ -307,7 +323,7 @@ export class SqliteStore implements LogStore {
       return result;
     } catch (error) {
       this.#db.exec('ROLLBACK');
-      for (const [map, saved] of [[this.#heads, heads], [this.#numbers, numbers], [this.#chainHeads, chainHeads]] as Array<[Map<unknown, unknown>, Map<unknown, unknown>]>) {
+      for (const [map, saved] of [[this.#heads, heads], [this.#numbers, numbers], [this.#chainHeads, chainHeads], [this.#contentCounts, contentCounts]] as Array<[Map<unknown, unknown>, Map<unknown, unknown>]>) {
         map.clear();
         for (const [k, v] of saved) map.set(k, v);
       }

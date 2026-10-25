@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_SEALED, sealFor, spaceScope } from '@weave/core';
+import { isWireItemV2, KIND_BOARD_RULE, KIND_CARRY, KIND_HANDOVER, KIND_SEALED, sealFor, signContentEventV2, spaceScope } from '@weave/core';
 import { loadSpaces, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 /* Regression tests from Julian's pre-release review: each one reproduces an issue and checks it stays fixed. */
@@ -114,5 +114,58 @@ describe("a carry can't forge events (FQ59bhoy)", () => {
     forge([{ id: 'forged-handover', author: bob.identity.author, signer: bob.identity.author, seq: 999, time: new Date().toISOString(), kind: KIND_HANDOVER, body: { to: alice.identity.author } }]);
     syncAll();
     expect((await carol.spaces('community')).find((x) => x.name === 'Synths')?.founder).toBe(bob.identity.author);
+  });
+});
+
+describe('a removed member can\'t plant old-dated content at numbers the remover never saw (H7hk7X9S, causal anchoring)', () => {
+  const plant = (alice: WeaveNode, bob: WeaveNode, home: ReturnType<typeof stored>, n: number, text: string, cs?: number) => {
+    const f = sealFor(home, { kind: 'weave.msg', body: { text } });
+    const { event, body } = signContentEventV2(alice.identity, { kind: f.kind, space: f.scope, class: 'content', body: f.body, ih: f.ih, n, ...(cs ? { cs } : {}), time: new Date(Date.now() - 3_600_000).toISOString() });
+    return bob.replica.ingest({ e: event, b: body });
+  };
+
+  async function setUp() {
+    const [bob, alice, carol] = [person('Bob'), person('Alice'), person('Carol')];
+    await bob.createGroup('Home');
+    await alice.joinSpace(await bob.invite('Home'));
+    await carol.createGroup('Side');
+    await alice.joinSpace(await carol.invite('Side'));
+    const side = spaceScope(stored(carol, 'Side'));
+    // Bob is not in Side: he never sees the numbers Alice's key uses there.
+    const syncHome = () => {
+      for (const [from, to] of [[alice, bob], [bob, alice]] as const) from.replica.events().filter((e) => e.scope !== side).forEach((e) => to.replica.ingest(e));
+    };
+    syncHome();
+    await alice.say({ space: 'Home', text: 'hi' });
+    for (const text of ['a', 'b', 'c']) await alice.say({ space: 'Side', text });
+    await alice.say({ space: 'Home', text: 'bye' });
+    syncHome();
+    const gap = alice.replica.events((e) => e.scope === side && e.signer === alice.identity.did && e.class === 'content')[1].seq;
+    expect(bob.replica.store.byNumber(alice.identity.did, gap)).toBeUndefined();
+    const home = stored(alice, 'Home');
+    return { bob, alice, home, gap, syncHome };
+  }
+
+  it('content at a gap number, with or without a number in the space, counts as after the removal', async () => {
+    const { bob, alice, home, gap } = await setUp();
+    await bob.removeMember('Home', 'Alice');
+    const s = bob.replica.store.contentCount(alice.identity.did, spaceScope(home));
+    expect(plant(alice, bob, home, gap, 'planted, no number').status).toBe('accepted');
+    expect(plant(alice, bob, home, gap + 1, 'planted at a seen number', s).reason).toMatch(/fork/);
+    expect(plant(alice, bob, home, gap - 1 > 0 ? gap - 1 : gap + 2, 'planted past the head', s + 1).status).toBe('accepted');
+    const texts = (await bob.messages('Home')).map((m) => m.text);
+    expect(texts).toEqual(expect.arrayContaining(['hi', 'bye']));
+    expect(texts.filter((t) => t.startsWith('planted'))).toEqual([]);
+  });
+
+  it('a removal from before anchors is anchored by whoever manages the space', async () => {
+    const { bob, alice, home, gap } = await setUp();
+    // As an older node removed: naming only numbers.
+    const space = stored(bob, 'Home');
+    bob.replica.write(bob.identity, sealFor(space, { kind: 'weave.space.remove', body: { member: alice.identity.author, upTo: { [alice.identity.did]: bob.replica.number(alice.identity.did) } } }));
+    expect(await bob.reconcile()).toBeGreaterThan(0);
+    const s = bob.replica.store.contentCount(alice.identity.did, spaceScope(home));
+    expect(plant(alice, bob, home, gap, 'planted past the head', s + 1).status).toBe('accepted');
+    expect((await bob.messages('Home')).map((m) => m.text).filter((t) => t.startsWith('planted'))).toEqual([]);
   });
 });

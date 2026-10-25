@@ -1718,12 +1718,12 @@ export class WeaveNode implements Backend {
       if (isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e)) {
         const id = canonicalIdV2(e);
         if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
-        const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, time: e.time, body: null };
+        const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, cseq: e.class === 'control' ? e.seq : undefined, cs: e.class === 'content' ? e.cs : undefined, time: e.time, body: null };
         out.push({ id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
         continue;
       }
       if (!unchecked || typeof item.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || !Number.isSafeInteger(item.seq)) continue;
-      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, time: item.time, body: null };
+      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, cseq: undefined, cs: undefined, time: item.time, body: null };
       out.push({ id: item.id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
     }
     return out;
@@ -2033,7 +2033,7 @@ export class WeaveNode implements Backend {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
@@ -2051,7 +2051,7 @@ export class WeaveNode implements Backend {
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new Error("that's you");
     if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     return this.#spaceInfo(space);
   }
 
@@ -2099,7 +2099,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
     if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
@@ -3262,6 +3262,7 @@ export class WeaveNode implements Backend {
     changed += await this.#attest();
     changed += await this.#applyDirectory();
     changed += await this.#offboard();
+    changed += this.#anchorRemovals();
     changed += await this.#orgDuties();
     changed += await this.#continueEnrollment();
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
@@ -4320,7 +4321,7 @@ export class WeaveNode implements Backend {
       if (!state.tier) continue;
       const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
       if (!expired.length) continue;
-      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
+      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
       const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
@@ -5732,7 +5733,7 @@ export class WeaveNode implements Backend {
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
     if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member) }) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member), at: this.#anchor(member, space) }) } }));
   }
 
   /** A board of a space, by name or title. */
@@ -6393,7 +6394,7 @@ export class WeaveNode implements Backend {
           }
           for (const did of state.maintainers) {
             if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did) } }));
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
             changed++;
           }
           state = this.#state(space);
@@ -7281,6 +7282,28 @@ export class WeaveNode implements Backend {
    * removed (with a new key), by whoever manages the space. Newcomers get an
    * hour to sign in.
    */
+  /**
+   * People removed before removals named what they saw (an anchor, see
+   * spaces.ts): whoever manages the space anchors them now, once, by what this
+   * node holds of them. What they sign past it counts as after their removal.
+   */
+  #anchorRemovals(): number {
+    let anchored = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (this.#directs.has(space.id)) continue;
+      const state = this.#state(space);
+      if (!canManage(state, this.identity.author) || !state.removed.size) continue;
+      for (const did of state.removed.keys()) {
+        if (state.left.has(did) || state.members.has(did)) continue;
+        const signers = this.replica.signers().filter((s) => this.replica.authority.personOf(s) === did);
+        if (!signers.length || signers.every((s) => state.cutoffs?.some((c) => c.signer === s && c.c !== undefined))) continue;
+        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member: did, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
+        anchored++;
+      }
+    }
+    return anchored;
+  }
+
   async #offboard(): Promise<number> {
     let removed = 0;
     const now = new Date(this.clock()).toISOString();
@@ -7766,6 +7789,18 @@ export class WeaveNode implements Backend {
    * it. Whatever those keys sign numbered past it counts as after, whatever date
    * it claims (Julian's backdating issue).
    */
+  #anchor(person: Did, space: StoredSpace): Record<string, { c: number; s: number; n: number }> {
+    // In the space itself, each key's control head and last content (see Anchor in spaces.ts): numbered there without gaps.
+    const scope = spaceScope(space);
+    const out: Record<string, { c: number; s: number; n: number }> = {};
+    for (const signer of this.replica.signers()) {
+      if (this.replica.authority.personOf(signer) !== person) continue;
+      const n = this.replica.number(signer);
+      if (n > 0) out[signer] = { c: this.replica.store.chainHead(signer, scope)?.seq ?? 0, s: this.replica.store.contentCount(signer, scope), n };
+    }
+    return out;
+  }
+
   #upTo(person: Did): Record<string, number> {
     const out: Record<string, number> = {};
     for (const signer of this.replica.signers()) {

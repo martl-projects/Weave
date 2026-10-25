@@ -27,6 +27,12 @@ import type { SigningIdentity } from './events.ts';
  * spaces, going on from the key's v1 seq. Content has no chain, so `n` is what
  * revocation ("void this key's events after n") and equivocation (two events of
  * one key with the same n) rest on. See docs/v2-stage1.md.
+ *
+ * Content also carries `cs`: its key's own counter in that space, from 1, with
+ * no gaps from its writer (but no prev either, so content can still be skipped
+ * or forgotten). A node in a space sees a key's numbers there without gaps that
+ * belong to other spaces: what a removal names as seen (its anchor, see
+ * spaces.ts) is a point nobody can write below without a fork showing.
  */
 
 /** Kinds that decide who may do what: chained, complete, never forgotten. */
@@ -141,6 +147,8 @@ export interface UnsignedControlEventV2 extends HeaderV2 {
 
 export interface UnsignedContentEventV2 extends HeaderV2 {
   class: 'content';
+  /** Position among this signer's content in this space, from 1 (absent on content from before it). */
+  cs?: number;
   /** Hash of the body (see bodyHash); the body itself travels apart. */
   body: string;
 }
@@ -161,6 +169,8 @@ export interface EventFieldsV2 {
   was?: string;
   /** A sealed event's inner hash (see HeaderV2.ih). */
   ih?: string;
+  /** A content event's number in its space (see UnsignedContentEventV2.cs). */
+  cs?: number;
 }
 
 const SIGNING_CONTEXT = 'weave/event/v2\n';
@@ -212,6 +222,7 @@ export function signContentEventV2(identity: SigningIdentity, fields: EventField
     time: fields.time ?? new Date().toISOString(),
     kind: fields.kind,
     body: bodyHash(body),
+    ...(fields.cs ? { cs: fields.cs } : {}),
     ...(fields.was ? { was: fields.was } : {}),
     ...(fields.ih ? { ih: fields.ih } : {}),
   };
@@ -274,9 +285,10 @@ export function isWellFormedV2(value: unknown): value is EventV2 {
     );
   }
   if (e.class === 'content') {
-    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'time', 'kind', 'body', 'was', 'ih', 'sig']);
+    const allowed = new Set(['v', 'class', 'author', 'signer', 'space', 'n', 'cs', 'time', 'kind', 'body', 'was', 'ih', 'sig']);
     return (
       Object.keys(e).every((k) => allowed.has(k)) &&
+      (e.cs === undefined || (Number.isSafeInteger(e.cs) && (e.cs as number) >= 1)) &&
       (sealed || !CONTROL_KINDS.has(e.kind as string)) &&
       typeof e.body === 'string' && HASH_PATTERN.test(e.body)
     );

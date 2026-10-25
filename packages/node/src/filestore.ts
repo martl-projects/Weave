@@ -84,6 +84,14 @@ export class FileStore implements LogStore {
     return this.#memory.chainHead(signer, space);
   }
 
+  contentAt(signer: Did, space: string, cs: number): StoredV2 | undefined {
+    return this.#memory.contentAt(signer, space, cs);
+  }
+
+  contentCount(signer: Did, space: string): number {
+    return this.#memory.contentCount(signer, space);
+  }
+
   all2(): StoredV2[] {
     return this.#memory.all2();
   }

@@ -20,6 +20,10 @@ export interface WeaveRecord {
   scope: string;
   /** v1: the seq; v2: n. One number space per key across both. */
   seq: number;
+  /** A v2 control event's position in its key's chain in its space. */
+  cseq?: number;
+  /** A v2 content event's position among its key's content in its space (cs). */
+  cs?: number;
   class: EventClass;
   /** The body: inline for v1 and v2 control events; a v2 content event's resolved body, or null when missing. */
   body: Json;
@@ -57,6 +61,7 @@ export function recordOfV2(id: string, event: EventV2, body?: Json): WeaveRecord
     time: event.time,
     scope: event.space,
     seq: event.n,
+    ...(event.class === 'control' ? { cseq: event.seq } : event.cs ? { cs: event.cs } : {}),
     class: event.class,
     body: content ? (body ?? null) : event.body,
     ...(missing ? { missing: true as const } : {}),
@@ -68,6 +73,6 @@ export function recordOfV2(id: string, event: EventV2, body?: Json): WeaveRecord
 export const recordOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
 /** What reading code needs of an event: a v1 event and a record of either version both have it. */
-export type EventView = Pick<WeaveRecord, 'author' | 'signer' | 'seq' | 'kind' | 'scope' | 'body' | 'time'>;
+export type EventView = Pick<WeaveRecord, 'author' | 'signer' | 'seq' | 'cseq' | 'cs' | 'kind' | 'scope' | 'body' | 'time'>;
 
 export const isRecord = (value: unknown): value is WeaveRecord => !!value && typeof value === 'object' && 'wire' in value && 'id' in value;

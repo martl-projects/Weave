@@ -1,7 +1,7 @@
 import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_ORG_FREEZE, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
 import { canonicalJson, type Json } from './bytes.ts';
 import { eventId, isWellFormedEvent, signEvent, verifyEventSignature, type EventFields, type SigningIdentity, type WeaveEvent } from './events.ts';
-import { bodyHash, bodyMatches, canonicalIdV2, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
+import { bodyHash, bodyMatches, canonicalIdV2, classOf, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
 import type { Did } from './keys.ts';
 import { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
 import { MemoryStore, type LogStore, type StoredV2 } from './store.ts';
@@ -139,7 +139,9 @@ export class Replica {
   /** Create, sign and store the next v2 event from a local identity: numbered after the key's last, chained if control. */
   append2(identity: SigningIdentity, fields: Omit<EventFieldsV2, 'n'>): WeaveRecord {
     const space = fields.space ?? 'public';
-    const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1 });
+    // Content is numbered in its space too (cs): what a removal names as seen there.
+    const content = (fields.class ?? classOf(fields.kind)) === 'content';
+    const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1, ...(content ? { cs: this.store.contentCount(identity.did, space) + 1 } : {}) });
     const result = this.ingest({ e: event, ...(body !== undefined ? { b: body } : {}) });
     if (result.status !== 'accepted') throw new Error(`local event not accepted: ${'reason' in result ? result.reason : result.status}`);
     return recordOfV2(canonicalIdV2(event), event, body);
@@ -259,6 +261,8 @@ export class Replica {
       if (event.seq > expected) return this.#park(`v2 ${ownId}`, wireItem(event, goodBody), 'gap in chain');
       if (event.prev !== (head ? eventIdV2(head) : null)) return { status: 'rejected', reason: 'broken hash chain' };
     }
+    // Two content events of one key at the same number in a space: a fork, like two at one n.
+    if (event.class === 'content' && event.cs !== undefined && this.store.contentAt(event.signer, event.space, event.cs)) return this.#fork(event.signer);
 
     const record = recordOfV2(id, event, goodBody);
     const check = this.authority.check(record);
