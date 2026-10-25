@@ -347,7 +347,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
             </>
           ) : null}
           <div className="field-row">
-            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you or a project's split (test network)</label>
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you (test network)</label>
           </div>
           {onChain ? (
             <>
@@ -360,7 +360,7 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 <input id="tier-payto" spellCheck={false} placeholder={wallet ? `your wallet ${wallet.address}` : '0x… (link your wallet, or give an address)'} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
               </div>
               <p className="small">
-                Empty: your linked wallet. Or a project's split contract (CLI: weave treasury split), so payments are divided as the project's split says. Supporters pay from their linked wallet and send the transaction; your Weave reads it on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can.
+                Empty: your linked wallet. Supporters pay from their linked wallet; your Weave reads the payment on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can. (To divide payments among a project's makers, give its split contract here: <code>weave treasury split</code>, once the project's payments are on.)
               </p>
             </>
           ) : null}

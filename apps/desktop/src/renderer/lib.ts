@@ -134,6 +134,33 @@ export function markSeen(key: string, time: string): void {
 
 export const isUnread = (key: string, latest?: string): boolean => !!latest && latest > (readSeen()[key] ?? '');
 
+// ---------------------------------------------------------------- payments switched on (per viewer, in this browser only)
+
+const PAYMENTS_KEY = 'weave.payments';
+
+function readPayments(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(PAYMENTS_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+/** Whether you turned a project's payments (treasury, split, ticketed shows) on; re-renders when that changes. */
+export function usePaymentsSwitch(project: string): [boolean, (on: boolean) => void] {
+  useTick();
+  const set = (on: boolean) => {
+    const all = readPayments();
+    if (on) all[project] = true;
+    else delete all[project];
+    try {
+      localStorage.setItem(PAYMENTS_KEY, JSON.stringify(all));
+    } catch {}
+    bump();
+  };
+  return [!!readPayments()[project], set];
+}
+
 // ---------------------------------------------------------------- formatting
 
 /** Markdown reduced to plain text, for one-line previews. */

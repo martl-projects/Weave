@@ -859,6 +859,9 @@ export interface RoomInfo {
   open: boolean;
   /** You are invited (every participant, or named people). */
   mayJoin: boolean;
+  /** A ticketed room: the show whose ticket holders get in while it's on, and tiers whose members do. */
+  show?: string;
+  groups?: Array<{ id: string; name?: string }>;
   /** You joined it (players) or are hosting it right now (host). */
   joined: boolean;
   /** Players: accepted by the host. Host: listening for players. */

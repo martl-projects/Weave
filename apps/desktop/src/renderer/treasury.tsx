@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { SpaceInfo, TreasuryInfo, WalletInfo } from '@weave/node/client';
+import type { ShowInfo, SpaceInfo, TreasuryInfo, WalletInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { api, bump, shortDid, useApi } from './lib.ts';
+import { api, bump, shortDid, useApi, usePaymentsSwitch } from './lib.ts';
 import { copy } from './posts.tsx';
 import { SafeProposals } from './shows.tsx';
 import { WalletLink } from './wallet.tsx';
@@ -99,14 +99,44 @@ function SplitEditor({ project, treasury, communities }: { project: SpaceInfo; t
   );
 }
 
-/** In a project's settings: its treasury's address, owners and split. */
-export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spaces: SpaceInfo[] }) {
+/**
+ * Whether a project's payments show (its treasury and split in Settings, new
+ * shows in Live): once you turned them on here, or while the project uses them.
+ */
+export function usePayments(project: SpaceInfo) {
+  const [turnedOn, turn] = usePaymentsSwitch(project.id);
+  const { data: treasury } = useApi(() => api<TreasuryInfo>('treasury', project.id).catch(() => undefined), [project.id]);
+  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id).catch(() => []), [project.id]);
+  const inUse = !!(treasury?.split || treasury?.pending || shows?.length);
+  return { on: turnedOn || inUse, inUse, turn };
+}
+
+/** In a project's settings: payments, off until someone turns them on; then its treasury. */
+export function PaymentsSettings({ project, spaces }: { project: SpaceInfo; spaces: SpaceInfo[] }) {
+  const payments = usePayments(project);
+  if (!payments.on)
+    return (
+      <fieldset>
+        <legend>Payments</legend>
+        <p className="small">
+          Off. Turned on, the project gets a treasury (a Safe its maintainers' wallets own), a split of what it earns, and ticketed shows in Live. On a test network: no real money yet.
+        </p>
+        <div className="buttons">
+          <button onClick={() => payments.turn(true)}>Turn on payments</button>
+        </div>
+      </fieldset>
+    );
+  return <TreasurySettings project={project} spaces={spaces} onTurnOff={payments.inUse ? undefined : () => payments.turn(false)} />;
+}
+
+/** Its treasury's address, owners and split. */
+function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; spaces: SpaceInfo[]; onTurnOff?(): void }) {
   const { data: treasury } = useApi(() => api<TreasuryInfo>('treasury', project.id), [project.id]);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
   if (!treasury) return null;
   return (
     <fieldset>
-      <legend>Treasury</legend>
+      <legend>Payments · treasury</legend>
       <p className="small">
         The project's own wallet: a Safe its maintainers' wallets own ({treasury.threshold} of {Math.max(treasury.owners.length, 1)} must sign). Weave holds no keys or money. On {treasury.chain.name}, a test network: no real money yet.
       </p>
@@ -167,6 +197,11 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
         </>
       )}
       {treasury.maintainer && <SplitEditor key={JSON.stringify(treasury.pending ?? treasury.split ?? null)} project={project} treasury={treasury} communities={spaces.filter((s) => s.kind === 'community')} />}
+      {onTurnOff && (
+        <div className="buttons">
+          <button onClick={onTurnOff}>Turn off payments</button>
+        </div>
+      )}
     </fieldset>
   );
 }

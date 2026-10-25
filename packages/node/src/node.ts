@@ -3539,6 +3539,8 @@ export class WeaveNode implements Backend {
       mine,
       open: room.open,
       mayJoin: this.#mayJoin(room, me),
+      ...(room.show ? { show: room.show } : {}),
+      ...(room.groups?.length ? { groups: room.groups.map((id) => ({ id, name: this.#spaces.get(id)?.name })) } : {}),
       joined,
       connected,
       peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
