@@ -215,7 +215,7 @@ function Badges({ post }: { post: PostInfo }) {
 export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate; moderator?: boolean }) {
   const href = postHref(post);
   return (
-    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`}>
+    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
       <a className={`thumb${post.image ? ' has-image' : ''}`} href={href}>
         {post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
@@ -736,7 +736,7 @@ export function ShareDialog({ post, spaces, onClose }: { post: PostInfo; spaces:
   const communities = spaces.filter((s) => s.kind === 'community' && s.id !== post.space?.id);
   const [to, setTo] = useState(communities[0]?.id ?? (post.type === 'project' ? 'followers' : ''));
   const [text, setText] = useState('');
-  const link = postLink(post.id);
+  const link = post.url ?? postLink(post.id);
   const into = communities.length > 0 || post.type === 'project';
   return (
     <Modal title={`Share “${post.title}”`} onClose={onClose}>

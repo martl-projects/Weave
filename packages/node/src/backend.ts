@@ -35,7 +35,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -372,6 +372,11 @@ export interface InviteOptions {
 export interface PostInfo {
   id: string;
   short: string;
+  /**
+   * Its web address, clickable anywhere: http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/title.
+   * Every Weave serves it on its own computer, so it opens for whoever can see the post.
+   */
+  url: string;
   type: 'post' | 'project' | 'issue' | 'proposal';
   /** Where it lives; undefined for public posts. */
   space?: SpaceRef;
@@ -382,6 +387,10 @@ export interface PostInfo {
   link?: string;
   /** An attached image (wblob: reference), shown as the post's thumbnail. */
   image?: string;
+  /** As a work item: what a session should do with it (its starting prompt). */
+  prompt?: string;
+  /** The routine occurrence that made it. */
+  routine?: { id: string; occurrence: string };
   time: string;
   /** When its author last edited it. */
   edited?: string;
@@ -738,10 +747,105 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox';
+  what: 'link-repo' | 'space' | 'inbox' | 'post';
   space?: SpaceRef;
+  /** For post: the post to show. */
+  post?: { id: string; title: string };
   /** For link-repo: the repository to have chosen (owner/name). */
   repo?: string;
+}
+
+/**
+ * A post an agent pointed you to: shown with weave_show, or written as a link in
+ * a Claude Code session Weave follows. Kept on this computer only, for the
+ * Mentions panel; never signed or sent anywhere.
+ */
+export interface MentionInfo {
+  id: string;
+  time: string;
+  /** The post as it was when mentioned, shown like on a board. */
+  post: PostInfo;
+  /** weave_show by an agent, or a link in a Claude Code session. */
+  source: 'agent' | 'claude-code';
+  /** The agent that showed it (weave_show). */
+  agent?: string;
+  /** For claude-code: the session, and the folder it works in. */
+  session?: { id: string; folder?: string };
+  /** What the agent said about it (weave_show). */
+  note?: string;
+}
+
+/** A session, as a tool or the app names it: its provider (default claude-code) and id, plus what's known about it. */
+export interface SessionRef {
+  provider?: string;
+  id: string;
+  /** The provider's other id for it, e.g. the Claude app's local_… id. */
+  host?: string;
+  folder?: string;
+}
+
+/** A work item on a session's stack: the post as it is now, shown like on a board. */
+export type StackPost = PostInfo;
+
+/**
+ * An agent session and its stack of work items: the top one is what it's on
+ * now, the ones below wait for it. Kept sealed to you, on all your devices.
+ */
+export interface SessionInfo {
+  provider: string;
+  id: string;
+  host?: string;
+  folder?: string;
+  /** Its name with the provider (the Claude app's sidebar title), when known. */
+  title?: string;
+  /** Top first. A post you can no longer see is listed by id only. */
+  stack: Array<{ post: StackPost | { id: string; missing: true }; since: string }>;
+  /** When its stack last changed. */
+  time: string;
+  /** When the session last did something (its transcript was written), if Weave can tell. */
+  active?: string;
+}
+
+/** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
+export interface WorkTarget {
+  post: PostInfo;
+  /** The latest session with this item on its stack, if any. */
+  session?: SessionInfo;
+  /** Folders on this computer known for the item's project, most likely first. */
+  folders: string[];
+  /** The message for the session: the item, its address, and its starting prompt. */
+  text: string;
+}
+
+/** A routine: a trigger and a work item it creates (see core routines.ts), with when it last and next fires. */
+export interface RoutineInfo {
+  id: string;
+  name: string;
+  on: boolean;
+  trigger: { type: 'schedule'; days: number[]; time: string } | { type: 'first-start' };
+  create: { board: string; title: string; text?: string; prompt?: string };
+  space: SpaceRef;
+  /** The latest item it made. */
+  last?: { post: string; occurrence: string; time: string };
+  /** When it next fires (scheduled routines that are on). */
+  next?: string;
+}
+
+/** Your desk: the private project where your journal, ideas and routines live, and its folder here. */
+export interface DeskInfo {
+  space: SpaceRef;
+  /** The folder on this computer where your daily driver's sessions run. */
+  folder?: string;
+  /** Your daily driver: the session your desk's items go to (the first one that took one on). */
+  driver?: SessionRef;
+}
+
+/** Whether Weave follows your Claude Code sessions for links to posts. */
+export interface ClaudeCodeFollow {
+  on: boolean;
+  /** Where Claude Code keeps its transcripts here, and whether it exists. */
+  dir: string;
+  found: boolean;
 }
 
 /** One of your agents asking to sign more kinds of events; you allow or decline it in the Inbox. */
@@ -1405,7 +1509,8 @@ export interface Backend {
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  /** prompt: as a work item, what a session should do with it (its starting prompt). */
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
@@ -1425,13 +1530,65 @@ export interface Backend {
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen>;
+  /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
+  showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
+  /** The Mentions panel: posts agents pointed to on this computer, newest first. */
+  mentions(): Promise<MentionInfo[]>;
+  /** Follow your Claude Code sessions for links to posts (reads the agent's answers in its transcripts, here only), or stop. */
+  followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow>;
+  claudeCode(): Promise<ClaudeCodeFollow>;
+  /** Sessions with work items, the latest changed first. */
+  sessions(): Promise<SessionInfo[]>;
+  /**
+   * The sessions pane: sessions with work items, and the ones that did something in the last `hours`
+   * (default 12) even without, the most recently active first.
+   */
+  activeSessions(input?: { hours?: number }): Promise<SessionInfo[]>;
+  /** The session the Claude app shows right now (while Follow Claude Code is on), with its stack. */
+  focusedSession(): Promise<SessionInfo | null>;
+  /** One session and its stack (an empty stack if it has none yet). */
+  session(input: SessionRef): Promise<SessionInfo>;
+  /**
+   * Put a work item on top of a session's stack: an existing post, or a new one (`create`, posted in its
+   * project or community). Whatever was on top waits below until this one is done.
+   */
+  workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo>;
+  /** Take a work item off a session's stack (the top one if none is named); the next one comes back up. `close` marks an issue done. */
+  doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
+  /** Where to work on an item (Ctrl+click): its latest session or the folders known for its project, and the message to start with. */
+  workTarget(input: { post: string }): Promise<WorkTarget>;
+  /** Your desk, once it's set up. */
+  desk(): Promise<DeskInfo | null>;
+  /** Where your desk's folder is, or goes unless you choose another. */
+  deskFolder(): Promise<string>;
+  /**
+   * Set up your desk (once): a private project with Journal and Ideas boards, the folder where your daily
+   * driver works (with a CLAUDE.md for it), and the first routines. Running it again changes nothing that exists.
+   */
+  setupDesk(input: { name?: string; folder?: string }): Promise<DeskInfo>;
+  /** A project's routines (your desk's by default). */
+  routines(input?: { space?: string }): Promise<RoutineInfo[]>;
+  /** Add or change a routine (maintainers). Without an id, a new one. */
+  setRoutine(input: { space?: string; id?: string; name: string; on?: boolean; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }): Promise<RoutineInfo>;
+  removeRoutine(input: { space?: string; id: string }): Promise<void>;
+  /** Run a routine now: its item for today (or its first start), unless that exists already. */
+  runRoutine(input: { space?: string; id: string }): Promise<PostInfo>;
+  /**
+   * A new session for this item is about to open in the Claude app (Ctrl+click): the next session you look at
+   * there that has no work items yet, within 15 minutes, gets it on its stack once the app says which session it is.
+   */
+  expectSession(input: { post: string; folder?: string }): Promise<void>;
+  /** Remember a folder on this computer for a project (or community), for the next new session there. */
+  rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
+  /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
+  restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
   answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */
@@ -1660,7 +1817,7 @@ export interface Backend {
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same project. */
   reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
   issues(project: string): Promise<IssueInfo[]>;
-  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo>;
+  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo>;
   claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
   setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
   proposals(project: string): Promise<ProposalInfo[]>;
@@ -1683,7 +1840,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp', 'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',

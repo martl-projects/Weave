@@ -103,7 +103,7 @@ export function loadEmbeds(root: HTMLElement): void {
       () => {
         box.classList.add('missing');
         const link = document.createElement('a');
-        link.setAttribute('href', `weave:post:${id}`);
+        link.setAttribute('href', id.startsWith('http') ? id : `weave:post:${id}`);
         link.textContent = "A post you can't see here";
         box.replaceChildren(link);
       },
@@ -122,6 +122,7 @@ function embedCard(p: PostInfo): HTMLElement {
   };
   const card = el('a', 'post-embed-card');
   card.setAttribute('href', `weave:post:${p.id}`);
+  card.dataset.post = p.id;
   const thumb = el('span', 'post-embed-thumb');
   if (p.image) {
     const img = document.createElement('img');
