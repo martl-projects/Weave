@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { GumroadLink } from '@weave/core';
+import type { GumroadLink, OnchainPrice } from '@weave/core';
 import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -191,6 +191,17 @@ export interface GitHubInfo {
   /** A sign-in waiting for you to enter the code on GitHub. */
   pending?: { userCode: string; verificationUri: string; expires: string };
   /** Why the last sign-in didn't work. */
+  error?: string;
+}
+
+export interface GumroadInfo {
+  /** This copy of Weave knows the Weave application on Gumroad (it has its client ID), so it can connect in the browser. */
+  available: boolean;
+  /** The Gumroad account connected on this device. */
+  account?: string;
+  /** A connection waiting for the person to allow Weave on Gumroad: open this. */
+  pending?: { url: string };
+  /** Why the last connection didn't work. */
   error?: string;
 }
 
@@ -448,6 +459,8 @@ export interface TierInfo {
   auto: boolean;
   /** Sold through Gumroad: buy there, then send the license key from the receipt. */
   gumroad?: GumroadLink;
+  /** Paid on chain: send the amount per month to `to` from your linked wallet, then send the transaction's hash. */
+  onchain?: OnchainPrice;
   /** You offer this tier. */
   mine: boolean;
   /** For the creator: how many active members it has. */
@@ -471,7 +484,8 @@ export interface BadgeSeriesInfo {
   description: string;
   /** How many there can ever be; missing: no limit. Fixed when the series was started. */
   limit?: number;
-  project?: { id: string; name: string };
+  /** checked: this node is in the project and its issuer maintains it; false: claimed, this node can't check. */
+  project?: { id: string; name: string; checked?: boolean };
   /** Badges given so far. */
   given: number;
   /** The issuer signed more badges than the limit, or one number twice: provable from their own signatures. */
@@ -484,7 +498,7 @@ export interface BadgeSeriesInfo {
 /** One badge: number n of its series, signed by the issuer, passed on by its holders. */
 export interface BadgeInfo {
   id: string;
-  series: { id: string; name: string; symbol: string; image?: string; limit?: number; broken: boolean; project?: { id: string; name: string } };
+  series: { id: string; name: string; symbol: string; image?: string; limit?: number; broken: boolean; project?: { id: string; name: string; checked?: boolean } };
   issuer: Person;
   n: number;
   holder: Person;
@@ -507,6 +521,198 @@ export interface BadgeInfo {
   mine: boolean;
 }
 
+/** A wallet someone linked to their Weave identity: theirs, as the wallet itself signed. */
+export interface WalletInfo {
+  owner: Person;
+  /** The address, with its checksum. */
+  address: string;
+  /** The wallet signed that it belongs to its owner; only verified wallets own treasuries. */
+  verified: boolean;
+  time: string;
+  mine: boolean;
+}
+
+/** How a project's income is divided, in basis points (10000 = 100%). */
+export interface SplitInfo {
+  /** standard, community, solo, free, or custom. */
+  preset: string;
+  shares: { makers: number; treasury: number; community: number; foundation: number };
+  /** How the makers' part is divided; empty: equally among the maintainers. */
+  makers: Array<{ person: Person; share: number }>;
+  /** The community that gets the community part. */
+  community?: string;
+  by: Person;
+  time: string;
+  /** When it counts: a changed split waits a few days, so nobody is surprised by it. */
+  from: string;
+}
+
+/** Someone a split pays: a person, or the treasury of a project, community or the Weave Foundation. */
+export interface RecipientInfo {
+  kind: 'person' | 'project' | 'community' | 'foundation';
+  /** Their did, or the space's id ('' while the foundation isn't set up). */
+  id: string;
+  name?: string;
+  /** Missing while they have no verified wallet or treasury yet. */
+  address?: string;
+  /** In millionths of the income (1000000 = 100%). */
+  share: number;
+  part: 'makers' | 'treasury' | 'community' | 'foundation';
+}
+
+/** A project's split contract (0xSplits v2.2, owned by its treasury): pay it, and the money is divided as the split says. */
+export interface SplitContractInfo {
+  chain: { id: number; name: string; explorer: string };
+  /** Where it is, or will be once deployed. */
+  address: string;
+  deployed: boolean;
+  /** The transaction that deploys it; any wallet can send it. */
+  deploy: { to: string; data: string };
+  allocations: Array<{ address: string; share: number }>;
+}
+
+/** A ticketed event, like a live stream with an entry price. Tickets are paid into the show's own Safe (its hosts' wallets own it) until it's over. */
+export interface ShowInfo {
+  id: string;
+  name: string;
+  host: Person;
+  project?: { id: string; name?: string };
+  /** The room it happens in. */
+  room?: string;
+  starts: string;
+  ends: string;
+  /** Per ticket; `to` is the show's Safe. */
+  price: OnchainPrice;
+  capacity?: number;
+  /** For the host: tickets sold. */
+  sold?: number;
+  hosts: Person[];
+  /** How the money is paid out after the show; `address` is missing while someone has no wallet or treasury yet. */
+  split: Array<{ to: string; name?: string; address?: string; share: number }>;
+  safe: { address: string; threshold: number; deploy?: { to: string; data: string } };
+  cancelled: boolean;
+  /** Tickets let people in right now (from an hour before the start to the end). */
+  open: boolean;
+  mine: boolean;
+  /** Your ticket, if you have one. */
+  ticket?: { tx: string };
+}
+
+/** A ticket to a show: for its host every one sold (and requests that weren't let in, with the reason), for others their own. */
+export interface TicketInfo {
+  holder: Person;
+  tx: string;
+  /** The wallet it was paid from, and how much (smallest unit). */
+  from?: string;
+  value?: string;
+  ok: boolean;
+  reason?: string;
+  request?: string;
+}
+
+/** What the show's Safe has to send to pay out (by the split) or pay back (to everyone who paid). The hosts sign it in their own wallets. */
+export interface ShowSettlement {
+  safe: string;
+  /** What the Safe holds now, and what this sends (smallest unit). */
+  balance: string;
+  total: string;
+  calls: Array<{ to: string; data: string }>;
+  /** All of them as one Safe transaction (operation 1: a delegatecall to MultiSendCallOnly). */
+  multiSend: { to: string; data: string; operation: number };
+  /** The same for the Safe app's Transaction Builder: load it at app.safe.global, check, sign. */
+  batch: unknown;
+  /** Proposed in Weave: the hosts sign it here, in their wallets. */
+  proposal: SafeProposalInfo;
+}
+
+/** How to pay a tier or show from your wallet without copying anything: a QR code for a phone wallet, or a transaction for a wallet in the browser. */
+export interface PaymentRequestInfo {
+  /** What it pays for, e.g. "a month of Editors". */
+  what: string;
+  chain: number;
+  token: string;
+  symbol: string;
+  decimals: number;
+  to: string;
+  /** In the token's smallest unit. */
+  amount: string;
+  /** Your linked wallet: pay from it. */
+  from: string;
+  /** EIP-681 link (ethereum:…): show it as a QR code for a phone wallet. */
+  uri: string;
+  /** The same as a transaction for eth_sendTransaction. */
+  tx: { from: string; to: string; data: string; chainId: string };
+  /** The chain's block when asked: look for the payment from there (findPayment). */
+  since: number;
+}
+
+/** A transaction for a Safe that its owners sign together in Weave; once enough signed, anyone sends `exec`. */
+export interface SafeProposalInfo {
+  id: string;
+  title: string;
+  safe: { address: string; label: string; threshold: number };
+  chain: number;
+  tx: { to: string; value: string; data: string; operation: 0 | 1; nonce: number };
+  /** What owners sign: this hash, as typed data (eth_signTypedData_v4) or as a message. */
+  hash: string;
+  typedData: unknown;
+  by: Person;
+  time: string;
+  signed: Array<{ person: Person; owner: string }>;
+  /** Owners who haven't signed yet. */
+  waiting: Person[];
+  /** Enough signed: send this transaction (from any wallet) to run it on the Safe. */
+  exec?: { to: string; data: string };
+  /** You own the Safe (one of your wallets signs for it). */
+  mine: boolean;
+  signedByMe: boolean;
+}
+
+/** What someone thinks of an address or contract: endorse or block, and why; or, from its owners, that it's retired. People choose whose labels they follow. */
+export interface LabelInfo {
+  /** 'eip155:<chain id>:<address>' */
+  target: string;
+  label: 'endorse' | 'block' | 'retired';
+  reason: string;
+  by: Person;
+  time: string;
+  mine: boolean;
+}
+
+/** A project's (or community's) treasury: a Safe its maintainers' wallets own, and how a project's income is split. Weave holds no keys or money. */
+export interface TreasuryInfo {
+  /** The project or community. */
+  project: { id: string; name: string };
+  kind: 'project' | 'community';
+  chain: { id: number; name: string; explorer: string };
+  /** The Safe's address, computed before anything is deployed; missing until a maintainer has a verified wallet. */
+  address?: string;
+  /** How many of the owners must sign. */
+  threshold: number;
+  /** Maintainers with a verified wallet: they own the Safe. */
+  owners: Array<{ person: Person; address: string }>;
+  /** Maintainers without a verified wallet yet: not owners until they link one. */
+  missing: Person[];
+  split?: SplitInfo;
+  /** A changed split, waiting for its notice to pass. */
+  pending?: SplitInfo;
+  presets: Record<string, { makers: number; treasury: number; community: number; foundation: number }>;
+  /** Who the split in force pays, and how much: what flows between people and spaces can be read from. */
+  recipients?: RecipientInfo[];
+  /** The split contract's allocations (addresses sorted, millionths); parts without an address go to a maker. */
+  allocations?: Array<{ address: string; share: number }>;
+  /** The transaction that puts the Safe on chain; any wallet can send it, the Safe belongs to its owners alone. */
+  deploy?: { to: string; data: string };
+  /** The transaction that puts the project's split contract on chain (owned by the treasury): payments to it are divided by `allocations`. */
+  splitDeploy?: { to: string; data: string };
+  /** Its earlier addresses, retired when owners changed wallets: money still sent there is moved on with sweepRetired. */
+  retired: Array<{ address: string; successor: string; time: string }>;
+  /** Its latest public announcement has this address: people outside the space can pay it and name it in their splits. */
+  announced: boolean;
+  /** You maintain (or moderate) it and may change its split. */
+  maintainer: boolean;
+}
+
 /** Someone asking to join one of your tiers. */
 export interface MembershipRequestInfo {
   id: string;
@@ -520,6 +726,11 @@ export interface MembershipRequestInfo {
    * said (`ok` is missing until it was checked). Valid keys are let in automatically.
    */
   license?: { key: string; ok?: boolean; reason?: string; email?: string };
+  /**
+   * For tiers paid on chain: the transaction they sent and what the chain said
+   * (`ok` is missing until it was read). Payments from their linked wallet are let in automatically.
+   */
+  payment?: { tx: string; ok?: boolean; reason?: string; months?: number };
 }
 
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
@@ -1318,7 +1529,7 @@ export interface Backend {
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
   /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[] }): Promise<RoomInfo>;
+  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1328,14 +1539,27 @@ export interface Backend {
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
-  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  createTier(input: { name: string; price?: number; currency?: string; description?: string; benefits?: string[]; auto?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo>;
   /** Change a tier, close it to new members (open: false) or take it off your hub (hidden: true). */
-  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null }): Promise<TierInfo>;
+  setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo>;
+  /** Your Gumroad connection on this device, and one waiting for you to allow Weave. */
+  gumroad(): Promise<GumroadInfo>;
+  /** Start connecting Gumroad: open pending.url, allow Weave there, and ask gumroad() until it's done. */
+  connectGumroad(): Promise<GumroadInfo>;
+  /** Forget the Gumroad connection on this device. Tiers stay sold there; license keys don't need it. */
+  disconnectGumroad(): Promise<GumroadInfo>;
+  /**
+   * Sell a tier through Gumroad without setting it up there by hand: makes a
+   * monthly membership with license keys for it, publishes it and links the
+   * tier. Through your Gumroad connection, or an access token (scope
+   * edit_products) used once and not kept.
+   */
+  sellTierOnGumroad(input: { tier: string; token?: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }>;
   /** The tiers someone offers (default: you). */
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
   /** Ask to join a tier; for tiers sold through Gumroad, send the license key from your receipt and you're in as soon as the creator's node checked it. */
-  requestMembership(input: { tier: string; note?: string; license?: string }): Promise<void>;
+  requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void>;
   /** Requests waiting for you, as a creator. */
   membershipRequests(): Promise<MembershipRequestInfo[]>;
   /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
@@ -1343,6 +1567,54 @@ export interface Backend {
   declineMembership(input: { tier: string; who: string }): Promise<void>;
   /** Tiers you're a member of, as a supporter. */
   memberships(): Promise<TierInfo[]>;
+
+  // treasuries: people's own wallets, a Safe per project, and how income is split; Weave holds no keys or money
+  /** What a wallet signs (personal_sign) to say it belongs to you. */
+  walletMessage(address: string): Promise<string>;
+  /** Link your wallet, with its signature over walletMessage(address); address '' unlinks it. */
+  linkWallet(input: { address: string; proof?: string }): Promise<WalletInfo | undefined>;
+  /** Someone's linked wallet (default: yours). */
+  wallet(who?: string): Promise<WalletInfo | undefined>;
+  /** A project's or community's treasury: its Safe's address, owners and split. */
+  treasury(space: string): Promise<TreasuryInfo>;
+  /** The project's split contract: where it is (asked from the chain), whether it exists yet, and how to put it there. */
+  splitContract(project: string): Promise<SplitContractInfo>;
+  // a Safe's transactions, signed together in Weave: Weave checks every signature and builds the transaction; owners sign in their own wallets
+  /** Propose a transaction for a Safe you own with others (a treasury, a show's Safe). */
+  proposeSafeTx(input: { safe: string; tx: { to: string; value?: string; data: string; operation?: 0 | 1 }; title: string }): Promise<SafeProposalInfo>;
+  /** Add your wallet's signature over a proposal's hash (typed data, or the hash as a message). */
+  signSafeTx(input: { proposal: string; signature: string }): Promise<SafeProposalInfo>;
+  /** Proposals for the Safes this node knows, or one Safe's. */
+  safeProposals(safe?: string): Promise<SafeProposalInfo[]>;
+
+  /** How to pay a tier (a month) or a show (a ticket) from your linked wallet: a QR link and a transaction. */
+  paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo>;
+  /** Look on chain for that payment from your wallets since a block; found, it is sent on (as if its hash were pasted). */
+  findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
+
+  // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
+  /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
+  createShow(input: { name: string; project?: string; room?: string; starts: string; ends: string; price: number; capacity?: number; hosts?: string[]; split?: Array<{ to: string; share: number }> }): Promise<ShowInfo>;
+  /** Call a show off: tickets stop letting people in; pay everyone back with settleShow. */
+  cancelShow(show: string): Promise<ShowInfo>;
+  /** Shows this node knows, or a project's. */
+  shows(project?: string): Promise<ShowInfo[]>;
+  /** Ask for a ticket with the transaction that paid it, from your linked wallet; the host's node reads it on chain. */
+  buyTicket(input: { show: string; payment: string }): Promise<void>;
+  /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
+  tickets(show: string): Promise<TicketInfo[]>;
+  /** The Safe transaction that pays a show out by its split (after it) or back to everyone who paid. */
+  settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement>;
+  /** Move what's left on a space's retired treasuries to its treasury now: a proposal per old Safe holding money, for its old owners to sign. */
+  sweepRetired(space: string): Promise<Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }>>;
+  /** Announce a treasury publicly (maintainers or moderators), so people outside it can pay it and name it in their splits. */
+  announceTreasury(space: string): Promise<TreasuryInfo>;
+  /** Endorse or block an address or contract, saying why; label '' withdraws yours. */
+  label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined>;
+  /** Labels on a target, or all this node knows; `by` limits them to the people you follow for labels. */
+  labels(input?: { target?: string; by?: string[] }): Promise<LabelInfo[]>;
+  /** Set how a project's income is split (maintainers): a preset, or shares in basis points; the Weave Foundation's part may be 0. */
+  setSplit(input: { project: string; preset?: string; shares?: { makers: number; treasury?: number; community?: number; foundation?: number }; makers?: Array<{ who: string; share: number }>; community?: string }): Promise<TreasuryInfo>;
 
   // badges: lasting recognition from a project, checkable by anyone, never votes or access
   /** Start a kind of badge for a project you maintain; `limit` (how many there can ever be) can never be raised. */
@@ -1411,8 +1683,9 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
-  'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
+  'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
+  'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react',
   'threads', 'startThread', 'reply', 'issues', 'openIssue', 'claimIssue', 'setIssueStatus',
