@@ -2,11 +2,27 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
+import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
   as?: string;
+  /** The agent session this server serves, when its harness says (see sessionFromEnv). */
+  session?: SessionRef;
+}
+
+/**
+ * The session a harness runs this server in, from what it tells the programs it
+ * starts. Claude Code: CLAUDE_CODE_SESSION_ID (its transcript's id) and
+ * CLAUDE_CODE_HOST_SESSION_ID (the Claude app's own id for it), in the folder it
+ * started this server in. Other harnesses: the session tools take an id instead.
+ */
+export function sessionFromEnv(env: NodeJS.ProcessEnv = process.env, folder = process.cwd()): SessionRef | undefined {
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (!id) return undefined;
+  const host = env.CLAUDE_CODE_HOST_SESSION_ID?.trim();
+  return { provider: 'claude-code', id, ...(host ? { host } : {}), folder };
 }
 
 /** A new event, shortened for an agent to read. */
@@ -74,6 +90,8 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
 Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
+
+Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
 
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
@@ -172,6 +190,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   backend
     .watch((item: FeedItem) => {
       if (item.signer === mySigner) return; // our own writes are not news
+      if (item.scope === 'live') return; // the app's own signals (rooms, opening, mentions), not events
       const text = textOf(item.body);
       if (!text && !item.kind.startsWith('weave.issue')) return;
       inbox.push({
@@ -329,7 +348,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
 
   server.registerTool(
     'weave_read_post',
-    { title: 'Read a post', description: 'A post with its chat. Id, its first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
+    { title: 'Read a post', description: 'A post with its chat. Its url, id, first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
     run(async ({ post, limit }: { post: string; limit?: number }) => {
       const p = await backend.post(post);
       const chat = p.space && p.type !== 'project' ? await backend.messages(undefined, { post: p.id, limit: limit ?? 50 }) : [];
@@ -342,19 +361,37 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Submit a post',
       description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
-      inputSchema: { space: z.string().describe('Project or community name or id'), title: z.string().min(1).max(200), text: z.string().optional(), link: z.string().url().optional(), board: z.string().optional() },
+      inputSchema: {
+        space: z.string().describe('Project or community name or id'),
+        title: z.string().min(1).max(200),
+        text: z.string().optional(),
+        link: z.string().url().optional(),
+        board: z.string().optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it (its starting prompt)'),
+      },
     },
-    run(async ({ space, title, text, link, board }: { space: string; title: string; text?: string; link?: string; board?: string }) => backend.submit({ space, board, title, text, link, as })),
+    run(async ({ space, title, text, link, board, prompt }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string }) =>
+      backend.submit({ space, board, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
     'weave_edit_post',
     {
       title: 'Edit a post',
-      description: 'Change the title, text or link of your own post (an empty link removes it). Leave out what stays the same. Everyone sees it marked as edited.',
-      inputSchema: { post: z.string().min(6), title: z.string().min(1).max(200).optional(), text: z.string().optional(), link: z.union([z.string().url(), z.literal('')]).optional() },
+      description:
+        'Change the title, text, link or starting prompt of your own post (an empty link or prompt removes it). Leave out what stays the same. Everyone sees it marked as edited.',
+      inputSchema: {
+        post: z.string().min(6),
+        title: z.string().min(1).max(200).optional(),
+        text: z.string().optional(),
+        link: z.union([z.string().url(), z.literal('')]).optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it'),
+      },
     },
-    run(async ({ post, title, text, link }: { post: string; title?: string; text?: string; link?: string }) => backend.editPost({ post, title, text, link, as })),
+    run(async ({ post, title, text, link, prompt }: { post: string; title?: string; text?: string; link?: string; prompt?: string }) =>
+      backend.editPost({ post, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
@@ -586,13 +623,107 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox. Tell them what to do there.",
-      inputSchema: { what: z.enum(['link-repo', 'space', 'inbox']), space: z.string().optional().describe('Group, tier or project name or id'), repo: z.string().optional().describe('For link-repo: owner/name') },
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url). Tell them what to do there.",
+      inputSchema: {
+        what: z.enum(['link-repo', 'space', 'inbox', 'post']),
+        space: z.string().optional().describe('Group, tier or project name or id'),
+        repo: z.string().optional().describe('For link-repo: owner/name'),
+        post: z.string().optional().describe('For post: its id or url'),
+      },
     },
-    run(async ({ what, space, repo }: { what: 'link-repo' | 'space' | 'inbox'; space?: string; repo?: string }) => ({
-      ...(await backend.openInApp({ what, space, repo })),
+    run(async ({ what, space, repo, post }: { what: 'link-repo' | 'space' | 'inbox' | 'post'; space?: string; repo?: string; post?: string }) => ({
+      ...(await backend.openInApp({ what, space, repo, post })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
+  );
+
+  // Post cards in the chat, where the host renders MCP Apps (Claude chat does).
+  server.registerResource('post-cards', POST_CARD_URI, { title: 'Weave post cards', mimeType: MCP_APP_MIME }, async () => ({
+    contents: [{ uri: POST_CARD_URI, mimeType: MCP_APP_MIME, text: POST_CARD_HTML, _meta: { ui: { prefersBorder: false } } }],
+  }));
+
+  // ---------------------------------------------------------------- this session's work items
+
+  const sessionId = z.string().min(4).optional().describe("A session's id, when your harness doesn't tell Weave which session you are");
+  const sessionOf = (id?: string): SessionRef => {
+    if (id) return { id };
+    if (options.session) return options.session;
+    throw new Error("Weave doesn't know which session you are: pass session_id (your harness's session id)");
+  };
+
+  server.registerTool(
+    'weave_session',
+    {
+      title: "This session's work items",
+      description:
+        "Your session's stack of work items: the top one is what you're on now, the ones below wait for it (an item that came in on top of unfinished work). Each has its starting prompt: what to do with it. Your person sees the stack in Weave's side panel.",
+      inputSchema: { session_id: sessionId },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ session_id }: { session_id?: string }) => backend.session(sessionOf(session_id))),
+  );
+
+  server.registerTool(
+    'weave_work_on',
+    {
+      title: 'Work on an item',
+      description:
+        "Put a work item on top of your session's stack: an existing post (url or id), or a new one you create in its project or community (with a starting prompt: what a session should do with it). Whatever you were on waits below and comes back when this one is done (weave_done). Use it when your person gives you a new item, or when you start one.",
+      inputSchema: {
+        post: z.string().min(4).optional().describe('An existing post: url, id or weave:post: link'),
+        create: z
+          .object({
+            space: z.string().describe('Project or community name or id'),
+            board: z.string().optional(),
+            title: z.string().min(1).max(200),
+            text: z.string().optional(),
+            prompt: z.string().max(4000).optional().describe('What a session should do with it'),
+          })
+          .optional()
+          .describe('A new work item, posted in that project or community'),
+        session_id: sessionId,
+      },
+    },
+    run(async ({ post, create, session_id }: { post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; session_id?: string }) =>
+      backend.workOn({ session: sessionOf(session_id), post, create, as }),
+    ),
+  );
+
+  server.registerTool(
+    'weave_done',
+    {
+      title: 'Done with an item',
+      description:
+        "Take a work item off your session's stack (the top one if you don't name one); the item below comes back to the top: tell your person what you're back to. close: true also marks an issue done.",
+      inputSchema: { post: z.string().min(4).optional(), close: z.boolean().optional(), session_id: sessionId },
+    },
+    run(async ({ post, close, session_id }: { post?: string; close?: boolean; session_id?: string }) => backend.doneWith({ session: sessionOf(session_id), post, close, as })),
+  );
+
+  server.registerTool(
+    'weave_stack',
+    {
+      title: "Rearrange this session's stack",
+      description: 'Put these posts first, in this order (the first is what you work on now), and take others off with remove. Nothing changes on the posts themselves.',
+      inputSchema: { posts: z.array(z.string().min(4)).optional(), remove: z.array(z.string().min(4)).optional(), session_id: sessionId },
+    },
+    run(async ({ posts, remove, session_id }: { posts?: string[]; remove?: string[]; session_id?: string }) => backend.restack({ session: sessionOf(session_id), posts, remove })),
+  );
+
+  server.registerTool(
+    'weave_show',
+    {
+      title: 'Show posts in the Mentions panel',
+      description:
+        "Show posts to your person in Weave's Mentions panel, a small window beside their work: the posts you just created, updated or want them to look at, as cards they can open in Weave. Nothing is posted or sent; it stays on their computer. Also link the posts in your answer (their url).",
+      inputSchema: {
+        posts: z.array(z.string().min(4)).min(1).max(20).describe('Posts: url, id or weave:post: link'),
+        note: z.string().max(500).optional().describe('A short line on why, e.g. "Updated after our plan"'),
+      },
+      // Where the host can, the result shows as post cards right in the chat.
+      _meta: { ui: { resourceUri: POST_CARD_URI } },
+    },
+    run(async ({ posts, note }: { posts: string[]; note?: string }) => backend.showPosts({ posts, note, as })),
   );
 
   // ---------------------------------------------------------------- project pages

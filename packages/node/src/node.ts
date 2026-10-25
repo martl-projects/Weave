@@ -185,6 +185,28 @@ import {
   coauthorsOf,
   MAX_COAUTHORS,
   postRefOf,
+  postRefsIn,
+  dayKey,
+  dueOccurrence,
+  KIND_ROUTINE,
+  nextRun,
+  parseCreate,
+  parseTrigger,
+  renderTitle,
+  routinesOf,
+  type Routine,
+  KIND_SESSION,
+  pushOnto,
+  reorder,
+  sessionKey,
+  sessionsOf,
+  takeOff,
+  type SessionRecord,
+  type StackItem,
+  postTargetOf,
+  postUrl,
+  shortPrefixes,
+  type PostTarget,
   type KeyFacts,
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
@@ -372,6 +394,14 @@ import {
   type HarnessInfo,
   type PermissionRequest,
   type AppOpen,
+  type ClaudeCodeFollow,
+  type MentionInfo,
+  type SessionInfo,
+  type SessionRef,
+  type WorkTarget,
+  type DeskInfo,
+  type RoutineInfo,
+  type StackPost,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
@@ -443,6 +473,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
+import { AppLogFollower, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
@@ -451,9 +482,9 @@ import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type 
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createPublicKey, createVerify, hkdfSync, createHmac } from 'node:crypto';
+import { createHash, createPublicKey, createVerify, hkdfSync, createHmac, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
@@ -648,6 +679,65 @@ const personalRepo = (repo: string) =>
 /** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
 const ONCHAIN_RECORD = 'tx:';
 
+/** The routines a new desk starts with. */
+const DESK_ROUTINES: Array<{ id: string; name: string; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }> = [
+  {
+    id: 'journal',
+    name: 'Journal entry',
+    trigger: { type: 'schedule', days: [1, 2, 3, 4, 5], time: '08:00' },
+    create: {
+      board: 'journal',
+      title: '{date}',
+      text: '## Plan\n\n- \n\n## Notes\n\n## Done\n',
+      prompt:
+        "This is today's journal entry, and our planning for the day. Start by reading yesterday's entry, my open work items and what's hot in my projects, then propose a plan for today and keep it in this entry's text (weave_edit_post). Listen and ask while I journal; when something deserves work, create a work item in the project it belongs to, with a clear starting prompt, and tell me where you put it.",
+    },
+  },
+  {
+    id: 'setup',
+    name: 'Set up your desk',
+    trigger: { type: 'first-start' },
+    create: {
+      board: 'ideas',
+      title: 'Set up your desk',
+      text: 'Your desk is new: a Journal (one entry per weekday, from the Journal entry routine) and Ideas. Ctrl+click this item to set it up with your daily driver.',
+      prompt:
+        "Help me set up my Weave desk; this session is my daily driver from now on. If you can, name this session \"Daily driver\" and put it in a sidebar group \"Desk\" in the Claude app. Then look at who I am and my projects (weave_whoami), ask how I like to plan my days, suggest routines that would help (a time for the journal entry, a standup, a backlog check), and write what you learn about how I work into this folder's CLAUDE.md.",
+    },
+  },
+];
+
+/** The CLAUDE.md a new desk folder starts with: who the daily driver works for and how. */
+function deskInstructions(person: string, desk: string): string {
+  return `# Weave desk
+
+This folder is where my daily driver works: the Claude Code sessions where we
+plan, journal and hand out work, with Weave. (Weave wrote this file once; it's
+mine now, change it as you learn how I work.)
+
+## Who and where
+
+- I'm ${person}. In Weave you act as my agent; your tools are the weave_* ones.
+- My desk is the private project "${desk}": Journal (one entry per weekday) and
+  Ideas. My other projects are where the real work lives.
+
+## How we work
+
+- A work item is a Weave post with a starting prompt (what to do with it).
+  Your session has a stack of work items (weave_session): the top one is what
+  we're on. Items I start from Weave arrive as "Weave work item: …" messages.
+- Today's journal entry is our planning: keep the plan in its text, and turn
+  what deserves it into work items in the right project, each with a clear
+  starting prompt. Say where you put them, as links.
+- When something interrupts, put it on top of the stack (weave_work_on); when
+  it's done, weave_done, and tell me what we're back to.
+- Folders and projects aren't one to one. To start work elsewhere, use a
+  folder Weave knows for that project; if none fits, ask me, or ask to create
+  one. Never guess a folder you haven't seen used for that project.
+- When you mention a post, link it with its url.
+`;
+}
+
 export class WeaveNode implements Backend {
   readonly home: Home;
   #identity: SigningIdentity;
@@ -680,6 +770,16 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
+  /** Posts agents pointed to, newest first (the Mentions panel), and who's watching for more. */
+  #mentions: MentionInfo[] = [];
+  readonly #mentionListeners = new Set<(mention: MentionInfo) => void>();
+  /** Claude Code sessions followed for links to posts, while that's on (see followClaudeCode). */
+  #follower?: TranscriptFollower;
+  /** The Claude app's log, for the session you're looking at, while that's on too. */
+  #appLog?: AppLogFollower;
+  readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
+  /** A session Ctrl+click is opening for an item (see expectSession). */
+  #expected?: { post: string; folder?: string; until: number };
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -1111,6 +1211,8 @@ export class WeaveNode implements Backend {
     this.#scimServer = undefined;
     await this.#console?.close();
     this.#console = undefined;
+    this.#follower?.stop();
+    this.#appLog?.stop();
     await this.goOffline();
     this.#sqlite?.close();
     this.#releaseLock();
@@ -1272,9 +1374,17 @@ export class WeaveNode implements Backend {
     // Not an event either: the app comes to the front there; other watchers see no text and leave it.
     const onOpen = (open: AppOpen) => onItem({ id: `open-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.open', scope: 'live', body: open as unknown as Json, author: me, signer: me, seq: 0 });
     this.#openListeners.add(onOpen);
+    // Neither: a post an agent pointed to, for the Mentions panel.
+    const onMention = (mention: MentionInfo) => onItem({ id: mention.id, time: mention.time, kind: 'weave.mention', scope: 'live', body: mention as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#mentionListeners.add(onMention);
+    // You switched sessions in the Claude app: the panel follows.
+    const onFocus = (session: SessionInfo | null) => onItem({ id: `focus-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.focus', scope: 'live', body: session as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#focusListeners.add(onFocus);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
+    this.#mentionListeners.delete(onMention);
+    this.#focusListeners.delete(onFocus);
     unsubscribe();
   }
 
@@ -1850,6 +1960,8 @@ export class WeaveNode implements Backend {
   }
 
   async post(ref: string): Promise<PostInfo> {
+    const target = postTargetOf(ref ?? '');
+    if (target) return this.#postAt(target);
     ref = postRefOf(ref ?? '');
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
@@ -1864,7 +1976,7 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -1878,9 +1990,12 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (image) body.image = image;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
+    const prompt = input.prompt?.trim();
+    if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
+    if (prompt) body.prompt = prompt;
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
-      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
+      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name, prompt })).id);
       if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
       body.board = board.name;
     }
@@ -1969,8 +2084,15 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox'].includes(input.what)) throw new Error('what is link-repo, space or inbox');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen> {
+    if (!['link-repo', 'space', 'inbox', 'post'].includes(input.what)) throw new Error('what is link-repo, space, inbox or post');
+    if (input.what === 'post') {
+      if (!input.post) throw new Error('say which post');
+      const post = await this.post(input.post);
+      const open: AppOpen = { what: 'post', post: { id: post.id, title: post.title }, ...(post.space ? { space: post.space } : {}) };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     const space = input.space ? this.#space(input.space) : undefined;
     if (input.what !== 'inbox' && !space) throw new Error('say which space');
     const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
@@ -1978,6 +2100,395 @@ export class WeaveNode implements Backend {
     const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}), ...(repo ? { repo } : {}) };
     for (const listener of this.#openListeners) listener(open);
     return open;
+  }
+
+  async showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]> {
+    if (input.as && !this.#agents.some((a) => a.name === input.as)) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (!input.posts?.length) throw new Error('say which posts to show');
+    const note = input.note?.trim().slice(0, 500) || undefined;
+    const shown: MentionInfo[] = [];
+    for (const ref of input.posts.slice(0, 20)) {
+      const post = await this.post(ref);
+      shown.push(this.#mention(post, { source: 'agent', ...(input.as ? { agent: input.as } : {}), ...(note ? { note } : {}) }));
+    }
+    return shown;
+  }
+
+  async mentions(): Promise<MentionInfo[]> {
+    return this.#mentions;
+  }
+
+  async followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow> {
+    this.config = { ...this.config, followClaudeCode: input.on || undefined };
+    saveConfig(this.home, this.config);
+    if (input.on) this.startFollowing();
+    else {
+      this.#follower?.stop();
+      this.#follower = undefined;
+      this.#appLog?.stop();
+      this.#appLog = undefined;
+    }
+    return this.claudeCode();
+  }
+
+  async claudeCode(): Promise<ClaudeCodeFollow> {
+    const follower = this.#follower ?? new TranscriptFollower(() => {});
+    return { on: !!this.config.followClaudeCode, dir: follower.dir, found: existsSync(follower.dir) };
+  }
+
+  /** Follow Claude Code sessions if the person turned that on (the daemon calls this when it starts). */
+  startFollowing(): void {
+    if (!this.config.followClaudeCode || this.#follower?.running) return;
+    this.#follower = new TranscriptFollower((said) => this.#mentionsIn(said));
+    this.#follower.start();
+    this.#appLog = new AppLogFollower(() => {
+      void this.#attachExpected()
+        .catch(() => {})
+        .then(() => this.focusedSession())
+        .then((session) => {
+          for (const listener of this.#focusListeners) listener(session);
+        });
+    });
+    this.#appLog.start();
+  }
+
+  /** Links to posts in what an agent said in a Claude Code session: each post once per session and hour. */
+  #mentionsIn(said: SessionText): void {
+    for (const ref of postRefsIn(said.text)) {
+      let post: PostInfo;
+      try {
+        post = postTargetOf(ref) ? this.#postAt(postTargetOf(ref)!) : this.#allPosts().find((p) => p.id.startsWith(ref))!;
+      } catch {
+        continue; // not a post you can see here
+      }
+      if (!post) continue;
+      const hour = Date.now() - 60 * 60 * 1000;
+      if (this.#mentions.some((m) => m.post.id === post.id && m.session?.id === said.session && Date.parse(m.time) > hour)) continue;
+      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
+    }
+  }
+
+  #mention(post: PostInfo, how: Pick<MentionInfo, 'source'> & Partial<Pick<MentionInfo, 'agent' | 'session' | 'note'>>): MentionInfo {
+    const mention: MentionInfo = {
+      id: `mention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      time: new Date().toISOString(),
+      post,
+      ...how,
+    };
+    this.#mentions = [mention, ...this.#mentions].slice(0, 100);
+    for (const listener of this.#mentionListeners) listener(mention);
+    return mention;
+  }
+
+  // ---------------------------------------------------------------- sessions and their stacks
+
+  async sessions(): Promise<SessionInfo[]> {
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    return [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time)).map((r) => this.#sessionInfo(r, posts));
+  }
+
+  async activeSessions(input: { hours?: number } = {}): Promise<SessionInfo[]> {
+    const hours = Math.min(Math.max(input.hours ?? 12, 1), 24 * 14);
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    const records = this.#sessionRecords();
+    const out = new Map([...records.values()].map((r) => [sessionKey(r.provider, r.id), this.#sessionInfo(r, posts)]));
+    for (const recent of recentSessions(Date.now() - hours * 3600 * 1000)) {
+      const key = sessionKey('claude-code', recent.id);
+      if (out.has(key)) continue;
+      out.set(key, this.#sessionInfo({ provider: 'claude-code', id: recent.id, ...(recent.folder ? { folder: recent.folder } : {}), stack: [], time: recent.active }, posts));
+    }
+    const when = (s: SessionInfo) => s.active ?? s.time;
+    return [...out.values()].sort((a, b) => when(b).localeCompare(when(a)));
+  }
+
+  async focusedSession(): Promise<SessionInfo | null> {
+    const focus = this.#appLog?.current;
+    if (!focus) return null;
+    // Before the app has said which Claude Code session it is, it's known by the app's id alone.
+    return this.session({ provider: 'claude-code', id: focus.id ?? focus.host, host: focus.host });
+  }
+
+  async session(input: SessionRef): Promise<SessionInfo> {
+    return this.#sessionInfo(this.#sessionRecord(input), new Map(this.#allPosts().map((p) => [p.id, p])));
+  }
+
+  async workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo> {
+    if (!input.post === !input.create) throw new Error('name a post to work on, or create one (not both)');
+    const post = input.post ? await this.post(input.post) : await this.submit({ ...input.create!, as: input.as });
+    const record = this.#sessionRecord(input.session);
+    // The first session that takes on a desk item becomes your daily driver: the desk's items go to it from then on.
+    const desk = this.config.desk;
+    if (desk && !desk.driver && post.space?.id === desk.space) {
+      this.config = { ...this.config, desk: { ...desk, driver: { provider: record.provider, id: record.id, ...(record.host ? { host: record.host } : {}), ...(record.folder ? { folder: record.folder } : {}) } } };
+      saveConfig(this.home, this.config);
+    }
+    return this.#saveSession({ ...record, stack: pushOnto(record.stack, post.id, new Date().toISOString()) });
+  }
+
+  async doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const id = input.post ? (await this.post(input.post)).id : record.stack[0]?.post;
+    if (!id) throw new Error('this session has no work items');
+    if (!record.stack.some((s) => s.post === id)) throw new Error("that post isn't on this session's stack");
+    if (input.close) {
+      const post = await this.post(id);
+      if (post.type === 'issue' && post.issue?.status !== 'done') await this.setIssueStatus({ issue: id, status: 'done', as: input.as });
+    }
+    return this.#saveSession({ ...record, stack: takeOff(record.stack, id, new Date().toISOString()) });
+  }
+
+  async restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const ids = async (refs: string[] = []) => Promise.all(refs.map(async (ref) => (await this.post(ref)).id));
+    const remove = new Set(await ids(input.remove));
+    const stack = reorder(record.stack, await ids(input.posts)).filter((s) => !remove.has(s.post));
+    return this.#saveSession({ ...record, stack });
+  }
+
+  // ---------------------------------------------------------------- your desk and its routines
+
+  async desk(): Promise<DeskInfo | null> {
+    const desk = this.config.desk;
+    const space = desk && this.#spaces.get(desk.space);
+    return space ? { space: { id: space.id, kind: space.kind, name: space.name }, ...(desk.folder ? { folder: desk.folder } : {}), ...(desk.driver ? { driver: desk.driver } : {}) } : null;
+  }
+
+  /** Where your desk's folder is, or goes by default. */
+  async deskFolder(): Promise<string> {
+    return this.config.desk?.folder ?? joinPath(homedir(), 'Weave Desk');
+  }
+
+  async setupDesk(input: { name?: string; folder?: string } = {}): Promise<DeskInfo> {
+    let desk = await this.desk();
+    if (!desk) {
+      const project = await this.createProject({ name: input.name?.trim() || 'Desk', description: 'My desk: journal, ideas and routines. Private.' });
+      await this.setBoard({ project: project.id, name: 'journal', title: 'Journal', type: 'posts', sort: 'new', position: 0 });
+      await this.setBoard({ project: project.id, name: 'releases', on: false });
+      await this.setBoard({ project: project.id, name: 'proposals', on: false });
+      this.config = { ...this.config, desk: { space: project.id } };
+      saveConfig(this.home, this.config);
+      desk = (await this.desk())!;
+      for (const routine of DESK_ROUTINES) await this.setRoutine({ space: project.id, ...routine });
+    }
+    // The folder where the daily driver works, with its instructions (yours to change: never overwritten).
+    // A bare name is a folder in your user folder, not wherever the daemon happens to run.
+    const asked = input.folder?.trim();
+    const folder = asked ? (isAbsolute(asked) ? resolvePath(asked) : joinPath(homedir(), asked)) : (desk.folder ?? joinPath(homedir(), 'Weave Desk'));
+    const previous = desk.folder;
+    mkdirSync(folder, { recursive: true });
+    const instructions = joinPath(folder, 'CLAUDE.md');
+    if (!existsSync(instructions)) writeFileSync(instructions, deskInstructions(this.nameOf(this.identity.author) ?? 'me', desk.space.name));
+    // A desk that moved: the old folder isn't suggested for it any more.
+    const known = (this.config.spaceFolders?.[desk.space.id] ?? []).filter((f) => f !== previous || f === folder);
+    this.config = { ...this.config, desk: { ...this.config.desk, space: desk.space.id, folder }, spaceFolders: { ...this.config.spaceFolders, [desk.space.id]: known } };
+    saveConfig(this.home, this.config);
+    await this.rememberFolder({ space: desk.space.id, folder });
+    // First start: the routines that run once, now.
+    for (const routine of (await this.routines({ space: desk.space.id })).filter((r) => r.on && r.trigger.type === 'first-start')) await this.runRoutine({ space: desk.space.id, id: routine.id });
+    return (await this.desk())!;
+  }
+
+  async routines(input: { space?: string } = {}): Promise<RoutineInfo[]> {
+    const space = this.#routineSpace(input.space);
+    const posts = this.#spacePosts(space).posts.filter((p) => p.routine);
+    const now = new Date();
+    return this.#routineRecords(space).map((r) => {
+      const last = posts.filter((p) => p.routine!.id === r.id).sort((a, b) => b.time.localeCompare(a.time))[0];
+      const next = nextRun(r, now);
+      return {
+        id: r.id,
+        name: r.name,
+        on: r.on,
+        trigger: r.trigger,
+        create: r.create,
+        space: { id: space.id, kind: space.kind, name: space.name },
+        ...(last ? { last: { post: last.id, occurrence: last.routine!.occurrence, time: last.time } } : {}),
+        ...(next ? { next: next.toISOString() } : {}),
+      };
+    });
+  }
+
+  async setRoutine(input: { space?: string; id?: string; name: string; on?: boolean; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }): Promise<RoutineInfo> {
+    const space = this.#routineSpace(input.space);
+    this.#maintainerState(space);
+    const name = input.name?.trim();
+    if (!name || name.length > 100) throw new Error('a routine needs a name (up to 100 characters)');
+    const trigger = parseTrigger(input.trigger);
+    if (!trigger) throw new Error('a routine runs on a schedule (days 0-6, Sunday is 0, and a time like 08:00) or at first start');
+    const create = parseCreate(input.create);
+    if (!create) throw new Error('say what the routine creates: a board and a title pattern ({date}, {day}, {weekday})');
+    this.#board(space, this.#spacePosts(space).boards, create.board);
+    const id = input.id?.trim() || randomUUID().slice(0, 8);
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
+    return (await this.routines({ space: space.id })).find((r) => r.id === id)!;
+  }
+
+  async removeRoutine(input: { space?: string; id: string }): Promise<void> {
+    const space = this.#routineSpace(input.space);
+    this.#maintainerState(space);
+    if (!this.#routineRecords(space).some((r) => r.id === input.id)) throw new Error('no such routine');
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
+  }
+
+  async runRoutine(input: { space?: string; id: string }): Promise<PostInfo> {
+    const space = this.#routineSpace(input.space);
+    const routine = this.#routineRecords(space).find((r) => r.id === input.id);
+    if (!routine) throw new Error('no such routine');
+    const now = new Date();
+    return this.#runOccurrence(space, routine, routine.trigger.type === 'first-start' ? 'first-start' : dayKey(now), now);
+  }
+
+  /**
+   * Create what's due: today's item of every scheduled routine whose time has come and that you made
+   * (in a shared project, only its author's Weave runs it). The daemon calls this every minute.
+   */
+  async tickRoutines(now = new Date()): Promise<PostInfo[]> {
+    const made: PostInfo[] = [];
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'project') continue;
+      for (const routine of this.#routineRecords(space)) {
+        if (routine.by !== this.identity.author) continue;
+        const occurrence = dueOccurrence(routine, now);
+        if (!occurrence || this.#occurrence(space, routine.id, occurrence)) continue;
+        made.push(await this.#runOccurrence(space, routine, occurrence, now));
+      }
+    }
+    return made;
+  }
+
+  #routineSpace(ref?: string): StoredSpace {
+    const id = ref ?? this.config.desk?.space;
+    if (!id) throw new Error('set up your desk first, or say which project');
+    const space = this.#space(id);
+    if (space.kind !== 'project') throw new Error('routines live in projects');
+    return space;
+  }
+
+  #routineRecords(space: StoredSpace): Routine[] {
+    return routinesOf(this.#entries(space), this.#state(space).maintainers);
+  }
+
+  #occurrence(space: StoredSpace, id: string, occurrence: string): PostInfo | undefined {
+    return this.#spacePosts(space).posts.find((p) => p.routine?.id === id && p.routine.occurrence === occurrence);
+  }
+
+  async #runOccurrence(space: StoredSpace, routine: Routine, occurrence: string, now: Date): Promise<PostInfo> {
+    const existing = this.#occurrence(space, routine.id, occurrence);
+    if (existing) return existing;
+    const { create } = routine;
+    const body: Record<string, Json> = { title: renderTitle(create.title, now), text: create.text ?? '', board: create.board, routine: { id: routine.id, occurrence } };
+    if (create.prompt) body.prompt = create.prompt;
+    const { id } = await this.publish({ kind: KIND_POST, body, space: space.id });
+    const post = await this.post(id);
+    this.#emitLive({ type: 'routine', category: 'activity', title: routine.name, text: `${post.title} is ready`, open: { post: post.id } });
+    return post;
+  }
+
+  async expectSession(input: { post: string; folder?: string }): Promise<void> {
+    const post = await this.post(input.post);
+    this.#expected = { post: post.id, ...(input.folder ? { folder: input.folder } : {}), until: Date.now() + 15 * 60 * 1000 };
+  }
+
+  /** The session Ctrl+click opened has shown up in the Claude app, with its id: give it its item. */
+  async #attachExpected(): Promise<void> {
+    const expected = this.#expected;
+    const focus = this.#appLog?.current;
+    if (!expected || !focus?.id) return;
+    if (Date.now() > expected.until) return void (this.#expected = undefined);
+    // Only a session with nothing on it yet: not one you switched to on the way.
+    if (this.#sessionRecords().get(sessionKey('claude-code', focus.id))?.stack.length) return;
+    this.#expected = undefined;
+    await this.workOn({ session: { provider: 'claude-code', id: focus.id, host: focus.host, ...(expected.folder ? { folder: expected.folder } : {}) }, post: expected.post });
+  }
+
+  async workTarget(input: { post: string }): Promise<WorkTarget> {
+    const post = await this.post(input.post);
+    const records = [...this.#sessionRecords().values()].sort((a, b) => b.time.localeCompare(a.time));
+    // Your desk's items go to your daily driver; others to their latest session.
+    const driver = this.config.desk?.driver;
+    const latest =
+      driver && post.space?.id === this.config.desk?.space ? this.#sessionRecord(driver) : records.find((r) => r.stack.some((s) => s.post === post.id));
+    const posts = new Map(this.#allPosts().map((p) => [p.id, p]));
+    // Folders for the item's space: the ones you chose, then the ones its sessions ran in.
+    const space = post.space?.id;
+    const used = space ? records.filter((r) => r.folder && r.stack.some((s) => posts.get(s.post)?.space?.id === space)).map((r) => r.folder!) : [];
+    const folders = [...new Set([...(space ? (this.config.spaceFolders?.[space] ?? []) : []), ...used])];
+    const lines = [
+      `Weave work item: ${post.title}`,
+      post.url,
+      '',
+      post.prompt ?? "Let's work on this.",
+      ...(latest ? [] : ['', `(This is a new session: first put the item on your stack with weave_work_on, post ${post.url}.)`]),
+    ];
+    return { post, ...(latest ? { session: this.#sessionInfo(latest, posts) } : {}), folders, text: lines.join('\n') };
+  }
+
+  async rememberFolder(input: { space: string; folder: string }): Promise<string[]> {
+    const space = this.#space(input.space);
+    const folder = input.folder?.trim();
+    if (!folder || folder.length > 1000) throw new Error('say which folder');
+    const list = [folder, ...(this.config.spaceFolders?.[space.id] ?? []).filter((f) => f !== folder)].slice(0, 10);
+    this.config = { ...this.config, spaceFolders: { ...this.config.spaceFolders, [space.id]: list } };
+    saveConfig(this.home, this.config);
+    return list;
+  }
+
+  #sessionRecords(): Map<string, SessionRecord> {
+    const mine = this.#decodeAll()
+      .filter((d) => d.private && d.inner.kind === KIND_SESSION)
+      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
+    return sessionsOf(mine);
+  }
+
+  /** A session's record, with what the caller now knows about it (host id, folder) filled in. */
+  #sessionRecord(ref: SessionRef): SessionRecord {
+    const provider = ref.provider?.trim() || 'claude-code';
+    const id = ref.id?.trim();
+    if (!id || id.length > 200) throw new Error('say which session (its id)');
+    const known = this.#sessionRecords().get(sessionKey(provider, id));
+    return {
+      provider,
+      id,
+      ...((ref.host ?? known?.host) ? { host: ref.host ?? known?.host } : {}),
+      ...((ref.folder ?? known?.folder) ? { folder: ref.folder ?? known?.folder } : {}),
+      ...(known?.title ? { title: known.title } : {}),
+      stack: known?.stack ?? [],
+      time: known?.time ?? new Date().toISOString(),
+    };
+  }
+
+  #saveSession(record: SessionRecord): SessionInfo {
+    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const body: Record<string, Json> = {
+      provider: record.provider,
+      id: record.id,
+      ...(record.host ? { host: record.host } : {}),
+      ...(record.folder ? { folder: record.folder } : {}),
+      ...(title ? { title } : {}),
+      stack: record.stack.map((s) => ({ post: s.post, since: s.since })),
+    };
+    const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
+    return this.#sessionInfo({ ...record, ...(title ? { title } : {}), time: event.time }, new Map(this.#allPosts().map((p) => [p.id, p])));
+  }
+
+  #sessionInfo(record: SessionRecord, posts: Map<string, PostInfo>): SessionInfo {
+    const brief = (item: StackItem): SessionInfo['stack'][number]['post'] => {
+      const p = posts.get(item.post);
+      return p ?? { id: item.post, missing: true };
+    };
+    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const active = record.provider === 'claude-code' ? transcriptActive(record.id) : undefined;
+    const host = record.host ?? (record.provider === 'claude-code' ? this.#appLog?.hostOf(record.id) : undefined);
+    return {
+      provider: record.provider,
+      id: record.id,
+      ...(active ? { active } : {}),
+      ...(host ? { host } : {}),
+      ...(record.folder ? { folder: record.folder } : {}),
+      ...(title ? { title } : {}),
+      stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),
+      time: record.time,
+    };
   }
 
   async permissionRequests(): Promise<PermissionRequest[]> {
@@ -2064,7 +2575,7 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const post = await this.#ownPost(input.post, 'edit');
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
@@ -2079,6 +2590,7 @@ export class WeaveNode implements Backend {
       if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
       body.link = link;
     }
+    if (input.prompt !== undefined) body.prompt = input.prompt.trim();
     if (input.image !== undefined) {
       const image = input.image.trim();
       if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
@@ -5285,11 +5797,12 @@ export class WeaveNode implements Backend {
     return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
   }
 
-  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo> {
+  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo> {
     if (!input.title?.trim()) throw new Error('an issue needs a title');
     const project = this.#project(input.project);
     const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
     if (input.board) body.board = input.board;
+    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
     const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
     return (await this.issues(project.id)).find((i) => i.id === id)!;
   }
@@ -7691,10 +8204,10 @@ export class WeaveNode implements Backend {
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
+    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
     const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
     const around = this.#aroundPosts(entries);
-    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
     const minDays = this.#companyRetention(space)?.minDays;
     // Each author's share of each board with a rule: their bytes against an even split (stage 8).
     const overuse = new Map<string, number>();
@@ -7936,6 +8449,7 @@ export class WeaveNode implements Backend {
     return {
       id: created.id,
       short: created.id.slice(0, 8),
+      url: postUrl({ id: created.id, title: project.name, space: project, project: true }, this.#prefix()),
       type: 'project',
       space: { id: project.id, kind: 'project', name: project.name },
       by: this.#actor(project.founder, project.founder),
@@ -7952,13 +8466,14 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[] }): PostInfo {
+  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[]; prefixes?: Map<string, string> }): PostInfo {
     const score = ctx.scores.get(p.id);
     const chat = ctx.chats.get(p.id);
     const saved = ctx.saves.get(p.id);
     const info: PostInfo = {
       id: p.id,
       short: p.id.slice(0, 8),
+      url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
       by: this.#actor(p.author, p.signer),
@@ -7966,6 +8481,8 @@ export class WeaveNode implements Backend {
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
       ...(p.image ? { image: p.image } : {}),
+      ...(p.prompt ? { prompt: p.prompt } : {}),
+      ...(p.routine ? { routine: p.routine } : {}),
       time: p.time,
       ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,
@@ -8001,10 +8518,9 @@ export class WeaveNode implements Backend {
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
       .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries };
-    return postsOf(undefined, entries)
-      .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
-      .map((p) => this.#postInfo(p, undefined, ctx));
+    const posts = postsOf(undefined, entries).filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author));
+    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries, prefixes: shortPrefixes(posts.map((p) => p.id)) };
+    return posts.map((p) => this.#postInfo(p, undefined, ctx));
   }
 
   /**
@@ -8105,6 +8621,26 @@ export class WeaveNode implements Backend {
     const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
     // Posts of followed boards are on Home too: each post once.
     return [...new Map([...this.#homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
+  }
+
+  /**
+   * Short ids for addresses: a post's within its list (`posts`), a space's
+   * among your spaces. Anything else keeps 8 characters.
+   */
+  #prefix(posts?: Map<string, string>): (id: string) => string {
+    const spaces = shortPrefixes(this.#spaces.keys());
+    return (id) => posts?.get(id) ?? spaces.get(id) ?? id.slice(0, 8);
+  }
+
+  /** The post an address points to (see postTargetOf): its project or community by id prefix, then the post. */
+  #postAt(target: PostTarget): PostInfo {
+    const posts = this.#allPosts().filter((p) =>
+      target.public ? !p.space : !!target.space && !!p.space?.id.startsWith(target.space) && (target.post ? p.type !== 'project' : p.type === 'project'),
+    );
+    const matches = target.post ? posts.filter((p) => p.id.startsWith(target.post!)) : posts;
+    if (matches.length === 0) throw new Error(`no post found at that address (it may be in a project or community you're not in)`);
+    if (matches.length > 1) throw new Error(`that address fits ${matches.length} posts here: use more characters of the id`);
+    return matches[0];
   }
 
   /** Where a post's chat lives; a project's own chat is its channels. */

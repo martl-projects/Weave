@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardsOf, createIdentity, eventId, messagesOf, postsOf, rank, Replica, savesOf, scoresOf, type Did, type Entry, type Json, type SigningIdentity } from '../src/index.ts';
+import { boardsOf, createIdentity, eventId, messagesOf, postPath, postRefsIn, postsOf, postTargetOf, postUrl, rank, Replica, savesOf, scoresOf, shortPrefixes, slugOf, type Did, type Entry, type Json, type SigningIdentity } from '../src/index.ts';
 
 function setup() {
   const replica = new Replica();
@@ -107,5 +107,49 @@ describe('posts and boards', () => {
     post(alice, 'weave.save', { target: 'b', mode: 'pinned' });
     post(alice, 'weave.save', { target: 'a', mode: null });
     expect([...savesOf(entries)]).toEqual([['b', 'pinned']]);
+  });
+});
+
+describe('post addresses', () => {
+  const project = { id: 'NqgQwm_P6I0gtnQDnZKURw', name: 'Weave' };
+
+  it('names a post by its project, board, short ids and title', () => {
+    const place = { id: 'aq1i-cIJ0QUM8K5ak8QZ3XUuDJeDwB2JTCTyA7qn_vU', title: 'Links from Claude Code: back to Weave!', space: project, board: 'ideas' };
+    const prefix = (id: string) => id.slice(0, 4);
+    expect(postPath(place, prefix)).toBe('weave~NqgQ/ideas/aq1i/links-from-claude-code-back-to-weave');
+    expect(postUrl(place, prefix)).toBe('http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code-back-to-weave');
+    expect(postPath({ ...place, project: true }, prefix)).toBe('weave~NqgQ');
+    expect(postPath({ id: place.id, title: 'Hello', author: 'Lena Müller' }, prefix)).toBe('@lena-muller/aq1i/hello');
+    expect(slugOf('Ünïcödé — and ✨ emoji')).toBe('unicode-and-emoji');
+    expect(slugOf('日本語')).toBe('');
+  });
+
+  it('keeps short ids unique, at least four characters', () => {
+    const prefixes = shortPrefixes(['abcdef', 'abcdxy', 'zzzzzz', 'abcdeg']);
+    expect(prefixes.get('zzzzzz')).toBe('zzzz');
+    expect(prefixes.get('abcdxy')).toBe('abcdx');
+    expect(prefixes.get('abcdef')).toBe('abcdef');
+    expect(prefixes.get('abcdeg')).toBe('abcdeg');
+  });
+
+  it('reads addresses back, with or without the host, ignoring names and port', () => {
+    expect(postTargetOf('see http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code.')).toEqual({ space: 'NqgQ', post: 'aq1i' });
+    expect(postTargetOf('http://weave.localhost:9999/anything~NqgQ/x/aq1i')).toEqual({ space: 'NqgQ', post: 'aq1i' });
+    expect(postTargetOf('http://weave.localhost:7710/weave~NqgQ')).toEqual({ space: 'NqgQ' });
+    expect(postTargetOf('http://weave.localhost:7710/@martl/-nt5_W/a-title')).toEqual({ post: '-nt5_W', public: true });
+    expect(postTargetOf('as in weave~NqgQ/ideas/aq1i, see')).toEqual({ space: 'NqgQ', post: 'aq1i' });
+    expect(postTargetOf('~NqgQ/posts/aq1i')).toEqual({ space: 'NqgQ', post: 'aq1i' });
+    // Ordinary text and other hosts are not addresses.
+    expect(postTargetOf('weave~NqgQ on its own')).toBeUndefined();
+    expect(postTargetOf('@martl/aq1i')).toBeUndefined();
+    expect(postTargetOf('http://example.com/weave~NqgQ/ideas/aq1i')).toBeUndefined();
+    expect(postTargetOf('a/b~cdef/ideas/aq1i')).toBeUndefined();
+  });
+
+  it('finds every post a text points to, once each, in order', () => {
+    const url = 'http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links';
+    const text = `I've updated [Links](${url}) and opened weave~NqgQ/issues/zz9k. Also weave:post:abcdefgh and again ${url}.`;
+    expect(postRefsIn(text)).toEqual([url, 'weave~NqgQ/issues/zz9k', 'abcdefgh']);
+    expect(postRefsIn('nothing here')).toEqual([]);
   });
 });

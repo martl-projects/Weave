@@ -7,6 +7,7 @@ import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
 import { formatUnits, isAddress, parseUnits, TEST_USDC } from '@weave/core';
 import {
+  claudeBundle,
   connectDaemon,
   daemonInfo,
   stopDaemon,
@@ -93,6 +94,8 @@ A company's own projects and groups are its company spaces.
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
   mcp                        serve this node to an agent harness over MCP (stdio)  [--as <agent>]
+  claude-bundle              write weave.mcpb: Weave for the Claude desktop app's chat, as an agent
+                             [--as <agent>] [--out <file>] [--open: show Claude's install dialog]
   join <topic>               listen on a DHT topic
   agent add <name>           create a key for an agent [--can <kinds>]  default: weave.post,weave.reply
   agent can <name> <kinds>   change what an agent may sign, e.g. weave.post,weave.post.coauthor
@@ -197,7 +200,7 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
                              on your home: [--from all|communities|projects|mine|friends|following]
   home hide <space> / home show <space>   leave a community or project off your home (only you know)
-  read <id|link>             a post and its chat (and its weave:post: link to send)
+  read <id|link>             a post and its chat (and its link to send: http://weave.localhost:7710/…)
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>] [--image <file>]
                              [--with <who,…>]: co-authors (people, your agents, or person·agent); each confirms first
   coauthor <id> yes|no       confirm (or decline) being named as co-author  [--as <agent>] for your agent
@@ -343,6 +346,8 @@ const { values, positionals } = parseArgs({
   options: {
     home: { type: 'string' },
     json: { type: 'boolean', default: false },
+    out: { type: 'string' },
+    open: { type: 'boolean', default: false },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -1054,6 +1059,28 @@ async function main(): Promise<void> {
       return serveStdio(b, { as: values.as });
     }
 
+    case 'claude-bundle': {
+      // How Claude starts Weave here: this very program (node with the CLI, or the app's
+      // own Node with its bundled CLI), for this home.
+      const agent = values.as ?? 'claude';
+      const known = (await (await backend()).whoami()).agents.map((a) => a.name);
+      if (!known.includes(agent)) throw new Error(`no agent "${agent}" here${known.length ? ` (you have ${known.join(', ')})` : ''}: add one with weave agent add ${agent}`);
+      const launch = {
+        command: process.execPath,
+        args: [resolvePath(process.argv[1]), ...(values.home || process.env.WEAVE_HOME ? ['--home', home.dir] : [])],
+        env: (process.versions.electron || process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : {}) as Record<string, string>,
+      };
+      const iconFile = [join(dirname(process.argv[1]), '..', 'icon.png'), join(dirname(process.argv[1]), '..', '..', '..', 'apps', 'desktop', 'assets', 'icon.png')].find((f) => existsSync(f));
+      const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.out ?? 'weave.mcpb');
+      writeFileSync(file, claudeBundle({ agent, launch, version: VERSION, ...(iconFile ? { icon: readFileSync(iconFile) } : {}) }));
+      if (values.open) {
+        const { spawn } = await import('node:child_process');
+        const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${file}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', file];
+        spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
+      }
+      return out({ file, agent, launch }, () => `wrote ${file}\n  Claude's chat will use Weave as your agent "${agent}". Open the file to install it in the Claude app (Settings → Extensions).`);
+    }
+
     case 'join': {
       const [topic] = args;
       if (!topic) throw new Error('usage: weave join <topic>');
@@ -1356,7 +1383,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         [
           postLine(p),
           p.text ? `\n${p.text}\n` : '',
-          `  link: weave:post:${p.id}`,
+          `  link: ${p.url}`,
           p.project && !p.project.member ? `  (a project you're not in: ${p.project.name} [${p.project.status}] — ask in the chat to be invited)` : '',
           p.type === 'project' ? `  chat in its channels: weave chat -p "${p.title}"` : '',
           ...chat.map((m) => `  ${m.short}  ${actor(m.by).padEnd(20)}  ${m.text}`),

@@ -9,6 +9,8 @@ export const TEXT_LIMITS = {
   /** Post, chat, reply and thread text (Markdown). */
   text: 10_000,
   link: 500,
+  /** A work item's starting prompt. */
+  prompt: 4_000,
   /** A project page's body (Markdown). */
   page: 100_000,
   pageTitle: 100,
@@ -29,6 +31,7 @@ export function checkTextFields(body: unknown): void {
     ['title', 'The title', TEXT_LIMITS.title],
     ['text', 'The text', TEXT_LIMITS.text],
     ['link', 'The link', TEXT_LIMITS.link],
+    ['prompt', 'The starting prompt', TEXT_LIMITS.prompt],
   ] as const) {
     const value = b[key];
     if (typeof value === 'string' && value.length > max) throw tooLong(what, value.length, max);

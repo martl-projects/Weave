@@ -27,6 +27,12 @@ export interface Config {
   standby?: boolean;
   /** The company's node serves the admin console on this port (stage 12). */
   console?: { port: number; url?: string; clientId?: string };
+  /** Follow Claude Code sessions for links to posts (the Mentions panel). */
+  followClaudeCode?: boolean;
+  /** Space id → folders on this computer its sessions ran in, latest first (see rememberFolder). */
+  spaceFolders?: Record<string, string[]>;
+  /** Your desk: its project, and the folder here where your daily driver works. */
+  desk?: { space: string; folder?: string; driver?: { provider: string; id: string; host?: string; folder?: string } };
 }
 
 export function loadConfig(home: Home): Config {
@@ -52,6 +58,9 @@ export function loadConfig(home: Home): Config {
     ...(stored.updates && typeof stored.updates === 'object'
       ? { updates: { ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}), ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}) } }
       : {}),
+    ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
+    ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
+    ...(stored.desk ? { desk: stored.desk } : {}),
   };
 }
 

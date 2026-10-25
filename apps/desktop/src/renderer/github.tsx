@@ -288,6 +288,8 @@ export function startAppOpens(): void {
     if (item.kind !== 'weave.open') return;
     const open = item.body as unknown as AppOpen;
     void bridge.show();
+    // A post (Open in Weave on its page): PublicPost takes it to where it lives.
+    if (open.what === 'post' && open.post) return navigate(`#/post/${open.post.id}`);
     if (open.what === 'inbox' || !open.space) return navigate('#/inbox');
     if (open.what === 'link-repo') {
       wantedLink = { space: open.space.id, ...(open.repo ? { repo: open.repo } : {}) };
