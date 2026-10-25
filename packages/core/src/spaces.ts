@@ -47,6 +47,12 @@ import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 export const KIND_SPACE_CREATE = 'weave.space.create';
 export const KIND_INVITE = 'weave.invite';
 export const KIND_JOIN = 'weave.space.join';
+/**
+ * {invite, joined}: by an invite's maker once it expired, naming who came in
+ * with it. A join's date is the joiner's claim: once closed, nobody else counts
+ * as having joined with it, whatever date they sign.
+ */
+export const KIND_INVITE_CLOSE = 'weave.invite.close';
 export const KIND_REMOVE = 'weave.space.remove';
 export const KIND_REKEY = 'weave.space.rekey';
 export const KIND_GIFT = 'weave.space.gift';
@@ -545,6 +551,16 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
     });
   };
   const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
+  // Invites their makers closed: only who they name came in with them.
+  const closes = new Map<string, { by: Did; joined: Set<Did> }>();
+  for (const { event, inner } of placed) {
+    const b = (inner.body ?? {}) as Record<string, unknown>;
+    if (canonicalKind(inner.kind) === KIND_INVITE_CLOSE && typeof b.invite === 'string' && Array.isArray(b.joined)) closes.set(`${event.author} ${b.invite}`, { by: event.author, joined: new Set(b.joined.filter(isDid)) });
+  }
+  const closedTo = (invite: string, by: Did, who: Did) => {
+    const close = closes.get(`${by} ${invite}`);
+    return !!close && !close.joined.has(who);
+  };
   const may = (author: Did) => (kind === 'project' ? state.maintainers.has(author) : state.tier ? author === state.founder : state.members.has(author));
   const admit = (did: Did, time: string, invitedBy?: Did, via?: string, invite?: string) => {
     state.members.set(did, { did, since: time, ...(invitedBy ? { invitedBy } : {}), ...(via ? { via } : {}), ...(invite ? { invite } : {}) });
@@ -569,7 +585,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
-        const live = invite && invite.expires >= at && state.members.has(invite.by);
+        const live = invite && invite.expires >= at && state.members.has(invite.by) && !closedTo(body.invite as string, invite.by, author);
         if (live && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, at, invite.by, undefined, body.invite as string);
         break;
       }
@@ -612,7 +628,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
         // Someone who knocked with an invite link, let in by whoever made the link (while it is live).
         if (typeof body.invite === 'string') {
           const invite = invites.get(body.invite);
-          const live = invite && invite.by === author && invite.expires >= at && state.members.has(author);
+          const live = invite && invite.by === author && invite.expires >= at && state.members.has(author) && !(isDid(body.member) && closedTo(body.invite, author, body.member));
           if (live && isDid(body.member) && !state.members.has(body.member)) admit(body.member, at, author, undefined, body.invite);
           break;
         }

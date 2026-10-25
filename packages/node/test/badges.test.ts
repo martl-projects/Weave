@@ -131,6 +131,18 @@ describe('badges', () => {
     expect(await ada.badges('Martin')).toEqual([]);
   });
 
+  it('a second transfer from the same point, backdated before the first, still loses: the lower number counts', async () => {
+    const { martin, lena, ada, series } = await setup();
+    const badge = await martin.giveBadge({ series: series.id, who: 'Lena' });
+    sync(martin, lena);
+    await lena.transferBadge({ badge: badge.id, to: 'Ada' });
+    // Later, a cheating node takes it back: a second transfer from the same point, dated a year earlier.
+    lena.replica.write(lena.identity, { kind: KIND_BADGE_TRANSFER, body: { badge: badge.id, from: badge.id, to: lena.identity.author }, time: new Date(Date.now() - 365 * 86_400_000).toISOString() } as never);
+    sync(lena, ada);
+    const [held] = await ada.badges();
+    expect(held).toMatchObject({ holder: { name: 'Ada' }, contested: true });
+  });
+
   it("counts a series for a project only while its issuer maintains it; elsewhere the claim shows as unchecked", async () => {
     const { martin, lena, ada, series } = await setup();
     await lena.joinSpace(await martin.invite('Weave'));

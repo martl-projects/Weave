@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { closingUpTo, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_VOTE, tally, type Entry } from '../src/index.ts';
+import { KIND_INVITE_CLOSE } from '../src/index.ts';
 import { createIdentity, KIND_INVITE, KIND_JOIN, KIND_MAINTAINER, KIND_REMOVE, KIND_SPACE_CREATE, newSpace, openIn, Replica, sealFor, spaceState, visibleIn, type Inner, type SigningIdentity, type SpaceKind } from '../src/index.ts';
 
 /*
@@ -121,5 +123,39 @@ describe('backdated events of a removed member', () => {
     post(founder, { kind: KIND_REMOVE, body: { member: eve.did } }, at(10));
     expect(state().members.has(eve.did)).toBe(false);
     expect(state().cutoffs).toBeUndefined();
+  });
+});
+
+describe('backdated votes', () => {
+  const entry = (who: SigningIdentity, seq: number, kind: string, body: Record<string, unknown>, time: string): Entry =>
+    ({ id: `${who.did}#${seq}`, kind, body, event: { author: who.did, signer: who.did, seq, kind, scope: 'project:x', body: null, time } }) as unknown as Entry;
+
+  it('once its proposer closes it, a vote signed afterwards does not count, whatever date it claims', () => {
+    const [ana, ben, cid] = [createIdentity(), createIdentity(), createIdentity()];
+    const members = new Set([ana.did, ben.did, cid.did]);
+    const proposal = entry(ana, 1, KIND_PROPOSAL, { title: 'Ship it?', deadline: at(30) }, at(0));
+    const entries = [proposal, entry(ana, 2, KIND_VOTE, { proposal: proposal.id, choice: 'yes' }, at(5)), entry(ben, 1, KIND_VOTE, { proposal: proposal.id, choice: 'yes' }, at(6))];
+    // At the deadline Ana's node closes it, naming what it holds.
+    const close = entry(ana, 3, KIND_PROPOSAL_CLOSE, { proposal: proposal.id, upTo: closingUpTo(proposal, entries) }, at(31));
+    // After seeing the result, Ben changes his mind and Cid votes, both dated before the deadline.
+    const late = [entry(ben, 2, KIND_VOTE, { proposal: proposal.id, choice: 'no' }, at(20)), entry(cid, 1, KIND_VOTE, { proposal: proposal.id, choice: 'no' }, at(21))];
+    const result = tally(proposal, [...entries, close, ...late], members, at(40));
+    expect({ yes: result.yes, no: result.no }).toEqual({ yes: 2, no: 0 });
+    // Without a close, it's by the dates they claim, as before.
+    expect(tally(proposal, [...entries, ...late], members, at(40)).no).toBe(2);
+  });
+});
+
+describe('backdated joins with an expired invite', () => {
+  it('once its maker closed it, nobody else joins with it, whatever date they sign', () => {
+    const { founder, post, state } = setup('group');
+    const [ana, late] = [createIdentity(), createIdentity()];
+    post(founder, { kind: KIND_INVITE, body: { invite: 'i1', expires: at(30) } }, at(1));
+    post(ana, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(2));
+    post(founder, { kind: KIND_INVITE_CLOSE, body: { invite: 'i1', joined: [ana.did] } }, at(31));
+    // Someone who got hold of the link joins long after, dating it before the expiry.
+    post(late, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(20));
+    expect(state().members.has(ana.did)).toBe(true);
+    expect(state().members.has(late.did)).toBe(false);
   });
 });

@@ -129,6 +129,7 @@ import {
   KIND_FOLLOW,
   KIND_GIFT,
   KIND_INVITE,
+  KIND_INVITE_CLOSE,
   KIND_ISSUE,
   KIND_ISSUE_CLAIM,
   KIND_ISSUE_STATUS,
@@ -188,6 +189,8 @@ import {
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
+  KIND_PROPOSAL_CLOSE,
+  closingUpTo,
   KIND_REACT,
   KIND_REKEY,
   KIND_REMOVE,
@@ -2397,6 +2400,8 @@ export class WeaveNode implements Backend {
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
+    changed += await this.#closeProposals();
+    for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
@@ -5289,6 +5294,49 @@ export class WeaveNode implements Backend {
     if (proposal.space?.kind !== 'project') throw new Error('votes happen inside projects');
     await this.publish({ kind: KIND_VOTE, body: { proposal: proposal.id, choice: input.choice }, space: proposal.space.id, as: input.as });
     return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
+  }
+
+  /** Close our invites that expired, naming who came in with each: later joins with them don't count, whatever date they claim. */
+  #closeInvites(space: StoredSpace): number {
+    if (space.kind === 'direct') return 0;
+    const now = new Date(this.clock()).toISOString();
+    const decoded = this.#decodedIn(space.id);
+    const closed = new Set(decoded.filter((d) => d.inner.kind === KIND_INVITE_CLOSE && d.event.author === this.identity.author).map((d) => (d.inner.body as { invite?: unknown } | null)?.invite));
+    let n = 0;
+    for (const d of decoded) {
+      if (canonicalKind(d.inner.kind) !== KIND_INVITE || d.event.author !== this.identity.author) continue;
+      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown };
+      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || b.expires > now || closed.has(b.invite)) continue;
+      const state = this.#state(space);
+      const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
+      this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
+      closed.add(b.invite);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * Close our proposals whose deadline passed: name the last number of each
+   * voting key we hold, so votes signed later don't count, whatever date they
+   * claim. Votes still on their way when we close don't count either.
+   */
+  async #closeProposals(): Promise<number> {
+    const now = new Date(this.clock()).toISOString();
+    let closed = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (space.kind !== 'project') continue;
+      const entries = this.#entries(space);
+      for (const p of entries) {
+        if (p.kind !== KIND_PROPOSAL || p.event.author !== this.identity.author) continue;
+        const deadline = typeof (p.body as { deadline?: unknown } | null)?.deadline === 'string' ? (p.body as { deadline: string }).deadline : '';
+        if (!deadline || deadline > now) continue;
+        if (entries.some((e) => e.kind === KIND_PROPOSAL_CLOSE && e.event.author === this.identity.author && (e.body as { proposal?: unknown } | null)?.proposal === p.id)) continue;
+        await this.publish({ kind: KIND_PROPOSAL_CLOSE, body: { proposal: p.id, upTo: closingUpTo(p, entries) }, space: space.id });
+        closed++;
+      }
+    }
+    return closed;
   }
 
   async delegateVote(input: { project: string; who?: string }): Promise<void> {
