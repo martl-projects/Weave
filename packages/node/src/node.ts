@@ -3931,14 +3931,14 @@ export class WeaveNode implements Backend {
     const group = await this.#createSpace('group', input.name, { tier: true });
     const position = this.#tierOffers(this.identity.author).length;
     this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, auto: false, time: '' }, input);
-    return this.#tierInfo(this.#tierOffer(group.id));
+    return this.#tierInfo(this.#tierOffer(group.id, this.identity.author));
   }
 
   async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo> {
-    const before = this.#tierOffer(input.tier);
+    const before = this.#tierOffer(input.tier, this.identity.author);
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
-    return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id));
+    return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id, this.identity.author));
   }
 
   get #gumroadFile(): string {
@@ -3988,7 +3988,7 @@ export class WeaveNode implements Backend {
   }
 
   async sellTierOnGumroad(input: { tier: string; token?: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }> {
-    const t = this.#tierOffer(input.tier);
+    const t = this.#tierOffer(input.tier, this.identity.author);
     if (t.creator !== this.identity.author) throw new Error('only its creator can sell a tier');
     const token = input.token?.trim() || this.#gumroadAuth()?.token;
     if (!token) throw new Error('connect Gumroad first (weave gumroad connect), or give an access token');
@@ -4001,8 +4001,8 @@ export class WeaveNode implements Backend {
     return this.#tierOffers(who ? this.resolve(who) : this.identity.author).map((t) => this.#tierInfo(t));
   }
 
-  async requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void> {
-    const tier = this.#tierOffer(input.tier);
+  async requestMembership(input: { tier: string; creator?: string; note?: string; license?: string; payment?: string }): Promise<void> {
+    const tier = this.#tierOffer(input.tier, input.creator ? this.resolve(input.creator) : undefined);
     if (tier.creator === this.identity.author) throw new Error("that's your own tier");
     if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
     const license = input.license?.trim();
@@ -4055,7 +4055,7 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, gift(this.#keysForNewcomers(group), [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
     }
     await this.#answerRequests(group.id, member);
-    return this.#tierInfo(this.#tierOffer(group.id));
+    return this.#tierInfo(this.#tierOffer(group.id, this.identity.author));
   }
 
   async declineMembership(input: { tier: string; who: string }): Promise<void> {
@@ -4317,19 +4317,28 @@ export class WeaveNode implements Backend {
   }
 
   /** A tier anyone offers, by id or name (yours first). */
-  #tierOffer(ref: string): Tier {
-    const all = tiersOf(this.replica.events((e) => e.kind === KIND_TIER));
-    const match = all.find((t) => t.id === ref) ?? all.find((t) => t.creator === this.identity.author && t.name.toLowerCase() === ref.toLowerCase()) ?? all.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
-    if (Array.isArray(match)) {
-      if (match.length === 1) return match[0];
-      throw new Error(match.length ? `several tiers are named "${ref}" — use its id` : `no tier "${ref}" is known`);
+  /**
+   * A tier by id or name, of `creator` if given. Anyone can publish a tier under
+   * someone else's id: then the id alone doesn't say whose. It's the tier whose
+   * group this node holds with that founder, or else the creator has to be named
+   * (the app always does: you join a tier from its creator's hub).
+   */
+  #tierOffer(ref: string, creator?: Did): Tier {
+    const all = tiersOf(this.replica.events((e) => e.kind === KIND_TIER)).filter((t) => !creator || t.creator === creator);
+    let match = all.filter((t) => t.id === ref);
+    if (!match.length) match = all.filter((t) => t.creator === this.identity.author && t.name.toLowerCase() === ref.toLowerCase());
+    if (!match.length) match = all.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
+    if (match.length > 1) {
+      const founded = match.filter((t) => this.#spaces.get(t.id)?.founder === t.creator);
+      if (founded.length === 1) return founded[0];
     }
-    return match;
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several people offer a tier "${ref}": name its creator (or join from their hub)` : `no tier "${ref}" is known`);
   }
 
   /** One of your own tiers' groups. */
   #tierGroup(ref: string): StoredSpace {
-    const tier = this.#tierOffer(ref);
+    const tier = this.#tierOffer(ref, this.identity.author);
     const group = this.#spaces.get(tier.id);
     if (tier.creator !== this.identity.author || !group) throw new Error(`only ${this.nameOf(tier.creator) ?? 'its creator'} can let people into ${tier.name}`);
     return group;
@@ -4939,7 +4948,7 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- paying from a wallet, without copying anything
 
-  async paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo> {
+  async paymentRequest(input: { tier?: string; creator?: string; show?: string }): Promise<PaymentRequestInfo> {
     const { price, what } = this.#payable(input);
     const wallet = this.#wallets().get(this.identity.author);
     if (!wallet?.verified) throw new Error('link your wallet first (weave wallet link): Weave looks for your payment from it');
@@ -4961,7 +4970,7 @@ export class WeaveNode implements Backend {
     };
   }
 
-  async findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }> {
+  async findPayment(input: { tier?: string; creator?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }> {
     const { price } = this.#payable(input);
     // From any wallet we ever linked (we may have moved on), to the address asked for.
     const mine = [...this.#walletHistory()].filter(([, did]) => did === this.identity.author).map(([address]) => '0x' + address.slice(2).padStart(64, '0'));
@@ -4977,8 +4986,8 @@ export class WeaveNode implements Backend {
       const paid = logs.find((l) => BigInt(l.data) >= BigInt(price.amount));
       if (paid) {
         // Found: send it on, as if its hash had been pasted.
-        if (input.tier) await this.requestMembership({ tier: input.tier, payment: paid.transactionHash });
-        else await this.buyTicket({ show: input.show!, payment: paid.transactionHash });
+        if (input.tier) await this.requestMembership({ tier: input.tier, ...(input.creator ? { creator: input.creator } : {}), payment: paid.transactionHash });
+        else await this.buyTicket({ show: input.show!, ...(input.creator ? { host: input.creator } : {}), payment: paid.transactionHash });
         return { found: paid.transactionHash, checkedTo: to };
       }
       from = to + 1;
@@ -4987,14 +4996,14 @@ export class WeaveNode implements Backend {
   }
 
   /** What a tier or show asks to be paid, and where. */
-  #payable(input: { tier?: string; show?: string }): { price: OnchainPrice; what: string } {
+  #payable(input: { tier?: string; creator?: string; show?: string }): { price: OnchainPrice; what: string } {
     if (input.tier) {
-      const tier = this.#tierOffer(input.tier);
+      const tier = this.#tierOffer(input.tier, input.creator ? this.resolve(input.creator) : undefined);
       if (!tier.onchain) throw new Error(`${tier.name} isn't paid on chain`);
       return { price: tier.onchain, what: `a month of ${tier.name}` };
     }
     if (input.show) {
-      const show = this.#showRef(input.show);
+      const show = this.#showRef(input.show, input.creator ? this.resolve(input.creator) : undefined);
       return { price: show.price, what: `a ticket to ${show.name}` };
     }
     throw new Error('pay for what? a tier or a show');
@@ -5050,8 +5059,8 @@ export class WeaveNode implements Backend {
       .map((s) => this.#showInfo(s));
   }
 
-  async buyTicket(input: { show: string; payment: string }): Promise<void> {
-    const show = this.#showRef(input.show);
+  async buyTicket(input: { show: string; host?: string; payment: string }): Promise<void> {
+    const show = this.#showRef(input.show, input.host ? this.resolve(input.host) : undefined);
     if (show.cancelled) throw new Error(`${show.name} is called off`);
     if (Date.parse(show.ends) < this.clock()) throw new Error(`${show.name} is over`);
     const payment = input.payment.trim().toLowerCase();
@@ -5213,15 +5222,17 @@ export class WeaveNode implements Backend {
   }
 
   /** A show by id, or by name (ours first). */
-  #showRef(ref: string): Show {
-    const all = this.#allShows();
-    const byId = all.find((s) => s.id === ref);
-    if (byId) return byId;
-    const named = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
-    const mine = named.filter((s) => s.host === this.identity.author);
-    const match = mine.length ? mine : named;
+  /** A show by id or name, of `host` if given. Anyone can publish a show under another's id: then ours (as a host) is meant, or the host has to be named. */
+  #showRef(ref: string, host?: Did): Show {
+    const all = this.#allShows().filter((s) => !host || s.host === host);
+    let match = all.filter((s) => s.id === ref);
+    if (!match.length) match = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
+    if (match.length > 1) {
+      const ours = match.filter((s) => s.hosts.includes(this.identity.author));
+      if (ours.length === 1) return ours[0];
+    }
     if (match.length === 1) return match[0];
-    throw new Error(match.length ? `several shows are named "${ref}" — use its id` : `no show "${ref}" is known`);
+    throw new Error(match.length ? `several shows "${ref}": name its host` : `no show "${ref}" is known`);
   }
 
   #showInfo(show: Show): ShowInfo {

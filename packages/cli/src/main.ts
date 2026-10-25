@@ -289,7 +289,7 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
                              or link one you made: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
                              your node lets buyers in and renews monthly; --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
-  support <tier>             ask to join a tier               [--text "how I paid"] [--license <key from your Gumroad receipt>]
+  support <tier>             ask to join a tier               [--creator <who>: when others publish under its id] [--text "how I paid"] [--license <key from your Gumroad receipt>]
                              [--payment <tx hash>: for tiers paid on chain, from your linked wallet]
   requests                   people asking to join your tiers
   grant <tier> <who>         let them in, or renew            [--months 1]
@@ -498,6 +498,7 @@ const { values, positionals } = parseArgs({
     'gumroad-token': { type: 'string' },
     license: { type: 'string' },
     usdc: { type: 'string' },
+    creator: { type: 'string' },
     show: { type: 'string' },
     tiers: { type: 'string' },
     signature: { type: 'string' },
@@ -2325,7 +2326,7 @@ ${postLine(p)}`);
     case 'support': {
       const tier = args.join(' ').trim();
       if (!tier) throw new Error('usage: weave support <tier id> [--text "how I paid"]');
-      await (await backend()).requestMembership({ tier, note: values.text, license: values.license, payment: values.payment });
+      await (await backend()).requestMembership({ tier, ...(values.creator ? { creator: values.creator } : {}), note: values.text, license: values.license, payment: values.payment });
       return out({ requested: tier }, () => (values.license ? "sent your license key: you're in once the creator's node has checked it with Gumroad" : values.payment ? "sent your payment: you're in once the creator's node has read it on chain" : 'asked to join; the creator decides'));
     }
 

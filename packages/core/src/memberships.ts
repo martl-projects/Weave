@@ -118,7 +118,12 @@ export interface Tier {
 
 const str = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '');
 
-/** A creator's tiers from their public tier events, the latest per tier winning; withdrawn ones (open: false and hidden) are dropped. */
+/**
+ * Tiers from public tier events, the latest per author and tier winning;
+ * withdrawn ones (open: false and hidden) are dropped. Keyed by author too:
+ * someone else publishing under the same id makes a tier of their own, never
+ * changes this one (who it pays, who lets people in).
+ */
 export function tiersOf(events: EventView[]): Tier[] {
   const latest = new Map<string, Tier & { hidden: boolean }>();
   for (const event of events) {
@@ -130,7 +135,7 @@ export function tiersOf(events: EventView[]): Tier[] {
     const price = Number(body.price);
     const gumroad = parseGumroadLink(body.gumroad);
     const onchain = parseOnchainPrice(body.onchain);
-    latest.set(id, {
+    latest.set(`${event.author} ${id}`, {
       id,
       creator: event.author,
       name,

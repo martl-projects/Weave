@@ -2106,7 +2106,8 @@ export interface Backend {
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
   /** Ask to join a tier; for tiers sold through Gumroad, send the license key from your receipt and you're in as soon as the creator's node checked it. */
-  requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void>;
+  /** Ask to join a tier; name its creator when others publish under the same id (the app always does). */
+  requestMembership(input: { tier: string; creator?: string; note?: string; license?: string; payment?: string }): Promise<void>;
   /** Requests waiting for you, as a creator. */
   membershipRequests(): Promise<MembershipRequestInfo[]>;
   /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
@@ -2135,9 +2136,10 @@ export interface Backend {
   safeProposals(safe?: string): Promise<SafeProposalInfo[]>;
 
   /** How to pay a tier (a month) or a show (a ticket) from your linked wallet: a QR link and a transaction. */
-  paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo>;
+  /** `creator`: whose tier, or whose show (its host), when others publish under the same id. */
+  paymentRequest(input: { tier?: string; creator?: string; show?: string }): Promise<PaymentRequestInfo>;
   /** Look on chain for that payment from your wallets since a block; found, it is sent on (as if its hash were pasted). */
-  findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
+  findPayment(input: { tier?: string; creator?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
 
   // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
   /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
@@ -2147,7 +2149,7 @@ export interface Backend {
   /** Shows this node knows, or a project's. */
   shows(project?: string): Promise<ShowInfo[]>;
   /** Ask for a ticket with the transaction that paid it, from your linked wallet; the host's node reads it on chain. */
-  buyTicket(input: { show: string; payment: string }): Promise<void>;
+  buyTicket(input: { show: string; host?: string; payment: string }): Promise<void>;
   /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
   tickets(show: string): Promise<TicketInfo[]>;
   /**
