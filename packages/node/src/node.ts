@@ -4978,9 +4978,21 @@ export class WeaveNode implements Backend {
       .map((t) => ({ holder: person(this.identity.author), tx: t.tx, ok: true }));
   }
 
-  async settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement> {
-    const show = this.#showRef(input.show);
+  async settleShow(input: { show: string; action: 'payout' | 'refund'; split?: Array<{ to: string; share: number }> }): Promise<ShowSettlement> {
+    let show = this.#showRef(input.show);
     if (!show.hosts.includes(this.identity.author)) throw new Error(`only the hosts of ${show.name} can settle it`);
+    if (input.action === 'payout' && input.split?.length) {
+      // Who gets what is decided after the show: the host records it on the show, then pays out by it.
+      if (show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} decides how ${show.name} pays out`);
+      if (show.cancelled) throw new Error(`${show.name} is called off: pay everyone back instead (refund)`);
+      if (Date.parse(show.ends) > this.clock()) throw new Error(`${show.name} isn't over yet: pay out after it (${show.ends})`);
+      const project = show.project ? this.#spaces.get(show.project) : undefined;
+      const split = input.split.map((part) => ({ to: part.to.startsWith('project:') ? part.to : this.#showRecipient(part.to, project), share: part.share }));
+      if (!parseShowSplit(split)) throw new Error('a split names people or addresses with whole basis points adding up to 10000');
+      const { id, host: _host, time: _time, ...rest } = show;
+      this.replica.write(this.identity, { kind: KIND_SHOW, body: { show: id, ...rest, split } as unknown as Json });
+      show = this.#showRef(id);
+    }
     const info = this.#showInfo(show);
     const balance = BigInt(await this.callChain(show.price.chain, { to: show.price.token, data: erc20BalanceOf(info.safe.address) }));
     let calls: Array<{ to: string; data: string }>;

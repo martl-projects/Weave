@@ -5,6 +5,7 @@ import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
+import { WalletNeeded } from './wallet.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
@@ -107,12 +108,7 @@ function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   // null: no wallet linked; undefined: still asking.
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   if (wallet === undefined) return null;
-  if (!wallet)
-    return (
-      <p className="small">
-        Paying in {tier.onchain!.symbol} goes from your own wallet: link it first (Keys &amp; devices → Wallet), so {creator} knows the payment is yours.
-      </p>
-    );
+  if (!wallet) return <WalletNeeded why={`Paying in ${tier.onchain!.symbol} goes from your own wallet, so ${creator} knows the payment is yours.`} />;
   return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;
 }
 

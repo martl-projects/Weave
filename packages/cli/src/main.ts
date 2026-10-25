@@ -263,7 +263,7 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
   ticket <show> --payment <tx hash>   ask for a ticket you paid from your linked wallet
   tickets <show>             for the host: every ticket sold, and requests not let in
   show cancel <show>         call it off: tickets stop letting people in
-  show settle <show> payout|refund [--file batch.json]   the Safe transaction that pays out by the split, or back
+  show settle <show> payout|refund [--split Lena=6000,project=4000] [--file batch.json]   the Safe transaction that pays out (by the split, or one decided now) or back
   safe proposals [address]   transactions waiting for a Safe's owners (treasuries, shows' Safes)
   safe show <proposal> [--file typed.json]   what to sign: the hash, and the typed data for your wallet
   safe sign <proposal> --signature <0x…>     add your wallet's signature (typed data, or the hash signed as a message)
@@ -2033,7 +2033,7 @@ ${postLine(p)}`);
         return out(deploy, () => `send this from any wallet to put ${sh.safe.address} on chain (it belongs to the hosts):\n  to:   ${deploy.to}\n  data: ${deploy.data}`);
       }
       if (sub === 'settle' && ref && (action === 'payout' || action === 'refund')) {
-        const settlement = await b.settleShow({ show: ref, action });
+        const settlement = await b.settleShow({ show: ref, action, ...(values.split ? { split: values.split.split(',').map((part) => { const [to, share] = part.split('='); return { to: to.trim(), share: Number(share) }; }) } : {}) });
         if (values.file) writeFileSync(resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file), JSON.stringify(settlement.batch, null, 2));
         return out(settlement, () => [`${action === 'refund' ? 'pay back' : 'pay out'} ${settlement.total} of ${settlement.balance} (smallest unit) from the Safe ${settlement.safe}, in ${settlement.calls.length} transfer${settlement.calls.length === 1 ? '' : 's'}`, values.file ? `wrote ${values.file}: load it in the Safe app's Transaction Builder (app.safe.global), check it, sign it in your wallets` : 'add --file batch.json for the Safe app'].join('\n'));
       }
