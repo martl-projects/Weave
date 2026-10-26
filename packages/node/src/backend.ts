@@ -1201,6 +1201,9 @@ export interface Profile {
 /** What the address book picker found: a person, or a post (projects and issues are posts too). */
 export type Found = { person: Profile; post?: undefined } | { post: PostInfo; person?: undefined };
 
+/** The picker's tabs: people, projects, or the other posts (issues, ideas, proposals). */
+export type FoundKind = 'people' | 'projects' | 'posts';
+
 /** Where the company's node streams its audit (stage 12), without secrets. */
 export interface AuditStreamInfo {
   id: string;
@@ -1835,8 +1838,8 @@ export interface Backend {
   setProfile(input: ProfileInput): Promise<Profile>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
   directory(query?: string): Promise<Profile[]>;
-  /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url. */
-  find(query: string, limit?: number): Promise<Found[]>;
+  /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url; `only` keeps one kind. */
+  find(query: string, limit?: number, only?: FoundKind): Promise<Found[]>;
   /** Your contact link: your address, to send to people however you like. Holds no keys. */
   contactLink(): Promise<string>;
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */

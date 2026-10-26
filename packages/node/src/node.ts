@@ -449,6 +449,7 @@ import {
   type PostsQuery,
   type Profile,
   type Found,
+  type FoundKind,
   type ProfileInput,
   type ProjectInfo,
   type ProjectPage,
@@ -3515,7 +3516,7 @@ export class WeaveNode implements Backend {
       .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
   }
 
-  async find(query: string, limit = 30): Promise<Found[]> {
+  async find(query: string, limit = 30, only?: FoundKind): Promise<Found[]> {
     const q = query.trim().toLowerCase();
     // How well a name matches: whole name, its start, a word's start, anywhere (lower is better).
     const rank = (text: string | undefined): number => {
@@ -3528,18 +3529,18 @@ export class WeaveNode implements Backend {
     };
     const key = personTargetOf(query) ?? (q.length >= 4 ? query.trim() : undefined);
     const found: Array<{ item: Found; rank: number; order: number; time: string }> = [];
-    for (const person of await this.directory()) {
+    for (const person of only && only !== 'people' ? [] : await this.directory()) {
       // Without a query, the people you'd most likely mean: friends, then those you follow.
       const r = !q ? (person.following && person.followsMe ? 0 : person.following ? 1 : 2) : key && personKeyOf(person.did).startsWith(key) ? 1 : rank(person.name);
       if (r >= 0) found.push({ item: { person }, rank: r, order: 0, time: '' });
     }
     for (const space of this.#spaces.values()) {
-      if (space.kind !== 'project') continue;
+      if (space.kind !== 'project' || (only && only !== 'projects')) continue;
       const post = this.#projectPost(space);
       const r = post ? rank(post.title) : -1;
       if (post && r >= 0) found.push({ item: { post }, rank: r, order: 1, time: post.active ?? post.time });
     }
-    for (const post of this.#allPosts()) {
+    for (const post of only && only !== 'posts' ? [] : this.#allPosts()) {
       if (post.type === 'project') continue;
       const r = rank(post.title);
       if (r >= 0) found.push({ item: { post }, rank: r, order: 2, time: post.active ?? post.time });

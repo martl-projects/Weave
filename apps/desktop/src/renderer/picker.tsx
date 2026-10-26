@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { Found } from '@weave/node/client';
+import type { Found, FoundKind } from '@weave/node/client';
 import { api, bridge } from './lib.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { kindOf } from './overlay.tsx';
@@ -26,6 +26,21 @@ function noteOf(f: Found): string {
   return [state, p.company?.name, `~${p.url.split('~').pop()}`].filter(Boolean).join(' · ');
 }
 
+/** The tabs: everything, or one kind. Tab and Shift+Tab go from one to the next. */
+const TABS: Array<[FoundKind | 'all', string]> = [
+  ['all', 'All'],
+  ['people', 'People'],
+  ['projects', 'Projects'],
+  ['posts', 'Posts'],
+];
+
+const NOTHING: Record<FoundKind | 'all', string> = {
+  all: 'Nobody and nothing by that name here.',
+  people: 'Nobody by that name here.',
+  projects: 'No project by that name here.',
+  posts: 'No issue, idea or post by that name here.',
+};
+
 function iconOf(f: Found): IconName {
   if (f.person) return 'user';
   if (f.post.type === 'project') return 'zap';
@@ -36,6 +51,7 @@ function iconOf(f: Found): IconName {
 
 export function Picker() {
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<FoundKind | 'all'>('all');
   const [found, setFound] = useState<Found[]>();
   const [at, setAt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -44,7 +60,7 @@ export function Picker() {
   useEffect(() => {
     let current = true;
     const search = () =>
-      void api<Found[]>('find', query, 30).then((f) => {
+      void api<Found[]>('find', query, 30, ...(tab === 'all' ? [] : [tab])).then((f) => {
         if (!current) return;
         setFound(f);
         setAt(0);
@@ -54,7 +70,7 @@ export function Picker() {
       current = false;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, tab]);
   // The shortcut again, after a pick or Escape: a fresh search.
   useEffect(
     () =>
@@ -79,6 +95,11 @@ export function Picker() {
     else if (event.key === 'ArrowDown' && n) setAt((i) => (i + 1) % n);
     else if (event.key === 'ArrowUp' && n) setAt((i) => (i - 1 + n) % n);
     else if (event.key === 'Enter') pick(found?.[at]);
+    else if (event.key === 'Tab') {
+      const i = TABS.findIndex(([key]) => key === tab);
+      setTab(TABS[(i + (event.shiftKey ? TABS.length - 1 : 1)) % TABS.length][0]);
+      input.current?.focus();
+    }
     else return;
     event.preventDefault();
   };
@@ -96,6 +117,23 @@ export function Picker() {
           <Icon name="search" />
           <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="A person, project, issue or post" spellCheck={false} />
         </div>
+        <menu role="tablist" className="picker-tabs">
+          {TABS.map(([key, label]) => (
+            <li key={key} role="tab" aria-selected={tab === key}>
+              <a
+                href="#"
+                tabIndex={-1}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setTab(key);
+                  input.current?.focus();
+                }}
+              >
+                {label}
+              </a>
+            </li>
+          ))}
+        </menu>
         <ul className="picker-list" ref={list} role="listbox">
           {found?.map((f, i) => (
             <li
@@ -113,10 +151,10 @@ export function Picker() {
               </span>
             </li>
           ))}
-          {found && !found.length && <li className="empty">Nobody and nothing by that name here.</li>}
+          {found && !found.length && <li className="empty">{NOTHING[tab]}</li>}
         </ul>
         <div className="panel-foot picker-foot">
-          <span>↑↓ choose · Enter {bridge.platform === 'win32' ? 'pastes a link where you were typing' : 'copies a link to paste'} · Esc closes</span>
+          <span>↑↓ choose · Tab switches tabs · Enter {bridge.platform === 'win32' ? 'pastes a link where you were typing' : 'copies a link to paste'} · Esc closes</span>
         </div>
       </div>
     </div>

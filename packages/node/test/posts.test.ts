@@ -48,6 +48,11 @@ describe('the address book picker', () => {
     // Without a query: the people you follow, then your projects and recent posts.
     expect((await martin.find('')).map((f) => f.person?.name ?? f.post?.title).slice(0, 3)).toEqual(['Phil', 'Phil', 'Philosophy club']);
     expect(await martin.find('zzz')).toEqual([]);
+
+    // One kind at a time, for the picker's tabs.
+    expect((await martin.find('phil', 30, 'people')).map((f) => f.person?.name)).toEqual(['Phil', 'Phil']);
+    expect((await martin.find('phil', 30, 'projects')).map((f) => f.post?.title)).toEqual(['Philosophy club']);
+    expect((await martin.find('', 30, 'posts')).map((f) => f.post?.title).sort()).toEqual(['Ask Phil about the web UI', 'Nothing to see']);
   });
 });
 
