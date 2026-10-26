@@ -2,6 +2,38 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.20.0 · 2026-10-26
+
+- Remove the project-app path: rooms come only from the room service
+- Rooms as a regular service: Weave's room service, with handlers instead of artifact services
+- Live starts artifacts as room services: "Start here" instead of hosting the project app
+- Artifacts as services: run another project's release, pinned, in your own spaces
+- Rooms offered by services: a service's own web page, as a room in its projects
+- Services in the app: add, set up and stop them, and ask them in a space
+- Run services on an always-on node: the key made on a computer, handed over sealed
+- Wait at most 4 s for leaving the DHT
+- Leave the DHT at once when stopping, so the process can exit
+- Keep a stop asked for while the daemon is still starting
+- Leave the DHT politely for 3 s at most when stopping
+- Services: code you run under a key of its own, with exactly its contract's rights
+- Link personal GitHub repositories: linked only, or written to by people picked
+- Shows pay out as decided after them; calmer project settings
+- Give the Mentions test a session folder in this system's own path form
+- Host room: tickets always on offer, a new show by default
+- Shows set up with their room; payments behind a switch
+- Show the work item a session is on in full, and a sessions pane
+- Give routines a tab of their own
+- Give a session Ctrl+click opened its item without the agent's help
+- Give the desk a daily driver: the session its items go to
+- Put a desk folder given by name in your user folder, and offer Choose…
+- Set up your desk, with routines that make work items on time
+- Ctrl+click a work item to work on it in the Claude app
+- Show work items in the side panel like posts on a board
+- Give agent sessions a stack of work items, and follow the one you look at
+- Start the harness: post links, a Mentions panel, Weave for Claude chat
+- Add a dark mode to the Clean look
+- Make Clean the default look
+
 ## v0.19.4 · 2026-10-25
 
 - Give up stalled phone connections after 4 s and try again
