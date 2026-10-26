@@ -1,15 +1,17 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, ServiceInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, HostedRoomInfo, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection } from './shows.tsx';
 import { Page } from './views.tsx';
+import { contractText, ServiceCard } from './services.tsx';
 
 /*
- * Rooms: a service's web page. Someone in the project starts an artifact (a project's release) as a service on
- * their computer; players use it through an encrypted tunnel. The ▶ button opens it in its own window; nobody sees
- * an address. Who is in a room and what they say there is never stored.
+ * A project's services, and the rooms the room service offers: someone in the project opens a room, answered by a
+ * handler on their computer (a project's release, a program, or something already running); players use it
+ * through an encrypted tunnel. The ▶ button opens it in its own window; nobody sees an address. Who is in a room
+ * and what they say there is never stored.
  */
 
 const play = (room: RoomInfo) => {
@@ -50,11 +52,11 @@ function RoomChat({ room }: { room: RoomInfo }) {
   );
 }
 
-function RoomCard({ room, shows, project }: { room: RoomInfo; shows: ShowInfo[]; project: SpaceInfo }) {
+function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
-  // A room a service offers: "board, offered by martl · board". Ending it here takes the service out of this project.
+  // A room a service offers: "Race, offered by martl · room".
   const offered = room.offeredBy ? `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy.name ?? 'a service'}` : undefined;
   let main;
   if (room.mine && offered)
@@ -122,24 +124,8 @@ function RoomCard({ room, shows, project }: { room: RoomInfo; shows: ShowInfo[];
         <div className="room-actions">
           {main}
           <span className="grow" />
-          {offered && room.mine ? (
-            <AsyncButton
-              onClick={async () => {
-                const services = await api<ServiceInfo[]>('services');
-                const service = services.find((s) => s.did === room.offeredBy!.did);
-                if (!service) return toast(`${offered} runs on another of your devices: end it there`, 'error');
-                const others = service.spaces.filter((s) => s.id !== project.id);
-                const asked = await ask(
-                  `End "${room.name}"? Everyone in it is disconnected, and ${service.name} leaves p/${project.name}${others.length ? ` (it keeps running in ${others.map((s) => s.name).join(', ')})` : ''}.`,
-                  'End room',
-                );
-                if (asked) await attempt(() => api('setService', { name: service.name, spaces: others.map((s) => s.id) }).then(bump), 'Room ended');
-              }}
-            >
-              End room
-            </AsyncButton>
-          ) : room.mine ? (
-            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+          {room.mine ? (
+            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected${offered ? ', and what answers it stops' : ''}.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
           )}
@@ -308,7 +294,7 @@ function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['set
       <label htmlFor={`setting-${setting.name}`}>
         {setting.label}
         {setting.optional ? <span className="muted"> (optional)</span> : null}
-        {setting.space ? <span className="muted"> · for this project only</span> : null}
+
       </label>
       <input id={`setting-${setting.name}`} className="wide" type={setting.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={value} placeholder={setting.name} onChange={(e) => onChange(e.target.value)} />
       {setting.hint && <div className="small muted">{setting.hint}</div>}
@@ -317,198 +303,277 @@ function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['set
 }
 
 /**
- * Starting an artifact as a room service: pick a release (this project's or one from another project you're in),
- * see what runs, fill in its settings, approve. It runs here as your service; its web page is the room. If you
- * already run that artifact, it's added to this project instead.
+ * Opening a room of your room service: its name, and what answers its clients (its handler): an artifact (a release
+ * of this project or another one you're in, fetched and checked), a command in a folder, or something already
+ * running. Running code is shown first and approved here.
  */
-function StartDialog({ project, onClose }: { project: SpaceInfo; onClose(): void }) {
+function OpenRoomDialog({ project, service, onClose }: { project: SpaceInfo; service: string; onClose(): void }) {
   const artifacts = useArtifacts(project);
-  const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
+  const [kind, setKind] = useState<'artifact' | 'command' | 'address'>('artifact');
   const [picked, setPicked] = useState<string>();
   const [name, setName] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
+  const [command, setCommand] = useState('');
+  const [folder, setFolder] = useState('');
+  const [port, setPort] = useState('');
   const [busy, setBusy] = useState(false);
-  const chosen = artifacts?.find((a) => a.id === picked) ?? artifacts?.find((a) => a.runs);
-  useEffect(() => {
-    if (chosen) setName(chosen.app);
-    setValues({});
-  }, [chosen?.id]);
-  if (!artifacts) return null;
-  // The same artifact, already running as one of your services on this computer.
-  const running = chosen && services?.find((s) => !s.node && s.artifact?.project.id === chosen.project.id && s.artifact.app === chosen.app);
-  const missing = chosen?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? [];
-  const start = async () => {
-    if (!chosen) return;
-    const once = Object.fromEntries((chosen.settings ?? []).filter((s) => !s.space && values[s.name]?.trim()).map((s) => [s.name, values[s.name].trim()]));
-    const here = Object.fromEntries((chosen.settings ?? []).filter((s) => s.space && values[s.name]?.trim()).map((s) => [s.name, values[s.name].trim()]));
+  const usable = (artifacts ?? []).filter((a) => a.runs && a.room);
+  const chosen = usable.find((a) => a.id === picked) ?? usable[0];
+  useEffect(() => setValues({}), [chosen?.id]);
+  const words = command.match(/"[^"]*"|'[^']*'|\S+/g)?.map((w) => w.replace(/^["']|["']$/g, '')) ?? [];
+  const missing = kind === 'artifact' ? (chosen?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? []) : [];
+  const ready = !!name.trim() && (kind === 'artifact' ? !!chosen && !missing.length : kind === 'command' ? words.length > 0 && !!folder && !!Number(port) : !!Number(port));
+  const open = async () => {
     setBusy(true);
-    const done = await attempt(async () => {
-      const service = await api<ServiceInfo>('addService', { name, artifact: { project: chosen.project.id, tag: chosen.tag }, spaces: [project.id], approve: true, settings: once });
-      if (Object.keys(here).length) await api('setService', { name: service.name, spaceSettings: { [project.id]: here } });
-      bump();
-      return true;
-    }, `${chosen.name} is starting: its room opens here once it answers`);
+    const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
+    const handler = kind === 'artifact' ? { artifact: { project: chosen!.project.id, tag: chosen!.tag }, settings } : kind === 'command' ? { command: words, folder, port: Number(port) } : { port: Number(port) };
+    const room = await attempt(() => api<RoomInfo>('openRoom', { service, project: project.id, name: name.trim(), ...handler, approve: true }), `"${name.trim()}" is open: it answers once its handler runs`);
     setBusy(false);
-    if (done) onClose();
+    if (room) {
+      bump();
+      onClose();
+    }
   };
-  const addHere = async () => {
-    if (!running) return;
-    const done = await attempt(() => api('setService', { name: running.name, spaces: [...running.spaces.map((s) => s.id), project.id] }).then(() => (bump(), true)), `${running.name} is in ${project.name} now`);
-    if (done) onClose();
-  };
+  const radio = (value: typeof kind, label: string) => (
+    <div className="field-row">
+      <input id={`handler-${value}`} type="radio" checked={kind === value} onChange={() => setKind(value)} />
+      <label htmlFor={`handler-${value}`}>{label}</label>
+    </div>
+  );
   return (
-    <Modal title={`Start here · p/${project.name}`} onClose={onClose} wide>
-      {artifacts.length === 0 ? (
-        <p>No project you're in has released anything to start yet. A project's maintainers release its artifacts here in Live.</p>
-      ) : (
-        <div className="form">
-          <fieldset>
-            <legend>What to start</legend>
-            {artifacts.map((a) => (
-              <div className="field-row" key={a.id}>
-                <input id={`artifact-${a.id}`} type="radio" disabled={!a.runs} checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
-                <label htmlFor={`artifact-${a.id}`}>
-                  <span>
-                    <b>{a.name}</b> {a.tag}{' '}
-                    <span className="muted small">
-                      · p/{a.project.name} · released {ago(a.time)} by {a.released.name ?? shortDid(a.released.did)}
-                      {!a.runs && ' · nothing for this computer'}
-                      {a.runs && !a.room && ' · no web page (no room)'}
+    <Modal title={`Open a room · p/${project.name}`} onClose={onClose} wide>
+      <div className="form">
+        <div className="field-row-stacked">
+          <label htmlFor="room-name">Name</label>
+          <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <fieldset>
+          <legend>What answers it</legend>
+          {radio('artifact', 'A release of a project (an artifact)')}
+          {kind === 'artifact' &&
+            (!artifacts ? (
+              <p className="small indent">Looking for releases…</p>
+            ) : usable.length === 0 ? (
+              <p className="small indent">No project you're in has released anything with a web page for this computer yet.</p>
+            ) : (
+              usable.map((a) => (
+                <div className="field-row indent" key={a.id}>
+                  <input id={`artifact-${a.id}`} type="radio" checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
+                  <label htmlFor={`artifact-${a.id}`}>
+                    <span>
+                      <b>{a.name}</b> {a.tag}{' '}
+                      <span className="muted small">
+                        · p/{a.project.name} · released {ago(a.time)} by {a.released.name ?? shortDid(a.released.did)}
+                      </span>
                     </span>
-                  </span>
-                </label>
-              </div>
-            ))}
-          </fieldset>
-          {chosen && running ? (
-            <>
-              <p>
-                You already run <b>{running.name}</b> ({chosen.name} {running.artifact?.tag}) in {running.spaces.map((s) => s.name).join(', ') || 'no space yet'}. Add it to p/{project.name}: one service, the same key,
-                a room here too.
-              </p>
-              <p className="small muted">It can then read what's addressed to it here, as it does in its other spaces, and so carry things between them: add it only where you'd trust it with that.</p>
-              <div className="buttons">
-                <button onClick={onClose}>Cancel</button>
-                <AsyncButton className="default" onClick={addHere}>
-                  Add it here
-                </AsyncButton>
-              </div>
-            </>
-          ) : chosen ? (
-            <>
-              <div className="field-row-stacked">
-                <label htmlFor="service-name">Its name</label>
-                <input id="service-name" maxLength={40} value={name} onChange={(e) => setName(e.target.value.toLowerCase())} />
-                <span className="small muted">What it signs shows as "you · {name || chosen.app}".</span>
-              </div>
-              {chosen.settings.map((s) => (
-                <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />
-              ))}
-              <div className="approve-launch">
-                <Icon name="warning" size={32} />
-                <div>
-                  <p>
-                    {chosen.runs === 'container' ? `Weave will run ${chosen.name} in a container, sealed off from your files:` : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it on this computer, as you:`}
-                  </p>
-                  {chosen.command && <pre className="launch-command">{chosen.command.join(' ')}</pre>}
-                  <p className="small">
-                    It runs under a key of its own and sees only what's addressed to it in p/{project.name}.{chosen.room ? ' Its web page is the room: everyone in the project can join it.' : ''} Only run it if you trust the people who maintain p/
-                    {chosen.project.name}. A newer release waits until you approve it.
-                  </p>
+                  </label>
                 </div>
-              </div>
-              <div className="buttons">
-                <button onClick={onClose}>Cancel</button>
-                <button className="default" disabled={!name || missing.length > 0 || busy} title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined} onClick={() => void start()}>
-                  {busy ? 'Starting…' : 'Run it here'}
+              ))
+            ))}
+          {radio('command', 'A program on this computer')}
+          {kind === 'command' && (
+            <div className="indent form">
+              <input className="wide code" placeholder="node server.js" value={command} onChange={(e) => setCommand(e.target.value)} aria-label="Command" />
+              <div className="field-row">
+                <span className="grow small">{folder || 'Runs in…'}</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const picked = await bridge.pickFolder('Where does it run?');
+                    if (picked) setFolder(picked);
+                  }}
+                >
+                  Choose folder…
                 </button>
               </div>
-            </>
-          ) : (
-            <p className="small">None of these has a release for this computer.</p>
+              <input inputMode="numeric" placeholder="Port it listens on (it gets PORT too)" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
+            </div>
           )}
+          {radio('address', 'Something already running on this computer')}
+          {kind === 'address' && (
+            <div className="indent">
+              <input inputMode="numeric" placeholder="Its port, like 3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
+              <p className="small muted">Weave starts nothing: the room's participants reach that port, and nothing else on your computer.</p>
+            </div>
+          )}
+        </fieldset>
+        {kind === 'artifact' && chosen && chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
+        {kind !== 'address' && (kind === 'command' ? words.length > 0 : !!chosen) && (
+          <div className="approve-launch">
+            <Icon name="warning" size={32} />
+            <div>
+              <p>
+                {kind === 'artifact'
+                  ? chosen!.runs === 'container'
+                    ? `Weave will run ${chosen!.name} ${chosen!.tag} in a container, sealed off from your files:`
+                    : `Weave will fetch ${chosen!.name} ${chosen!.tag}, check it against the fingerprints p/${chosen!.project.name} published, and run it on this computer, as you:`
+                  : 'Weave will run this program on your computer, as you:'}
+              </p>
+              <pre className="launch-command">{(kind === 'artifact' ? (chosen!.command ?? []) : words).join(' ')}</pre>
+              <p className="small">
+                {kind === 'artifact' ? `Only run it if you trust the people who maintain p/${chosen!.project.name}. ` : ''}It has no key: it signs nothing, and only learns from Weave who is in its room. Weave asks again for
+                another release or command.
+              </p>
+            </div>
+          </div>
+        )}
+        <div className="buttons">
+          <button onClick={onClose}>Cancel</button>
+          <button className="default" disabled={!ready || busy} title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined} onClick={() => void open()}>
+            {busy ? 'Opening…' : kind === 'address' ? 'Open room' : 'Run it and open room'}
+          </button>
         </div>
-      )}
+      </div>
     </Modal>
   );
 }
 
-/** Your services in this project that have no open room here yet: fetching, waiting for a setting, or failed. */
-function ServicesStarting({ project, rooms }: { project: SpaceInfo; rooms: RoomInfo[] }) {
-  const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
-  const here = (services ?? []).filter((s) => !s.node && s.artifact && s.enabled && s.contract.room && s.spaces.some((x) => x.id === project.id) && !rooms.some((r) => r.open && r.offeredBy?.did === s.did));
-  const fetching = here.some((s) => s.artifact?.progress);
-  // While a release is fetched, look every second.
+/** How a room of your room service is doing, where it isn't answering yet. */
+function HostedStatus({ hosted }: { hosted?: HostedRoomInfo }) {
   useEffect(() => {
-    if (!fetching) return;
+    if (!hosted?.progress) return;
     const timer = setInterval(bump, 1000);
     return () => clearInterval(timer);
-  }, [fetching]);
+  }, [!!hosted?.progress]);
+  if (!hosted || (!hosted.progress && !hosted.error)) return null;
   return (
-    <>
-      {here.map((s) => {
-        const a = s.artifact!;
-        return (
-          <fieldset key={s.did}>
-            <legend>
-              {s.name} · {a.name} {a.tag}
-            </legend>
-            <p className="small">
-              {a.progress ? (
-                <>
-                  {a.progress.state === 'downloading' ? `fetching ${a.tag}…` : 'unpacking…'}
-                  {a.progress.total ? <progress max={a.progress.total} value={a.progress.done} /> : null}
-                </>
-              ) : a.error ? (
-                <span className="error-text">{a.error}</span>
-              ) : s.running ? (
-                'running, its room opens in a moment'
-              ) : (
-                'starting…'
-              )}
-            </p>
-            <div className="buttons">
-              <AsyncButton
-                onClick={() => attempt(() => api('setService', { name: s.name, spaces: s.spaces.filter((x) => x.id !== project.id).map((x) => x.id) }).then(bump), `${s.name} left p/${project.name}`)}
-              >
-                Remove from p/{project.name}
-              </AsyncButton>
-              {a.error && <AsyncButton onClick={() => attempt(() => api('setService', { name: s.name }).then(bump))}>Try again</AsyncButton>}
-            </div>
-          </fieldset>
-        );
-      })}
-    </>
+    <p className="small">
+      {hosted.progress ? (
+        <>
+          {hosted.progress.state === 'downloading' ? 'Fetching its release…' : 'Unpacking…'} {hosted.progress.total ? <progress max={hosted.progress.total} value={hosted.progress.done} /> : null}
+        </>
+      ) : (
+        <span className="error-text">{hosted.error}</span>
+      )}
+    </p>
   );
 }
 
-export function RoomsView({ project, members }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+/** What a service is there for, in a project. */
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
+
+/** One service in the project: what it's for, and what it offers here (a room service: its rooms). */
+function ServiceSection({ project, service, rooms, shows, mine, meDid }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: RoomInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string }) {
+  const [opening, setOpening] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const own = service.person.did === meDid;
+  const by = service.person.name ?? shortDid(service.person.did);
+  const its = rooms.filter((r) => r.offeredBy?.did === service.did);
+  return (
+    <fieldset className="project-service">
+      <legend>
+        <Icon name={service.builtin === 'room' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
+      </legend>
+      <p className="small">{purpose(service)}</p>
+      {its.map((room) => (
+        <div key={room.id}>
+          <RoomCard room={room} shows={shows} />
+          <HostedStatus hosted={mine?.rooms?.find((r) => r.id === room.id)} />
+        </div>
+      ))}
+      {service.builtin === 'room' && !its.length && <p className="small muted">No open rooms{own ? '' : ` from ${by}`}.</p>}
+      <div className="buttons">
+        {service.builtin === 'room' && own && mine && <button onClick={() => setOpening(true)}>Open a room…</button>}
+        {service.builtin === 'room' && own && !mine && <span className="small muted">It runs on another of your devices: open rooms there.</span>}
+        {service.builtin !== 'room' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
+        {own && mine && (
+          <AsyncButton
+            onClick={async () =>
+              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its rooms here end.' : ''}`, 'Take it out')) &&
+              attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`)
+            }
+          >
+            Take out of p/{project.name}
+          </AsyncButton>
+        )}
+      </div>
+      {opening && mine && <OpenRoomDialog project={project} service={mine.name} onClose={() => setOpening(false)} />}
+      {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
+    </fieldset>
+  );
+}
+
+/** Adding a service to the project: the room service Weave ships (yours, or a new one), or another of your services. */
+function AddProjectService({ project, services, onClose }: { project: SpaceInfo; services: ServiceInfo[]; onClose(): void }) {
+  const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
+  const rooms = services.filter((s) => s.builtin === 'room');
+  const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
+  return (
+    <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
+      <div className="form">
+        {!rooms.length && (
+          <div className="install-box">
+            <span className="grow">
+              <b>Rooms</b>
+              <br />
+              <span className="small">A way to join in with the project's participants: you open rooms here, each answered by a project's release or a program of yours.</span>
+            </span>
+            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'room', spaces: [project.id] }).then(() => (bump(), onClose())), `Rooms are on in p/${project.name}`)}>
+              Add
+            </AsyncButton>
+          </div>
+        )}
+        {away.map((s) => (
+          <div className="install-box" key={s.name}>
+            <span className="grow">
+              <b>{s.name}</b>
+              <br />
+              <span className="small">{s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
+            </span>
+            <AsyncButton onClick={() => add(s)}>Add</AsyncButton>
+          </div>
+        ))}
+        {rooms.length > 0 && !away.length && <p className="small">Your services are all in p/{project.name} already.</p>}
+        <p className="small muted">
+          A service you add reads what's addressed to it here, as in its other spaces, and so could carry things between them: add it only where you'd trust it with that. Your own code becomes a service in{' '}
+          <a href="#/keys">Keys &amp; devices → Services</a>.
+        </p>
+      </div>
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** A project's services: each with what it's for and what it offers here. Rooms are what the room service offers. */
+export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', project.id), [project.id]);
+  const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
   const { data: app } = useApi(() => api<AppManifest | null>('projectApp', project.id), [project.id]);
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
-  const [starting, setStarting] = useState(false);
+  const [adding, setAdding] = useState(false);
+  // Rooms from before the room service (a host sharing the project's app) still show until they end.
+  const older = (rooms ?? []).filter((r) => !r.offeredBy);
+  // Room services first, then the rest.
+  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'room') - Number(a.builtin === 'room'));
   return (
     <Page
-      title={<><Icon name="zap" /> Live · p/{project.name}</>}
+      title={<><Icon name="zap" /> Services · p/{project.name}</>}
       actions={
-        <button onClick={() => setStarting(true)}>
-          <Icon name="plus" /> Start here…
+        <button onClick={() => setAdding(true)}>
+          <Icon name="plus" /> Add a service…
         </button>
       }
     >
-      <p className="small">
-        A room is a service's web page: started by someone in the project, from an artifact (this project's, or another's), on their computer. Players reach it through an encrypted tunnel. Who's in a room and what's said there is never stored.
-      </p>
-      {(rooms ?? []).map((room) => (
-        <RoomCard key={room.id} room={room} shows={shows ?? []} project={project} />
+      {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add rooms, and everyone here can join in.</p>}
+      {list.map((s) => (
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} />
       ))}
-      <ServicesStarting project={project} rooms={rooms ?? []} />
-      {rooms?.length === 0 && <p className="empty">No open rooms. Start one here.</p>}
+      {older.length > 0 && (
+        <fieldset>
+          <legend>Other rooms</legend>
+          {older.map((room) => (
+            <RoomCard key={room.id} room={room} shows={shows ?? []} />
+          ))}
+        </fieldset>
+      )}
       {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
       <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
-      {starting && <StartDialog project={project} onClose={() => setStarting(false)} />}
+      {adding && <AddProjectService project={project} services={services ?? []} onClose={() => setAdding(false)} />}
     </Page>
   );
 }

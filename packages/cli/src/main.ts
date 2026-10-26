@@ -36,6 +36,7 @@ import {
   type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
+  type HostedRoomInfo,
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
@@ -197,14 +198,12 @@ github — repositories that follow a group, tier or project (members who give t
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
-  service add [<name>] --artifact <project>[@tag]   run a project's release as a service, pinned to it (the latest
-                             without a tag); it asks you to approve what it runs. Its web page becomes its room.
-                             [--spaces <space,…>] [--setting KEY=VALUE]
-  service artifacts <project>  a project's releases, as they can run as services
+  service add room --builtin room   the room service Weave ships: a way to join in with a project's participants
+                             [--spaces <project,…>]: where it opens rooms (weave room open)
+  service artifacts <project>  a project's releases: what a room can run
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
-                             [--update latest|<tag>]: run another release of its artifact (asks you to approve it)
   service start|stop <name>  run it or not
   service remove <name>      stop it for good (its key is revoked)
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
@@ -306,7 +305,10 @@ rooms: share a project's app live with its participants (needs a running daemon)
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   rooms [-p <project>]       open rooms
-  room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
+  room open <name> -p <p>    a room of your room service, answered by: --artifact <project>[@tag] (a release, fetched and
+                             checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
+                             [--setting KEY=VALUE] [--service <room service>]; running code asks you to approve it
+  room host <name> -p <p>    (older) open a room sharing the project's app  [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
   room join <room>           join: prints the address to open
   room leave|end <room>      leave a room, or end the one you host
   room chat <room>           the room's chat (never stored)
@@ -406,7 +408,10 @@ const { values, positionals } = parseArgs({
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
     artifact: { type: 'string' },
-    update: { type: 'string' },
+    builtin: { type: 'string' },
+    folder: { type: 'string' },
+    port: { type: 'string' },
+    service: { type: 'string' },
     repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
@@ -688,6 +693,27 @@ async function askHidden(question: string): Promise<string> {
     process.stdout.write('\n');
   }
 }
+
+/** Running someone's code (a release, a command): Weave says what would run, and the person approves it here. */
+async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
+  try {
+    return await run(false);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (!message.startsWith('approve it first:')) throw error;
+    const answer = await askLine(`${message.slice('approve it first: '.length)}.\nRun it? [y/N] `);
+    if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not approved: nothing runs');
+    return run(true);
+  }
+}
+
+/** How a room of the room service is doing. */
+const hostedLine = (r: HostedRoomInfo): string => {
+  const h = r.handler;
+  const what = h.kind === 'artifact' ? `${h.artifact.name} ${h.artifact.tag}${h.artifact.latest ? ` (${h.artifact.latest} is out)` : ''}` : h.kind === 'command' ? h.command.join(' ') : `port ${r.port}`;
+  const state = r.progress ? `fetching (${Math.round((r.progress.done / (r.progress.total || 1)) * 100)}%)` : r.error ? r.error : r.running ? 'running' : 'starting';
+  return `${what}, ${state}`;
+};
 
 /** One line from the terminal, for questions only a person should answer. */
 async function askLine(question: string): Promise<string> {
@@ -1385,28 +1411,15 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
         [
-          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.running ? 'running' : s.artifact?.progress ? `fetching ${s.artifact.tag}` : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
+          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
           `  ${s.did}`,
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
-          ...(s.artifact ? [`  artifact: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}`] : []),
-          ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
+          ...(s.rooms ?? []).map((r) => `  room "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
           ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
           ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
           ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
         ].join('\n');
-      // Running a release is running someone's code: shown, then approved here.
-      const approving = async <T,>(run: (approve: boolean) => Promise<T>): Promise<T> => {
-        try {
-          return await run(false);
-        } catch (error) {
-          const message = (error as Error).message;
-          if (!message.startsWith('approve it first:')) throw error;
-          const answer = await askLine(`${message.slice('approve it first: '.length)}.\nRun it? [y/N] `);
-          if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not approved: nothing runs');
-          return run(true);
-        }
-      };
       const words = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
       const list = (text?: string) => text?.split(',').map((x) => x.trim()).filter(Boolean);
       const settingsOf = () =>
@@ -1419,12 +1432,10 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const all = await b.artifacts(ref ?? needSpace());
         return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.space ? ' (per space)' : ''}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
-      if (sub === 'add' && values.artifact) {
-        const at = values.artifact.lastIndexOf('@');
-        const artifact = at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact };
-        const settings = Object.fromEntries(Object.entries(settingsOf()).filter(([, v]) => v !== null)) as Record<string, string>;
-        const s = await approving((approve) => b.addService({ ...(ref ? { name: ref } : {}), ...(values.text ? { description: values.text } : {}), artifact, approve, spaces: list(values.spaces), ...(Object.keys(settings).length ? { settings } : {}) }));
-        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}. It starts once its release is fetched and checked${s.contract.room ? '; its web page is then its room in each of its projects' : ''}.`);
+      if (sub === 'add' && values.builtin) {
+        if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
+        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'room', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
+        return out(s, () => `${line(s)}\n\nIt signs rooms as you · ${s.name}. Open one: weave room open <name> -p <project> --artifact <project>`);
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
@@ -1443,8 +1454,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       if (sub === 'set' && ref) {
         const settings = settingsOf();
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
-        const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
-        const s = await approving((approve) => b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }));
+        const s = await b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...(values.text !== undefined ? { description: values.text } : {}) });
         return out(s, () => line(s));
       }
       if ((sub === 'start' || sub === 'stop') && ref) {
@@ -2362,6 +2372,20 @@ ${postLine(p)}`);
     case 'room': {
       const [sub, ref, ...words] = args;
       const b = await backend({ needsDaemon: sub !== 'chat' });
+      if (sub === 'open' && ref) {
+        const at = values.artifact ? values.artifact.lastIndexOf('@') : -1;
+        const artifact = values.artifact ? (at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact }) : undefined;
+        const settings = Object.fromEntries((values.setting ?? []).map((s) => {
+          const eq = s.indexOf('=');
+          if (eq < 1) throw new Error('a setting is KEY=VALUE');
+          return [s.slice(0, eq), s.slice(eq + 1)];
+        }));
+        const command = values.run ? [...values.run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]) : undefined;
+        const r = await approving((approve) =>
+          b.openRoom({ project: needProject(), name: [ref, ...words].join(' '), ...(values.service ? { service: values.service } : {}), ...(artifact ? { artifact } : {}), ...(command ? { command, folder: values.folder ?? process.cwd() } : {}), ...(values.port ? { port: Number(values.port) } : {}), ...(Object.keys(settings).length ? { settings } : {}), approve }),
+        );
+        return out(r, () => `${roomLine(r)}\n  it opens for everyone once its handler answers (weave service list shows how it's doing)`);
+      }
       if (sub === 'host' && ref) {
         const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean), show: values.show, groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean) });
         return out(r, () => `${roomLine(r)}${r.service?.ready ? '' : `\n  start the app first${r.app?.startHint ? `: ${r.app.startHint}` : ''}`}`);
@@ -2387,7 +2411,7 @@ ${postLine(p)}`);
         await b.sayInRoom({ room: ref, text: words.join(' ') });
         return out({ said: words.join(' ') }, () => 'said');
       }
-      throw new Error('usage: weave room host|join|leave|end|chat|say — see "weave --help"');
+      throw new Error('usage: weave room open|join|leave|end|chat|say — see "weave --help"');
     }
 
     case 'chats': {

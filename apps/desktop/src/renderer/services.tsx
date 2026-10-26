@@ -212,14 +212,14 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
           <div className="grow">
             <b>{s.name}</b>{' '}
             <span className="small muted">
-              {s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
+              {s.builtin === 'room' ? `Weave's room service · ${s.enabled ? `${s.rooms?.length ?? 0} room${s.rooms?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
               {s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : 'no spaces yet'}
             </span>
             {s.description && <div className="small">{s.description}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
           </div>
           <div className="service-actions">
-            <button onClick={() => setEditing(s)}>Settings…</button>
+            {!s.builtin && <button onClick={() => setEditing(s)}>Settings…</button>}
             <AsyncButton onClick={() => attempt(() => api('setService', { name: s.name, enabled: !s.enabled }).then(bump), s.enabled ? `${s.name} stopped` : `${s.name} started`)}>{s.enabled ? 'Stop' : 'Start'}</AsyncButton>
             <AsyncButton
               onClick={async () =>
@@ -246,7 +246,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
 }
 
 /** A service in a space: what it is, what it may do, asking it, and what it answered. */
-function ServiceCard({ space, service, onClose }: { space: SpaceInfo; service: ServiceProfileInfo; onClose(): void }) {
+export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; service: ServiceProfileInfo; onClose(): void }) {
   const { data: requests, reload } = useApi(() => api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }), [space.id, service.did]);
   const [text, setText] = useState('');
   const by = service.person.name ?? shortDid(service.person.did);

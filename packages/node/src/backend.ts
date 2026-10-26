@@ -237,8 +237,9 @@ export interface ServiceInfo {
   spaces: Array<SpaceRef & { settings?: string[] }>;
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
-  /** The artifact it runs, pinned to one release; `latest` when the project released a newer one. */
-  artifact?: ServiceArtifactInfo;
+  /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
+  builtin?: 'room';
+  rooms?: HostedRoomInfo[];
   /** The names of its settings (the values stay on this node). */
   settings: string[];
   enabled: boolean;
@@ -247,20 +248,23 @@ export interface ServiceInfo {
   node?: { did: Did; name: string };
 }
 
-/** The release a service runs, and how far getting it went. */
-export interface ServiceArtifactInfo {
-  project: { id: string; name?: string };
-  tag: string;
-  app: string;
+/** A room the room service runs here: what answers its clients (its handler), and how that's doing. */
+export interface HostedRoomInfo {
+  id: string;
+  project: SpaceRef;
   name: string;
-  /** A newer release of the project, if there is one. */
-  latest?: string;
-  /** Its files are here, checked against the release's fingerprints. */
-  installed: boolean;
+  /** Where the handler listens on this computer. */
+  port: number;
+  handler:
+    | { kind: 'artifact'; artifact: { project: { id: string; name?: string }; tag: string; app: string; name: string; latest?: string }; command: string[] }
+    | { kind: 'command'; command: string[]; folder: string }
+    | { kind: 'address' };
+  /** The names of the handler's settings (the values stay here). */
+  settings: string[];
+  running: boolean;
+  /** Fetching its release, or why it doesn't run. */
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
-  /** The settings it asks for: once (in its environment), or per space. */
-  settings: AppSetting[];
 }
 
 /** A release of a project, as it can be started as a service. */
@@ -272,7 +276,7 @@ export interface ArtifactInfo {
   name: string;
   released: Actor;
   time: string;
-  /** It has a web page: started as a service, it's offered as a room in its projects. */
+  /** It has a web page: a room can run it. */
   room: boolean;
   settings: AppSetting[];
   /** How it would run on this node: its release file for this platform, or its container (Docker). */
@@ -288,6 +292,7 @@ export interface ServiceProfileInfo {
   name: string;
   description: string;
   icon?: string;
+  builtin?: 'room';
   contract: ServiceContract;
   time: string;
 }
@@ -1596,14 +1601,16 @@ export interface Backend {
   githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
-  /** A service: a command, or an artifact (a project's release, pinned; needs `approve`), which gives it its contract. */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
-  /** A project's releases, newest first: what can be started as a service. */
+  /** A service: your code under a key of its own, or one Weave ships (`builtin: 'room'`). */
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo>;
+  /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
+  /** A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or a port already answering. */
+  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean }): Promise<RoomInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */
@@ -1972,7 +1979,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'openRoom', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

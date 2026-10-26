@@ -429,8 +429,8 @@ import {
   type BadgeInfo,
   type ServiceGate,
   type ServiceInfo,
-  type ServiceArtifactInfo,
   type ArtifactInfo,
+  type HostedRoomInfo,
   type ServiceProfileInfo,
   type ServiceRequestInfo,
   type BadgeSeriesInfo,
@@ -625,11 +625,32 @@ interface StoredService {
   rooms?: Record<string, string>;
   /** Where its process serves its rooms (WEAVE_ROOM_PORT). */
   roomPort?: number;
-  /** The artifact it runs instead of a command: a project's release, pinned (its manifest as released). */
-  artifact?: StoredArtifact;
-  /** Settings given per space (an artifact's per-space settings): space id → name → value. */
+  /** Settings given per space: space id → name → value (it reads them from its API). */
   spaceSettings?: Record<string, Record<string, string>>;
+  /** A service Weave ships, run by the node itself: the room service. */
+  builtin?: 'room';
+  /** The room service's rooms: room id → room, kept across restarts. */
+  hosted?: Record<string, StoredRoom>;
+  /** What you approved its rooms to run: fingerprints of a release's command, or of a command in a folder. */
+  approved?: string[];
 }
+
+/** A room the room service runs: in one of its projects, answered by its handler. */
+interface StoredRoom {
+  id: string;
+  project: string;
+  name: string;
+  handler: RoomHandler;
+  /** Where the handler listens, on this computer: what the room's clients reach. */
+  port: number;
+  /** The handler's settings (its environment). */
+  settings: Record<string, string>;
+  /** Its own token: the handler's way into the app API (for its room only), and the key of X-Weave-Person. */
+  token: string;
+}
+
+/** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
+type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
 
 interface StoredArtifact {
   /** The project that released it. */
@@ -638,10 +659,6 @@ interface StoredArtifact {
   id: string;
   tag: string;
   manifest: AppManifest;
-  /** Where its release file was unpacked, once fetched and checked. */
-  folder?: string;
-  /** The fingerprint of what you approved to run (its command, for this release). */
-  approved?: string;
 }
 
 interface Decoded {
@@ -1280,7 +1297,7 @@ export class WeaveNode implements Backend {
     this.#apps.stopAll();
     this.#appTokens.clear();
     // Services still running keep asking it (their WEAVE_API); it closes with them (close stops them first).
-    if (!this.#serviceProcs.size) {
+    if (!this.#serviceProcs.size && !this.#roomProcs.size) {
       const appApi = this.#appApi;
       this.#appApi = undefined;
       this.#appApiPort = undefined;
@@ -3759,8 +3776,12 @@ export class WeaveNode implements Backend {
   #appScope(token: string): string | undefined {
     const app = [...this.#appTokens].find(([, t]) => sameToken(t, token))?.[0];
     if (app) return app;
-    const service = this.#storedServices().find((s) => s.enabled && sameToken(s.token, token));
-    return service && `service:${service.name}`;
+    const services = this.#storedServices().filter((s) => s.enabled);
+    const service = services.find((s) => sameToken(s.token, token));
+    if (service) return `service:${service.name}`;
+    // A room's handler: its room only.
+    const room = services.flatMap((s) => Object.values(s.hosted ?? {})).find((r) => sameToken(r.token, token));
+    return room && `room:${room.id}`;
   }
 
   /**
@@ -3790,7 +3811,9 @@ export class WeaveNode implements Backend {
 
   #appAnswer(scope: string, route: string, params: URLSearchParams): unknown {
     const service = scope.startsWith('service:') ? scope.slice('service:'.length) : undefined;
-    const projectId = service ? this.#serviceAppSpace(service, route, params) : scope;
+    const hosted = scope.startsWith('room:') ? this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {})).find((r) => r.id === scope.slice('room:'.length)) : undefined;
+    if (scope.startsWith('room:') && !hosted) throw new AppApiError(401, 'unauthorized');
+    const projectId = hosted ? hosted.project : service ? this.#serviceAppSpace(service, route, params) : scope;
     const project = this.#spaces.get(projectId);
     if (!project) throw new AppApiError(404, 'this project is no longer here');
     const me = this.identity.author;
@@ -3799,14 +3822,14 @@ export class WeaveNode implements Backend {
       const port = Number(params.get('port'));
       if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('port: the remote port of the connection (a number)');
       const found = this.#live.personOnPort(port);
-      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.project.id === projectId);
-      if (!found || !room) throw new AppApiError(404, 'not a connection through one of this project’s rooms');
+      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.project.id === projectId && (!hosted || r.room.id === hosted.id));
+      if (!found || !room) throw new AppApiError(404, hosted ? 'not a connection through this room' : 'not a connection through one of this project’s rooms');
       return { ...this.#appPerson(project, found.person), room: { id: room.room.id, name: room.room.name } };
     }
     if (route === '/v1/project') {
       // A service sees its own rooms only, and the settings it was given for this space.
       const agent = service ? this.#serviceKey(service).did : undefined;
-      const rooms = this.#allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.#live.isHosting(r.room.id) && (!agent || r.room.agent === agent));
+      const rooms = this.#allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.#live.isHosting(r.room.id) && (!agent || r.room.agent === agent) && (!hosted || r.room.id === hosted.id));
       return {
         id: project.id,
         name: project.name,
@@ -3860,7 +3883,8 @@ export class WeaveNode implements Backend {
     if (this.#roomService(room)?.protocol !== 'http') return undefined;
     const found = this.#allRooms().find((r) => r.room.id === room.id);
     // A service's room is vouched for with the service's own token, which its process has.
-    const token = room.agent ? this.#localServiceByKey(room.agent)?.token : found && this.#appTokens.get(found.project.id);
+    const service = room.agent ? this.#localServiceByKey(room.agent) : undefined;
+    const token = room.agent ? (service?.hosted?.[room.id]?.token ?? service?.token) : found && this.#appTokens.get(found.project.id);
     if (!found || !token) return undefined;
     const payload = Buffer.from(JSON.stringify({ ...this.#appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.clock() / 1000) })).toString('base64url');
     return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
@@ -4122,7 +4146,12 @@ export class WeaveNode implements Backend {
   async endRoom(ref: string): Promise<void> {
     const { room, project } = this.#roomById(ref);
     if (room.host !== this.identity.author) throw new Error('only the host can end a room');
-    if (room.agent) throw new Error(`${this.#agentName(room.agent, room.host) ?? 'a service'} offers this room: it ends when that service stops (weave service stop)`);
+    if (room.agent) {
+      // A room of the room service: its handler stops, the room closes.
+      const service = this.#localServiceByKey(room.agent);
+      if (service?.hosted?.[room.id]) return this.#closeHostedRooms(service.name, (r) => r.id !== room.id);
+      throw new Error(`${this.#agentName(room.agent, room.host) ?? 'a service'} offers this room: ${service ? 'it ends when that service stops (weave service stop)' : 'end it on the device it runs on'}`);
+    }
     await this.#live.stopHosting(room.id);
     this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, open: false } }));
   }
@@ -4241,7 +4270,9 @@ export class WeaveNode implements Backend {
     // A service's room: its own web interface, on the port its process was given.
     if (room.agent) {
       const service = this.#localServiceByKey(room.agent);
-      return service?.roomPort ? { id: 'room', port: service.roomPort, protocol: 'http' as const } : undefined;
+      // The room service's rooms: their handler's port. A service with its own page: the port it offered.
+      const port = service?.hosted?.[room.id]?.port ?? service?.roomPort;
+      return port ? { id: 'room', port, protocol: 'http' as const } : undefined;
     }
     const found = this.#allRooms().find((r) => r.room.id === room.id);
     const app = found && this.#app(found.project);
@@ -7485,14 +7516,14 @@ export class WeaveNode implements Backend {
         return space ? [{ id, kind: space.kind, name: this.#spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
       ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.artifact ? { command: this.#artifactCommand(stored.name, stored.artifact.manifest), artifact: this.#serviceArtifactInfo(stored.artifact, stored.name) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.#hostedRoomInfo(stored, r)) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
-      running: this.#serviceProcs.has(stored.name),
+      running: stored.builtin ? stored.enabled : this.#serviceProcs.has(stored.name),
     };
   }
 
-  // Artifacts: a project's releases, each startable as a service, pinned to it, in any of your spaces.
+  // Artifacts: a project's releases. A room runs one as its handler, pinned to it, in any project of yours.
 
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.#project(ref);
@@ -7508,7 +7539,7 @@ export class WeaveNode implements Backend {
         time: a.time,
         room: !!this.#artifactWeb(a.manifest),
         settings: a.manifest.env ?? [],
-        ...(runs ? { runs, command: this.#artifactCommand(serviceName(a.manifest.app) ?? a.manifest.app, a.manifest) } : {}),
+        ...(runs ? { runs, command: this.#artifactCommand('room', a.manifest) } : {}),
       };
     });
   }
@@ -7518,7 +7549,7 @@ export class WeaveNode implements Backend {
     const project = this.#project(ref);
     const all = artifactsOf(this.#entries(project), this.#state(project).maintainers);
     const artifact = tag ? all.find((a) => a.tag === tag) : all[0];
-    if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing that can run as a service yet (weave app release)`);
+    if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
     return { project, artifact };
   }
 
@@ -7528,147 +7559,310 @@ export class WeaveNode implements Backend {
     return app.install?.assets?.[platformKey()] && startCommand(app, platformKey(), true) ? 'release' : undefined;
   }
 
-  /** Its web page, if it has one: offered as the service's room. */
+  /** Its web page, if it has one: what a room's clients reach. */
   #artifactWeb(app: AppManifest): AppManifest['services'][number] | undefined {
     return app.services.find((s) => s.protocol === 'http');
   }
 
-  /** The contract an artifact runs under: it reads what's addressed to it, writes nothing of its own, and offers a room if it has a web page. */
-  #artifactContract(app: AppManifest): ServiceContract {
-    return { reads: 'addressed', writes: [], ...(this.#artifactWeb(app) ? { room: true as const } : {}), version: String(app.version) };
-  }
-
-  #serviceContainer(name: string): string {
-    return `weave-service-${name}`;
-  }
-
-  /** What starting it runs (for the approval): the release build's command, or its container. */
-  #artifactCommand(name: string, app: AppManifest): string[] | undefined {
+  /** What running it here runs (for the approval): the release build's command, or its container (one per room). */
+  #artifactCommand(container: string, app: AppManifest): string[] | undefined {
     const runs = this.#artifactRuns(app);
-    if (runs === 'container') return this.#dockerRun(this.#serviceContainer(name), app, [...this.#artifactSettings(app, false).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT', 'WEAVE_SERVICE', 'WEAVE_SERVICE_API', 'WEAVE_SERVICE_TOKEN']);
+    if (runs === 'container') return this.#dockerRun(`weave-room-${container}`, app, [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT', 'WEAVE_ROOM', 'PORT']);
     return runs === 'release' ? startCommand(app, platformKey(), true) : undefined;
   }
 
-  /** Its settings: those asked once (its environment), or those asked per space. */
-  #artifactSettings(app: AppManifest, perSpace: boolean): AppSetting[] {
-    return (app.env ?? []).filter((e) => !!e.space === perSpace);
+  /** Settings checked against what's allowed: an artifact's own, or any variable-like name for a command. */
+  #checkSettings(app: AppManifest | undefined, settings: Record<string, string | null>): void {
+    for (const key of Object.keys(settings)) {
+      if (app) {
+        if (!(app.env ?? []).some((e) => e.name === key)) throw new Error(`${app.name} doesn't ask for ${key}${app.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
+      } else if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_') || key === 'PORT') throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
+    }
   }
 
-  /** What you approve: this release's command, here. */
-  #artifactApproval(name: string, artifact: { id: string; tag: string; manifest: AppManifest }, projectName: string, approve?: boolean): string {
-    const command = this.#artifactCommand(name, artifact.manifest);
-    if (!command) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no release file for this computer (${platformKey()})${artifact.manifest.install?.image ? ', and Docker isn\'t running here' : ''}`);
-    if (!approve) throw new Error(`approve it first: Weave would run "${command.join(' ')}" from ${artifact.manifest.name} ${artifact.tag}, released in ${projectName}`);
-    return launchFingerprint(command, artifact.id);
+  // The room service: a service Weave ships. In each project it's added to, it opens rooms, each answered by a
+  // handler: an artifact (a project's release, fetched and checked), a command, or something already running.
+
+  /**
+   * Open a room: in a project the room service was added to, answered by its handler. Running code (an artifact's
+   * release, a command) needs `approve` once per release or command; a handler already running needs nothing.
+   */
+  async openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean }): Promise<RoomInfo> {
+    const service = this.#roomServiceFor(input.service);
+    const project = this.#project(input.project);
+    if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
+    const name = input.name?.trim().slice(0, 60);
+    if (!name) throw new Error('a room has a name');
+    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
+    if (input.artifact && command?.length) throw new Error('a room runs an artifact or a command, not both');
+    let handler: RoomHandler;
+    let port: number;
+    let approved: string | undefined;
+    if (input.artifact) {
+      const found = this.#artifact(input.artifact.project, input.artifact.tag);
+      const { id, tag, manifest } = found.artifact;
+      const web = this.#artifactWeb(manifest);
+      if (!web) throw new Error(`${manifest.name} has no web page (an http service in its weave.app.json): nothing for a room to reach`);
+      port = web.port;
+      const run = this.#artifactCommand('x', manifest);
+      if (!run) throw new Error(`${manifest.name} ${tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
+      approved = launchFingerprint(this.#artifactCommand('room', manifest)!, id);
+      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${run.join(' ')}" from ${manifest.name} ${tag}, released in ${found.project.name}`);
+      handler = { artifact: { project: found.project.id, id, tag, manifest } };
+      this.#checkSettings(manifest, input.settings ?? {});
+      const missing = (manifest.env ?? []).filter((e) => !e.optional && !input.settings?.[e.name]);
+      if (missing.length) throw new Error(`${manifest.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
+    } else if (command?.length) {
+      const folder = input.folder ? resolvePath(input.folder) : undefined;
+      if (!folder || !existsSync(folder)) throw new Error('a command runs in a folder: say which (an existing one)');
+      port = this.#roomPortOf(input.port);
+      approved = launchFingerprint(command, folder);
+      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${command.join(' ')}" in ${folder}`);
+      handler = { command, folder };
+      this.#checkSettings(undefined, input.settings ?? {});
+    } else {
+      // Something already running: Weave only lets the room's clients reach it.
+      port = this.#roomPortOf(input.port);
+      handler = { address: true };
+      if (input.settings && Object.keys(input.settings).length) throw new Error('settings go to a handler Weave starts: this one runs by itself');
+    }
+    const taken = this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {})).find((r) => r.port === port);
+    if (taken) throw new Error(`port ${port} already answers the room "${taken.name}": end it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
+    const room: StoredRoom = { id: b64u.encode(randomBytes(12)), project: project.id, name, handler, port, settings: Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)])), token: b64u.encode(randomBytes(24)) };
+    this.#saveServices(
+      this.#storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room }, ...(approved && !(s.approved ?? []).includes(approved) ? { approved: [...(s.approved ?? []), approved] } : {}) } : s)),
+    );
+    // Announced under the room service's key, so everyone sees whose service offers it.
+    const key = this.#serviceKey(service.name);
+    this.replica.write(key, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, name, service: 'room', key: roomKeyPair(this.#roomSeed(room.id)).publicKey.toString('hex'), invite: 'participants', agent: key.did, open: true } }));
+    const announced = this.#roomById(room.id).room;
+    // Hosting finds the network in the background: the room is announced already.
+    if (this.#swarm) void this.#live.host(announced).catch(() => {});
+    if (this.#serviceApi) await this.#startAppApi();
+    this.#startRoom(service.name, room.id);
+    this.#emitLive();
+    return this.#roomInfo(announced, project);
   }
 
-  #serviceArtifactInfo(a: StoredArtifact, name: string): ServiceArtifactInfo {
-    const project = this.#spaces.get(a.project);
-    const latest = project ? artifactsOf(this.#entries(project), this.#state(project).maintainers)[0] : undefined;
-    const job = this.#serviceInstalls.get(name);
+  /** A port a room's clients may reach: one a handler listens on, on this computer. */
+  #roomPortOf(port: unknown): number {
+    const n = Number(port);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error('which port does it listen on (on this computer)?');
+    return n;
+  }
+
+  /** Your room service: the one named, or your only one. */
+  #roomServiceFor(name?: string): StoredService {
+    const all = this.#storedServices().filter((s) => s.builtin === 'room');
+    const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
+    if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --room)');
+    if (!found.enabled) throw new Error(`${found.name} is stopped: start it first`);
+    return found;
+  }
+
+  /** A room the room service runs, as its service lists it: its handler and how it's doing. */
+  #hostedRoomInfo(stored: StoredService, r: StoredRoom): HostedRoomInfo {
+    const project = this.#spaces.get(r.project);
+    const job = this.#roomInstalls.get(r.id);
+    const h = r.handler;
+    let handler: HostedRoomInfo['handler'];
+    if ('artifact' in h) {
+      const from = this.#spaces.get(h.artifact.project);
+      const latest = from ? artifactsOf(this.#entries(from), this.#state(from).maintainers)[0] : undefined;
+      handler = {
+        kind: 'artifact',
+        artifact: { project: { id: h.artifact.project, ...(from ? { name: this.#spaceName(from) } : {}) }, tag: h.artifact.tag, app: h.artifact.manifest.app, name: h.artifact.manifest.name, ...(latest && latest.id !== h.artifact.id && latest.tag !== h.artifact.tag ? { latest: latest.tag } : {}) },
+        command: this.#artifactCommand(r.id, h.artifact.manifest) ?? [],
+      };
+    } else if ('command' in h) handler = { kind: 'command', command: h.command, folder: h.folder };
+    else handler = { kind: 'address' };
     return {
-      project: { id: a.project, ...(project ? { name: this.#spaceName(project) } : {}) },
-      tag: a.tag,
-      app: a.manifest.app,
-      name: a.manifest.name,
-      ...(latest && latest.id !== a.id && latest.tag !== a.tag ? { latest: latest.tag } : {}),
-      installed: this.#artifactRuns(a.manifest) === 'container' || (!!a.folder && existsSync(a.folder)),
+      id: r.id,
+      project: { id: r.project, kind: 'project', name: project ? this.#spaceName(project) : r.project },
+      name: r.name,
+      port: r.port,
+      handler,
+      settings: Object.keys(r.settings).sort(),
+      running: 'address' in h ? true : this.#roomProcs.has(r.id),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
-      settings: a.manifest.env ?? [],
     };
   }
 
-  /** Settings checked against what's allowed: an artifact's own (once, or per space), any variable-like name for a command. */
-  #checkSettings(app: AppManifest | undefined, perSpace: boolean, settings: Record<string, string | null>): void {
-    for (const key of Object.keys(settings)) {
-      if (app) {
-        if (!this.#artifactSettings(app, perSpace).some((e) => e.name === key)) {
-          const allowed = this.#artifactSettings(app, perSpace).map((e) => e.name);
-          throw new Error(`${app.name} doesn't ask for ${key}${perSpace ? ' per space' : ''}${allowed.length ? ` (it asks for ${allowed.join(', ')})` : ''}`);
-        }
-      } else if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
-    }
-  }
-
-  /** Fetch a service's release (checked against its fingerprints) unless it's there already, then start it. */
-  #installArtifact(name: string): void {
-    const stored = this.#storedService(name);
-    const a = stored.artifact!;
-    if (this.#artifactRuns(a.manifest) === 'container' || (a.folder && existsSync(a.folder))) return this.#startService(stored);
-    if (this.#serviceInstalls.get(name)?.progress) return;
+  /** Fetch a room's release where it isn't here yet (checked against its fingerprints), then start its handler. */
+  #startRoom(serviceName: string, roomId: string): void {
+    const stored = this.#storedServices().find((s) => s.name === serviceName);
+    const room = stored?.hosted?.[roomId];
+    if (!stored?.enabled || !room) return;
+    if (!('artifact' in room.handler)) return this.#runRoomHandler(stored, room);
+    const a = room.handler.artifact;
+    const dir = joinPath(this.home.dir, 'services', stored.name, 'artifacts', a.project);
+    const folder = joinPath(dir, tagFolder(a.tag));
+    if (this.#artifactRuns(a.manifest) === 'container' || existsSync(folder)) return this.#runRoomHandler(stored, room);
+    if (this.#roomInstalls.get(roomId)?.progress) return;
     const asset = a.manifest.install?.assets?.[platformKey()];
     if (!asset || !a.manifest.install?.github) {
-      this.#serviceInstalls.set(name, { error: `${a.manifest.name} ${a.tag} has no release file for this computer (${platformKey()})` });
+      this.#roomInstalls.set(roomId, { error: `${a.manifest.name} ${a.tag} has no release file for this computer (${platformKey()})` });
       return;
     }
     const job: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
-    this.#serviceInstalls.set(name, job);
-    const dir = joinPath(this.home.dir, 'services', name, 'artifact');
-    const done = this.#fetchRelease(dir, a.manifest, { github: a.manifest.install.github, tag: a.tag, asset }, job).then(
-      (folder) => {
-        this.#serviceInstalls.delete(name);
-        const now = this.#storedServices().find((s) => s.name === name);
-        if (now?.artifact?.id !== a.id) return;
-        this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, artifact: { ...a, ...s.artifact, folder } } : s)));
-        // Releases it ran before go.
-        for (const entry of readdirSync(dir)) if (entry !== tagFolder(a.tag) && !entry.startsWith('.')) rmSync(joinPath(dir, entry), { recursive: true, force: true });
-        this.#startService(this.#storedService(name));
+    this.#roomInstalls.set(roomId, job);
+    // Rooms with the same release share its folder: fetched once.
+    const fetched = (this.#fetching.get(folder) ?? this.#fetchRelease(dir, a.manifest, { github: a.manifest.install.github, tag: a.tag, asset }, job).then(() => undefined)).finally(() => this.#fetching.delete(folder));
+    this.#fetching.set(folder, fetched);
+    const done = fetched.then(
+      () => {
+        this.#roomInstalls.delete(roomId);
+        const now = this.#storedServices().find((s) => s.name === serviceName);
+        if (now?.hosted?.[roomId]) this.#runRoomHandler(now, now.hosted[roomId]);
       },
-      (error: Error) => void this.#serviceInstalls.set(name, { error: error.message }),
+      (error: Error) => void this.#roomInstalls.set(roomId, { error: error.message }),
     );
-    this.#serviceInstalling.set(name, done.finally(() => this.#emitLive()));
+    this.#roomInstalling.set(roomId, done.finally(() => this.#emitLive()));
   }
 
-  #serviceInstalls = new Map<string, InstallJob>();
-  #serviceInstalling = new Map<string, Promise<void>>();
+  #roomInstalls = new Map<string, InstallJob>();
+  #roomInstalling = new Map<string, Promise<void>>();
+  #fetching = new Map<string, Promise<void>>();
 
-  /** Resolves when fetching a service's release ends (for tests and the CLI). */
-  async serviceInstalled(name: string): Promise<ServiceInfo> {
-    await this.#serviceInstalling.get(name);
-    return this.#serviceInfo(this.#storedService(name));
+  /** Resolves when fetching a room's release ends (for tests and the CLI). */
+  async roomReady(ref: string): Promise<RoomInfo> {
+    const { room, project } = this.#roomById(ref);
+    await this.#roomInstalling.get(room.id);
+    return this.#roomInfo(room, project);
+  }
+
+  /** The release folder of a room's artifact, the one Weave fetched. */
+  #artifactFolder(service: string, a: StoredArtifact): string {
+    const dir = joinPath(this.home.dir, 'services', service, 'artifacts', a.project, tagFolder(a.tag));
+    // The release unpacks into one folder, usually: that one.
+    const entries = existsSync(dir) ? readdirSync(dir).filter((e) => !e.startsWith('.')) : [];
+    return entries.length === 1 && statSync(joinPath(dir, entries[0])).isDirectory() ? joinPath(dir, entries[0]) : dir;
+  }
+
+  /** Start a room's handler: its process gets the room's port, its settings, and the app API for its room only. */
+  #runRoomHandler(stored: StoredService, room: StoredRoom): void {
+    if (!this.#serviceApi || !this.#appApiPort || this.#roomProcs.has(room.id) || 'address' in room.handler) return;
+    const h = room.handler;
+    const container = 'artifact' in h && this.#artifactRuns(h.artifact.manifest) === 'container' ? `weave-room-${room.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}` : undefined;
+    let command: string[];
+    let cwd: string;
+    if ('artifact' in h) {
+      const run = this.#artifactCommand(container ? room.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-') : 'room', h.artifact.manifest);
+      if (!run || !(stored.approved ?? []).includes(launchFingerprint(this.#artifactCommand('room', h.artifact.manifest)!, h.artifact.id))) return void this.#roomInstalls.set(room.id, { error: 'approve what it runs first' });
+      cwd = container ? joinPath(this.home.dir, 'services', stored.name) : this.#artifactFolder(stored.name, h.artifact);
+      // A program in the release's folder ("./band-ab"): Windows wouldn't look there by itself.
+      const [named, ...args] = run;
+      command = [!container && !isAbsolute(named) && existsSync(joinPath(cwd, named)) ? joinPath(cwd, named) : named, ...args];
+    } else {
+      if (!(stored.approved ?? []).includes(launchFingerprint(h.command, h.folder))) return void this.#roomInstalls.set(room.id, { error: 'approve its command first' });
+      cwd = h.folder;
+      const [named, ...args] = h.command;
+      command = [!isAbsolute(named) && existsSync(joinPath(cwd, named)) ? joinPath(cwd, named) : named, ...args];
+    }
+    const dir = joinPath(this.home.dir, 'services', stored.name, 'rooms', room.id);
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
+    if (container) {
+      // One left from before (a crash, a stop that didn't reach Docker) would block the name.
+      const [docker, ...first] = this.containerSetup.docker;
+      spawnSync(docker, [...first, 'rm', '-f', container], { windowsHide: true, timeout: 20_000 });
+    }
+    const log = createWriteStream(joinPath(dir, 'room.log'), { flags: 'a' });
+    const [program, ...args] = command;
+    const child = spawn(program, args, {
+      cwd,
+      // Its settings, its port, and the app API for its room (who is who); nothing of the daemon's own environment. Weave's own variables last.
+      env: { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '', HOME: dir, ...room.settings, PORT: String(room.port), WEAVE_API: `http://${host}:${this.#appApiPort}`, WEAVE_TOKEN: room.token, WEAVE_PROJECT: room.project, WEAVE_ROOM: room.id },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    child.stdout?.pipe(log);
+    child.stderr?.pipe(log);
+    const entry = { child, stopping: false, ...(container ? { container } : {}) };
+    this.#roomProcs.set(room.id, entry);
+    child.on('error', (error) => log.write(`weave: couldn't start the room's handler: ${error.message}\n`));
+    child.on('exit', (code) => {
+      log.write(`weave: the handler exited (${code})\n`);
+      log.end();
+      if (this.#roomProcs.get(room.id) === entry) this.#roomProcs.delete(room.id);
+      if (entry.stopping) return;
+      // Crashed: start again, waiting longer each time.
+      const restarts = this.#serviceRestarts.get(`room:${room.id}`) ?? { count: 0 };
+      const wait = [1000, 5000, 30_000, 60_000][Math.min(restarts.count, 3)];
+      restarts.count++;
+      restarts.timer = setTimeout(() => this.#startRoom(stored.name, room.id), wait);
+      restarts.timer.unref?.();
+      this.#serviceRestarts.set(`room:${room.id}`, restarts);
+    });
+  }
+
+  #stopRoomHandler(roomId: string): void {
+    const restarts = this.#serviceRestarts.get(`room:${roomId}`);
+    if (restarts?.timer) clearTimeout(restarts.timer);
+    this.#serviceRestarts.delete(`room:${roomId}`);
+    const entry = this.#roomProcs.get(roomId);
+    if (!entry) return;
+    entry.stopping = true;
+    if (entry.container) {
+      const [docker, ...first] = this.containerSetup.docker;
+      spawnSync(docker, [...first, 'stop', '-t', '5', entry.container], { windowsHide: true, timeout: 20_000 });
+    }
+    entry.child.kill();
+    this.#roomProcs.delete(roomId);
+  }
+
+  #roomProcs = new Map<string, { child: ChildProcess; stopping: boolean; container?: string }>();
+
+  /** End rooms the room service runs (all of them, or those in projects it left): handler stopped, room closed for everyone. */
+  async #closeHostedRooms(name: string, keep: (room: StoredRoom) => boolean = () => false): Promise<void> {
+    const stored = this.#storedServices().find((s) => s.name === name);
+    const key = this.#agents.find((a) => a.name === name);
+    if (!stored?.hosted || !key) return;
+    const gone = Object.values(stored.hosted).filter((r) => !keep(r));
+    for (const room of gone) {
+      this.#stopRoomHandler(room.id);
+      await this.#closeServiceRoom(key, room.project, room.id);
+    }
+    if (gone.length) this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, hosted: Object.fromEntries(Object.entries(s.hosted ?? {}).filter(([id]) => !gone.some((g) => g.id === id))) } : s)));
+    this.#emitLive();
   }
 
   /** The profile everyone sees: signed by the service's own key, public. */
   #publishServiceProfile(stored: StoredService): void {
-    this.replica.write(this.#serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), contract: stored.contract as unknown as Json } });
+    this.replica.write(this.#serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), ...(stored.builtin ? { builtin: stored.builtin } : {}), contract: stored.contract as unknown as Json } });
   }
 
   /**
-   * A service: code under a key of its own, in the spaces you add it to. It runs a command, or an artifact (a
-   * project's release, `artifact: {project, tag}`), which also gives it its contract; running one needs `approve`.
+   * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
+   * (`builtin: 'room'`): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo> {
     if (this.#isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    const found = input.artifact ? this.#artifact(input.artifact.project, input.artifact.tag) : undefined;
-    if (found && command?.length) throw new Error('a service runs an artifact or a command, not both');
-    if (found && input.node) throw new Error('artifacts run on this computer for now: always-on nodes come next');
-    const name = serviceName(input.name ?? found?.artifact.manifest.app);
+    const builtin = input.builtin === 'room' ? ('room' as const) : undefined;
+    if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
+    if (builtin && input.node) throw new Error('the room service runs on this computer for now: always-on nodes come next');
+    const name = serviceName(input.name ?? builtin);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.#agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
-    const contract = parseContract(found ? this.#artifactContract(found.artifact.manifest) : input.contract);
+    // The room service writes rooms and nothing else; it reads only what's addressed to it.
+    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], room: true, version: '1.0' } : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     if (input.node) {
       if (this.#handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.#addNodeService(name, contract, input, command);
     }
-    let artifact: StoredArtifact | undefined;
-    if (found) {
-      const { id, tag, manifest } = found.artifact;
-      artifact = { project: found.project.id, id, tag, manifest, approved: this.#artifactApproval(name, found.artifact, found.project.name, input.approve) };
-    }
-    const settings = input.settings ?? {};
-    this.#checkSettings(artifact?.manifest, false, settings);
     const stored: StoredService = {
       name,
-      description: input.description?.trim().slice(0, 1000) ?? (found ? `${found.artifact.manifest.name} ${found.artifact.tag}, from ${found.project.name}` : ''),
+      description: input.description?.trim().slice(0, 1000) ?? (builtin ? 'Rooms: a way to join in with the project’s participants' : ''),
       ...(input.icon?.startsWith('wblob:') ? { icon: input.icon } : {}),
       contract,
       spaces: this.#serviceSpaces(input.spaces ?? []),
       ...(command?.length ? { command } : {}),
-      ...(artifact ? { artifact } : {}),
-      settings: Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, String(v)])),
+      ...(builtin ? { builtin } : {}),
+      settings: {},
       token: b64u.encode(randomBytes(24)),
       enabled: true,
     };
@@ -7682,8 +7876,7 @@ export class WeaveNode implements Backend {
     this.#announceService(key.did, [], stored.spaces);
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.#serviceApi) await this.#startAppApi();
-    if (stored.artifact) this.#installArtifact(name);
-    else this.#startService(stored);
+    this.#startService(stored);
     return this.#serviceInfo(this.#storedService(name));
   }
 
@@ -7853,33 +8046,18 @@ export class WeaveNode implements Backend {
     }
   }
 
-  /**
-   * Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or the release
-   * it runs (`artifact: {tag}`, the latest without one; that runs other code, so it needs `approve` again).
-   */
-  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
+  /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
+  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string }): Promise<ServiceInfo> {
     const away = this.#isLinkedNode ? undefined : this.#handedOver().get(input.name);
     if (away && !this.#storedServices().some((s) => s.name === input.name)) {
-      if (input.artifact || input.spaceSettings) throw new Error('artifacts and per-space settings run on this computer for now: always-on nodes come next');
+      if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
       this.#changeNodeService(away, input);
       return this.#handoverInfo(this.#handedOver().get(input.name)!);
     }
     const before = this.#storedService(input.name);
-    if (input.artifact && !before.artifact) throw new Error(`${before.name} runs a command, not an artifact`);
-    if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
-    // Another release: what it runs, and maybe its contract, change.
-    let artifact = before.artifact;
-    let contract = before.contract;
-    if (input.artifact && before.artifact) {
-      const found = this.#artifact(before.artifact.project, input.artifact.tag);
-      if (found.artifact.id !== before.artifact.id) {
-        const { id, tag, manifest } = found.artifact;
-        artifact = { project: found.project.id, id, tag, manifest, approved: this.#artifactApproval(before.name, found.artifact, found.project.name, input.approve) };
-        contract = this.#artifactContract(manifest);
-      }
-    }
+    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its rooms say what they run`);
     const settings = { ...before.settings };
-    this.#checkSettings(artifact?.manifest, false, input.settings ?? {});
+    this.#checkSettings(undefined, input.settings ?? {});
     for (const [key, value] of Object.entries(input.settings ?? {})) {
       if (value === null) delete settings[key];
       else settings[key] = String(value);
@@ -7890,7 +8068,7 @@ export class WeaveNode implements Backend {
     for (const [ref, given] of Object.entries(input.spaceSettings ?? {})) {
       const id = this.#space(ref).id;
       if (!spaces.includes(id)) throw new Error(`${before.name} isn't in ${this.#space(ref).name}: add it there first`);
-      this.#checkSettings(artifact?.manifest, true, given);
+      this.#checkSettings(undefined, given);
       const mine = { ...(spaceSettings[id] ?? {}) };
       for (const [key, value] of Object.entries(given)) {
         if (value === null) delete mine[key];
@@ -7900,36 +8078,33 @@ export class WeaveNode implements Backend {
       else delete spaceSettings[id];
     }
     const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
-    const { command: _command, spaceSettings: _spaceSettings, artifact: _artifact, ...rest } = before;
+    const { command: _command, spaceSettings: _spaceSettings, ...rest } = before;
     const after: StoredService = {
       ...rest,
-      contract,
       spaces,
       ...(command?.length ? { command } : {}),
-      ...(artifact ? { artifact } : {}),
       settings,
       ...(Object.keys(spaceSettings).length ? { spaceSettings } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.description !== undefined ? { description: input.description.trim().slice(0, 1000) } : {}),
     };
-    // A release that asks for other rights: the key gets them (and loses the old ones), and says so in its profile.
-    const permissions = servicePermissions(contract);
-    if (JSON.stringify(permissions) !== JSON.stringify(servicePermissions(before.contract))) {
-      const key = this.#serviceKey(before.name);
-      this.replica.write(this.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${before.name}`));
-      const updated = { ...key, permissions };
-      saveAgent(this.home, updated);
-      this.#agents = this.#agents.map((a) => (a.name === before.name ? updated : a));
-    }
     this.#saveServices(this.#storedServices().map((s) => (s.name === after.name ? after : s)));
-    if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract)) this.#publishServiceProfile(after);
+    if (after.description !== before.description) this.#publishServiceProfile(after);
     if (!this.#isLinkedNode) this.#announceService(this.#serviceKey(after.name).did, before.spaces, after.spaces);
-    // Settings and commands take effect on a fresh start; turned off (or no longer offering one), its rooms end.
-    if ((before.enabled && !after.enabled) || (before.contract.room && !after.contract.room)) await this.#endServiceRooms(after.name);
+    // Turned off, its rooms end; out of a project, its rooms there end.
+    if (before.enabled && !after.enabled) {
+      await this.#endServiceRooms(after.name);
+      await this.#closeHostedRooms(after.name);
+    } else await this.#closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
+    if (after.builtin) {
+      if (this.#serviceApi) await this.#startAppApi();
+      for (const id of Object.keys(this.#storedService(after.name).hosted ?? {})) this.#startRoom(after.name, id);
+      return this.#serviceInfo(this.#storedService(after.name));
+    }
+    // Settings and commands take effect on a fresh start.
     this.#stopService(after.name);
     if (this.#serviceApi) await this.#startAppApi();
-    if (after.artifact) this.#installArtifact(after.name);
-    else this.#startService(after);
+    this.#startService(after);
     return this.#serviceInfo(this.#storedService(after.name));
   }
 
@@ -7943,6 +8118,7 @@ export class WeaveNode implements Backend {
     }
     const stored = this.#storedService(name);
     await this.#endServiceRooms(name);
+    await this.#closeHostedRooms(name);
     this.#stopService(name);
     const key = this.#serviceKey(name);
     this.#announceService(key.did, stored.spaces, []);
@@ -7967,6 +8143,7 @@ export class WeaveNode implements Backend {
       name: p.name,
       description: p.description,
       ...(p.icon ? { icon: p.icon } : {}),
+      ...(p.builtin ? { builtin: p.builtin } : {}),
       contract: p.contract,
       time: p.time,
     }));
@@ -8131,78 +8308,42 @@ export class WeaveNode implements Backend {
 
   // Running services: one process each, started with the address of the local API and its own token.
 
-  #serviceProcs = new Map<string, { child: ChildProcess; stopping: boolean; container?: string }>();
+  #serviceProcs = new Map<string, { child: ChildProcess; stopping: boolean }>();
   #serviceRestarts = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>();
   #serviceApi?: string;
 
-  /** Start the enabled services, now that the local API is up (the daemon calls this); artifacts are fetched first where needed. */
+  /** Start the enabled services and the room service's rooms, now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.#serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
     void this.#startAppApi().then(() => {
       for (const stored of this.#storedServices()) {
-        if (stored.artifact && stored.enabled) this.#installArtifact(stored.name);
-        else this.#startService(stored);
+        this.#startService(stored);
+        for (const id of Object.keys(stored.hosted ?? {})) this.#startRoom(stored.name, id);
       }
     });
   }
 
-  /**
-   * What a service runs: its command (in its own folder), or its artifact (in the release's folder, or its container),
-   * only as approved, and only with the settings its release asks for once filled in.
-   */
-  #serviceRun(stored: StoredService): { command: string[]; cwd: string; container?: string } | undefined {
-    const dir = joinPath(this.home.dir, 'services', stored.name);
-    const a = stored.artifact;
-    if (!a) return stored.command?.length ? { command: stored.command, cwd: dir } : undefined;
-    const command = this.#artifactCommand(stored.name, a.manifest);
-    if (!command || a.approved !== launchFingerprint(command, a.id)) {
-      this.#serviceInstalls.set(stored.name, { error: `approve what it runs first (weave service set ${stored.name} --approve)` });
-      return undefined;
-    }
-    const missing = this.#artifactSettings(a.manifest, false).filter((e) => !e.optional && !stored.settings[e.name]);
-    if (missing.length) {
-      this.#serviceInstalls.set(stored.name, { error: `${a.manifest.name} needs ${missing.map((e) => e.label).join(', ')} first (weave service set ${stored.name} --setting ${missing[0].name}=…)` });
-      return undefined;
-    }
-    if (this.#artifactRuns(a.manifest) === 'container') return { command, cwd: dir, container: this.#serviceContainer(stored.name) };
-    if (!a.folder || !existsSync(a.folder)) return undefined;
-    // A program in the release's folder ("./band-ab"): Windows wouldn't look there by itself.
-    const [named, ...args] = command;
-    return { command: [!isAbsolute(named) && existsSync(joinPath(a.folder, named)) ? joinPath(a.folder, named) : named, ...args], cwd: a.folder };
-  }
-
   #startService(stored: StoredService): void {
-    if (!this.#serviceApi || !this.#appApiPort || !stored.enabled || this.#serviceProcs.has(stored.name)) return;
-    const run = this.#serviceRun(stored);
-    if (!run) return;
-    if (stored.artifact) this.#serviceInstalls.delete(stored.name);
+    if (!this.#serviceApi || !this.#appApiPort || !stored.enabled || !stored.command?.length || this.#serviceProcs.has(stored.name)) return;
     const dir = joinPath(this.home.dir, 'services', stored.name);
     mkdirSync(dir, { recursive: true });
     const log = createWriteStream(joinPath(dir, 'service.log'), { flags: 'a' });
-    // In a container, the local APIs are the host's: reached as host.docker.internal (on Linux the host's network is shared).
-    const host = run.container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
     const project = stored.spaces.filter((id) => this.#spaces.get(id)?.kind === 'project');
-    const settings = stored.artifact ? Object.fromEntries(this.#artifactSettings(stored.artifact.manifest, false).filter((e) => stored.settings[e.name]).map((e) => [e.name, stored.settings[e.name]])) : stored.settings;
-    const [command, ...args] = run.command;
-    if (run.container) {
-      // One left from before (a crash, a stop that didn't reach Docker) would block the name.
-      const [docker, ...first] = this.containerSetup.docker;
-      spawnSync(docker, [...first, 'rm', '-f', run.container], { windowsHide: true, timeout: 20_000 });
-    }
+    const [command, ...args] = stored.command;
     const child = spawn(command, args, {
-      cwd: run.cwd,
+      cwd: dir,
       // Its settings, Weave's app API (who is who, as apps ask it; WEAVE_TOKEN also checks X-Weave-Person) and its
       // service API; nothing of the daemon's own environment it doesn't need. Weave's own variables last.
       env: {
         PATH: process.env.PATH ?? '',
         SYSTEMROOT: process.env.SYSTEMROOT ?? '',
         HOME: dir,
-        ...settings,
-        WEAVE_API: `http://${host}:${this.#appApiPort}`,
+        ...stored.settings,
+        WEAVE_API: `http://127.0.0.1:${this.#appApiPort}`,
         WEAVE_TOKEN: stored.token,
         ...(project.length === 1 ? { WEAVE_PROJECT: project[0] } : {}),
         WEAVE_SERVICE: stored.name,
-        WEAVE_SERVICE_API: this.#serviceApi.replace('127.0.0.1', host),
+        WEAVE_SERVICE_API: this.#serviceApi,
         WEAVE_SERVICE_TOKEN: stored.token,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -8210,14 +8351,8 @@ export class WeaveNode implements Backend {
     });
     child.stdout?.pipe(log);
     child.stderr?.pipe(log);
-    const entry = { child, stopping: false, ...(run.container ? { container: run.container } : {}) };
+    const entry = { child, stopping: false };
     this.#serviceProcs.set(stored.name, entry);
-    // An artifact with a web page: offered as its room in each of its projects, on the port its release names.
-    const web = stored.artifact && this.#artifactWeb(stored.artifact.manifest);
-    if (web) {
-      this.#saveServices(this.#storedServices().map((s) => (s.name === stored.name ? { ...s, roomPort: web.port } : s)));
-      void this.#openServiceRooms(stored.name).catch((error: Error) => log.write(`weave: couldn't offer ${stored.name}'s room: ${error.message}\n`));
-    }
     child.on('error', (error) => log.write(`weave: couldn't start ${stored.name}: ${error.message}\n`));
     child.on('exit', (code) => {
       log.write(`weave: ${stored.name} exited (${code})\n`);
@@ -8245,16 +8380,12 @@ export class WeaveNode implements Backend {
     const entry = this.#serviceProcs.get(name);
     if (!entry) return;
     entry.stopping = true;
-    // A container is stopped through Docker: ending its docker client wouldn't.
-    if (entry.container) {
-      const [docker, ...first] = this.containerSetup.docker;
-      spawnSync(docker, [...first, 'stop', '-t', '5', entry.container], { windowsHide: true, timeout: 20_000 });
-    }
     entry.child.kill();
     this.#serviceProcs.delete(name);
   }
 
   #stopServiceProcesses(): void {
+    for (const id of [...this.#roomProcs.keys(), ...[...this.#serviceRestarts.keys()].filter((k) => k.startsWith('room:')).map((k) => k.slice('room:'.length))]) this.#stopRoomHandler(id);
     for (const name of [...this.#serviceProcs.keys(), ...this.#serviceRestarts.keys()]) this.#stopService(name);
   }
 

@@ -64,6 +64,8 @@ export interface ServiceProfile {
   description: string;
   /** A picture (wblob: reference). */
   icon?: string;
+  /** One Weave ships (the room service), rather than someone's own code. */
+  builtin?: 'room';
   contract: ServiceContract;
   time: string;
 }
@@ -123,6 +125,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       name,
       description: typeof body.description === 'string' ? body.description.slice(0, 1000) : '',
       ...(typeof body.icon === 'string' && body.icon.startsWith('wblob:') ? { icon: body.icon } : {}),
+      ...(body.builtin === 'room' ? { builtin: 'room' as const } : {}),
       contract,
       time: e.time,
     });

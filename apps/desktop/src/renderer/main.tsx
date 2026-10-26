@@ -10,7 +10,7 @@ import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
-import { RoomsView } from './rooms.tsx';
+import { ProjectServicesView } from './rooms.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -81,7 +81,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="zap" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
@@ -223,7 +223,7 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
   return (
     <nav className="project-sections mobile-only">
       {link(base, 'hash', 'general', !view)}
-      {link(`${base}/live`, 'zap', `Live${rooms?.length ? ` (${rooms.length})` : ''}`, view === 'live', !!rooms?.length)}
+      {link(`${base}/services`, 'zap', `Services${rooms?.length ? ` (${rooms.length} live)` : ''}`, view === 'services' || view === 'live', !!rooms?.length)}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
       {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
     </nav>
@@ -309,8 +309,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           empty={<>Nothing in {board?.title ?? arg} yet.</>}
         />
       );
-  } else if (view === 'live') {
-    body = <RoomsView project={space} members={list} meDid={me.did} />;
+  } else if (view === 'services' || view === 'live') {
+    body = <ProjectServicesView project={space} members={list} meDid={me.did} />;
   } else if (view === 'routines') {
     body = <RoutinesPage project={space} />;
   } else if (view === 'settings') {

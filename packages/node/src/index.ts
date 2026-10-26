@@ -83,6 +83,8 @@ export type {
   SpaceRepos,
   ServiceGate,
   ServiceInfo,
+  HostedRoomInfo,
+  ArtifactInfo,
   ServiceProfileInfo,
   ServiceRequestInfo,
   Status,
