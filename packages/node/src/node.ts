@@ -1,4 +1,3 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   accessOf,
   accountsOf,
@@ -25,7 +24,6 @@ import {
   encodeKnock,
   inviteRightsOf,
   isKnockLink,
-  isReadLimited,
   keyHolders,
   KIND_BOARD_ACCESS,
   KIND_BOARD_KEY,
@@ -43,7 +41,6 @@ import {
   lifetimeOf,
   overBudget,
   type BoardRule,
-  type Lifetime,
   KIND_CARRY,
   KIND_SHRED,
   KIND_MANAGED,
@@ -221,7 +218,6 @@ import {
   KIND_REKEY,
   KIND_REMOVE,
   KIND_REPLY,
-  KIND_ROOM,
   KIND_RULE,
   KIND_SAVE,
   KIND_SEALED,
@@ -288,12 +284,7 @@ import {
   openMembershipRequest,
   openRekey,
   parseManifest,
-  startCommand,
-  artifactsOf,
-  canonicalJson,
-  parsePages,
   type RoomPages,
-  type Artifact,
   type AppAsset,
   type AppImage,
   type AppInstall,
@@ -308,7 +299,6 @@ import {
   recoveryRoot,
   rank,
   rekey,
-  roomsOf,
   revocation,
   rotation,
   Replica,
@@ -326,7 +316,6 @@ import {
   tiersOf,
   visibleIn,
   type AppManifest,
-  type AppSetting,
   type Board,
   type Member,
   type BoardType,
@@ -347,7 +336,6 @@ import {
   type Proposal,
   type Reaction,
   type Reply,
-  type Room,
   type SaveMode,
   type Score,
   type Sealed,
@@ -383,31 +371,16 @@ import {
   parseVersion,
   TEXT_LIMITS,
   tooLong,
-  KIND_SERVICE_PROFILE,
-  KIND_SERVICE_REQUEST,
-  KIND_SERVICE_RESULT,
-  KIND_SERVICE_IN,
-  servicesIn as servicesInSpace,
   SERVICE_PREFIX,
-  parseContract,
-  profilesOf,
-  requestsOf,
-  serviceName,
-  servicePermissions,
-  contractWords,
-  serviceReads,
   type ServiceContract,
 } from '@weave/core';
-import { roomKeyPair, SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
+import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
   HOME_SOURCES,
   PROJECT_STATUSES,
   type Actor,
   type Admission,
   type AgentInfo,
-  type AppEnv,
-
-  type AppPerson,
   type UpdateInfo,
   type Backend,
   type BoardInfo,
@@ -425,19 +398,10 @@ import {
   type WorkTarget,
   type DeskInfo,
   type RoutineInfo,
-  type StackPost,
-  type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
   type MembershipRequestInfo,
   type BadgeInfo,
-  type ServiceGate,
-  type ServiceInfo,
-  type ArtifactInfo,
-  type HostedRoomInfo,
-  type ServiceArtifactInfo,
-  type ServiceProfileInfo,
-  type ServiceRequestInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
   type PaymentRequestInfo,
@@ -481,8 +445,6 @@ import {
   type PublishInput,
   type ReactionInfo,
   type ReplyInfo,
-  type RoomChatMessage,
-  type RoomInfo,
   type Social,
   type SpaceInfo,
   type SpaceRef,
@@ -511,13 +473,13 @@ import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
-import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
+import { guessPlatform } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createHmac, createPublicKey, createVerify, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
-import { cpSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
-import { LiveRooms, portOpen } from './live.ts';
+import { LiveRooms } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
@@ -547,10 +509,10 @@ import {
   type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
-import { launchFingerprint } from './applaunch.ts';
-import { releaseApproval, Runtime } from './runtime.ts';
-import { Releases, type ArtifactRef as StoredArtifact, type InstallJob } from './artifacts.ts';
-import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
+import { Runtime } from './runtime.ts';
+import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { NODE_PREFIX, Services } from './services.ts';
+import { Website } from './website.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
@@ -591,7 +553,7 @@ interface GitHubLogin {
 
 /** An event as this node can read it, before names are resolved. */
 /** A service handed to an always-on node (the body of a handover, sealed to yourself). */
-interface Handover {
+export interface Handover {
   id: string;
   service: string;
   /** The always-on node's key it's for. */
@@ -617,7 +579,7 @@ interface Handover {
 }
 
 /** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
-interface StoredService {
+export interface StoredService {
   name: string;
   description: string;
   icon?: string;
@@ -641,7 +603,7 @@ interface StoredService {
 }
 
 /** A room the room service runs: in one of its projects, answered by its handler. */
-interface StoredRoom {
+export interface StoredRoom {
   id: string;
   project: string;
   name: string;
@@ -659,9 +621,9 @@ interface StoredRoom {
 }
 
 /** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
-type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
+export type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
 
-interface Decoded {
+export interface Decoded {
   event: WeaveRecord;
   /** Restated in a carry, not decoded from the event itself (see #expandCarry). */
   carried?: true;
@@ -697,15 +659,8 @@ const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
 const KIND_KEEP_INDEX = 'weave.keep.index';
 /** Every space of ours (but direct chats) and its keys, in our own space, for our always-on nodes (stage 18). */
 const KIND_NODE_INDEX = 'weave.node.index';
-/**
- * Sealed to yourself, by one of your computers: a service for one of your always-on nodes. Its configuration in the
- * clear for your devices; its key and settings in a box only that node opens. Later ones change or remove it.
- */
-const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
-/** Always-on nodes' keys are named "node:<name>" among your keys. */
-const NODE_PREFIX = 'node:';
 interface KeepState {
   spaces: Record<string, Did[]>;
   seen: Record<string, string>;
@@ -864,10 +819,10 @@ export class WeaveNode implements Backend {
       const grant = this.replica.authority.grant(signer);
       return grant && grant.revokedAfter !== undefined ? undefined : person;
     },
-    mayJoin: (room, person) => this.#mayJoin(room, person),
-    servicePort: (room) => this.#roomService(room)?.port,
-    personHeader: (room, person) => this.#personHeader(room, person),
-    seed: (roomId) => this.#roomSeed(roomId),
+    mayJoin: (room, person) => this.#website.mayJoin(room, person),
+    servicePort: (room) => this.#website.roomService(room)?.port,
+    personHeader: (room, person) => this.#website.personHeader(room, person),
+    seed: (roomId) => this.#website.roomSeed(roomId),
     nameOf: (did) => this.nameOf(did),
     changed: () => this.#emitLive(),
   });
@@ -938,14 +893,16 @@ export class WeaveNode implements Backend {
     name: () => this.nameOf(this.identity.author),
     call: (method, args) => (this[method] as (...a: unknown[]) => Promise<unknown>).apply(this, args),
     watch: (onItem, signal) => this.watch(onItem, signal),
-    roomPort: async (roomId) => this.#roomPort(roomId),
+    roomPort: async (roomId) => this.#website.roomPort(roomId),
   });
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive());
-  /** The app API (see appapi.ts), started when a room's handler or a service first needs it. */
-  #appApi?: Promise<AppApiServer>;
+  /** Services: code you run under keys of their own (see services.ts). */
+  #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
+  /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
+  #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -1288,7 +1245,7 @@ export class WeaveNode implements Backend {
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
-    for (const { room } of this.#allRooms()) if (room.open && this.#hostedHere(room)) await this.#live.host(room).catch(() => {});
+    for (const { room } of this.#website.allRooms()) if (room.open && this.#website.hostedHere(room)) await this.#live.host(room).catch(() => {});
     await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
   }
 
@@ -1296,9 +1253,9 @@ export class WeaveNode implements Backend {
 
     // Services still running keep asking it (their WEAVE_API); it closes with them (close stops them first).
     if (!this.#runtime.size) {
-      const appApi = this.#appApi;
-      this.#appApi = undefined;
-      this.#appApiPort = undefined;
+      const appApi = this.#website.appApi;
+      this.#website.appApi = undefined;
+      this.#website.appApiPort = undefined;
       await (await appApi?.catch(() => undefined))?.close();
     }
     await this.#remote.close();
@@ -1309,7 +1266,7 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
-    this.#stopServiceProcesses();
+    this.#services.stopServiceProcesses();
     this.#follower?.stop();
     this.#appLog?.stop();
     // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
@@ -3045,7 +3002,7 @@ export class WeaveNode implements Backend {
     }
     this.#recoverSpaces();
     // On an always-on node: services handed over by its person's computers.
-    changed += await this.#takeHandovers();
+    changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -3583,172 +3540,6 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- app API
 
-  /**
-   * What a room's handler needs to ask Weave who its players are: Weave passes it to handlers it starts; for one
-   * that runs by itself (a room on a port), `weave room env` prints it.
-   */
-  async roomEnv(ref: string): Promise<AppEnv> {
-    const { room } = this.#roomById(ref);
-    const hosted = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
-    if (!hosted) throw new Error(`"${room.name}" isn't a room your room service runs here`);
-    const api = await this.#startAppApi();
-    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: hosted.token, WEAVE_PROJECT: hosted.project, WEAVE_ROOM: hosted.id };
-  }
-
-  /** The port of the app API once it runs (services get it as WEAVE_API). */
-  #appApiPort?: number;
-
-  #startAppApi(): Promise<AppApiServer> {
-    this.#appApi ??= startAppApi(
-      (token) => this.#appScope(token),
-      (scope, route, params) => this.#appAnswer(scope, route, params),
-    ).then((api) => {
-      this.#appApiPort = api.port;
-      return api;
-    });
-    return this.#appApi;
-  }
-
-  /** Whose a token is: a project's app (the project id), or a service running here ("service:<name>"). */
-  #appScope(token: string): string | undefined {
-    const services = this.#storedServices().filter((s) => s.enabled);
-    const service = services.find((s) => sameToken(s.token, token));
-    if (service) return `service:${service.name}`;
-    // A room's handler: its room only.
-    const room = services.flatMap((s) => Object.values(s.hosted ?? {})).find((r) => sameToken(r.token, token));
-    return room && `room:${room.id}`;
-  }
-
-  /**
-   * The space a service asks the app API about: the room a connection came through (who), the one it names
-   * (?project=), or its only one. Never a space it wasn't added to.
-   */
-  #serviceAppSpace(name: string, route: string, params: URLSearchParams): string {
-    const stored = this.#storedServices().find((s) => s.name === name && s.enabled);
-    if (!stored) throw new AppApiError(401, 'unauthorized');
-    if (route === '/v1/who') {
-      const did = this.#serviceKey(name).did;
-      const found = this.#live.personOnPort(Number(params.get('port')));
-      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.room.agent === did);
-      if (!room) throw new AppApiError(404, 'not a connection through one of this service’s rooms');
-      return room.project.id;
-    }
-    const mine = stored.spaces.filter((id) => this.#spaces.has(id));
-    const asked = params.get('project');
-    if (asked) {
-      const id = mine.find((s) => s === asked || this.#spaceName(this.#spaces.get(s)!).toLowerCase() === asked.toLowerCase());
-      if (!id) throw new AppApiError(404, `"${asked}" isn't one of the spaces ${name} was added to`);
-      return id;
-    }
-    if (mine.length === 1) return mine[0];
-    throw new Error(mine.length ? `${name} runs in ${mine.length} spaces: say which (?project=<id>)` : `${name} wasn't added to any space yet`);
-  }
-
-  #appAnswer(scope: string, route: string, params: URLSearchParams): unknown {
-    const service = scope.startsWith('service:') ? scope.slice('service:'.length) : undefined;
-    const hosted = scope.startsWith('room:') ? this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {})).find((r) => r.id === scope.slice('room:'.length)) : undefined;
-    if (scope.startsWith('room:') && !hosted) throw new AppApiError(401, 'unauthorized');
-    const projectId = hosted ? hosted.project : service ? this.#serviceAppSpace(service, route, params) : scope;
-    const project = this.#spaces.get(projectId);
-    if (!project) throw new AppApiError(404, 'this project is no longer here');
-    const me = this.identity.author;
-    if (route === '/v1/me') return this.#appPerson(project, me);
-    if (route === '/v1/who') {
-      const port = Number(params.get('port'));
-      if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('port: the remote port of the connection (a number)');
-      const found = this.#live.personOnPort(port);
-      const room = found && this.#allRooms().find((r) => r.room.id === found.room && r.project.id === projectId && (!hosted || r.room.id === hosted.id));
-      if (!found || !room) throw new AppApiError(404, hosted ? 'not a connection through this room' : 'not a connection through one of this project’s rooms');
-      return { ...this.#appPerson(project, found.person), room: { id: room.room.id, name: room.room.name } };
-    }
-    if (route === '/v1/project') {
-      // A service sees its own rooms only, and the settings it was given for this space.
-      const agent = service ? this.#serviceKey(service).did : undefined;
-      const rooms = this.#allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.#live.isHosting(r.room.id) && (!agent || r.room.agent === agent) && (!hosted || r.room.id === hosted.id));
-      return {
-        id: project.id,
-        name: project.name,
-        ...(service ? { service, settings: this.#storedServices().find((s) => s.name === service)?.spaceSettings?.[projectId] ?? {} } : {}),
-        host: { did: me, name: this.nameOf(me) },
-        rooms: rooms.map(({ room }) => ({ id: room.id, name: room.name, people: this.#live.peers(room.id).map((did) => this.#appPerson(project, did)) })),
-        groups: this.#appGroups(project).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
-      };
-    }
-    if (route === '/v1/access') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose access to look up');
-      const groups = this.#appGroups(project);
-      const group = params.get('group');
-      const asked = group ? groups.filter(({ space }) => space.id === group || space.name.toLowerCase() === group.toLowerCase()) : groups;
-      if (group && asked.length === 0) throw new AppApiError(404, `no group "${group}" here: only the project's groups and the host's own groups and tiers`);
-      return {
-        ...this.#appPerson(project, did as Did),
-        groups: asked.filter(({ state }) => state.members.has(did as Did)).map(({ space, state }) => ({ id: space.id, name: space.name, ...(state.tier ? { tier: true } : {}) })),
-      };
-    }
-    if (route === '/v1/tickets') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose tickets to look up');
-      const now = new Date(this.clock());
-      return this.#allShows()
-        .filter((s) => s.project === projectId && s.host === this.identity.author)
-        .flatMap((s) => (this.#ticketRecords(s.id).some((r) => r.holder === did) ? [{ show: s.id, name: s.name, ...(s.room ? { room: s.room } : {}), starts: s.starts, ends: s.ends, open: showOpen(s, now), cancelled: s.cancelled }] : []));
-    }
-    if (route === '/v1/badges') {
-      const did = params.get('did') ?? '';
-      if (!did.startsWith('did:')) throw new Error('did: whose badges to look up');
-      const { series, badges } = this.#allBadges();
-      const ours = new Map(series.filter((s) => s.project?.id === projectId && s.project.checked && !s.broken).map((s) => [s.id, s]));
-      return badges
-        .filter((b) => b.holder === did && !b.invalid && ours.has(b.series))
-        .map((b) => {
-          const s = ours.get(b.series)!;
-          return { id: b.id, series: { id: s.id, name: s.name, symbol: s.symbol, ...(s.image ? { image: s.image } : {}), ...(s.limit ? { limit: s.limit } : {}) }, n: b.n, issuer: { did: b.issuer, name: this.nameOf(b.issuer) }, note: b.note, ...(b.ref ? { ref: b.ref } : {}), ...(b.personal?.published ? { personal: b.personal.published } : {}), time: b.time };
-        });
-    }
-    throw new AppApiError(404, `no route ${route}`);
-  }
-
-  /**
-   * X-Weave-Person for a room's http service (Weave and Docker): who this player is, as the app API would say,
-   * the room, and the time, signed with the app's own token (HMAC-SHA256), which only Weave and the app know.
-   * Only for apps Weave gave a token (it started them, or weave app env): otherwise nobody could check it.
-   */
-  #personHeader(room: Room, person: Did): string | undefined {
-    if (this.#roomService(room)?.protocol !== 'http') return undefined;
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    // A service's room is vouched for with the service's own token, which its process has.
-    const token = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id]?.token : undefined;
-    if (!found || !token) return undefined;
-    const payload = Buffer.from(JSON.stringify({ ...this.#appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.clock() / 1000) })).toString('base64url');
-    return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
-  }
-
-  /** A person as an app sees them: who they are and their place in the project. */
-  #appPerson(project: StoredSpace, did: Did): AppPerson {
-    const state = this.#state(project);
-    const name = this.nameOf(did);
-    return {
-      did,
-      ...(name ? { name } : {}),
-      host: did === this.identity.author,
-      member: state.members.has(did) || did === this.identity.author,
-      maintainer: state.maintainers.has(did),
-    };
-  }
-
-  /** Groups an app may ask about: the ones invited into the project, and the host's own groups and tiers. Nothing else of the host's. */
-  #appGroups(project: StoredSpace): Array<{ space: StoredSpace; state: SpaceState }> {
-    const invited = new Set(this.#state(project).groups.keys());
-    const out: Array<{ space: StoredSpace; state: SpaceState }> = [];
-    for (const space of this.#spaces.values()) {
-      if (space.kind !== 'group') continue;
-      const state = this.#state(space);
-      if (invited.has(space.id) || state.founder === this.identity.author) out.push({ space, state });
-    }
-    return out;
-  }
-
   // ---------------------------------------------------------------- fetching a release
 
   async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
@@ -3825,63 +3616,6 @@ export class WeaveNode implements Backend {
   }
 
 
-  async rooms(ref?: string): Promise<RoomInfo[]> {
-    const only = ref ? this.#project(ref).id : undefined;
-    // Rooms come from room services (rooms hosts announced themselves, before them, are left out).
-    const rooms = this.#allRooms().filter(({ room, project }) => room.open && !!room.agent && (!only || project.id === only));
-    return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
-  }
-
-  async endRoom(ref: string): Promise<void> {
-    const { room, project } = this.#roomById(ref);
-    if (room.host !== this.identity.author || !room.agent) throw new Error('only the person whose room service offers a room ends it');
-    // A room of the room service: its handler stops, the room closes. On an always-on node: handed over as a change.
-    const service = this.#localServiceByKey(room.agent);
-    if (service?.hosted?.[room.id]) return this.#closeHostedRooms(service.name, (r) => r.id !== room.id);
-    const away = this.#isLinkedNode ? undefined : [...this.#handedOver().values()].find((h) => h.did === room.agent);
-    if (away?.hosted?.[room.id]) {
-      const { [room.id]: _gone, ...hosted } = away.hosted;
-      return this.#changeNodeService(away, { hosted });
-    }
-    throw new Error(`${this.#agentName(room.agent, room.host) ?? 'a service'} offers "${room.name}": end it on the device it runs on`);
-  }
-
-  async joinRoom(ref: string): Promise<RoomInfo> {
-    const { room, project } = this.#roomById(ref);
-    if (!room.open) throw new Error('this room has ended');
-    if (this.#hostedHere(room)) return this.#roomInfo(room, project);
-    if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show || room.groups ? "this room is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this room");
-    await this.#live.join(room, room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'room');
-    return this.#roomInfo(room, project);
-  }
-
-  async leaveRoom(ref: string): Promise<void> {
-    await this.#live.leave(this.#roomById(ref).room.id);
-  }
-
-  async roomChat(ref: string): Promise<RoomChatMessage[]> {
-    const { room } = this.#roomById(ref);
-    return this.#live.chat(room.id).map((m) => ({ id: m.id, by: { did: m.from, name: this.nameOf(m.from) ?? m.name }, text: m.text, time: m.time, mine: m.from === this.identity.author }));
-  }
-
-  async sayInRoom(input: { room: string; text: string }): Promise<void> {
-    if (!input.text?.trim()) throw new Error('a message needs text');
-    this.#live.say(this.#roomById(input.room).room.id, input.text);
-  }
-
-  /** Where a room's app is reached on this computer while we're in the room: the same port its address (RoomInfo.url) has. */
-  #roomPort(roomId: string): number | undefined {
-    const found = this.#allRooms().find((r) => r.room.id === roomId && r.room.open);
-    if (!found) return undefined;
-    if (found.room.host !== this.identity.author) return this.#live.localPort(roomId);
-    return this.#live.isHosting(roomId) ? this.#roomService(found.room)?.port : undefined;
-  }
-
-  /** A room's key seed, from our own secret: the host can reopen its rooms after a restart. */
-  #roomSeed(roomId: string): Uint8Array {
-    return createHash('sha256').update('weave/room-seed/v1').update(this.#selfSecret()).update(roomId).digest();
-  }
-
   /** The latest app manifest a maintainer published in a project. */
   #app(project: StoredSpace): AppManifest | undefined {
     const state = this.#state(project);
@@ -3895,97 +3629,6 @@ export class WeaveNode implements Backend {
       }
     }
     return app;
-  }
-
-  #allRooms(): Array<{ room: Room; project: StoredSpace }> {
-    const out: Array<{ room: Room; project: StoredSpace }> = [];
-    for (const project of this.#spaces.values()) {
-      if (project.kind !== 'project') continue;
-      for (const room of roomsOf(this.#entries(project))) out.push({ room, project });
-    }
-    return out;
-  }
-
-  #roomById(ref: string): { room: Room; project: StoredSpace } {
-    const matches = this.#allRooms().filter(({ room }) => room.id === ref || room.id.startsWith(ref) || room.name.toLowerCase() === ref.toLowerCase());
-    if (matches.length === 0) throw new Error(`no room "${ref}"`);
-    const open = matches.filter((m) => m.room.open);
-    if (open.length > 1) throw new Error(`several rooms match "${ref}": use its id`);
-    return open[0] ?? matches[0];
-  }
-
-  /** Participants of the room's project who are invited (or everyone, by default); the host always. */
-  #mayJoin(room: Room, person: Did): boolean {
-    if (person === room.host) return true;
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    if (!found || !this.#state(found.project).members.has(person)) return false;
-    if (room.show || room.groups?.length) {
-      // A ticketed room: a ticket while the show is on (the host checks its own records, a guest its ticket)…
-      const show = room.show ? this.#allShows().find((s) => s.id === room.show && s.host === room.host) : undefined;
-      const ticket =
-        !!show &&
-        showOpen(show, new Date(this.clock())) &&
-        (person === this.identity.author ? this.#myTickets().some((t) => t.show === show.id && t.host === show.host) : show.host === this.identity.author && this.#ticketRecords(show.id).some((r) => r.holder === person));
-      // …or an active membership in one of its groups (a tier).
-      const member = (room.groups ?? []).some((id) => this.#activeMember(id, person));
-      if (!ticket && !member) return false;
-    }
-    return room.invite === 'participants' || room.invite.includes(person);
-  }
-
-  /** Whether someone is in a group right now (a tier's grant not run out). */
-  #activeMember(groupId: string, person: Did): boolean {
-    const group = this.#spaces.get(groupId);
-    const member = group && this.#state(group).members.get(person);
-    return !!member && (!member.until || member.until > new Date(this.clock()).toISOString());
-  }
-
-  /** Whether this node hosts a room: one of a room service running here. */
-  #hostedHere(room: Room): boolean {
-    return room.host === this.identity.author && !!room.agent && !!this.#localServiceByKey(room.agent)?.hosted?.[room.id];
-  }
-
-  #localServiceByKey(did: Did): StoredService | undefined {
-    return this.#storedServices().find((s) => this.#agents.find((a) => a.name === s.name)?.did === did);
-  }
-
-  /** What a room's clients reach on this computer: its handler's port, where the room service runs. */
-  #roomService(room: Room) {
-    const port = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id]?.port : undefined;
-    return port ? { id: 'room', port, protocol: 'http' as const } : undefined;
-  }
-
-  /** A room, offered by a room service: hosted where that service runs, joined like any room everywhere else (also on your own computers). */
-  async #roomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
-    const me = this.identity.author;
-    const here = this.#hostedHere(room);
-    const service = here ? this.#roomService(room) : undefined;
-    const joined = here ? this.#live.isHosting(room.id) : this.#live.isJoined(room.id);
-    const ready = here ? !!service && (await portOpen(service.port)) : this.#live.appReady(room.id);
-    const localPort = this.#live.localPort(room.id);
-    const slug = room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'room';
-    const side = here ? room.pages?.host : room.pages?.joiner;
-    const path = side?.path ?? '/';
-    const url = here ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && ready ? `http://${slug}.weave.localhost:${localPort}${path}` : undefined;
-    const name = this.#agentName(room.agent!, room.host);
-    return {
-      id: room.id,
-      project: { id: project.id, kind: 'project', name: project.name },
-      name: room.name,
-      host: { did: room.host, name: this.nameOf(room.host) },
-      offeredBy: { did: room.agent!, ...(name ? { name } : {}) },
-      mine: here,
-      open: room.open,
-      mayJoin: this.#mayJoin(room, me),
-      ...(room.show ? { show: room.show } : {}),
-      ...(room.groups?.length ? { groups: room.groups.map((id) => ({ id, name: this.#spaces.get(id)?.name })) } : {}),
-      joined,
-      connected: this.#live.connected(room.id),
-      peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      service: { id: 'room', label: side?.label ?? (here ? 'Open' : 'Play'), ready },
-      ...(url ? { url } : {}),
-      time: room.time,
-    };
   }
 
   /** Tell watchers something changed that isn't an event; with a notice, it may also show as a notification. */
@@ -7104,976 +6747,6 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- services: code you run under keys of their own
 
-  get #servicesFile(): string {
-    return joinPath(this.home.dir, 'services.json');
-  }
-
-  /** The services this node runs, as kept (sealed, with their settings and tokens). */
-  #storedServices(): StoredService[] {
-    return readSecretJson<StoredService[]>(this.home, this.#servicesFile) ?? [];
-  }
-
-  #saveServices(list: StoredService[]): void {
-    writeSecretJson(this.home, this.#servicesFile, list);
-  }
-
-  #storedService(name: string): StoredService {
-    const found = this.#storedServices().find((s) => s.name === name);
-    if (!found) throw new Error(`this node runs no service "${name}"`);
-    return found;
-  }
-
-  #serviceKey(name: string): AgentKey {
-    const key = this.#agents.find((a) => a.name === name);
-    if (!key) throw new Error(`the key of service "${name}" is missing on this node`);
-    return key;
-  }
-
-  /** The spaces a service may be added to: groups, projects and communities you're in (never direct chats). */
-  #serviceSpaces(refs: string[]): string[] {
-    return [...new Set(refs.map((ref) => {
-      const space = this.#space(ref);
-      if (space.kind === 'direct') throw new Error('services work in groups, projects and communities, not in direct chats');
-      return space.id;
-    }))];
-  }
-
-  /** Tell the spaces a service joined or left, so their members see it (and can ask it). */
-  #announceService(did: Did, before: string[], after: string[]): void {
-    for (const id of after.filter((s) => !before.includes(s))) if (this.#spaces.has(id)) this.replica.write(this.identity, sealFor(this.#cipher(this.#spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: true } }));
-    for (const id of before.filter((s) => !after.includes(s))) if (this.#spaces.has(id)) this.replica.write(this.identity, sealFor(this.#cipher(this.#spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: false } }));
-  }
-
-  async servicesIn(ref: string): Promise<ServiceProfileInfo[]> {
-    const space = this.#space(ref);
-    const here = new Set(servicesInSpace(this.#entries(space), (service, author) => this.#isServiceKey(service, author)));
-    return (await this.serviceProfiles()).filter((p) => here.has(p.did));
-  }
-
-  #serviceInfo(stored: StoredService): ServiceInfo {
-    return {
-      name: stored.name,
-      did: this.#serviceKey(stored.name).did,
-      description: stored.description,
-      ...(stored.icon ? { icon: stored.icon } : {}),
-      contract: stored.contract,
-      spaces: stored.spaces.flatMap((id) => {
-        const space = this.#spaces.get(id);
-        const given = Object.keys(stored.spaceSettings?.[id] ?? {}).sort();
-        return space ? [{ id, kind: space.kind, name: this.#spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
-      }),
-      ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.#hostedRoomInfo(r)) } : {}),
-      ...(stored.artifact ? { artifact: this.#serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
-      settings: Object.keys(stored.settings).sort(),
-      enabled: stored.enabled,
-      running: stored.builtin ? stored.enabled : this.#runtime.running(`service:${stored.name}`),
-    };
-  }
-
-  // Artifacts: a project's releases. A room runs one as its handler, pinned to it, in any project of yours.
-
-  async artifacts(ref: string): Promise<ArtifactInfo[]> {
-    const project = this.#project(ref);
-    return artifactsOf(this.#entries(project), this.#state(project).maintainers).map((a) => {
-      const runs = this.#runtime.runs(a.manifest);
-      return {
-        id: a.id,
-        project: { id: project.id, kind: 'project', name: this.#spaceName(project) },
-        tag: a.tag,
-        app: a.manifest.app,
-        name: a.manifest.name,
-        released: this.#actor(a.author, a.signer as Did),
-        time: a.time,
-        room: !!this.#artifactWeb(a.manifest),
-        settings: a.manifest.env ?? [],
-          ...(a.manifest.service ? { applet: a.manifest.service } : {}),
-        ...(runs ? { runs, command: this.#runtime.command(`weave-${a.manifest.app}`, a.manifest) } : {}),
-      };
-    });
-  }
-
-  /** One release of a project: the one with this tag, or the latest. */
-  #artifact(ref: string, tag?: string): { project: StoredSpace; artifact: Artifact } {
-    const project = this.#project(ref);
-    const all = artifactsOf(this.#entries(project), this.#state(project).maintainers);
-    const artifact = tag ? all.find((a) => a.tag === tag) : all[0];
-    if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
-    return { project, artifact };
-  }
-
-  /** Its web page, if it has one: what a room's clients reach. */
-  #artifactWeb(app: AppManifest): AppManifest['services'][number] | undefined {
-    return app.services.find((s) => s.protocol === 'http');
-  }
-
-  /** The release an applet runs: pinned, with a newer one of its project if there is one, and (here) how fetching it went. */
-  #serviceArtifactInfo(service: string, a: StoredArtifact, here: boolean): ServiceArtifactInfo {
-    const from = this.#spaces.get(a.project);
-    const latest = from ? artifactsOf(this.#entries(from), this.#state(from).maintainers)[0] : undefined;
-    const job = here ? this.#releases.jobs.get(`service:${service}`) : undefined;
-    const fetched = this.#releases.has(service, a);
-    return {
-      project: { id: a.project, ...(from ? { name: this.#spaceName(from) } : {}) },
-      tag: a.tag,
-      app: a.manifest.app,
-      name: a.manifest.name,
-      ...(latest && latest.id !== a.id && latest.tag !== a.tag ? { latest: latest.tag } : {}),
-      installed: here && (this.#runtime.runs(a.manifest) === 'container' || fetched),
-      ...(job?.progress ? { progress: { ...job.progress } } : {}),
-      ...(job?.error ? { error: job.error } : {}),
-      settings: a.manifest.env ?? [],
-    };
-  }
-
-  /**
-   * An applet's next release: pinned until you take it. Another release runs other code, so it needs your yes; one
-   * asking for other rights gets them (its key's grant changes) and says so in its profile.
-   */
-  #nextRelease(name: string, artifact: StoredArtifact, tag: string | undefined, approved: string[], approve?: boolean): { artifact: StoredArtifact; contract: ServiceContract; approved: string[] } | undefined {
-    const found = this.#artifact(artifact.project, tag);
-    if (found.artifact.id === artifact.id) return undefined;
-    const manifest = found.artifact.manifest;
-    if (!manifest.service) throw new Error(`${manifest.name} ${found.artifact.tag} is an app, not an applet: it can't replace ${name}`);
-    const fingerprint = releaseApproval(found.artifact);
-    if (!approve && !approved.includes(fingerprint)) throw new Error(`approve it first: Weave would run "${this.#runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest.service)}`);
-    return { artifact: { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, contract: manifest.service, approved: approved.includes(fingerprint) ? approved : [...approved, fingerprint] };
-  }
-
-  /** A service's key gets the rights of a new contract (and loses the old ones), and its profile says so. */
-  #grantContract(did: Did, name: string, contract: ServiceContract): void {
-    const permissions = servicePermissions(contract);
-    this.replica.write(this.identity, delegation(did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
-    const key = this.#agents.find((a) => a.name === name);
-    if (key) {
-      const updated = { ...key, permissions };
-      saveAgent(this.home, updated);
-      this.#agents = this.#agents.map((a) => (a.name === name ? updated : a));
-    }
-  }
-
-  /** Settings checked against what's allowed: an artifact's own, or any variable-like name for a command. */
-  #checkSettings(app: AppManifest | undefined, settings: Record<string, string | null>): void {
-    for (const key of Object.keys(settings)) {
-      if (app) {
-        if (!(app.env ?? []).some((e) => e.name === key)) throw new Error(`${app.name} doesn't ask for ${key}${app.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
-      } else if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_') || key === 'PORT') throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
-    }
-  }
-
-  // The room service: a service Weave ships. In each project it's added to, it opens rooms, each answered by a
-  // handler: an artifact (a project's release, fetched and checked), a command, or something already running.
-
-  /**
-   * Open a room: in a project the room service was added to, answered by its handler. Running code (an artifact's
-   * release, a command) needs `approve` once per release or command; a handler already running needs nothing.
-   */
-  async openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo> {
-    const service = this.#roomServiceFor(input.service);
-    const project = this.#project(input.project);
-    if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
-    const name = input.name?.trim().slice(0, 60);
-    if (!name) throw new Error('a room has a name');
-    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    if (input.artifact && command?.length) throw new Error('a room runs an artifact or a command, not both');
-    if (service.away && command?.length) throw new Error(`${service.name} runs on ${this.#nodeKey(service.away.node).name}: a room there runs a project's release, or something already running there, not a program of this computer`);
-    let handler: RoomHandler;
-    let port: number;
-    let approved: string | undefined;
-    if (input.artifact) {
-      const found = this.#artifact(input.artifact.project, input.artifact.tag);
-      const { id, tag, manifest } = found.artifact;
-      const web = this.#artifactWeb(manifest);
-      if (!web) throw new Error(`${manifest.name} has no web page (an http service in its weave.app.json): nothing for a room to reach`);
-      port = web.port;
-      // On an always-on node, its own platform decides; here, this computer's.
-      if (!service.away && !this.#runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
-      approved = releaseApproval(found.artifact);
-      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${this.#runtime.runText(manifest)}" from ${manifest.name} ${tag}, released in ${found.project.name}`);
-      handler = { artifact: { project: found.project.id, id, tag, manifest } };
-      this.#checkSettings(manifest, input.settings ?? {});
-      const missing = (manifest.env ?? []).filter((e) => !e.optional && !input.settings?.[e.name]);
-      if (missing.length) throw new Error(`${manifest.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
-    } else if (command?.length) {
-      const folder = input.folder ? resolvePath(input.folder) : undefined;
-      if (!folder || !existsSync(folder)) throw new Error('a command runs in a folder: say which (an existing one)');
-      port = this.#roomPortOf(input.port);
-      approved = launchFingerprint(command, folder);
-      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${command.join(' ')}" in ${folder}`);
-      handler = { command, folder };
-      this.#checkSettings(undefined, input.settings ?? {});
-    } else {
-      // Something already running: Weave only lets the room's clients reach it.
-      port = this.#roomPortOf(input.port);
-      handler = { address: true };
-      if (input.settings && Object.keys(input.settings).length) throw new Error('settings go to a handler Weave starts: this one runs by itself');
-    }
-    // Who may join: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
-    const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : ('participants' as const);
-    const show = input.show ? this.#showRef(input.show) : undefined;
-    if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} opens rooms for ${show.name}: they let ticket holders in`);
-    const groups = (input.groups ?? []).map((ref) => {
-      const group = this.#space(ref);
-      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
-      if (!this.#state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
-      return group.id;
-    });
-    // Ports answer on one device: rooms there can't share one.
-    const busy = service.away ? Object.values(service.hosted) : this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {}));
-    const taken = busy.find((r) => r.port === port);
-    if (taken) throw new Error(`port ${port} already answers the room "${taken.name}": end it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
-    const access = { ...(invite !== 'participants' ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
-    // The pages each side opens: the release's own (its manifest's open), or as given.
-    const web = 'artifact' in handler ? this.#artifactWeb(handler.artifact.manifest) : undefined;
-    const pages = parsePages(web ? web.open : input.pages);
-    const room: StoredRoom = {
-      id: b64u.encode(randomBytes(12)),
-      project: project.id,
-      name,
-      handler,
-      port,
-      settings: Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)])),
-      token: b64u.encode(randomBytes(24)),
-      ...(Object.keys(access).length ? { access } : {}),
-      ...(pages ? { pages } : {}),
-    };
-    const approvals = approved && !service.approved.includes(approved) ? [...service.approved, approved] : service.approved;
-    if (service.away) {
-      // Its key is on the always-on node: the room goes there, sealed to yourself, and the node announces and runs it.
-      this.#changeNodeService(service.away, { hosted: { ...service.hosted, [room.id]: room }, approved: approvals });
-      return {
-        id: room.id,
-        project: { id: project.id, kind: 'project', name: project.name },
-        name,
-        host: { did: this.identity.author, name: this.nameOf(this.identity.author) },
-        offeredBy: { did: service.away.did, name: service.name },
-        mine: false,
-        open: false,
-        mayJoin: true,
-        joined: false,
-        connected: false,
-        peers: [],
-        time: new Date(this.clock()).toISOString(),
-      };
-    }
-    this.#saveServices(this.#storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room }, approved: approvals } : s)));
-    const announced = this.#announceRoom(service.name, room)!;
-    if (this.#serviceApi) await this.#startAppApi();
-    this.#startRoom(service.name, room.id);
-    this.#emitLive();
-    return this.#roomInfo(announced, project);
-  }
-
-  /** A room of the room service, announced under its key (so everyone sees whose service offers it), and hosted here. */
-  #announceRoom(serviceName: string, room: StoredRoom): Room | undefined {
-    const project = this.#spaces.get(room.project);
-    if (!project) return undefined;
-    const key = this.#serviceKey(serviceName);
-    const known = roomsOf(this.#entries(project)).find((r) => r.id === room.id);
-    if (!known?.open) {
-      const roomKey = roomKeyPair(this.#roomSeed(room.id)).publicKey.toString('hex');
-      const a = room.access ?? {};
-      this.replica.write(
-        key,
-        sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, name: room.name, service: 'room', key: roomKey, invite: a.invite ?? 'participants', ...(a.show ? { show: a.show } : {}), ...(a.groups?.length ? { groups: a.groups } : {}), ...(room.pages ? { pages: room.pages as unknown as Json } : {}), agent: key.did, open: true } }),
-      );
-    }
-    const announced = this.#roomById(room.id).room;
-    // Hosting finds the network in the background: the room is announced already.
-    if (this.#swarm) void this.#live.host(announced).catch(() => {});
-    return announced;
-  }
-
-  /** A port a room's clients may reach: one a handler listens on, on this computer. */
-  #roomPortOf(port: unknown): number {
-    const n = Number(port);
-    if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error('which port does it listen on (on this computer)?');
-    return n;
-  }
-
-  /** Your room service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
-  #roomServiceFor(name?: string): { name: string; spaces: string[]; approved: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
-    const here = this.#storedServices()
-      .filter((s) => s.builtin === 'room')
-      .map((s) => ({ name: s.name, spaces: s.spaces, approved: s.approved ?? [], hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
-    const away = this.#isLinkedNode ? [] : [...this.#handedOver().values()].filter((h) => h.builtin === 'room').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
-    const all = [...here, ...away];
-    const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
-    if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --builtin room)');
-    if (!found.enabled) throw new Error(`${found.name} is stopped: start it first`);
-    return found;
-  }
-
-  /** A room the room service runs, as its service lists it: its handler and how it's doing. */
-  #hostedRoomInfo(r: StoredRoom, here = true): HostedRoomInfo {
-    const project = this.#spaces.get(r.project);
-    const job = this.#releases.jobs.get(r.id);
-    const h = r.handler;
-    let handler: HostedRoomInfo['handler'];
-    if ('artifact' in h) {
-      const from = this.#spaces.get(h.artifact.project);
-      const latest = from ? artifactsOf(this.#entries(from), this.#state(from).maintainers)[0] : undefined;
-      handler = {
-        kind: 'artifact',
-        artifact: { project: { id: h.artifact.project, ...(from ? { name: this.#spaceName(from) } : {}) }, tag: h.artifact.tag, app: h.artifact.manifest.app, name: h.artifact.manifest.name, ...(latest && latest.id !== h.artifact.id && latest.tag !== h.artifact.tag ? { latest: latest.tag } : {}) },
-        command: this.#runtime.command(`weave-room-${r.id}`, h.artifact.manifest) ?? [],
-      };
-    } else if ('command' in h) handler = { kind: 'command', command: h.command, folder: h.folder };
-    else handler = { kind: 'address' };
-    return {
-      id: r.id,
-      project: { id: r.project, kind: 'project', name: project ? this.#spaceName(project) : r.project },
-      name: r.name,
-      port: r.port,
-      handler,
-      settings: Object.keys(r.settings).sort(),
-      running: here && ('address' in h || this.#runtime.running(`room:${r.id}`)),
-      ...(job?.progress ? { progress: { ...job.progress } } : {}),
-      ...(job?.error ? { error: job.error } : {}),
-    };
-  }
-
-  /** Fetch a room's release where it isn't here yet (checked against its fingerprints), then start its handler. */
-  #startRoom(serviceName: string, roomId: string): void {
-    const stored = this.#storedServices().find((s) => s.name === serviceName);
-    const room = stored?.hosted?.[roomId];
-    if (!stored?.enabled || !room) return;
-    if (!('artifact' in room.handler)) return this.#runRoomHandler(stored, room);
-    // Rooms with the same release share its folder: fetched once.
-    this.#releases.ensure(stored.name, room.handler.artifact, roomId, () => {
-      const now = this.#storedServices().find((s) => s.name === serviceName);
-      if (now?.hosted?.[roomId]) this.#runRoomHandler(now, now.hosted[roomId]);
-    });
-  }
-
-  /** Resolves when fetching a room's release ends (for tests and the CLI). */
-  async roomReady(ref: string): Promise<RoomInfo> {
-    const { room, project } = this.#roomById(ref);
-    await this.#releases.done(room.id);
-    return this.#roomInfo(room, project);
-  }
-
-  /** Start a room's handler: its process gets the room's port, its settings, and the app API for its room only. */
-  #runRoomHandler(stored: StoredService, room: StoredRoom): void {
-    if (!this.#serviceApi || !this.#appApiPort || this.#runtime.running(`room:${room.id}`) || 'address' in room.handler) return;
-    const h = room.handler;
-    const container = 'artifact' in h && this.#runtime.runs(h.artifact.manifest) === 'container' ? `weave-room-${room.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}` : undefined;
-    let command: string[];
-    let cwd: string;
-    if ('artifact' in h) {
-      const run = this.#runtime.command(container ?? 'weave', h.artifact.manifest);
-      if (!run || !(stored.approved ?? []).includes(releaseApproval(h.artifact))) return void this.#releases.jobs.set(room.id, { error: 'approve what it runs first' });
-      cwd = container ? joinPath(this.home.dir, 'services', stored.name) : this.#releases.folder(stored.name, h.artifact);
-      command = run;
-    } else {
-      if (!(stored.approved ?? []).includes(launchFingerprint(h.command, h.folder))) return void this.#releases.jobs.set(room.id, { error: 'approve its command first' });
-      cwd = h.folder;
-      command = h.command;
-    }
-    const dir = joinPath(this.home.dir, 'services', stored.name, 'rooms', room.id);
-    const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
-    this.#runtime.start(
-      `room:${room.id}`,
-      {
-        command,
-        cwd,
-        // Its settings, its port, and the app API for its room (who is who). Weave's own variables last.
-        env: { HOME: dir, ...room.settings, PORT: String(room.port), WEAVE_API: `http://${host}:${this.#appApiPort}`, WEAVE_TOKEN: room.token, WEAVE_PROJECT: room.project, WEAVE_ROOM: room.id },
-        ...(container ? { container } : {}),
-        log: joinPath(dir, 'room.log'),
-        name: 'the handler',
-      },
-      () => this.#startRoom(stored.name, room.id),
-    );
-  }
-
-  #stopRoomHandler(roomId: string): void {
-    this.#runtime.stop(`room:${roomId}`);
-  }
-
-  /** End rooms the room service runs (all of them, or those in projects it left): handler stopped, room closed for everyone. */
-  async #closeHostedRooms(name: string, keep: (room: StoredRoom) => boolean = () => false): Promise<void> {
-    const stored = this.#storedServices().find((s) => s.name === name);
-    const key = this.#agents.find((a) => a.name === name);
-    if (!stored?.hosted || !key) return;
-    const gone = Object.values(stored.hosted).filter((r) => !keep(r));
-    for (const room of gone) {
-      this.#stopRoomHandler(room.id);
-      await this.#closeServiceRoom(key, room.project, room.id);
-    }
-    if (gone.length) this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, hosted: Object.fromEntries(Object.entries(s.hosted ?? {}).filter(([id]) => !gone.some((g) => g.id === id))) } : s)));
-    this.#emitLive();
-  }
-
-  /** The profile everyone sees: signed by the service's own key, public. */
-  #publishServiceProfile(stored: StoredService): void {
-    this.replica.write(this.#serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), ...(stored.builtin ? { builtin: stored.builtin } : {}), contract: stored.contract as unknown as Json } });
-  }
-
-  /**
-   * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
-   * (`builtin: 'room'`): the node runs it itself, and it gets its contract from Weave.
-   */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
-    if (this.#isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
-    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    const builtin = input.builtin === 'room' ? ('room' as const) : undefined;
-    if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
-    // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
-    const found = input.artifact ? this.#artifact(input.artifact.project, input.artifact.tag) : undefined;
-    if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the room service: one of them');
-    const manifest = found?.artifact.manifest;
-    if (manifest && !manifest.service) throw new Error(`${manifest.name} is an app, not an applet: it runs in a room (open one with your room service)`);
-    if (manifest && !input.node && !this.#runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${found!.artifact.tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
-    const approved = found ? releaseApproval(found.artifact) : undefined;
-    if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.#runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest!.service!)}`);
-    const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
-    this.#checkSettings(manifest, settings);
-    const missing = (manifest?.env ?? []).filter((e) => !e.optional && !settings[e.name]);
-    if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
-    const name = serviceName(input.name ?? builtin ?? manifest?.app);
-    if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
-    if (this.#agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
-    // The room service writes rooms and nothing else; it reads only what's addressed to it. An applet: its manifest's contract.
-    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], room: true, version: '1.0' } : (manifest?.service ?? input.contract));
-    if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
-    const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Rooms: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
-    if (input.node) {
-      if (this.#handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
-      return this.#addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
-    }
-    const stored: StoredService = {
-      name,
-      description,
-      ...(input.icon?.startsWith('wblob:') ? { icon: input.icon } : {}),
-      contract,
-      spaces: this.#serviceSpaces(input.spaces ?? []),
-      ...(command?.length ? { command } : {}),
-      ...(builtin ? { builtin } : {}),
-      ...(artifact ? { artifact, approved: [approved!] } : {}),
-      settings,
-      token: b64u.encode(randomBytes(24)),
-      enabled: true,
-    };
-    // Its own key, with exactly its contract's rights; named so that everyone knows it's a service.
-    const permissions = servicePermissions(contract);
-    const key = createAndSaveAgent(this.home, this.identity.author, name, permissions);
-    this.replica.write(this.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
-    this.#agents.push(key);
-    this.#saveServices([...this.#storedServices(), stored]);
-    this.#publishServiceProfile(stored);
-    this.#announceService(key.did, [], stored.spaces);
-    // Services start once the app API runs (it gives them WEAVE_API).
-    if (this.#serviceApi) await this.#startAppApi();
-    this.#startService(stored);
-    return this.#serviceInfo(this.#storedService(name));
-  }
-
-  async services(): Promise<ServiceInfo[]> {
-    const here = this.#storedServices().map((s) => this.#serviceInfo(s));
-    // On a computer: also those it handed to always-on nodes (the node lists them as its own).
-    const away = this.#isLinkedNode ? [] : [...this.#handedOver().values()].map((h) => this.#handoverInfo(h));
-    return [...here, ...away];
-  }
-
-  // Services on always-on nodes: made on a computer, handed over sealed, run there.
-
-  /** Your always-on nodes' keys, by name or key. */
-  #nodeKey(ref: string): { did: Did; name: string } {
-    const nodes = this.replica.authority.grantsOf(this.identity.author).filter((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
-    const found = nodes.find((g) => g.subject === ref || g.name === ref || g.name === `${NODE_PREFIX}${ref}`);
-    if (!found) throw new Error(`you have no always-on node "${ref}"${nodes.length ? ` (yours: ${nodes.map((g) => g.name!.slice(NODE_PREFIX.length)).join(', ')})` : ''}`);
-    return { did: found.subject, name: found.name!.slice(NODE_PREFIX.length) };
-  }
-
-  /** The latest handover of each service still on a node (removed ones left out), as your devices read them. */
-  #handedOver(): Map<string, Handover> {
-    const latest = new Map<string, Handover>();
-    for (const d of this.#decodeAll().filter((x) => x.private && x.inner.kind === KIND_SERVICE_HANDOVER).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
-      const body = d.inner.body as unknown as Handover;
-      if (typeof body?.service !== 'string') continue;
-      if (body.removed) latest.delete(body.service);
-      else latest.set(body.service, { ...body, id: d.id });
-    }
-    return latest;
-  }
-
-  #handoverInfo(h: Handover): ServiceInfo {
-    return {
-      name: h.service,
-      did: h.did,
-      description: h.description ?? '',
-      ...(h.icon ? { icon: h.icon } : {}),
-      contract: h.contract,
-      spaces: h.spaces.flatMap((id) => {
-        const space = this.#spaces.get(id);
-        return space ? [{ id, kind: space.kind, name: this.#spaceName(space) }] : [];
-      }),
-      ...(h.command ? { command: h.command } : {}),
-      ...(h.builtin ? { builtin: h.builtin, rooms: Object.values(h.hosted ?? {}).map((r) => this.#hostedRoomInfo(r, false)) } : {}),
-      ...(h.artifact ? { artifact: this.#serviceArtifactInfo(h.service, h.artifact, false) } : {}),
-      settings: h.settingNames ?? [],
-      enabled: h.enabled !== false,
-      running: false,
-      node: { did: h.node, name: this.#nodeKey(h.node).name },
-    };
-  }
-
-  async #addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'room'; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
-    const node = this.#nodeKey(input.node!);
-    const key = createSubKey(this.identity.author);
-    const permissions = servicePermissions(contract);
-    this.replica.write(this.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
-    const description = input.description?.trim().slice(0, 1000) ?? '';
-    const icon = input.icon?.startsWith('wblob:') ? input.icon : undefined;
-    // The profile, signed by the service's own key, before the key leaves this computer for good.
-    this.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), ...(input.builtin ? { builtin: input.builtin } : {}), contract: contract as unknown as Json } });
-    const handover: Omit<Handover, 'id'> = {
-      service: name,
-      node: node.did,
-      did: key.did,
-      contract,
-      description,
-      ...(icon ? { icon } : {}),
-      spaces: this.#serviceSpaces(input.spaces ?? []),
-      ...(command?.length ? { command } : {}),
-      ...(input.builtin ? { builtin: input.builtin, hosted: {}, approved: [] } : {}),
-      ...(input.artifact ? { artifact: input.artifact, approved: input.approved ?? [] } : {}),
-      enabled: true,
-      settingNames: Object.keys(input.settings ?? {}).sort(),
-      // Its key and its settings (secrets too), for that node's eyes only.
-      box: boxTo(node.did, { secretKey: b64u.encode(key.keys.secretKey), publicKey: b64u.encode(key.keys.publicKey), settings: input.settings ?? {} }) as unknown as Json,
-    };
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: handover as unknown as Json }));
-    this.#announceService(key.did, [], handover.spaces);
-    return this.#handoverInfo({ ...handover, id: '' });
-  }
-
-  /** A change to a service on a node: a new handover; settings travel as changes, boxed for that node only. */
-  #changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true; hosted?: Record<string, StoredRoom>; approved?: string[]; artifact?: StoredArtifact; contract?: ServiceContract }): void {
-    const { id: _id, box: _box, command: _command, ...rest } = before;
-    const command = change.command === null ? undefined : (change.command ?? before.command);
-    const names = new Set(before.settingNames ?? []);
-    for (const [key, value] of Object.entries(change.settings ?? {})) {
-      if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
-      if (value === null) names.delete(key);
-      else names.add(key);
-    }
-    const spaces = change.spaces ? this.#serviceSpaces(change.spaces) : before.spaces;
-    // The room service's rooms: only in projects it's in, none while it's off.
-    const hosted = before.builtin ? Object.fromEntries(Object.entries(change.hosted ?? before.hosted ?? {}).filter(([, r]) => spaces.includes(r.project) && change.enabled !== false)) : undefined;
-    const after: Omit<Handover, 'id'> = {
-      ...rest,
-      spaces,
-      ...(command?.length ? { command } : {}),
-      ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
-      ...(change.description !== undefined ? { description: change.description.trim().slice(0, 1000) } : {}),
-      settingNames: [...names].sort(),
-      ...(change.settings && Object.keys(change.settings).length ? { box: boxTo(before.node, { settings: change.settings }) as unknown as Json } : {}),
-      ...(change.removed ? { removed: true as const } : {}),
-      ...(hosted ? { hosted } : {}),
-      ...(change.approved ? { approved: change.approved } : {}),
-      ...(change.artifact ? { artifact: change.artifact } : {}),
-      ...(change.contract ? { contract: change.contract } : {}),
-    };
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: after as unknown as Json }));
-    this.#announceService(before.did, before.spaces, change.removed ? [] : after.spaces);
-  }
-
-  /** On an always-on node: take over the services handed to it, change them, or let them go. Each handover once. */
-  async #takeHandovers(): Promise<number> {
-    if (!this.#isLinkedNode) return 0;
-    const appliedFile = joinPath(this.home.dir, 'handovers.json');
-    const applied = new Set<string>(existsSync(appliedFile) ? (JSON.parse(readFileSync(appliedFile, 'utf8')) as string[]) : []);
-    const mine = this.#decodeAll()
-      .filter((d) => d.private && d.inner.kind === KIND_SERVICE_HANDOVER && !applied.has(d.id) && (d.inner.body as { node?: unknown } | null)?.node === this.identity.did)
-      .sort((a, b) => a.event.time.localeCompare(b.event.time));
-    let changed = 0;
-    for (const d of mine) {
-      applied.add(d.id);
-      const h = d.inner.body as unknown as Handover;
-      const opened = h.box ? this.#openHandoverBox(h.box) : undefined;
-      const list = this.#storedServices();
-      const before = list.find((s) => s.name === h.service);
-      if (h.removed) {
-        if (!before) continue;
-        // Its rooms end first, signed with its key, before the key goes.
-        await this.#closeHostedRooms(h.service);
-        this.#stopService(h.service);
-        this.#agents = this.#agents.filter((a) => a.name !== h.service);
-        rmSync(joinPath(this.home.agents, `${h.service}.json`), { force: true });
-        this.#saveServices(list.filter((s) => s.name !== h.service));
-        changed++;
-        continue;
-      }
-      if (!before) {
-        // New here: its key comes in the box.
-        if (typeof opened?.secretKey !== 'string' || typeof opened.publicKey !== 'string') continue;
-        const key: AgentKey = { author: this.identity.author, did: h.did, keys: { secretKey: b64u.decode(opened.secretKey), publicKey: b64u.decode(opened.publicKey) }, name: h.service, permissions: servicePermissions(h.contract) };
-        saveAgent(this.home, key);
-        this.#agents = [...this.#agents.filter((a) => a.name !== h.service), key];
-      } else {
-        // Another contract (a release asking for other rights): its key signs within the new one from now on.
-        const key = this.#agents.find((a) => a.name === h.service);
-        const permissions = servicePermissions(h.contract);
-        if (key && JSON.stringify(key.permissions) !== JSON.stringify(permissions)) {
-          const updated = { ...key, permissions };
-          saveAgent(this.home, updated);
-          this.#agents = this.#agents.map((a) => (a.name === h.service ? updated : a));
-        }
-      }
-      const settings = { ...(before?.settings ?? {}) };
-      for (const [name, value] of Object.entries((opened?.settings ?? {}) as Record<string, string | null>)) {
-        if (value === null) delete settings[name];
-        else settings[name] = String(value);
-      }
-      const stored: StoredService = {
-        name: h.service,
-        description: h.description ?? '',
-        ...(h.icon ? { icon: h.icon } : {}),
-        contract: h.contract,
-        spaces: h.spaces,
-        ...(h.command?.length ? { command: h.command } : {}),
-        ...(h.builtin ? { builtin: h.builtin, approved: h.approved ?? [] } : {}),
-        ...(h.artifact ? { artifact: h.artifact, approved: h.approved ?? [] } : {}),
-        settings,
-        token: before?.token ?? b64u.encode(randomBytes(24)),
-        enabled: h.enabled !== false,
-      };
-      // The room service: rooms gone from the handover end here; new ones are announced and run here.
-      const rooms = h.builtin && stored.enabled ? (h.hosted ?? {}) : {};
-      await this.#closeHostedRooms(h.service, (r) => !!rooms[r.id]);
-      this.#saveServices([...this.#storedServices().filter((s) => s.name !== h.service), { ...stored, ...(h.builtin ? { hosted: { ...(this.#storedServices().find((s) => s.name === h.service)?.hosted ?? {}), ...rooms } } : {}) }]);
-      if (h.builtin) {
-        if (this.#serviceApi) await this.#startAppApi();
-        for (const room of Object.values(rooms)) {
-          this.#announceRoom(h.service, room);
-          this.#startRoom(h.service, room.id);
-        }
-      } else {
-        this.#stopService(h.service);
-        this.#startService(this.#storedService(h.service));
-      }
-      changed++;
-    }
-    if (mine.length) writeFileSync(appliedFile, JSON.stringify([...applied]));
-    return changed;
-  }
-
-  #openHandoverBox(box: Json): { secretKey?: unknown; publicKey?: unknown; settings?: unknown } | undefined {
-    try {
-      return openBox(this.identity.keys.secretKey, this.identity.keys.publicKey, box as unknown as Box) as { secretKey?: unknown; publicKey?: unknown; settings?: unknown };
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
-  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
-    const away = this.#isLinkedNode ? undefined : this.#handedOver().get(input.name);
-    if (away && !this.#storedServices().some((s) => s.name === input.name)) {
-      if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
-      if (input.artifact && !away.artifact) throw new Error(`${away.service} isn't an applet: it runs no release`);
-      if (away.artifact) this.#checkSettings(away.artifact.manifest, input.settings ?? {});
-      const next = input.artifact && away.artifact ? this.#nextRelease(away.service, away.artifact, input.artifact.tag, away.approved ?? [], input.approve) : undefined;
-      if (next && JSON.stringify(servicePermissions(next.contract)) !== JSON.stringify(servicePermissions(away.contract))) this.#grantContract(away.did, away.service, next.contract);
-      const { artifact: _wanted, approve: _approve, ...change } = input;
-      this.#changeNodeService(away, { ...change, ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}) });
-      return this.#handoverInfo(this.#handedOver().get(input.name)!);
-    }
-    const before = this.#storedService(input.name);
-    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its rooms say what they run`);
-    if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
-    if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
-    const next = input.artifact && before.artifact ? this.#nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;
-    const settings = { ...before.settings };
-    this.#checkSettings((next?.artifact ?? before.artifact)?.manifest, input.settings ?? {});
-    for (const [key, value] of Object.entries(input.settings ?? {})) {
-      if (value === null) delete settings[key];
-      else settings[key] = String(value);
-    }
-    const spaces = input.spaces ? this.#serviceSpaces(input.spaces) : before.spaces;
-    // Per-space settings: only for spaces it's in; a space it leaves takes its settings along.
-    const spaceSettings: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(before.spaceSettings ?? {}).filter(([id]) => spaces.includes(id)));
-    for (const [ref, given] of Object.entries(input.spaceSettings ?? {})) {
-      const id = this.#space(ref).id;
-      if (!spaces.includes(id)) throw new Error(`${before.name} isn't in ${this.#space(ref).name}: add it there first`);
-      this.#checkSettings(undefined, given);
-      const mine = { ...(spaceSettings[id] ?? {}) };
-      for (const [key, value] of Object.entries(given)) {
-        if (value === null) delete mine[key];
-        else mine[key] = String(value).slice(0, 4096);
-      }
-      if (Object.keys(mine).length) spaceSettings[id] = mine;
-      else delete spaceSettings[id];
-    }
-    const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
-    const { command: _command, spaceSettings: _spaceSettings, ...rest } = before;
-    const after: StoredService = {
-      ...rest,
-      ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
-      spaces,
-      ...(command?.length ? { command } : {}),
-      settings,
-      ...(Object.keys(spaceSettings).length ? { spaceSettings } : {}),
-      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-      ...(input.description !== undefined ? { description: input.description.trim().slice(0, 1000) } : {}),
-    };
-    if (next && JSON.stringify(servicePermissions(after.contract)) !== JSON.stringify(servicePermissions(before.contract))) this.#grantContract(this.#serviceKey(after.name).did, after.name, after.contract);
-    this.#saveServices(this.#storedServices().map((s) => (s.name === after.name ? after : s)));
-    if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract)) this.#publishServiceProfile(after);
-    if (!this.#isLinkedNode) this.#announceService(this.#serviceKey(after.name).did, before.spaces, after.spaces);
-    // Turned off, its rooms end; out of a project, its rooms there end.
-    if (before.enabled && !after.enabled) await this.#closeHostedRooms(after.name);
-    else await this.#closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
-    if (after.builtin) {
-      if (this.#serviceApi) await this.#startAppApi();
-      for (const id of Object.keys(this.#storedService(after.name).hosted ?? {})) this.#startRoom(after.name, id);
-      return this.#serviceInfo(this.#storedService(after.name));
-    }
-    // Settings and commands take effect on a fresh start.
-    this.#stopService(after.name);
-    if (this.#serviceApi) await this.#startAppApi();
-    this.#startService(after);
-    return this.#serviceInfo(this.#storedService(after.name));
-  }
-
-  async removeService(name: string): Promise<void> {
-    const away = this.#isLinkedNode ? undefined : this.#handedOver().get(name);
-    if (away && !this.#storedServices().some((s) => s.name === name)) {
-      // Its key was issued here: revoked here, and the node lets it go.
-      this.replica.write(this.identity, revocation(away.did, this.replica.number(away.did)));
-      this.#changeNodeService(away, { removed: true });
-      return;
-    }
-    const stored = this.#storedService(name);
-    await this.#closeHostedRooms(name);
-    this.#stopService(name);
-    const key = this.#serviceKey(name);
-    this.#announceService(key.did, stored.spaces, []);
-    // Everything it signs from now on counts nowhere.
-    this.replica.write(this.identity, revocation(key.did, this.replica.number(key.did)));
-    this.#agents = this.#agents.filter((a) => a.name !== name);
-    rmSync(joinPath(this.home.agents, `${name}.json`), { force: true });
-    this.#saveServices(this.#storedServices().filter((s) => s.name !== stored.name));
-  }
-
-  /** Whether a key is a service of that person: an agent key they named service:… */
-  #isServiceKey(signer: string, author: Did): boolean {
-    const grant = this.replica.authority.grant(signer as Did);
-    return !!grant && grant.role === 'agent' && grant.author === author && !!grant.name?.startsWith(SERVICE_PREFIX) && grant.revokedAfter === undefined;
-  }
-
-  async serviceProfiles(): Promise<ServiceProfileInfo[]> {
-    const events = this.replica.events((e) => e.kind === KIND_SERVICE_PROFILE);
-    return profilesOf(events, (signer, author) => this.#isServiceKey(signer, author)).map((p) => ({
-      did: p.did,
-      person: this.#actor(p.person, p.person),
-      name: p.name,
-      description: p.description,
-      ...(p.icon ? { icon: p.icon } : {}),
-      ...(p.builtin ? { builtin: p.builtin } : {}),
-      contract: p.contract,
-      time: p.time,
-    }));
-  }
-
-  /** A service by its key, or by "person/name" or its name when that's unique among the profiles known here. */
-  async #serviceDid(ref: string): Promise<Did> {
-    const profiles = await this.serviceProfiles();
-    const byKey = profiles.find((p) => p.did === ref);
-    if (byKey) return byKey.did;
-    const [person, name] = ref.includes('/') ? ref.split('/', 2) : [undefined, ref];
-    const matches = profiles.filter((p) => p.name === name && (!person || p.person.name === person || p.person.did === person));
-    if (matches.length === 1) return matches[0].did;
-    throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
-  }
-
-  async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
-    const to = await this.#serviceDid(input.service);
-    const text = input.text?.trim() ?? '';
-    if (!text && input.data === undefined) throw new Error('ask with some text or data');
-    const item = await this.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
-    return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
-  }
-
-  async serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]> {
-    const space = this.#space(input.space);
-    const entries = this.#entries(space);
-    const to = input.service ? await this.#serviceDid(input.service) : undefined;
-    const results = entries.filter((e) => e.kind === KIND_SERVICE_RESULT);
-    return requestsOf(entries, to).map((r) => ({
-      id: r.id,
-      to: this.#actor(this.replica.authority.grant(r.to)?.author ?? r.to, r.to),
-      from: this.#actor(r.from, r.from),
-      text: r.text,
-      ...(r.data !== undefined ? { data: r.data as Json } : {}),
-      time: r.time,
-      // Only the service it was for answers it.
-      results: results
-        .filter((e) => (e.body as { request?: unknown } | null)?.request === r.id && e.event.signer === r.to)
-        .map((e) => {
-          const body = (e.body ?? {}) as Record<string, Json>;
-          return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
-        }),
-    }));
-  }
-
-  /**
-   * What a service sees: in the spaces it was added to, requests addressed to it, and what its contract reads.
-   * Never private data, never other spaces.
-   */
-  #serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
-    if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
-    if (d.inner.kind === KIND_SERVICE_REQUEST) return (d.inner.body as { to?: unknown } | null)?.to === did;
-    return serviceReads(stored.contract, d.inner.kind);
-  }
-
-  /** The gate a service's token opens on the local API, or undefined for any other token. */
-  serviceGate(token: string): ServiceGate | undefined {
-    const given = Buffer.from(token);
-    const stored = this.#storedServices().find((s) => {
-      const expected = Buffer.from(s.token);
-      return expected.length === given.length && timingSafeEqual(expected, given);
-    });
-    if (!stored || !stored.enabled) return undefined;
-    const name = stored.name;
-    const key = this.#serviceKey(name);
-    const current = () => this.#storedService(name);
-    const inSpace = (ref: string) => {
-      const space = this.#space(ref);
-      if (!current().spaces.includes(space.id)) throw new Error(`service "${name}" wasn't added to ${space.name}`);
-      return space;
-    };
-    return {
-      me: () => ({
-        name,
-        did: key.did,
-        person: this.identity.author,
-        contract: current().contract,
-        spaces: this.#serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: current().spaceSettings?.[id] ?? {} })),
-      }),
-      events: (since) =>
-        this.#decodeAll()
-          .filter((d) => (!since || d.event.time > since) && this.#serviceSees(current(), key.did, d))
-          .sort((a, b) => a.event.time.localeCompare(b.event.time))
-          .map((d) => this.#toItem(d)),
-      watch: async (onItem, signal) => {
-        const unsubscribe = this.replica.onAppend((event) => {
-          const decoded = this.#decode(event);
-          if (decoded && this.#serviceSees(current(), key.did, decoded)) onItem(this.#toItem(decoded));
-        });
-        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
-        unsubscribe();
-      },
-      publish: async ({ space, kind, body }) => {
-        const target = inSpace(space);
-        if (kind === KIND_SERVICE_REQUEST) throw new Error('a service answers requests; it doesn\'t send them');
-        return this.publish({ kind, body: body ?? null, space: target.id, as: name });
-      },
-      answer: async ({ request, text, data, error }) => {
-        const found = this.#find(request, [KIND_SERVICE_REQUEST]);
-        if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
-        inSpace(found.space.id);
-        return this.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
-      },
-    };
-  }
-
-  async #closeServiceRoom(key: AgentKey, projectId: string, roomId: string): Promise<void> {
-    await this.#live.stopHosting(roomId);
-    const project = this.#spaces.get(projectId);
-    if (project) this.replica.write(key, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: roomId, agent: key.did, open: false } }));
-  }
-
-  // Running services: one process each, started with the address of the local API and its own token.
-
-  #serviceApi?: string;
-
-  /** Start the enabled services and the room service's rooms, now that the local API is up (the daemon calls this). */
-  runServices(api: { port: number }): void {
-    this.#serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
-    void this.#startAppApi().then(() => {
-      for (const stored of this.#storedServices()) {
-        this.#startService(stored);
-        for (const id of Object.keys(stored.hosted ?? {})) this.#startRoom(stored.name, id);
-      }
-    });
-  }
-
-  #startService(stored: StoredService): void {
-    if (!this.#serviceApi || !this.#appApiPort || !stored.enabled || this.#runtime.running(`service:${stored.name}`)) return;
-    const a = stored.artifact;
-    if (!a) return stored.command?.length ? this.#spawnService(stored) : undefined;
-    // An applet: only the release you approved, fetched and checked against its fingerprints first.
-    if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.#releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
-    this.#releases.ensure(stored.name, a, `service:${stored.name}`, () => {
-      const now = this.#storedServices().find((s) => s.name === stored.name);
-      if (now?.enabled && now.artifact?.id === a.id) this.#spawnService(now);
-    });
-  }
-
-  /** Resolves when fetching an applet's release ends (for tests and the CLI). */
-  async serviceReady(name: string): Promise<ServiceInfo> {
-    await this.#releases.done(`service:${name}`);
-    return this.#serviceInfo(this.#storedService(name));
-  }
-
-  /** Run a service's process: its command (in its own folder), or its release (in the release's folder, or its container). */
-  #spawnService(stored: StoredService): void {
-    if (!this.#serviceApi || !this.#appApiPort || this.#runtime.running(`service:${stored.name}`)) return;
-    const dir = joinPath(this.home.dir, 'services', stored.name);
-    const a = stored.artifact;
-    const container = a && this.#runtime.runs(a.manifest) === 'container' ? `weave-service-${stored.name}` : undefined;
-    let run: string[] | undefined = stored.command;
-    let cwd = dir;
-    if (a) {
-      run = this.#runtime.command(container ?? 'weave', a.manifest);
-      if (!run) return void this.#releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} has nothing to run on this computer (${platformKey()})` });
-      if (!container) cwd = this.#releases.folder(stored.name, a);
-    }
-    if (!run?.length) return;
-    const project = stored.spaces.filter((id) => this.#spaces.get(id)?.kind === 'project');
-    // An applet gets the settings its manifest names, nothing else; in a container, the local APIs are the host's.
-    const settings = a ? Object.fromEntries((a.manifest.env ?? []).filter((e) => stored.settings[e.name]).map((e) => [e.name, stored.settings[e.name]])) : stored.settings;
-    const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
-    this.#runtime.start(
-      `service:${stored.name}`,
-      {
-        command: run,
-        cwd,
-        // Its settings, Weave's app API (who is who, as apps ask it; WEAVE_TOKEN also checks X-Weave-Person) and its
-        // service API. Weave's own variables last.
-        env: {
-          HOME: dir,
-          ...settings,
-          WEAVE_API: `http://${host}:${this.#appApiPort}`,
-          WEAVE_TOKEN: stored.token,
-          ...(project.length === 1 ? { WEAVE_PROJECT: project[0] } : {}),
-          WEAVE_SERVICE: stored.name,
-          WEAVE_SERVICE_API: this.#serviceApi.replace('127.0.0.1', host),
-          WEAVE_SERVICE_TOKEN: stored.token,
-        },
-        ...(container ? { container } : {}),
-        log: joinPath(dir, 'service.log'),
-        name: stored.name,
-      },
-      () => {
-        const now = this.#storedServices().find((s) => s.name === stored.name);
-        if (now) this.#startService(now);
-      },
-    );
-  }
-
-  #stopService(name: string): void {
-    this.#runtime.stop(`service:${name}`);
-  }
-
-  #stopServiceProcesses(): void {
-    this.#runtime.stopAll();
-  }
-
   // ---------------------------------------------------------------- the admin console (stage 12)
 
   #console?: { port: number; url: string; operatorLink(): string; close(): Promise<void> };
@@ -10023,6 +8696,193 @@ export class WeaveNode implements Backend {
     if (isPrivate) item.private = true;
     return item;
   }
+
+  // ---------------------------------------------------------------- modules: services and websites
+
+  /** What services.ts reaches of the node: exactly what it uses. */
+  static servicesHost(n: WeaveNode) {
+    return {
+      actor: n.#actor.bind(n),
+      get agents() {
+        return n.#agents;
+      },
+      set agents(value) {
+        n.#agents = value;
+      },
+      cipher: n.#cipher.bind(n),
+      decode: n.#decode.bind(n),
+      decodeAll: n.#decodeAll.bind(n),
+      entries: n.#entries.bind(n),
+      find: n.#find.bind(n),
+      get home() {
+        return n.home;
+      },
+      get identity() {
+        return n.identity;
+      },
+      get isLinkedNode() {
+        return n.#isLinkedNode;
+      },
+      project: n.#project.bind(n),
+      publish: n.publish.bind(n),
+      get releases() {
+        return n.#releases;
+      },
+      get replica() {
+        return n.replica;
+      },
+      get runtime() {
+        return n.#runtime;
+      },
+      sealForSelf: n.#sealForSelf.bind(n),
+      space: n.#space.bind(n),
+      spaceName: n.#spaceName.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      state: n.#state.bind(n),
+      toItem: n.#toItem.bind(n),
+    };
+  }
+
+  /** What website.ts reaches of the node: exactly what it uses. */
+  static websiteHost(n: WeaveNode) {
+    return {
+      agentName: n.#agentName.bind(n),
+      get agents() {
+        return n.#agents;
+      },
+      allBadges: n.#allBadges.bind(n),
+      allShows: n.#allShows.bind(n),
+      cipher: n.#cipher.bind(n),
+      get clock() {
+        return n.clock;
+      },
+      emitLive: n.#emitLive.bind(n),
+      entries: n.#entries.bind(n),
+      get home() {
+        return n.home;
+      },
+      get identity() {
+        return n.identity;
+      },
+      get isLinkedNode() {
+        return n.#isLinkedNode;
+      },
+      get live() {
+        return n.#live;
+      },
+      myTickets: n.#myTickets.bind(n),
+      nameOf: n.nameOf.bind(n),
+      project: n.#project.bind(n),
+      get releases() {
+        return n.#releases;
+      },
+      get replica() {
+        return n.replica;
+      },
+      resolve: n.resolve.bind(n),
+      get runtime() {
+        return n.#runtime;
+      },
+      selfSecret: n.#selfSecret.bind(n),
+      showRef: n.#showRef.bind(n),
+      space: n.#space.bind(n),
+      spaceName: n.#spaceName.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      state: n.#state.bind(n),
+      get swarm() {
+        return n.#swarm;
+      },
+      ticketRecords: n.#ticketRecords.bind(n),
+    };
+  }
+
+  servicesIn(...args: Parameters<Services['servicesIn']>): ReturnType<Services['servicesIn']> {
+    return this.#services.servicesIn(...args);
+  }
+
+  artifacts(...args: Parameters<Services['artifacts']>): ReturnType<Services['artifacts']> {
+    return this.#services.artifacts(...args);
+  }
+
+  addService(...args: Parameters<Services['addService']>): ReturnType<Services['addService']> {
+    return this.#services.addService(...args);
+  }
+
+  services(...args: Parameters<Services['services']>): ReturnType<Services['services']> {
+    return this.#services.services(...args);
+  }
+
+  setService(...args: Parameters<Services['setService']>): ReturnType<Services['setService']> {
+    return this.#services.setService(...args);
+  }
+
+  removeService(...args: Parameters<Services['removeService']>): ReturnType<Services['removeService']> {
+    return this.#services.removeService(...args);
+  }
+
+  serviceProfiles(...args: Parameters<Services['serviceProfiles']>): ReturnType<Services['serviceProfiles']> {
+    return this.#services.serviceProfiles(...args);
+  }
+
+  askService(...args: Parameters<Services['askService']>): ReturnType<Services['askService']> {
+    return this.#services.askService(...args);
+  }
+
+  serviceRequests(...args: Parameters<Services['serviceRequests']>): ReturnType<Services['serviceRequests']> {
+    return this.#services.serviceRequests(...args);
+  }
+
+  serviceGate(...args: Parameters<Services['serviceGate']>): ReturnType<Services['serviceGate']> {
+    return this.#services.serviceGate(...args);
+  }
+
+  runServices(...args: Parameters<Services['runServices']>): ReturnType<Services['runServices']> {
+    return this.#services.runServices(...args);
+  }
+
+  serviceReady(...args: Parameters<Services['serviceReady']>): ReturnType<Services['serviceReady']> {
+    return this.#services.serviceReady(...args);
+  }
+
+  roomEnv(...args: Parameters<Website['roomEnv']>): ReturnType<Website['roomEnv']> {
+    return this.#website.roomEnv(...args);
+  }
+
+  rooms(...args: Parameters<Website['rooms']>): ReturnType<Website['rooms']> {
+    return this.#website.rooms(...args);
+  }
+
+  endRoom(...args: Parameters<Website['endRoom']>): ReturnType<Website['endRoom']> {
+    return this.#website.endRoom(...args);
+  }
+
+  joinRoom(...args: Parameters<Website['joinRoom']>): ReturnType<Website['joinRoom']> {
+    return this.#website.joinRoom(...args);
+  }
+
+  leaveRoom(...args: Parameters<Website['leaveRoom']>): ReturnType<Website['leaveRoom']> {
+    return this.#website.leaveRoom(...args);
+  }
+
+  roomChat(...args: Parameters<Website['roomChat']>): ReturnType<Website['roomChat']> {
+    return this.#website.roomChat(...args);
+  }
+
+  sayInRoom(...args: Parameters<Website['sayInRoom']>): ReturnType<Website['sayInRoom']> {
+    return this.#website.sayInRoom(...args);
+  }
+
+  openRoom(...args: Parameters<Website['openRoom']>): ReturnType<Website['openRoom']> {
+    return this.#website.openRoom(...args);
+  }
+
+  roomReady(...args: Parameters<Website['roomReady']>): ReturnType<Website['roomReady']> {
+    return this.#website.roomReady(...args);
+  }
 }
 
 const agentInfo = (agent: AgentKey): AgentInfo => ({ name: agent.name, did: agent.did, permissions: agent.permissions });
@@ -10060,3 +8920,7 @@ function summary(markdown: string, max = 300): string {
     .trim();
   return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain;
 }
+
+/** What services.ts and website.ts reach of the node. */
+export type ServicesHost = ReturnType<typeof WeaveNode.servicesHost>;
+export type WebsiteHost = ReturnType<typeof WeaveNode.websiteHost>;

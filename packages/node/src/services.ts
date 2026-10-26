@@ -1,0 +1,767 @@
+import { b64u, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceRequestInfo } from './backend.ts';
+import { readSecretJson, writeSecretJson } from './vault.ts';
+import { platformKey } from './appinstall.ts';
+import { timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
+import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
+import { releaseApproval } from './runtime.ts';
+import { type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { type StoredSpace } from './spacestore.ts';
+import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
+import type { Website } from './website.ts';
+
+/*
+ * Services: code you run under keys of their own. A service has its own key ("martl · github"), a contract that
+ * says what it reads and writes (its key may sign exactly that), the spaces you add it to, and settings sealed on the
+ * node that runs it. It runs here, or on an always-on node it was handed over to; it's a command, an applet (a
+ * project's release), or Weave's room service (see website.ts). Its process reaches Weave through its own token on
+ * the local API (serviceGate).
+ */
+
+/**
+ * Sealed to yourself, by one of your computers: a service for one of your always-on nodes. Its configuration in the
+ * clear for your devices; its key and settings in a box only that node opens. Later ones change or remove it.
+ */
+export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
+/** Always-on nodes' keys are named "node:<name>" among your keys. */
+export const NODE_PREFIX = 'node:';
+
+export class Services {
+  readonly h: ServicesHost;
+  readonly #web: () => Website;
+  get web(): Website {
+    return this.#web();
+  }
+
+  constructor(h: ServicesHost, web: () => Website) {
+    this.h = h;
+    this.#web = web;
+  }
+
+  localServiceByKey(did: Did): StoredService | undefined {
+    return this.storedServices().find((s) => this.h.agents.find((a) => a.name === s.name)?.did === did);
+  }
+
+  get servicesFile(): string {
+    return joinPath(this.h.home.dir, 'services.json');
+  }
+
+  /** The services this node runs, as kept (sealed, with their settings and tokens). */
+  storedServices(): StoredService[] {
+    return readSecretJson<StoredService[]>(this.h.home, this.servicesFile) ?? [];
+  }
+
+  saveServices(list: StoredService[]): void {
+    writeSecretJson(this.h.home, this.servicesFile, list);
+  }
+
+  storedService(name: string): StoredService {
+    const found = this.storedServices().find((s) => s.name === name);
+    if (!found) throw new Error(`this node runs no service "${name}"`);
+    return found;
+  }
+
+  serviceKey(name: string): AgentKey {
+    const key = this.h.agents.find((a) => a.name === name);
+    if (!key) throw new Error(`the key of service "${name}" is missing on this node`);
+    return key;
+  }
+
+  /** The spaces a service may be added to: groups, projects and communities you're in (never direct chats). */
+  serviceSpaces(refs: string[]): string[] {
+    return [...new Set(refs.map((ref) => {
+      const space = this.h.space(ref);
+      if (space.kind === 'direct') throw new Error('services work in groups, projects and communities, not in direct chats');
+      return space.id;
+    }))];
+  }
+
+  /** Tell the spaces a service joined or left, so their members see it (and can ask it). */
+  announceService(did: Did, before: string[], after: string[]): void {
+    for (const id of after.filter((s) => !before.includes(s))) if (this.h.spaces.has(id)) this.h.replica.write(this.h.identity, sealFor(this.h.cipher(this.h.spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: true } }));
+    for (const id of before.filter((s) => !after.includes(s))) if (this.h.spaces.has(id)) this.h.replica.write(this.h.identity, sealFor(this.h.cipher(this.h.spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: false } }));
+  }
+
+  async servicesIn(ref: string): Promise<ServiceProfileInfo[]> {
+    const space = this.h.space(ref);
+    const here = new Set(servicesInSpace(this.h.entries(space), (service, author) => this.isServiceKey(service, author)));
+    return (await this.serviceProfiles()).filter((p) => here.has(p.did));
+  }
+
+  serviceInfo(stored: StoredService): ServiceInfo {
+    return {
+      name: stored.name,
+      did: this.serviceKey(stored.name).did,
+      description: stored.description,
+      ...(stored.icon ? { icon: stored.icon } : {}),
+      contract: stored.contract,
+      spaces: stored.spaces.flatMap((id) => {
+        const space = this.h.spaces.get(id);
+        const given = Object.keys(stored.spaceSettings?.[id] ?? {}).sort();
+        return space ? [{ id, kind: space.kind, name: this.h.spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
+      }),
+      ...(stored.command ? { command: stored.command } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
+      ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
+      settings: Object.keys(stored.settings).sort(),
+      enabled: stored.enabled,
+      running: stored.builtin ? stored.enabled : this.h.runtime.running(`service:${stored.name}`),
+    };
+  }
+
+  // Artifacts: a project's releases. A room runs one as its handler, pinned to it, in any project of yours.
+
+  async artifacts(ref: string): Promise<ArtifactInfo[]> {
+    const project = this.h.project(ref);
+    return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
+      const runs = this.h.runtime.runs(a.manifest);
+      return {
+        id: a.id,
+        project: { id: project.id, kind: 'project', name: this.h.spaceName(project) },
+        tag: a.tag,
+        app: a.manifest.app,
+        name: a.manifest.name,
+        released: this.h.actor(a.author, a.signer as Did),
+        time: a.time,
+        room: !!this.artifactWeb(a.manifest),
+        settings: a.manifest.env ?? [],
+          ...(a.manifest.service ? { applet: a.manifest.service } : {}),
+        ...(runs ? { runs, command: this.h.runtime.command(`weave-${a.manifest.app}`, a.manifest) } : {}),
+      };
+    });
+  }
+
+  /** One release of a project: the one with this tag, or the latest. */
+  artifact(ref: string, tag?: string): { project: StoredSpace; artifact: Artifact } {
+    const project = this.h.project(ref);
+    const all = artifactsOf(this.h.entries(project), this.h.state(project).maintainers);
+    const artifact = tag ? all.find((a) => a.tag === tag) : all[0];
+    if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
+    return { project, artifact };
+  }
+
+  /** Its web page, if it has one: what a room's clients reach. */
+  artifactWeb(app: AppManifest): AppManifest['services'][number] | undefined {
+    return app.services.find((s) => s.protocol === 'http');
+  }
+
+  /** The release an applet runs: pinned, with a newer one of its project if there is one, and (here) how fetching it went. */
+  serviceArtifactInfo(service: string, a: StoredArtifact, here: boolean): ServiceArtifactInfo {
+    const from = this.h.spaces.get(a.project);
+    const latest = from ? artifactsOf(this.h.entries(from), this.h.state(from).maintainers)[0] : undefined;
+    const job = here ? this.h.releases.jobs.get(`service:${service}`) : undefined;
+    const fetched = this.h.releases.has(service, a);
+    return {
+      project: { id: a.project, ...(from ? { name: this.h.spaceName(from) } : {}) },
+      tag: a.tag,
+      app: a.manifest.app,
+      name: a.manifest.name,
+      ...(latest && latest.id !== a.id && latest.tag !== a.tag ? { latest: latest.tag } : {}),
+      installed: here && (this.h.runtime.runs(a.manifest) === 'container' || fetched),
+      ...(job?.progress ? { progress: { ...job.progress } } : {}),
+      ...(job?.error ? { error: job.error } : {}),
+      settings: a.manifest.env ?? [],
+    };
+  }
+
+  /**
+   * An applet's next release: pinned until you take it. Another release runs other code, so it needs your yes; one
+   * asking for other rights gets them (its key's grant changes) and says so in its profile.
+   */
+  nextRelease(name: string, artifact: StoredArtifact, tag: string | undefined, approved: string[], approve?: boolean): { artifact: StoredArtifact; contract: ServiceContract; approved: string[] } | undefined {
+    const found = this.artifact(artifact.project, tag);
+    if (found.artifact.id === artifact.id) return undefined;
+    const manifest = found.artifact.manifest;
+    if (!manifest.service) throw new Error(`${manifest.name} ${found.artifact.tag} is an app, not an applet: it can't replace ${name}`);
+    const fingerprint = releaseApproval(found.artifact);
+    if (!approve && !approved.includes(fingerprint)) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest.service)}`);
+    return { artifact: { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, contract: manifest.service, approved: approved.includes(fingerprint) ? approved : [...approved, fingerprint] };
+  }
+
+  /** A service's key gets the rights of a new contract (and loses the old ones), and its profile says so. */
+  grantContract(did: Did, name: string, contract: ServiceContract): void {
+    const permissions = servicePermissions(contract);
+    this.h.replica.write(this.h.identity, delegation(did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
+    const key = this.h.agents.find((a) => a.name === name);
+    if (key) {
+      const updated = { ...key, permissions };
+      saveAgent(this.h.home, updated);
+      this.h.agents = this.h.agents.map((a) => (a.name === name ? updated : a));
+    }
+  }
+
+  /** Settings checked against what's allowed: an artifact's own, or any variable-like name for a command. */
+  checkSettings(app: AppManifest | undefined, settings: Record<string, string | null>): void {
+    for (const key of Object.keys(settings)) {
+      if (app) {
+        if (!(app.env ?? []).some((e) => e.name === key)) throw new Error(`${app.name} doesn't ask for ${key}${app.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
+      } else if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_') || key === 'PORT') throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
+    }
+  }
+
+  // The room service: a service Weave ships. In each project it's added to, it opens rooms, each answered by a
+  // handler: an artifact (a project's release, fetched and checked), a command, or something already running.
+
+  /** The profile everyone sees: signed by the service's own key, public. */
+  publishServiceProfile(stored: StoredService): void {
+    this.h.replica.write(this.serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), ...(stored.builtin ? { builtin: stored.builtin } : {}), contract: stored.contract as unknown as Json } });
+  }
+
+  /**
+   * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
+   * (`builtin: 'room'`): the node runs it itself, and it gets its contract from Weave.
+   */
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+    if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
+    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
+    const builtin = input.builtin === 'room' ? ('room' as const) : undefined;
+    if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
+    // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
+    const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
+    if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the room service: one of them');
+    const manifest = found?.artifact.manifest;
+    if (manifest && !manifest.service) throw new Error(`${manifest.name} is an app, not an applet: it runs in a room (open one with your room service)`);
+    if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${found!.artifact.tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
+    const approved = found ? releaseApproval(found.artifact) : undefined;
+    if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest!.service!)}`);
+    const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
+    this.checkSettings(manifest, settings);
+    const missing = (manifest?.env ?? []).filter((e) => !e.optional && !settings[e.name]);
+    if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
+    const name = serviceName(input.name ?? builtin ?? manifest?.app);
+    if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
+    if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
+    // The room service writes rooms and nothing else; it reads only what's addressed to it. An applet: its manifest's contract.
+    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], room: true, version: '1.0' } : (manifest?.service ?? input.contract));
+    if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
+    const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Rooms: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
+    if (input.node) {
+      if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
+      return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
+    }
+    const stored: StoredService = {
+      name,
+      description,
+      ...(input.icon?.startsWith('wblob:') ? { icon: input.icon } : {}),
+      contract,
+      spaces: this.serviceSpaces(input.spaces ?? []),
+      ...(command?.length ? { command } : {}),
+      ...(builtin ? { builtin } : {}),
+      ...(artifact ? { artifact, approved: [approved!] } : {}),
+      settings,
+      token: b64u.encode(randomBytes(24)),
+      enabled: true,
+    };
+    // Its own key, with exactly its contract's rights; named so that everyone knows it's a service.
+    const permissions = servicePermissions(contract);
+    const key = createAndSaveAgent(this.h.home, this.h.identity.author, name, permissions);
+    this.h.replica.write(this.h.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
+    this.h.agents.push(key);
+    this.saveServices([...this.storedServices(), stored]);
+    this.publishServiceProfile(stored);
+    this.announceService(key.did, [], stored.spaces);
+    // Services start once the app API runs (it gives them WEAVE_API).
+    if (this.serviceApi) await this.web.startAppApi();
+    this.startService(stored);
+    return this.serviceInfo(this.storedService(name));
+  }
+
+  async services(): Promise<ServiceInfo[]> {
+    const here = this.storedServices().map((s) => this.serviceInfo(s));
+    // On a computer: also those it handed to always-on nodes (the node lists them as its own).
+    const away = this.h.isLinkedNode ? [] : [...this.handedOver().values()].map((h) => this.handoverInfo(h));
+    return [...here, ...away];
+  }
+
+  // Services on always-on nodes: made on a computer, handed over sealed, run there.
+
+  /** Your always-on nodes' keys, by name or key. */
+  nodeKey(ref: string): { did: Did; name: string } {
+    const nodes = this.h.replica.authority.grantsOf(this.h.identity.author).filter((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    const found = nodes.find((g) => g.subject === ref || g.name === ref || g.name === `${NODE_PREFIX}${ref}`);
+    if (!found) throw new Error(`you have no always-on node "${ref}"${nodes.length ? ` (yours: ${nodes.map((g) => g.name!.slice(NODE_PREFIX.length)).join(', ')})` : ''}`);
+    return { did: found.subject, name: found.name!.slice(NODE_PREFIX.length) };
+  }
+
+  /** The latest handover of each service still on a node (removed ones left out), as your devices read them. */
+  handedOver(): Map<string, Handover> {
+    const latest = new Map<string, Handover>();
+    for (const d of this.h.decodeAll().filter((x) => x.private && x.inner.kind === KIND_SERVICE_HANDOVER).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+      const body = d.inner.body as unknown as Handover;
+      if (typeof body?.service !== 'string') continue;
+      if (body.removed) latest.delete(body.service);
+      else latest.set(body.service, { ...body, id: d.id });
+    }
+    return latest;
+  }
+
+  handoverInfo(h: Handover): ServiceInfo {
+    return {
+      name: h.service,
+      did: h.did,
+      description: h.description ?? '',
+      ...(h.icon ? { icon: h.icon } : {}),
+      contract: h.contract,
+      spaces: h.spaces.flatMap((id) => {
+        const space = this.h.spaces.get(id);
+        return space ? [{ id, kind: space.kind, name: this.h.spaceName(space) }] : [];
+      }),
+      ...(h.command ? { command: h.command } : {}),
+      ...(h.builtin ? { builtin: h.builtin, rooms: Object.values(h.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r, false)) } : {}),
+      ...(h.artifact ? { artifact: this.serviceArtifactInfo(h.service, h.artifact, false) } : {}),
+      settings: h.settingNames ?? [],
+      enabled: h.enabled !== false,
+      running: false,
+      node: { did: h.node, name: this.nodeKey(h.node).name },
+    };
+  }
+
+  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'room'; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
+    const node = this.nodeKey(input.node!);
+    const key = createSubKey(this.h.identity.author);
+    const permissions = servicePermissions(contract);
+    this.h.replica.write(this.h.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
+    const description = input.description?.trim().slice(0, 1000) ?? '';
+    const icon = input.icon?.startsWith('wblob:') ? input.icon : undefined;
+    // The profile, signed by the service's own key, before the key leaves this computer for good.
+    this.h.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), ...(input.builtin ? { builtin: input.builtin } : {}), contract: contract as unknown as Json } });
+    const handover: Omit<Handover, 'id'> = {
+      service: name,
+      node: node.did,
+      did: key.did,
+      contract,
+      description,
+      ...(icon ? { icon } : {}),
+      spaces: this.serviceSpaces(input.spaces ?? []),
+      ...(command?.length ? { command } : {}),
+      ...(input.builtin ? { builtin: input.builtin, hosted: {}, approved: [] } : {}),
+      ...(input.artifact ? { artifact: input.artifact, approved: input.approved ?? [] } : {}),
+      enabled: true,
+      settingNames: Object.keys(input.settings ?? {}).sort(),
+      // Its key and its settings (secrets too), for that node's eyes only.
+      box: boxTo(node.did, { secretKey: b64u.encode(key.keys.secretKey), publicKey: b64u.encode(key.keys.publicKey), settings: input.settings ?? {} }) as unknown as Json,
+    };
+    this.h.replica.write(this.h.identity, this.h.sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: handover as unknown as Json }));
+    this.announceService(key.did, [], handover.spaces);
+    return this.handoverInfo({ ...handover, id: '' });
+  }
+
+  /** A change to a service on a node: a new handover; settings travel as changes, boxed for that node only. */
+  changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true; hosted?: Record<string, StoredRoom>; approved?: string[]; artifact?: StoredArtifact; contract?: ServiceContract }): void {
+    const { id: _id, box: _box, command: _command, ...rest } = before;
+    const command = change.command === null ? undefined : (change.command ?? before.command);
+    const names = new Set(before.settingNames ?? []);
+    for (const [key, value] of Object.entries(change.settings ?? {})) {
+      if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
+      if (value === null) names.delete(key);
+      else names.add(key);
+    }
+    const spaces = change.spaces ? this.serviceSpaces(change.spaces) : before.spaces;
+    // The room service's rooms: only in projects it's in, none while it's off.
+    const hosted = before.builtin ? Object.fromEntries(Object.entries(change.hosted ?? before.hosted ?? {}).filter(([, r]) => spaces.includes(r.project) && change.enabled !== false)) : undefined;
+    const after: Omit<Handover, 'id'> = {
+      ...rest,
+      spaces,
+      ...(command?.length ? { command } : {}),
+      ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
+      ...(change.description !== undefined ? { description: change.description.trim().slice(0, 1000) } : {}),
+      settingNames: [...names].sort(),
+      ...(change.settings && Object.keys(change.settings).length ? { box: boxTo(before.node, { settings: change.settings }) as unknown as Json } : {}),
+      ...(change.removed ? { removed: true as const } : {}),
+      ...(hosted ? { hosted } : {}),
+      ...(change.approved ? { approved: change.approved } : {}),
+      ...(change.artifact ? { artifact: change.artifact } : {}),
+      ...(change.contract ? { contract: change.contract } : {}),
+    };
+    this.h.replica.write(this.h.identity, this.h.sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: after as unknown as Json }));
+    this.announceService(before.did, before.spaces, change.removed ? [] : after.spaces);
+  }
+
+  /** On an always-on node: take over the services handed to it, change them, or let them go. Each handover once. */
+  async takeHandovers(): Promise<number> {
+    if (!this.h.isLinkedNode) return 0;
+    const appliedFile = joinPath(this.h.home.dir, 'handovers.json');
+    const applied = new Set<string>(existsSync(appliedFile) ? (JSON.parse(readFileSync(appliedFile, 'utf8')) as string[]) : []);
+    const mine = this.h.decodeAll()
+      .filter((d) => d.private && d.inner.kind === KIND_SERVICE_HANDOVER && !applied.has(d.id) && (d.inner.body as { node?: unknown } | null)?.node === this.h.identity.did)
+      .sort((a, b) => a.event.time.localeCompare(b.event.time));
+    let changed = 0;
+    for (const d of mine) {
+      applied.add(d.id);
+      const h = d.inner.body as unknown as Handover;
+      const opened = h.box ? this.openHandoverBox(h.box) : undefined;
+      const list = this.storedServices();
+      const before = list.find((s) => s.name === h.service);
+      if (h.removed) {
+        if (!before) continue;
+        // Its rooms end first, signed with its key, before the key goes.
+        await this.web.closeHostedRooms(h.service);
+        this.stopService(h.service);
+        this.h.agents = this.h.agents.filter((a) => a.name !== h.service);
+        rmSync(joinPath(this.h.home.agents, `${h.service}.json`), { force: true });
+        this.saveServices(list.filter((s) => s.name !== h.service));
+        changed++;
+        continue;
+      }
+      if (!before) {
+        // New here: its key comes in the box.
+        if (typeof opened?.secretKey !== 'string' || typeof opened.publicKey !== 'string') continue;
+        const key: AgentKey = { author: this.h.identity.author, did: h.did, keys: { secretKey: b64u.decode(opened.secretKey), publicKey: b64u.decode(opened.publicKey) }, name: h.service, permissions: servicePermissions(h.contract) };
+        saveAgent(this.h.home, key);
+        this.h.agents = [...this.h.agents.filter((a) => a.name !== h.service), key];
+      } else {
+        // Another contract (a release asking for other rights): its key signs within the new one from now on.
+        const key = this.h.agents.find((a) => a.name === h.service);
+        const permissions = servicePermissions(h.contract);
+        if (key && JSON.stringify(key.permissions) !== JSON.stringify(permissions)) {
+          const updated = { ...key, permissions };
+          saveAgent(this.h.home, updated);
+          this.h.agents = this.h.agents.map((a) => (a.name === h.service ? updated : a));
+        }
+      }
+      const settings = { ...(before?.settings ?? {}) };
+      for (const [name, value] of Object.entries((opened?.settings ?? {}) as Record<string, string | null>)) {
+        if (value === null) delete settings[name];
+        else settings[name] = String(value);
+      }
+      const stored: StoredService = {
+        name: h.service,
+        description: h.description ?? '',
+        ...(h.icon ? { icon: h.icon } : {}),
+        contract: h.contract,
+        spaces: h.spaces,
+        ...(h.command?.length ? { command: h.command } : {}),
+        ...(h.builtin ? { builtin: h.builtin, approved: h.approved ?? [] } : {}),
+        ...(h.artifact ? { artifact: h.artifact, approved: h.approved ?? [] } : {}),
+        settings,
+        token: before?.token ?? b64u.encode(randomBytes(24)),
+        enabled: h.enabled !== false,
+      };
+      // The room service: rooms gone from the handover end here; new ones are announced and run here.
+      const rooms = h.builtin && stored.enabled ? (h.hosted ?? {}) : {};
+      await this.web.closeHostedRooms(h.service, (r) => !!rooms[r.id]);
+      this.saveServices([...this.storedServices().filter((s) => s.name !== h.service), { ...stored, ...(h.builtin ? { hosted: { ...(this.storedServices().find((s) => s.name === h.service)?.hosted ?? {}), ...rooms } } : {}) }]);
+      if (h.builtin) {
+        if (this.serviceApi) await this.web.startAppApi();
+        for (const room of Object.values(rooms)) {
+          this.web.announceRoom(h.service, room);
+          this.web.startRoom(h.service, room.id);
+        }
+      } else {
+        this.stopService(h.service);
+        this.startService(this.storedService(h.service));
+      }
+      changed++;
+    }
+    if (mine.length) writeFileSync(appliedFile, JSON.stringify([...applied]));
+    return changed;
+  }
+
+  openHandoverBox(box: Json): { secretKey?: unknown; publicKey?: unknown; settings?: unknown } | undefined {
+    try {
+      return openBox(this.h.identity.keys.secretKey, this.h.identity.keys.publicKey, box as unknown as Box) as { secretKey?: unknown; publicKey?: unknown; settings?: unknown };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
+  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
+    const away = this.h.isLinkedNode ? undefined : this.handedOver().get(input.name);
+    if (away && !this.storedServices().some((s) => s.name === input.name)) {
+      if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
+      if (input.artifact && !away.artifact) throw new Error(`${away.service} isn't an applet: it runs no release`);
+      if (away.artifact) this.checkSettings(away.artifact.manifest, input.settings ?? {});
+      const next = input.artifact && away.artifact ? this.nextRelease(away.service, away.artifact, input.artifact.tag, away.approved ?? [], input.approve) : undefined;
+      if (next && JSON.stringify(servicePermissions(next.contract)) !== JSON.stringify(servicePermissions(away.contract))) this.grantContract(away.did, away.service, next.contract);
+      const { artifact: _wanted, approve: _approve, ...change } = input;
+      this.changeNodeService(away, { ...change, ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}) });
+      return this.handoverInfo(this.handedOver().get(input.name)!);
+    }
+    const before = this.storedService(input.name);
+    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its rooms say what they run`);
+    if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
+    if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
+    const next = input.artifact && before.artifact ? this.nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;
+    const settings = { ...before.settings };
+    this.checkSettings((next?.artifact ?? before.artifact)?.manifest, input.settings ?? {});
+    for (const [key, value] of Object.entries(input.settings ?? {})) {
+      if (value === null) delete settings[key];
+      else settings[key] = String(value);
+    }
+    const spaces = input.spaces ? this.serviceSpaces(input.spaces) : before.spaces;
+    // Per-space settings: only for spaces it's in; a space it leaves takes its settings along.
+    const spaceSettings: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(before.spaceSettings ?? {}).filter(([id]) => spaces.includes(id)));
+    for (const [ref, given] of Object.entries(input.spaceSettings ?? {})) {
+      const id = this.h.space(ref).id;
+      if (!spaces.includes(id)) throw new Error(`${before.name} isn't in ${this.h.space(ref).name}: add it there first`);
+      this.checkSettings(undefined, given);
+      const mine = { ...(spaceSettings[id] ?? {}) };
+      for (const [key, value] of Object.entries(given)) {
+        if (value === null) delete mine[key];
+        else mine[key] = String(value).slice(0, 4096);
+      }
+      if (Object.keys(mine).length) spaceSettings[id] = mine;
+      else delete spaceSettings[id];
+    }
+    const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
+    const { command: _command, spaceSettings: _spaceSettings, ...rest } = before;
+    const after: StoredService = {
+      ...rest,
+      ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
+      spaces,
+      ...(command?.length ? { command } : {}),
+      settings,
+      ...(Object.keys(spaceSettings).length ? { spaceSettings } : {}),
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.description !== undefined ? { description: input.description.trim().slice(0, 1000) } : {}),
+    };
+    if (next && JSON.stringify(servicePermissions(after.contract)) !== JSON.stringify(servicePermissions(before.contract))) this.grantContract(this.serviceKey(after.name).did, after.name, after.contract);
+    this.saveServices(this.storedServices().map((s) => (s.name === after.name ? after : s)));
+    if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract)) this.publishServiceProfile(after);
+    if (!this.h.isLinkedNode) this.announceService(this.serviceKey(after.name).did, before.spaces, after.spaces);
+    // Turned off, its rooms end; out of a project, its rooms there end.
+    if (before.enabled && !after.enabled) await this.web.closeHostedRooms(after.name);
+    else await this.web.closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
+    if (after.builtin) {
+      if (this.serviceApi) await this.web.startAppApi();
+      for (const id of Object.keys(this.storedService(after.name).hosted ?? {})) this.web.startRoom(after.name, id);
+      return this.serviceInfo(this.storedService(after.name));
+    }
+    // Settings and commands take effect on a fresh start.
+    this.stopService(after.name);
+    if (this.serviceApi) await this.web.startAppApi();
+    this.startService(after);
+    return this.serviceInfo(this.storedService(after.name));
+  }
+
+  async removeService(name: string): Promise<void> {
+    const away = this.h.isLinkedNode ? undefined : this.handedOver().get(name);
+    if (away && !this.storedServices().some((s) => s.name === name)) {
+      // Its key was issued here: revoked here, and the node lets it go.
+      this.h.replica.write(this.h.identity, revocation(away.did, this.h.replica.number(away.did)));
+      this.changeNodeService(away, { removed: true });
+      return;
+    }
+    const stored = this.storedService(name);
+    await this.web.closeHostedRooms(name);
+    this.stopService(name);
+    const key = this.serviceKey(name);
+    this.announceService(key.did, stored.spaces, []);
+    // Everything it signs from now on counts nowhere.
+    this.h.replica.write(this.h.identity, revocation(key.did, this.h.replica.number(key.did)));
+    this.h.agents = this.h.agents.filter((a) => a.name !== name);
+    rmSync(joinPath(this.h.home.agents, `${name}.json`), { force: true });
+    this.saveServices(this.storedServices().filter((s) => s.name !== stored.name));
+  }
+
+  /** Whether a key is a service of that person: an agent key they named service:… */
+  isServiceKey(signer: string, author: Did): boolean {
+    const grant = this.h.replica.authority.grant(signer as Did);
+    return !!grant && grant.role === 'agent' && grant.author === author && !!grant.name?.startsWith(SERVICE_PREFIX) && grant.revokedAfter === undefined;
+  }
+
+  async serviceProfiles(): Promise<ServiceProfileInfo[]> {
+    const events = this.h.replica.events((e) => e.kind === KIND_SERVICE_PROFILE);
+    return profilesOf(events, (signer, author) => this.isServiceKey(signer, author)).map((p) => ({
+      did: p.did,
+      person: this.h.actor(p.person, p.person),
+      name: p.name,
+      description: p.description,
+      ...(p.icon ? { icon: p.icon } : {}),
+      ...(p.builtin ? { builtin: p.builtin } : {}),
+      contract: p.contract,
+      time: p.time,
+    }));
+  }
+
+  /** A service by its key, or by "person/name" or its name when that's unique among the profiles known here. */
+  async serviceDid(ref: string): Promise<Did> {
+    const profiles = await this.serviceProfiles();
+    const byKey = profiles.find((p) => p.did === ref);
+    if (byKey) return byKey.did;
+    const [person, name] = ref.includes('/') ? ref.split('/', 2) : [undefined, ref];
+    const matches = profiles.filter((p) => p.name === name && (!person || p.person.name === person || p.person.did === person));
+    if (matches.length === 1) return matches[0].did;
+    throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
+  }
+
+  async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
+    const to = await this.serviceDid(input.service);
+    const text = input.text?.trim() ?? '';
+    if (!text && input.data === undefined) throw new Error('ask with some text or data');
+    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
+    return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
+  }
+
+  async serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]> {
+    const space = this.h.space(input.space);
+    const entries = this.h.entries(space);
+    const to = input.service ? await this.serviceDid(input.service) : undefined;
+    const results = entries.filter((e) => e.kind === KIND_SERVICE_RESULT);
+    return requestsOf(entries, to).map((r) => ({
+      id: r.id,
+      to: this.h.actor(this.h.replica.authority.grant(r.to)?.author ?? r.to, r.to),
+      from: this.h.actor(r.from, r.from),
+      text: r.text,
+      ...(r.data !== undefined ? { data: r.data as Json } : {}),
+      time: r.time,
+      // Only the service it was for answers it.
+      results: results
+        .filter((e) => (e.body as { request?: unknown } | null)?.request === r.id && e.event.signer === r.to)
+        .map((e) => {
+          const body = (e.body ?? {}) as Record<string, Json>;
+          return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
+        }),
+    }));
+  }
+
+  /**
+   * What a service sees: in the spaces it was added to, requests addressed to it, and what its contract reads.
+   * Never private data, never other spaces.
+   */
+  serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
+    if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
+    if (d.inner.kind === KIND_SERVICE_REQUEST) return (d.inner.body as { to?: unknown } | null)?.to === did;
+    return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** The gate a service's token opens on the local API, or undefined for any other token. */
+  serviceGate(token: string): ServiceGate | undefined {
+    const given = Buffer.from(token);
+    const stored = this.storedServices().find((s) => {
+      const expected = Buffer.from(s.token);
+      return expected.length === given.length && timingSafeEqual(expected, given);
+    });
+    if (!stored || !stored.enabled) return undefined;
+    const name = stored.name;
+    const key = this.serviceKey(name);
+    const current = () => this.storedService(name);
+    const inSpace = (ref: string) => {
+      const space = this.h.space(ref);
+      if (!current().spaces.includes(space.id)) throw new Error(`service "${name}" wasn't added to ${space.name}`);
+      return space;
+    };
+    return {
+      me: () => ({
+        name,
+        did: key.did,
+        person: this.h.identity.author,
+        contract: current().contract,
+        spaces: this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: current().spaceSettings?.[id] ?? {} })),
+      }),
+      events: (since) =>
+        this.h.decodeAll()
+          .filter((d) => (!since || d.event.time > since) && this.serviceSees(current(), key.did, d))
+          .sort((a, b) => a.event.time.localeCompare(b.event.time))
+          .map((d) => this.h.toItem(d)),
+      watch: async (onItem, signal) => {
+        const unsubscribe = this.h.replica.onAppend((event) => {
+          const decoded = this.h.decode(event);
+          if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.h.toItem(decoded));
+        });
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        unsubscribe();
+      },
+      publish: async ({ space, kind, body }) => {
+        const target = inSpace(space);
+        if (kind === KIND_SERVICE_REQUEST) throw new Error('a service answers requests; it doesn\'t send them');
+        return this.h.publish({ kind, body: body ?? null, space: target.id, as: name });
+      },
+      answer: async ({ request, text, data, error }) => {
+        const found = this.h.find(request, [KIND_SERVICE_REQUEST]);
+        if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
+        inSpace(found.space.id);
+        return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
+      },
+    };
+  }
+
+  serviceApi?: string;
+
+  /** Start the enabled services and the room service's rooms, now that the local API is up (the daemon calls this). */
+  runServices(api: { port: number }): void {
+    this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
+    void this.web.startAppApi().then(() => {
+      for (const stored of this.storedServices()) {
+        this.startService(stored);
+        for (const id of Object.keys(stored.hosted ?? {})) this.web.startRoom(stored.name, id);
+      }
+    });
+  }
+
+  startService(stored: StoredService): void {
+    if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
+    const a = stored.artifact;
+    if (!a) return stored.command?.length ? this.spawnService(stored) : undefined;
+    // An applet: only the release you approved, fetched and checked against its fingerprints first.
+    if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
+    this.h.releases.ensure(stored.name, a, `service:${stored.name}`, () => {
+      const now = this.storedServices().find((s) => s.name === stored.name);
+      if (now?.enabled && now.artifact?.id === a.id) this.spawnService(now);
+    });
+  }
+
+  /** Resolves when fetching an applet's release ends (for tests and the CLI). */
+  async serviceReady(name: string): Promise<ServiceInfo> {
+    await this.h.releases.done(`service:${name}`);
+    return this.serviceInfo(this.storedService(name));
+  }
+
+  /** Run a service's process: its command (in its own folder), or its release (in the release's folder, or its container). */
+  spawnService(stored: StoredService): void {
+    if (!this.serviceApi || !this.web.appApiPort || this.h.runtime.running(`service:${stored.name}`)) return;
+    const dir = joinPath(this.h.home.dir, 'services', stored.name);
+    const a = stored.artifact;
+    const container = a && this.h.runtime.runs(a.manifest) === 'container' ? `weave-service-${stored.name}` : undefined;
+    let run: string[] | undefined = stored.command;
+    let cwd = dir;
+    if (a) {
+      run = this.h.runtime.command(container ?? 'weave', a.manifest);
+      if (!run) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} has nothing to run on this computer (${platformKey()})` });
+      if (!container) cwd = this.h.releases.folder(stored.name, a);
+    }
+    if (!run?.length) return;
+    const project = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');
+    // An applet gets the settings its manifest names, nothing else; in a container, the local APIs are the host's.
+    const settings = a ? Object.fromEntries((a.manifest.env ?? []).filter((e) => stored.settings[e.name]).map((e) => [e.name, stored.settings[e.name]])) : stored.settings;
+    const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
+    this.h.runtime.start(
+      `service:${stored.name}`,
+      {
+        command: run,
+        cwd,
+        // Its settings, Weave's app API (who is who, as apps ask it; WEAVE_TOKEN also checks X-Weave-Person) and its
+        // service API. Weave's own variables last.
+        env: {
+          HOME: dir,
+          ...settings,
+          WEAVE_API: `http://${host}:${this.web.appApiPort}`,
+          WEAVE_TOKEN: stored.token,
+          ...(project.length === 1 ? { WEAVE_PROJECT: project[0] } : {}),
+          WEAVE_SERVICE: stored.name,
+          WEAVE_SERVICE_API: this.serviceApi.replace('127.0.0.1', host),
+          WEAVE_SERVICE_TOKEN: stored.token,
+        },
+        ...(container ? { container } : {}),
+        log: joinPath(dir, 'service.log'),
+        name: stored.name,
+      },
+      () => {
+        const now = this.storedServices().find((s) => s.name === stored.name);
+        if (now) this.startService(now);
+      },
+    );
+  }
+
+  stopService(name: string): void {
+    this.h.runtime.stop(`service:${name}`);
+  }
+
+  stopServiceProcesses(): void {
+    this.h.runtime.stopAll();
+  }
+}
