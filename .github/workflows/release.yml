@@ -18,6 +18,7 @@ jobs:
   installers:
     needs: ci
     uses: ./.github/workflows/installers.yml
+    secrets: inherit
 
   # Weave Server: the company's node as a folder to run with Node 24 (attached to the release) ...
   server:
