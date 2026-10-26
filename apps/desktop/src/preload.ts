@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('weave', {
   pick: (text: string) => ipcRenderer.invoke('weave:pick', text),
   closePicker: () => ipcRenderer.invoke('weave:picker'),
   fitPicker: (height: number) => ipcRenderer.invoke('weave:picker-fit', height),
+  onPickerDone: (listener: (delivered: 'pasted' | 'clipboard') => void) => {
+    ipcRenderer.on('weave:picker-done', (_event, delivered: 'pasted' | 'clipboard') => listener(delivered));
+  },
   onPickerOpen: (listener: (tab: string) => void) => {
     ipcRenderer.on('weave:picker-open', (_event, tab: string) => listener(tab));
   },

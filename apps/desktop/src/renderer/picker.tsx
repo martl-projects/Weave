@@ -65,6 +65,8 @@ export function Picker() {
   const [tab, setTab] = useState(() => tabOf(new URLSearchParams(location.hash.split('?')[1] ?? '').get('tab')));
   const [found, setFound] = useState<Found[]>();
   const [at, setAt] = useState(0);
+  // After a pick: where the link went, said for a moment before the bar goes.
+  const [done, setDone] = useState<'pasted' | 'clipboard'>();
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -88,11 +90,13 @@ export function Picker() {
     () =>
       bridge.onPickerOpen?.((asked) => {
         setQuery('');
+        setDone(undefined);
         setTab(tabOf(asked));
         input.current?.focus();
       }),
     [],
   );
+  useEffect(() => bridge.onPickerDone?.(setDone), []);
   // Keep the chosen one in view by scrolling the list only: scrollIntoView would scroll the page too,
   // and the page is exactly as tall as the window, so everything but the chosen row slid out of it.
   useEffect(() => {
@@ -108,14 +112,19 @@ export function Picker() {
     const fit = new ResizeObserver(() => void bridge.fitPicker!(Math.ceil(root.current!.getBoundingClientRect().height)));
     fit.observe(root.current);
     return () => fit.disconnect();
-  }, []);
+  }, [done]); // the note is another element than the bar
 
   const close = () => void bridge.closePicker?.();
   const pick = (f: Found | undefined) => {
     if (!f) return;
     const link = linkOf(f);
     if (bridge.pick) void bridge.pick(link);
-    else void navigator.clipboard.writeText(link); // in a browser
+    else
+      void navigator.clipboard.writeText(link).then(() => {
+        // In a browser there's no window to put away: the note goes by itself.
+        setDone('clipboard');
+        setTimeout(() => setDone(undefined), 1400);
+      });
   };
   const onKey = (event: KeyboardEvent) => {
     const n = found?.length ?? 0;
@@ -132,6 +141,13 @@ export function Picker() {
     event.preventDefault();
   };
 
+  if (done)
+    return (
+      <div className="picker picker-done" ref={root} role="status">
+        <Icon name="copy" />
+        {done === 'pasted' ? 'Link pasted' : `Copied to clipboard · paste with ${bridge.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}`}
+      </div>
+    );
   return (
     <div className="picker" ref={root} onKeyDown={onKey}>
       <div className="picker-search">

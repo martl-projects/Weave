@@ -245,7 +245,11 @@ const PICKER_SHORTCUTS: Array<[string, PickerTab]> =
  * link to the pick where you were typing, so it names exactly that person or
  * post. Losing the focus or Escape puts it away.
  */
+/** Puts the "Pasted" / "Copied to clipboard" note away; a new search cancels it. */
+let pickerNote: ReturnType<typeof setTimeout> | undefined;
+
 async function showPicker(tab: PickerTab = 'all'): Promise<void> {
+  clearTimeout(pickerNote);
   if (picker?.isVisible()) {
     picker.webContents.send('weave:picker-open', tab);
     return void picker.focus();
@@ -306,7 +310,15 @@ ipcMain.handle('weave:pick', async (_event, text: string): Promise<'pasted' | 'c
   if (typeof text !== 'string' || !text || text.length > 4000) throw new Error('nothing to paste');
   picker?.hide();
   if (process.platform === 'darwin') app.hide(); // the app you were in comes back to the front
-  return pasteBack(text);
+  const delivered = await pasteBack(text);
+  // A moment's note where the bar was, without taking the focus back.
+  if (picker) {
+    picker.webContents.send('weave:picker-done', delivered);
+    picker.showInactive();
+    clearTimeout(pickerNote);
+    pickerNote = setTimeout(() => picker?.hide(), 1400);
+  }
+  return delivered;
 });
 
 ipcMain.handle('weave:picker', () => picker?.hide());

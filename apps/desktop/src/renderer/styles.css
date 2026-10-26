@@ -639,6 +639,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .picker .picker-tabs button.on { opacity: 1; background: var(--cl-accent, var(--accent)); color: #fff; }
 .picker-list { max-height: 400px; overflow-y: auto; list-style: none; margin: 0; padding: 0 0 4px; font-family: var(--content-font); }
 .picker-item { display: flex; align-items: center; gap: 6px; padding: 4px; cursor: default; }
+.picker.picker-done { flex-direction: row; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; animation: picker-done 1.4s ease forwards; }
+@keyframes picker-done { 0% { opacity: 0; transform: translateY(-4px); } 15%, 75% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 .picker-none { padding: 4px; opacity: .7; font-size: 12px; }
 .picker-item.at { background: var(--cl-accent-soft, var(--accent)); }
 .picker-what { display: flex; flex-direction: column; min-width: 0; }
