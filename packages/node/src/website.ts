@@ -492,6 +492,7 @@ export class Website {
       port: r.port,
       handler: r.servedBy ? { kind: 'service', service: r.servedBy } : { kind: 'address' },
       running: here && (!r.servedBy || (!!serving?.enabled && this.h.runtime.running(`service:${r.servedBy}`))),
+      ...(r.note ? { note: r.note } : {}),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
     };

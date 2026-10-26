@@ -19,6 +19,9 @@ export function imageLocation(ref: string): { host: string; path: string } {
   return { host: 'registry-1.docker.io', path: rest.length ? ref : `library/${ref}` };
 }
 
+/** A registry's address: on this computer over http, as Docker allows it (a registry you run yourself); elsewhere https. */
+const base = (host: string): string => (/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host) ? `http://${host}` : `https://${host}`);
+
 const ACCEPT = [
   'application/vnd.oci.image.index.v1+json',
   'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -50,7 +53,7 @@ export async function imageDigest(ref: string, tags: string[], options: { fetch?
   const basic = options.credentials ? Buffer.from(`${options.credentials.user}:${options.credentials.token}`).toString('base64') : undefined;
   let refused = false;
   for (const tag of tags) {
-    const url = `https://${host}/v2/${path}/manifests/${encodeURIComponent(tag)}`;
+    const url = `${base(host)}/v2/${path}/manifests/${encodeURIComponent(tag)}`;
     // Anonymously first; for a private image, once more with the credentials.
     for (const asked of basic ? [undefined, basic] : [undefined]) {
       let res = await fetchImpl(url, { headers: { accept: ACCEPT }, signal: AbortSignal.timeout(20_000) });
@@ -99,7 +102,7 @@ export async function imageLabels(ref: string, digest: string, options: { fetch?
   const fetchImpl = options.fetch ?? fetch;
   const { host, path } = imageLocation(ref);
   const basic = options.credentials ? Buffer.from(`${options.credentials.user}:${options.credentials.token}`).toString('base64') : undefined;
-  const manifestAt = (d: string) => byDigest(`https://${host}/v2/${path}/manifests/${d}`, d, ACCEPT, fetchImpl, basic);
+  const manifestAt = (d: string) => byDigest(`${base(host)}/v2/${path}/manifests/${d}`, d, ACCEPT, fetchImpl, basic);
   type Manifest = { mediaType?: string; manifests?: Array<{ digest: string; platform?: { os?: string; architecture?: string } }>; config?: { digest: string } };
   let manifest = JSON.parse((await manifestAt(digest)).toString('utf8')) as Manifest;
   if (manifest.manifests) {
@@ -110,6 +113,6 @@ export async function imageLabels(ref: string, digest: string, options: { fetch?
     manifest = JSON.parse((await manifestAt(chosen.digest)).toString('utf8')) as Manifest;
   }
   if (!manifest.config?.digest) throw new Error(`${ref}@${digest} has no config`);
-  const config = JSON.parse((await byDigest(`https://${host}/v2/${path}/blobs/${manifest.config.digest}`, manifest.config.digest, '*/*', fetchImpl, basic)).toString('utf8')) as { config?: { Labels?: Record<string, string> | null } };
+  const config = JSON.parse((await byDigest(`${base(host)}/v2/${path}/blobs/${manifest.config.digest}`, manifest.config.digest, '*/*', fetchImpl, basic)).toString('utf8')) as { config?: { Labels?: Record<string, string> | null } };
   return config.config?.Labels ?? {};
 }

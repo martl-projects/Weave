@@ -706,7 +706,7 @@ const hostedLine = (r: HostedWebsiteInfo): string => {
   const h = r.handler;
   const what = h.kind === 'service' ? `service ${h.service} on port ${r.port}` : `port ${r.port}`;
   const state = r.progress ? `fetching (${Math.round((r.progress.done / (r.progress.total || 1)) * 100)}%)` : r.error ? r.error : r.running ? 'running' : 'starting';
-  return `${what}, ${state}`;
+  return `${what}, ${state}${r.note ? `\n    ${r.note}` : ''}`;
 };
 
 /** One line from the terminal, for questions only a person should answer. */

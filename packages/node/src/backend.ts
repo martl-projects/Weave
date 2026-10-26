@@ -276,6 +276,8 @@ export interface HostedWebsiteInfo {
   port: number;
   /** What answers it: a service of this device (it serves it), or something you run yourself at the port. */
   handler: { kind: 'service'; service: string } | { kind: 'address' };
+  /** Something its host should know (what changed in Weave 0.21). */
+  note?: string;
   running: boolean;
   /** Fetching the serving service's release, or why it doesn't run. */
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };

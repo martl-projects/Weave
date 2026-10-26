@@ -817,6 +817,46 @@ export class Services {
 
   serviceApi?: string;
 
+  /**
+   * Websites from before Weave 0.21, whose website service started what answered them. A release now runs as a
+   * service of its own: you approved it for that website, so it keeps running, and the website keeps its address.
+   * A command is yours to start now: the website stays at its port and says so. On an always-on node, which can't
+   * issue keys, a release's website says how to bring it back.
+   */
+  async migrateWebsites(): Promise<void> {
+    type Old = StoredRoom & { handler?: { artifact?: StoredArtifact; command?: string[]; folder?: string }; settings?: Record<string, string> };
+    for (const site of this.storedServices().filter((s) => s.builtin === 'website')) {
+      for (const old of Object.values(site.hosted ?? {}) as Old[]) {
+        if (!old.handler) continue;
+        const { handler, settings, ...room } = old;
+        let next: StoredRoom = room;
+        if (handler.command) next = { ...room, note: `Weave no longer starts "${handler.command.join(' ')}" in ${handler.folder} for this website: start it yourself (weave website env gives it its token)` };
+        else if (handler.artifact && this.h.isLinkedNode) next = { ...room, note: `Weave no longer runs ${handler.artifact.manifest.name} ${handler.artifact.tag} for this website: install it as a service from one of your computers (with --node), and it serves its website again` };
+        else if (handler.artifact) {
+          const a = handler.artifact;
+          const taken = new Set(this.h.agents.map((k) => k.name));
+          const base = serviceName(a.manifest.app) ?? 'app';
+          const name = [base, ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${base}-${n}`)].find((n) => !taken.has(n)) ?? `${base}-${room.id.slice(0, 6).toLowerCase()}`;
+          // The website first, so the service finds it when it serves its page.
+          next = { ...room, servedBy: name };
+          this.saveWebsite(site.name, next);
+          try {
+            await this.addService({ name, artifact: { project: a.project, tag: a.tag }, spaces: [room.project], settings: settings ?? {}, approve: true });
+            continue;
+          } catch (error) {
+            next = { ...room, note: `Weave no longer runs ${a.manifest.name} ${a.tag} for this website, and couldn't install it as a service: ${(error as Error).message}` };
+          }
+        }
+        this.saveWebsite(site.name, next);
+      }
+    }
+  }
+
+  /** Keep a website of a website service as it is now. */
+  saveWebsite(site: string, room: StoredRoom): void {
+    this.saveServices(this.storedServices().map((s) => (s.name === site ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
+  }
+
   /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
@@ -832,7 +872,8 @@ export class Services {
       });
       this.provide();
     }
-    void this.web.startAppApi().then(() => {
+    void this.web.startAppApi().then(async () => {
+      await this.migrateWebsites().catch(() => {});
       for (const stored of this.storedServices()) {
         this.startService(stored);
       }
@@ -917,7 +958,9 @@ export class Services {
     const errors: string[] = [];
     for (const space of projects) {
       try {
-        await this.web.serve(stored.name, { space, port: web.port, name: stored.artifact!.manifest.name, ...(web.open ? { pages: web.open } : {}) });
+        // Its website there keeps its name (one from before 0.21 was named by whoever opened it).
+        const before = this.web.hosted().find((h) => h.room.servedBy === stored.name && h.room.project === space);
+        await this.web.serve(stored.name, { space, port: web.port, name: before?.room.name ?? stored.artifact!.manifest.name, ...(web.open ? { pages: web.open } : {}) });
       } catch (err) {
         errors.push((err as Error).message);
       }

@@ -410,7 +410,8 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
     const timer = setInterval(bump, 1000);
     return () => clearInterval(timer);
   }, [!!hosted?.progress]);
-  if (!hosted || (!hosted.progress && !hosted.error)) return null;
+  if (!hosted || (!hosted.progress && !hosted.error && !hosted.note)) return null;
+  if (!hosted.progress && !hosted.error) return <p className="small muted">{hosted.note}</p>;
   return (
     <p className="small">
       {hosted.progress ? (

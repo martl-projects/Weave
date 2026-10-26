@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { platformKey } from '../src/appinstall.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
-import { readSecretJson } from '../src/vault.ts';
+import { readSecretJson, writeSecretJson } from '../src/vault.ts';
 
 /*
  * The website service: a service Weave ships. Added to a project, it makes ports of this device reachable there,
@@ -183,6 +183,55 @@ describe('the website service', { timeout: 60_000 }, () => {
     } finally {
       await lena.removeService('horses').catch(() => {});
       await lena.removeService('website').catch(() => {});
+      await api.close();
+    }
+  });
+});
+
+describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
+  it('keeps a release running as a service of its own, at the same website; a command is yours to start now', async () => {
+    const github = new FakeReleases();
+    const racePort = await freePort();
+    const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
+    github.releases.set('v1.0', { files: new Map([[21, { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') }]]), manifest });
+    const martl = person('martl', github);
+    const lena = person('Lena', github);
+    await martl.createProject({ name: 'Horses' });
+    await lena.joinSpace(await martl.invite('Horses'));
+    const released = await martl.releaseApp({ project: 'Horses', tag: 'v1.0', repo: 'martl/horses', assets: { [platformKey()]: `Horses-1.0-${platformKey()}.tar.gz` } });
+    syncAll([martl, lena]);
+    const party = await lena.createProject({ name: 'Party' });
+    await lena.addService({ builtin: 'website', spaces: ['Party'] });
+    const [artifact] = await lena.artifacts('Horses');
+
+    // As Weave 0.20 left them: one website ran martl's release, one a command of Lena's.
+    const file = join(lena.home.dir, 'services.json');
+    const stored = readSecretJson<Array<Record<string, unknown>>>(lena.home, file)!;
+    const old = {
+      raceRoom0020: { id: 'raceRoom0020', project: party.id, name: 'Race night', handler: { artifact: { project: artifact.project.id, id: artifact.id, tag: 'v1.0', manifest: released } }, port: racePort, settings: { API_KEY: 'k-020' }, token: 'old-token-race' },
+      quizRoom0020: { id: 'quizRoom0020', project: party.id, name: 'Quiz', handler: { command: ['node', 'quiz.js'], folder: 'C:\\games\\quiz' }, port: 4321, settings: {}, token: 'old-token-quiz' },
+    };
+    writeSecretJson(lena.home, file, stored.map((s) => (s.name === 'website' ? { ...s, hosted: old, approved: ['an-old-fingerprint'] } : s)));
+
+    const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
+    lena.runServices({ port: api.port });
+    try {
+      // The release runs as a service now, with the setting it had, and serves the same website.
+      await vi.waitFor(async () => expect((await lena.services()).map((s) => s.name).sort()).toEqual(['horses', 'website']), { timeout: 10_000, interval: 200 });
+      const horses = (await lena.services()).find((s) => s.name === 'horses')!;
+      expect(horses).toMatchObject({ spaces: [{ name: 'Party' }], contract: { reads: 'nothing', website: true }, artifact: { tag: 'v1.0' }, settings: ['API_KEY'] });
+      await lena.serviceReady('horses');
+      expect(await answers(racePort)).toMatchObject({ version: 'v1.0', service: 'horses', key: 'k-020' });
+      const sites = async () => (await lena.services()).find((s) => s.name === 'website')!.websites!;
+      await vi.waitFor(async () => expect((await sites()).find((r) => r.id === 'raceRoom0020')).toMatchObject({ name: 'Race night', handler: { kind: 'service', service: 'horses' }, running: true }), { timeout: 10_000, interval: 200 });
+      // The command's website stays at its port, and says Lena starts it now.
+      expect((await sites()).find((r) => r.id === 'quizRoom0020')).toMatchObject({ name: 'Quiz', port: 4321, handler: { kind: 'address' }, note: expect.stringMatching(/no longer starts "node quiz\.js" in C:\\games\\quiz[^]*start it yourself/) });
+      // Nothing of the old shape is left.
+      const after = readSecretJson<Array<{ name: string; hosted?: Record<string, Record<string, unknown>> }>>(lena.home, file)!.find((s) => s.name === 'website')!;
+      expect(Object.values(after.hosted ?? {}).some((r) => 'handler' in r || 'settings' in r)).toBe(false);
+      expect(Object.keys(after.hosted ?? {}).sort()).toEqual(['quizRoom0020', 'raceRoom0020']);
+    } finally {
+      await lena.removeService('horses').catch(() => {});
       await api.close();
     }
   });

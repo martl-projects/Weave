@@ -621,6 +621,8 @@ export interface StoredRoom {
   access?: { invite?: Did[]; show?: string; groups?: string[] };
   /** Which page each side opens (a service's from its manifest). */
   pages?: RoomPages;
+  /** Something its host should know: what changed when Weave stopped starting what answers it (0.21). */
+  note?: string;
 }
 
 export interface Decoded {
