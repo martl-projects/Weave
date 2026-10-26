@@ -627,12 +627,13 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-pick { width: 100%; }
 /* The address book picker: a bare search bar that grows with its results (the window fits it). */
 /* Its window is transparent, so only the rounded panel shows. */
-:root[data-skin]:has(.picker), :root[data-skin]:has(.picker) body, :root[data-skin]:has(.picker) #root { overflow: hidden; background: transparent; }
-.picker { display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; border-radius: 10px; background: var(--cl-panel, #c0c0c0); color: var(--cl-text, #000); border: 1px solid color-mix(in srgb, var(--cl-line, #808080) 70%, transparent); }
+:root[data-skin]:has(.picker), :root[data-skin]:has(.picker) body, :root[data-skin]:has(.picker) #root { overflow: clip; background: transparent; }
+.picker-list { position: relative; } /* items' offsetTop counts from the list */
+.picker { box-sizing: border-box; width: 100%; display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; border-radius: 10px; background: var(--cl-panel, #c0c0c0); color: var(--cl-text, #000); border: 1px solid color-mix(in srgb, var(--cl-line, #808080) 70%, transparent); }
 /* One row: the icon, the input and the tabs. */
 .picker-search { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 2px 6px; }
 .picker:has(.picker-list) .picker-search { border-bottom: 1px solid var(--cl-line, #808080); }
-.picker .picker-search input { flex: 1; min-width: 0; font-size: 14px; padding: 6px 2px; border: none; outline: none; background: transparent; box-shadow: none; color: inherit; }
+:root[data-skin] .picker .picker-search input, :root[data-skin] .picker .picker-search input:focus { flex: 1; min-width: 0; font-size: 14px; padding: 6px 2px; border: none; outline: none; background: transparent; box-shadow: none; color: inherit; }
 .picker-tabs { display: flex; flex: none; gap: 2px; }
 .picker .picker-tabs button { min-width: 0; min-height: 0; margin: 0; padding: 2px 6px; border: none; border-radius: 3px; box-shadow: none; background: transparent; color: inherit; font-size: 11px; opacity: .6; cursor: default; }
 .picker .picker-tabs button.on { opacity: 1; background: var(--cl-accent, var(--accent)); color: #fff; }

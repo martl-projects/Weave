@@ -93,7 +93,15 @@ export function Picker() {
       }),
     [],
   );
-  useEffect(() => list.current?.querySelector('.picker-item.at')?.scrollIntoView({ block: 'nearest' }), [at]);
+  // Keep the chosen one in view by scrolling the list only: scrollIntoView would scroll the page too,
+  // and the page is exactly as tall as the window, so everything but the chosen row slid out of it.
+  useEffect(() => {
+    const box = list.current;
+    const item = box?.querySelector<HTMLElement>('.picker-item.at');
+    if (!box || !item) return;
+    if (item.offsetTop < box.scrollTop) box.scrollTop = item.offsetTop;
+    else if (item.offsetTop + item.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = item.offsetTop + item.offsetHeight - box.clientHeight;
+  }, [at]);
   // Just the search bar at first; the window grows with what it finds.
   useEffect(() => {
     if (!root.current || !bridge.fitPicker) return;
