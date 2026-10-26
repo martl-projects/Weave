@@ -40,10 +40,12 @@ export async function startDaemon(
   writeJson(home.daemon, info);
   // Post addresses (http://weave.localhost:7710/…). One Weave per computer gets the port; the others go without.
   const linkPort = options.linkPort ?? (process.env.WEAVE_LINK_PORT ? Number(process.env.WEAVE_LINK_PORT) : undefined);
-  const links = await startLinks(node, linkPort).catch((error: Error & { code?: string }): LinkServer | undefined => {
+  const links = await startLinks(node, linkPort, node.githubAppFlow).catch((error: Error & { code?: string }): LinkServer | undefined => {
     console.error(`weave: post links are off: ${error.code === 'EADDRINUSE' ? 'another Weave serves them on this computer' : error.message}`);
     return undefined;
   });
+  // Where GitHub sends the person back when they set up their own GitHub App.
+  node.linkPort = links?.port;
   // Claude Code sessions, for the Mentions panel, if the person turned that on.
   node.startFollowing();
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));

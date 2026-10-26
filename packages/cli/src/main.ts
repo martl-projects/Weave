@@ -206,6 +206,7 @@ github — repositories that follow a group, tier or project (members who give t
                              (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
                              [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
                              installed on the organization, so nobody has to sign in (with --node, on an always-on node)
+  service github-app [<name>] [--org <org>] [--open]   create that App in one go: confirm on GitHub, install it, done
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -380,6 +381,7 @@ const { values, positionals } = parseArgs({
     json: { type: 'boolean', default: false },
     out: { type: 'string' },
     open: { type: 'boolean', default: false },
+    org: { type: 'string' },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -1443,6 +1445,15 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
         return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+      }
+      if (sub === 'github-app') {
+        const { url } = await b.githubAppSetup({ ...(ref ? { service: ref } : {}), ...(values.org ? { org: values.org } : {}) });
+        if (values.open) {
+          const { spawn } = await import('node:child_process');
+          const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
+          spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
+        }
+        return out({ url }, () => `Open this in your browser (within an hour) to create your own GitHub App${values.org ? ` in ${values.org}` : ''}:\n  ${url}\nConfirm it on GitHub, then install it on the repositories it should manage: the GitHub service gets its ID and key by itself.`);
       }
       if (sub === 'release' && ref) {
         const app = await b.releaseService({ project: needProject(), image: ref });

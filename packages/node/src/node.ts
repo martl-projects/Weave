@@ -497,6 +497,7 @@ import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, 
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLabels, imageLocation } from './registry.ts';
+import type { GitHubAppFlow } from './links.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -8931,6 +8932,20 @@ export class WeaveNode implements Backend {
 
   catalog(...args: Parameters<Services['catalog']>): ReturnType<Services['catalog']> {
     return this.#services.catalog(...args);
+  }
+
+  async githubAppSetup(input: { service?: string; org?: string }): Promise<{ url: string }> {
+    return this.#services.githubAppSetup(input);
+  }
+
+  /** Where GitHub sends the person back when they set up an App (this computer's local pages); the daemon sets it. */
+  set linkPort(port: number | undefined) {
+    this.#services.linkPort = port;
+  }
+
+  /** The local pages' part in setting up a GitHub App (not on the API: only the browser reaches it, with its secret state). */
+  get githubAppFlow(): GitHubAppFlow {
+    return { manifest: (state) => this.#services.githubAppManifest(state), created: (input) => this.#services.githubAppCreated(input) };
   }
 
   catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {

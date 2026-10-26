@@ -1,4 +1,4 @@
-import { b64u, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
 import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
@@ -906,6 +906,64 @@ export class Services {
     const own = this.githubApp();
     const client = own ? await own.app.clientFor(repo) : undefined;
     return client ?? this.h.github();
+  }
+
+  // Setting up the person's own GitHub App in one go (GitHub's App-manifest flow): Weave opens a page on this
+  // computer that sends GitHub the App's description, the person confirms on GitHub, GitHub sends them back with a
+  // one-time code, and Weave exchanges it for the App's ID and key: they go into the GitHub service's settings.
+
+  /** The port of this computer's local pages (http://weave.localhost:…), where GitHub sends the person back. */
+  linkPort?: number;
+  /** Setups started here, by their secret state: valid for an hour, once. */
+  #appSetups = new Map<string, { service: string; org?: string; at: number }>();
+
+  /** Start setting up a GitHub App for a GitHub service: the address to open in the browser. */
+  githubAppSetup(input: { service?: string; org?: string }): { url: string } {
+    const here = this.storedServices().filter((s) => s.builtin === 'github').map((s) => s.name);
+    const away = this.h.isLinkedNode ? [] : [...this.handedOver().values()].filter((h) => h.builtin === 'github').map((h) => h.service);
+    const all = [...here, ...away];
+    const service = input.service ?? (all.length === 1 ? all[0] : undefined);
+    if (!service || !all.includes(service)) throw new Error(all.length ? `which GitHub service? (${all.join(', ')})` : 'add the GitHub service first (weave service add github --builtin github)');
+    const org = input.org?.trim();
+    if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(org)) throw new Error('an organization is its GitHub name, like acme');
+    if (!this.linkPort) throw new Error("this computer's Weave doesn't serve its local pages (another Weave has their port): set the App's ID and key by hand instead");
+    const state = b64u.encode(randomBytes(18));
+    for (const [key, s] of this.#appSetups) if (this.h.clock() - s.at > 3600_000) this.#appSetups.delete(key);
+    this.#appSetups.set(state, { service, ...(org ? { org } : {}), at: this.h.clock() });
+    return { url: `http://${LINK_HOST}:${this.linkPort}/github/new-app?state=${state}` };
+  }
+
+  /** What the start page sends GitHub: where (the organization's or the person's App settings) and the App's description. */
+  githubAppManifest(state: string): { action: string; manifest: string; org?: string; service: string } {
+    const setup = this.#appSetups.get(state);
+    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup link has expired or was used: start again in Weave');
+    const back = `http://${LINK_HOST}:${this.linkPort}`;
+    const person = (this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'my').replace(/[^A-Za-z0-9 -]/g, '').slice(0, 14).trim();
+    const manifest = {
+      // App names are unique on GitHub: a few random letters keep it free. It can be renamed on GitHub.
+      name: `Weave ${person} ${b64u.encode(randomBytes(3)).replace(/[^A-Za-z0-9]/g, 'x')}`.slice(0, 34),
+      description: 'Weave: keeps repository access in step with your Weave spaces, and hands their release files to participants.',
+      url: back,
+      redirect_url: `${back}/github/app-created`,
+      public: false,
+      default_permissions: { administration: 'write', contents: 'read', metadata: 'read' },
+      default_events: [],
+    };
+    const action = setup.org ? `https://github.com/organizations/${setup.org}/settings/apps/new?state=${state}` : `https://github.com/settings/apps/new?state=${state}`;
+    return { action, manifest: JSON.stringify(manifest), ...(setup.org ? { org: setup.org } : {}), service: setup.service };
+  }
+
+  /** GitHub sent the person back with a code: the App's ID and key go into the service; next, installing it. */
+  async githubAppCreated(input: { code: string; state: string }): Promise<{ name: string; install: string; service: string }> {
+    const setup = this.#appSetups.get(input.state);
+    this.#appSetups.delete(input.state);
+    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup has expired or was used: start again in Weave');
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.code)) throw new Error('GitHub sent no code back');
+    const res = await this.h.githubFetch()(`https://api.github.com/app-manifests/${input.code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' } });
+    const app = (await res.json().catch(() => ({}))) as { id?: number; slug?: string; name?: string; pem?: string; message?: string };
+    if (!res.ok || !app.id || !app.pem || !app.slug) throw new Error(`GitHub didn't hand over the App${app.message ? `: ${app.message}` : ''}`);
+    await this.setService({ name: setup.service, settings: { GITHUB_APP_ID: String(app.id), GITHUB_APP_KEY: app.pem } });
+    return { name: app.name ?? app.slug, install: `https://github.com/apps/${app.slug}/installations/new`, service: setup.service };
   }
 
   /** Requests the node is answering now, so each is answered once. */

@@ -1,10 +1,12 @@
 import { createVerify, generateKeyPairSync } from 'node:crypto';
+import { request } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { WeaveNode, type Fetch, closeOpenStores } from '../src/index.ts';
 import { writeSecretJson } from '../src/vault.ts';
+import { startLinks } from '../src/links.ts';
 
 /*
  * The GitHub service with a GitHub App of the person's own (block 7): it keeps linked repositories' access in step
@@ -34,11 +36,15 @@ class AppGitHub {
   #next = 1;
   /** Who acted on a repo: the App's installation token, or someone else. */
   actors: string[] = [];
+  converted = 0;
   fetch: Fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     const json = (status: number, body?: unknown) => new Response(body === undefined ? '' : JSON.stringify(body), { status });
     const auth = String(new Headers(init?.headers).get('authorization') ?? '').replace('Bearer ', '');
+    // The App-manifest flow's last step: the one-time code GitHub gave the person's browser, for the App's credentials.
+    const conversion = url.pathname.match(/^\/app-manifests\/([^/]+)\/conversions$/);
+    if (conversion && method === 'POST') return conversion[1] === 'code-from-github' && !this.converted++ ? json(201, { id: Number(APP_ID), slug: 'weave-martl-x1', name: 'Weave martl x1', pem: privateKey }) : json(404, { message: 'Not Found' });
     // As the App: only a JWT signed with its key, for its ID, not expired.
     if (url.pathname.endsWith('/installation') || url.pathname.startsWith('/app/')) {
       const [header, payload, signature] = auth.split('.');
@@ -157,4 +163,58 @@ describe('the GitHub service with its own GitHub App', () => {
     await martl.reconcile();
     expect(github.actors).toEqual(['PUT collaborators lena-gh as the App']);
   });
+
+  it('sets up the App in one go: GitHub creates it from Weave\'s description, and its ID and key go to the service', async () => {
+    const github = new AppGitHub();
+    const martl = person('martl', github);
+    await martl.createProject({ name: 'Weave' });
+    await martl.addService({ builtin: 'github', spaces: ['Weave'] });
+    // Without this computer's pages there's nowhere for GitHub to send the person back.
+    await expect(martl.githubAppSetup({ org: 'acme' })).rejects.toThrow(/doesn't serve its local pages/);
+    const links = await startLinks(martl, 0, martl.githubAppFlow);
+    martl.linkPort = links.port;
+    try {
+      const { url } = await martl.githubAppSetup({ org: 'acme' });
+      expect(url).toMatch(new RegExp(`^http://weave\\.localhost:${links.port}/github/new-app\\?state=[\\w-]+$`));
+      const state = new URL(url).searchParams.get('state')!;
+
+      // The start page: one button that sends GitHub the App's description, to the organization's App settings.
+      const start = await get(links.port, `/github/new-app?state=${state}`);
+      expect(start.status).toBe(200);
+      expect(start.headers['content-security-policy']).toMatch(/form-action 'self' https:\/\/github\.com;/);
+      expect(start.body).toContain(`action="https://github.com/organizations/acme/settings/apps/new?state=${state}"`);
+      const manifest = JSON.parse(unescapeHtml(start.body.match(/name="manifest" value="([^"]*)"/)![1])) as { redirect_url: string; default_permissions: Record<string, string>; public: boolean };
+      expect(manifest).toMatchObject({ redirect_url: `http://weave.localhost:${links.port}/github/app-created`, public: false, default_permissions: { administration: 'write', contents: 'read', metadata: 'read' } });
+
+      // GitHub sends the person back with a code: Weave takes the App's ID and key, and sends them on to install it.
+      const back = await get(links.port, `/github/app-created?code=code-from-github&state=${state}`);
+      expect(back.status).toBe(303);
+      expect(back.headers.location).toBe('https://github.com/apps/weave-martl-x1/installations/new');
+      expect((await martl.services())[0].settings).toEqual(['GITHUB_APP_ID', 'GITHUB_APP_KEY']);
+      // And it acts as that App: linking a repository of the organization works without anyone signing in.
+      await martl.linkRepo({ space: 'Weave', repo: 'acme/site', on: true });
+
+      // A setup is used once; a made-up one does nothing.
+      expect((await get(links.port, `/github/app-created?code=code-from-github&state=${state}`)).body).toMatch(/expired or was used/);
+      expect((await get(links.port, '/github/new-app?state=made-up')).status).toBe(400);
+      expect(github.converted).toBe(1);
+    } finally {
+      await links.close();
+    }
+  });
 });
+
+/** A request to this computer's pages, as a browser sends it (by the name weave.localhost). */
+function get(port: number, path: string): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path, headers: { host: `weave.localhost:${port}` } }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers as Record<string, string>, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const unescapeHtml = (text: string) => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
