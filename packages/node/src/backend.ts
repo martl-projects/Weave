@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -35,7 +35,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -211,6 +211,11 @@ export interface RepoInfo {
   url: string;
   /** Only readers of this board, not the whole project. */
   board?: string;
+  /** read: members get read access; none: just linked; write: the people picked (writers) can write. */
+  access: RepoAccess;
+  writers?: Actor[];
+  /** It gives you access, once you give the space your GitHub account. */
+  forYou?: true;
   /** Who linked it; their node invites and removes people. */
   by: Actor;
   /** You linked it: your GitHub sign-in keeps it in step. */
@@ -218,6 +223,104 @@ export interface RepoInfo {
   /** For your own: when it was last brought in step, and what went wrong if it didn't. */
   synced?: string;
   problem?: string;
+}
+
+/** A service this node runs (yours): code under a key of its own, with exactly its contract's rights. */
+export interface ServiceInfo {
+  name: string;
+  /** Its own key: what it signs shows as "you · name". */
+  did: Did;
+  description: string;
+  icon?: string;
+  contract: ServiceContract;
+  /** The spaces it was added to: the only ones it reads and writes in; with the names of the settings given for each. */
+  spaces: Array<SpaceRef & { settings?: string[] }>;
+  /** What runs it on this node, if anything does (else something else uses its token). */
+  command?: string[];
+  /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
+  builtin?: 'room';
+  rooms?: HostedRoomInfo[];
+  /** The names of its settings (the values stay on this node). */
+  settings: string[];
+  enabled: boolean;
+  running: boolean;
+  /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
+  node?: { did: Did; name: string };
+}
+
+/** A room the room service runs here: what answers its clients (its handler), and how that's doing. */
+export interface HostedRoomInfo {
+  id: string;
+  project: SpaceRef;
+  name: string;
+  /** Where the handler listens on this computer. */
+  port: number;
+  handler:
+    | { kind: 'artifact'; artifact: { project: { id: string; name?: string }; tag: string; app: string; name: string; latest?: string }; command: string[] }
+    | { kind: 'command'; command: string[]; folder: string }
+    | { kind: 'address' };
+  /** The names of the handler's settings (the values stay here). */
+  settings: string[];
+  running: boolean;
+  /** Fetching its release, or why it doesn't run. */
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+}
+
+/** A release of a project, as it can be started as a service. */
+export interface ArtifactInfo {
+  id: string;
+  project: SpaceRef;
+  tag: string;
+  app: string;
+  name: string;
+  released: Actor;
+  time: string;
+  /** It has a web page: a room can run it. */
+  room: boolean;
+  settings: AppSetting[];
+  /** How it would run on this node: its release file for this platform, or its container (Docker). */
+  runs?: 'release' | 'container';
+  /** What starting it here would run (shown before you approve it). */
+  command?: string[];
+}
+
+/** A service someone runs, as anyone can see it: its public profile. */
+export interface ServiceProfileInfo {
+  did: Did;
+  person: Actor;
+  name: string;
+  description: string;
+  icon?: string;
+  builtin?: 'room';
+  contract: ServiceContract;
+  time: string;
+}
+
+/**
+ * What a running service may do, through its own token on the node that runs it: who it is, what it reads (only
+ * what its contract says, only in its spaces), and signing as itself, only the kinds it may write.
+ */
+export interface ServiceGate {
+  /** Who it is, and its spaces with the settings given for each (its manifest's per-space settings). */
+  me(): { name: string; did: Did; person: Did; contract: ServiceContract; spaces: Array<SpaceRef & { settings: Record<string, string> }> };
+  /** What it may read, after `since` (an event time), oldest first. */
+  events(since?: string): FeedItem[];
+  watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void>;
+  publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
+  /** Answer a request addressed to it, in the request's space. */
+  answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
+}
+
+/** A request to a service in a space, and what the service answered. */
+export interface ServiceRequestInfo {
+  id: string;
+  to: Actor;
+  from: Actor;
+  text: string;
+  data?: Json;
+  time: string;
+  results: Array<{ id: string; text: string; data?: Json; error?: string; time: string }>;
 }
 
 export interface SpaceRepos {
@@ -230,6 +333,8 @@ export interface SpaceRepos {
   missing?: Actor[];
   /** For whoever linked a repo: members and the accounts they gave. */
   accounts?: Array<{ who: Actor; login: string }>;
+  /** For those who may link: the members who may be picked to write (in personally, not through a group or tier). */
+  mayWrite?: Actor[];
 }
 
 /** What to say when someone acts as an agent this node doesn't have (often an MCP server started with an old --as). */
@@ -372,6 +477,11 @@ export interface InviteOptions {
 export interface PostInfo {
   id: string;
   short: string;
+  /**
+   * Its web address, clickable anywhere: http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/title.
+   * Every Weave serves it on its own computer, so it opens for whoever can see the post.
+   */
+  url: string;
   type: 'post' | 'project' | 'issue' | 'proposal';
   /** Where it lives; undefined for public posts. */
   space?: SpaceRef;
@@ -382,6 +492,10 @@ export interface PostInfo {
   link?: string;
   /** An attached image (wblob: reference), shown as the post's thumbnail. */
   image?: string;
+  /** As a work item: what a session should do with it (its starting prompt). */
+  prompt?: string;
+  /** The routine occurrence that made it. */
+  routine?: { id: string; occurrence: string };
   time: string;
   /** When its author last edited it. */
   edited?: string;
@@ -738,10 +852,105 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox';
+  what: 'link-repo' | 'space' | 'inbox' | 'post';
   space?: SpaceRef;
+  /** For post: the post to show. */
+  post?: { id: string; title: string };
   /** For link-repo: the repository to have chosen (owner/name). */
   repo?: string;
+}
+
+/**
+ * A post an agent pointed you to: shown with weave_show, or written as a link in
+ * a Claude Code session Weave follows. Kept on this computer only, for the
+ * Mentions panel; never signed or sent anywhere.
+ */
+export interface MentionInfo {
+  id: string;
+  time: string;
+  /** The post as it was when mentioned, shown like on a board. */
+  post: PostInfo;
+  /** weave_show by an agent, or a link in a Claude Code session. */
+  source: 'agent' | 'claude-code';
+  /** The agent that showed it (weave_show). */
+  agent?: string;
+  /** For claude-code: the session, and the folder it works in. */
+  session?: { id: string; folder?: string };
+  /** What the agent said about it (weave_show). */
+  note?: string;
+}
+
+/** A session, as a tool or the app names it: its provider (default claude-code) and id, plus what's known about it. */
+export interface SessionRef {
+  provider?: string;
+  id: string;
+  /** The provider's other id for it, e.g. the Claude app's local_… id. */
+  host?: string;
+  folder?: string;
+}
+
+/** A work item on a session's stack: the post as it is now, shown like on a board. */
+export type StackPost = PostInfo;
+
+/**
+ * An agent session and its stack of work items: the top one is what it's on
+ * now, the ones below wait for it. Kept sealed to you, on all your devices.
+ */
+export interface SessionInfo {
+  provider: string;
+  id: string;
+  host?: string;
+  folder?: string;
+  /** Its name with the provider (the Claude app's sidebar title), when known. */
+  title?: string;
+  /** Top first. A post you can no longer see is listed by id only. */
+  stack: Array<{ post: StackPost | { id: string; missing: true }; since: string }>;
+  /** When its stack last changed. */
+  time: string;
+  /** When the session last did something (its transcript was written), if Weave can tell. */
+  active?: string;
+}
+
+/** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
+export interface WorkTarget {
+  post: PostInfo;
+  /** The latest session with this item on its stack, if any. */
+  session?: SessionInfo;
+  /** Folders on this computer known for the item's project, most likely first. */
+  folders: string[];
+  /** The message for the session: the item, its address, and its starting prompt. */
+  text: string;
+}
+
+/** A routine: a trigger and a work item it creates (see core routines.ts), with when it last and next fires. */
+export interface RoutineInfo {
+  id: string;
+  name: string;
+  on: boolean;
+  trigger: { type: 'schedule'; days: number[]; time: string } | { type: 'first-start' };
+  create: { board: string; title: string; text?: string; prompt?: string };
+  space: SpaceRef;
+  /** The latest item it made. */
+  last?: { post: string; occurrence: string; time: string };
+  /** When it next fires (scheduled routines that are on). */
+  next?: string;
+}
+
+/** Your desk: the private project where your journal, ideas and routines live, and its folder here. */
+export interface DeskInfo {
+  space: SpaceRef;
+  /** The folder on this computer where your daily driver's sessions run. */
+  folder?: string;
+  /** Your daily driver: the session your desk's items go to (the first one that took one on). */
+  driver?: SessionRef;
+}
+
+/** Whether Weave follows your Claude Code sessions for links to posts. */
+export interface ClaudeCodeFollow {
+  on: boolean;
+  /** Where Claude Code keeps its transcripts here, and whether it exists. */
+  dir: string;
+  found: boolean;
 }
 
 /** One of your agents asking to sign more kinds of events; you allow or decline it in the Inbox. */
@@ -783,11 +992,12 @@ export interface UpdateInfo {
   newer: boolean;
 }
 
-/** How a project's app reaches the app API on the host's computer (see appapi.ts): set in its environment when Weave starts it. */
+/** How a room's handler reaches the app API on this computer (see appapi.ts): set in its environment when Weave starts it. */
 export interface AppEnv {
   WEAVE_API: string;
   WEAVE_TOKEN: string;
   WEAVE_PROJECT: string;
+  WEAVE_ROOM?: string;
 }
 
 /** A person as the app API shows them to an app. */
@@ -800,73 +1010,28 @@ export interface AppPerson {
   maintainer: boolean;
 }
 
-/** Starting the project's app on this computer (see the manifest's start.command). */
-export interface AppLaunchInfo {
-  /** The command from the manifest, if it has one. */
-  command?: string[];
-  hint?: string;
-  /** This computer's copy of the app, if chosen. */
-  folder?: string;
-  /** You approved this command for this folder. */
-  approved: boolean;
-  running: boolean;
-  started?: string;
-  /** `stopped`: on request, not by itself. */
-  exit?: { code: number | null; time: string; stopped?: true };
-  /** The app's last lines of output. */
-  log: string[];
-  /** Settings the app asks hosts for (an API key…), and whether this computer has a value; values never leave this computer. */
-  settings?: Array<AppSetting & { set: boolean }>;
-  /** You may point the app at a GitHub release (a maintainer), and the repository its releases come from. */
-  release?: { canRelease: boolean; repo?: string };
-  /**
-   * The release's container image (Weave and Docker): when Docker runs on this computer, Weave starts the app
-   * from it, sealed off from the computer (`active`). Without Docker, `docker` is false and it starts as before.
-   */
-  container?: { image: string; tag: string; digest: string; docker: boolean; active: boolean };
-  /** Getting the app: its release, the file for this computer, and steps for an agent. */
-  install?: {
-    /** The release's tag. */
-    version?: string;
-    /** owner/name on GitHub. */
-    repo?: string;
-    /** The release file for this computer, if there is one. */
-    asset?: { file: string; size?: number };
-    /** This computer, as manifests name platforms (win32-x64…). */
-    platform: string;
-    /** The version Weave installed here (when the app folder is that install). */
-    installed?: string;
-    /** An install going on now. */
-    progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
-    /** Why the last install failed. */
-    error?: string;
-    /** For an agent, installing it by hand. */
-    steps?: string[];
-    /** The GitHub App the release downloads through, when it isn't the one you sign in with. */
-    otherApp?: string;
-    /** What the installed release build starts with on this computer. */
-    command?: string[];
-  };
-}
-
 export interface RoomInfo {
   id: string;
   project: SpaceRef;
   name: string;
   host: Person;
-  /** You host it. */
+  /** A service offers it (its key and name): the room is there while that service runs. */
+  offeredBy?: { did: Did; name?: string };
+  /** Your room service runs it on this device. */
   mine: boolean;
   open: boolean;
   /** You are invited (every participant, or named people). */
   mayJoin: boolean;
+  /** A ticketed room: the show whose ticket holders get in while it's on, and tiers whose members do. */
+  show?: string;
+  groups?: Array<{ id: string; name?: string }>;
   /** You joined it (players) or are hosting it right now (host). */
   joined: boolean;
   /** Players: accepted by the host. Host: listening for players. */
   connected: boolean;
   /** Who is in it right now, as far as you can see (only once you're in). */
   peers: Person[];
-  app?: { app: string; name: string; startHint?: string; canLaunch?: boolean };
-  /** The shared service, the label of your ▶ button, and (host) whether the app answers on its port. */
+  /** The label of your ▶ button, and (where it runs) whether what answers it answers on its port. */
   service?: { id: string; label: string; ready: boolean };
   /** What ▶ opens, once there is something to open. */
   url?: string;
@@ -1383,10 +1548,41 @@ export interface Backend {
   setGithubApp(app: string | null): Promise<GitHubInfo>;
   /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
   githubRepos(): Promise<string[]>;
+  // services: code you run under keys of their own, with exactly the rights their contracts declare
+  /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
+  /** A service: your code under a key of its own, or one Weave ships (`builtin: 'room'`). */
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo>;
+  /** A project's releases, newest first: what a room can run. */
+  artifacts(project: string): Promise<ArtifactInfo[]>;
+  /**
+   * A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or
+   * a port already answering. Who joins: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
+   */
+  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo>;
+  /** The services this node runs. */
+  services(): Promise<ServiceInfo[]>;
+  /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
+  /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
+  removeService(name: string): Promise<void>;
+  /** Services people run, from their public profiles. */
+  serviceProfiles(): Promise<ServiceProfileInfo[]>;
+  /** The services in a space: those whose people added them there. */
+  servicesIn(space: string): Promise<ServiceProfileInfo[]>;
+  /** Ask a service something in a space: a request it reads (it must be in that space). */
+  askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo>;
+  /** Requests to services in a space, with their answers (optionally for one service). */
+  serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
+  /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
+  githubRepoOwner(repo: string): Promise<'organization' | 'personal'>;
   /** A space's repositories, and whether you gave it your GitHub account. */
   spaceRepos(space: string): Promise<SpaceRepos>;
   /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
-  linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos>;
+  /**
+   * Let a repository follow a space (on: false unlinks it). An organization's: members get read access. A person's:
+   * access none (just linked) or write (writers: people in the space personally, picked one by one).
+   */
+  linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
   shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos>;
   /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
@@ -1405,7 +1601,8 @@ export interface Backend {
   post(ref: string): Promise<PostInfo>;
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  /** prompt: as a work item, what a session should do with it (its starting prompt). */
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
@@ -1425,13 +1622,65 @@ export interface Backend {
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen>;
+  /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
+  showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
+  /** The Mentions panel: posts agents pointed to on this computer, newest first. */
+  mentions(): Promise<MentionInfo[]>;
+  /** Follow your Claude Code sessions for links to posts (reads the agent's answers in its transcripts, here only), or stop. */
+  followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow>;
+  claudeCode(): Promise<ClaudeCodeFollow>;
+  /** Sessions with work items, the latest changed first. */
+  sessions(): Promise<SessionInfo[]>;
+  /**
+   * The sessions pane: sessions with work items, and the ones that did something in the last `hours`
+   * (default 12) even without, the most recently active first.
+   */
+  activeSessions(input?: { hours?: number }): Promise<SessionInfo[]>;
+  /** The session the Claude app shows right now (while Follow Claude Code is on), with its stack. */
+  focusedSession(): Promise<SessionInfo | null>;
+  /** One session and its stack (an empty stack if it has none yet). */
+  session(input: SessionRef): Promise<SessionInfo>;
+  /**
+   * Put a work item on top of a session's stack: an existing post, or a new one (`create`, posted in its
+   * project or community). Whatever was on top waits below until this one is done.
+   */
+  workOn(input: { session: SessionRef; post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; as?: string }): Promise<SessionInfo>;
+  /** Take a work item off a session's stack (the top one if none is named); the next one comes back up. `close` marks an issue done. */
+  doneWith(input: { session: SessionRef; post?: string; close?: boolean; as?: string }): Promise<SessionInfo>;
+  /** Where to work on an item (Ctrl+click): its latest session or the folders known for its project, and the message to start with. */
+  workTarget(input: { post: string }): Promise<WorkTarget>;
+  /** Your desk, once it's set up. */
+  desk(): Promise<DeskInfo | null>;
+  /** Where your desk's folder is, or goes unless you choose another. */
+  deskFolder(): Promise<string>;
+  /**
+   * Set up your desk (once): a private project with Journal and Ideas boards, the folder where your daily
+   * driver works (with a CLAUDE.md for it), and the first routines. Running it again changes nothing that exists.
+   */
+  setupDesk(input: { name?: string; folder?: string }): Promise<DeskInfo>;
+  /** A project's routines (your desk's by default). */
+  routines(input?: { space?: string }): Promise<RoutineInfo[]>;
+  /** Add or change a routine (maintainers). Without an id, a new one. */
+  setRoutine(input: { space?: string; id?: string; name: string; on?: boolean; trigger: RoutineInfo['trigger']; create: RoutineInfo['create'] }): Promise<RoutineInfo>;
+  removeRoutine(input: { space?: string; id: string }): Promise<void>;
+  /** Run a routine now: its item for today (or its first start), unless that exists already. */
+  runRoutine(input: { space?: string; id: string }): Promise<PostInfo>;
+  /**
+   * A new session for this item is about to open in the Claude app (Ctrl+click): the next session you look at
+   * there that has no work items yet, within 15 minutes, gets it on its stack once the app says which session it is.
+   */
+  expectSession(input: { post: string; folder?: string }): Promise<void>;
+  /** Remember a folder on this computer for a project (or community), for the next new session there. */
+  rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
+  /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
+  restack(input: { session: SessionRef; posts?: string[]; remove?: string[] }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
   answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
-  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo>;
+  editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
   /** Take a post down: your own, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   deletePost(input: { post: string; as?: string }): Promise<void>;
   /** 1 up, -1 down, 0 to take your vote back. */
@@ -1494,44 +1743,23 @@ export interface Backend {
   rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo>;
 
   // rooms and shared apps: live, never logged (except the room announcement)
-  /** The app a project shares in its rooms, if a maintainer published one. */
+  /** The project's artifact description (its weave.app.json as last published), if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
-  /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
-  /** Maintainers: publish the app manifest; `folder` (from the CLI) is remembered as this computer's copy of the app. */
-  publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest>;
-  /** Starting the app here: its command, your folder, whether you approved it, and whether it runs. */
-  appLaunch(project: string): Promise<AppLaunchInfo>;
-  /**
-   * Install (or update) the project's app from its release on GitHub: the file for this computer is
-   * downloaded, checked against the SHA-256 in the manifest, and unpacked into Weave's apps folder,
-   * which becomes the app's folder. `approve` also approves its start command there. Ask appLaunch for progress.
-   */
-  installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
-  /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
+  /** Maintainers: publish (or replace) the project's artifact description (the contents of weave.app.json). */
+  publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
+  /** Maintainers: release an artifact from a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
   appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
-  /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
-  setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
-  /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
-  launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
-  stopApp(project: string): Promise<AppLaunchInfo>;
-  /**
-   * Fill in one of the settings the app's manifest asks for (value: null clears it). Kept on this computer only,
-   * in app-settings.json, and handed to this app alone when Weave starts it; never synced, shown or given to agents.
-   */
-  setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
    */
   updateCheck(input: { current: string }): Promise<UpdateInfo>;
-  /** The app API's address and this project's token, for an app started by hand (Weave sets them itself when it starts the app). Valid until Weave restarts. */
-  appEnv(project: string): Promise<AppEnv>;
+  /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
+  roomEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
-  /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1607,8 +1835,11 @@ export interface Backend {
   buyTicket(input: { show: string; host?: string; payment: string }): Promise<void>;
   /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
   tickets(show: string): Promise<TicketInfo[]>;
-  /** The Safe transaction that pays a show out by its split (after it) or back to everyone who paid. */
-  settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement>;
+  /**
+   * The Safe transaction that pays a show out by its split (after it) or back to everyone who paid.
+   * Paying out, its host may give the split then: who gets what is decided after the show, and recorded on the show.
+   */
+  settleShow(input: { show: string; action: 'payout' | 'refund'; split?: Array<{ to: string; share: number }> }): Promise<ShowSettlement>;
   /** Move what's left on a space's retired treasuries to its treasury now: a proposal per old Safe holding money, for its old owners to sign. */
   sweepRetired(space: string): Promise<Array<{ safe: string; balance: string; proposal?: SafeProposalInfo; deploy: { to: string; data: string } }>>;
   /** Announce a treasury publicly (maintainers or moderators), so people outside it can pay it and name it in their splits. */
@@ -1662,7 +1893,7 @@ export interface Backend {
   /** Reply to a thread, issue or proposal (full or short id); it lands in the same project. */
   reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo>;
   issues(project: string): Promise<IssueInfo[]>;
-  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo>;
+  openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo>;
   claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo>;
   setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo>;
   proposals(project: string): Promise<ProposalInfo[]>;
@@ -1680,13 +1911,16 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
+  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
+  'addService', 'artifacts', 'openRoom', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder',
+  'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
+  'projectApp', 'publishApp', 'releaseApp', 'appReleases', 'roomEnv', 'updateCheck', 'rooms', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',

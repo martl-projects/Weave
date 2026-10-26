@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import type { SpaceInfo, TreasuryInfo, WalletInfo } from '@weave/node/client';
+import type { ShowInfo, SpaceInfo, TreasuryInfo, WalletInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { api, bump, shortDid, useApi } from './lib.ts';
+import { api, bump, shortDid, useApi, usePaymentsSwitch } from './lib.ts';
 import { copy } from './posts.tsx';
 import { SafeProposals } from './shows.tsx';
-import { WalletLink } from './wallet.tsx';
+import { WalletNeeded } from './wallet.tsx';
 import { attempt, AsyncButton, toast } from './ui.tsx';
 
 /*
@@ -23,19 +23,20 @@ const PARTS: Array<{ key: keyof Shares; label: string; color: string }> = [
 const PRESET_LABELS: Record<string, string> = { standard: 'Standard', community: 'Community first', solo: 'Solo', free: 'All free' };
 const pct = (bp: number) => `${(bp / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
 
-function SplitBar({ shares }: { shares: Shares }) {
+function SplitBar({ shares, community }: { shares: Shares; community?: string }) {
+  const label = (p: (typeof PARTS)[number]) => (p.key === 'community' && community ? community : p.label);
   return (
     <div>
       <div style={{ display: 'flex', height: 14, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border, #8884)' }}>
         {PARTS.filter((p) => shares[p.key] > 0).map((p) => (
-          <div key={p.key} title={`${p.label} ${pct(shares[p.key])}`} style={{ width: `${shares[p.key] / 100}%`, background: p.color }} />
+          <div key={p.key} title={`${label(p)} ${pct(shares[p.key])}`} style={{ width: `${shares[p.key] / 100}%`, background: p.color }} />
         ))}
       </div>
       <div className="small">
-        {PARTS.map((p) => (
+        {PARTS.filter((p) => shares[p.key] > 0).map((p) => (
           <span key={p.key} style={{ marginRight: 12 }}>
             <span style={{ display: 'inline-block', width: 8, height: 8, background: p.color, marginRight: 4 }} />
-            {p.label} {pct(shares[p.key])}
+            {label(p)} {pct(shares[p.key])}
           </span>
         ))}
       </div>
@@ -44,53 +45,76 @@ function SplitBar({ shares }: { shares: Shares }) {
 }
 
 
-function SplitEditor({ project, treasury, communities }: { project: SpaceInfo; treasury: TreasuryInfo; communities: SpaceInfo[] }) {
+function SplitEditor({ project, treasury, communities, onDone }: { project: SpaceInfo; treasury: TreasuryInfo; communities: SpaceInfo[]; onDone(): void }) {
   const start = treasury.pending ?? treasury.split;
   const [shares, setShares] = useState<Shares>(start?.shares ?? treasury.presets.standard);
   const [community, setCommunity] = useState(start?.community ?? '');
-  const total = PARTS.reduce((sum, p) => sum + shares[p.key], 0);
-  const preset = Object.entries(treasury.presets).find(([, s]) => PARTS.every((p) => s[p.key] === shares[p.key]))?.[0];
+  // The community part goes to a community you name; with none named, it stays with the project's treasury.
+  const named = communities.find((c) => c.id === community);
+  const saved = named ? shares : { ...shares, treasury: shares.treasury + shares.community, community: 0 };
+  const total = PARTS.reduce((sum, p) => sum + saved[p.key], 0);
+  const preset = Object.entries(treasury.presets).find(([, s]) => PARTS.every((p) => s[p.key] === saved[p.key]))?.[0];
+  const highlighted = Object.entries(treasury.presets).find(([, s]) => PARTS.every((p) => s[p.key] === shares[p.key]))?.[0];
   return (
     <>
       <div className="field-row">
         {Object.entries(treasury.presets).map(([name, s]) => (
-          <button key={name} className={preset === name ? 'default' : ''} onClick={() => setShares(s)}>
+          <button key={name} className={highlighted === name ? 'default' : ''} onClick={() => setShares(s)}>
             {PRESET_LABELS[name] ?? name}
           </button>
         ))}
       </div>
       {PARTS.map((p) => (
         <div className="field-row" key={p.key}>
-          <label className="grow" htmlFor={`share-${p.key}`}>
-            {p.label}
-            {p.key === 'foundation' && <span className="small"> · funds interesting projects; a suggestion, 0 is fine</span>}
-          </label>
-          <input id={`share-${p.key}`} type="number" min={0} max={100} step={0.5} style={{ width: 80 }} value={shares[p.key] / 100} onChange={(e) => setShares({ ...shares, [p.key]: Math.round(Number(e.target.value) * 100) || 0 })} />%
+          {p.key === 'community' ? (
+            <span className="grow">
+              {communities.length ? (
+                <select value={community} onChange={(e) => setCommunity(e.target.value)} aria-label="The community that gets this part">
+                  <option value="">A community you name…</option>
+                  {communities.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      r/{c.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <label htmlFor="share-community">A community</label>
+              )}
+              <span className="small muted"> · {named ? `to r/${named.name}'s treasury` : communities.length ? 'name one, or it stays with the treasury' : "you're in none: it stays with the treasury"}</span>
+            </span>
+          ) : (
+            <label className="grow" htmlFor={`share-${p.key}`}>
+              {p.label}
+              {p.key === 'foundation' && <span className="small"> · funds interesting projects; a suggestion, 0 is fine</span>}
+            </label>
+          )}
+          <input
+            id={`share-${p.key}`}
+            type="number"
+            min={0}
+            max={100}
+            step={0.5}
+            style={{ width: 80 }}
+            disabled={p.key === 'community' && !named}
+            value={saved[p.key] / 100}
+            onChange={(e) => setShares({ ...saved, [p.key]: Math.round(Number(e.target.value) * 100) || 0 })}
+          />
+          %
         </div>
       ))}
-      {shares.community > 0 && (
-        <div className="field-row">
-          <select value={community} onChange={(e) => setCommunity(e.target.value)} aria-label="Community that gets the community part">
-            <option value="">No community yet: its part goes to the treasury</option>
-            {communities.map((c) => (
-              <option key={c.id} value={c.id}>
-                r/{c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      <SplitBar shares={shares} />
+      <SplitBar shares={saved} community={named && `r/${named.name}`} />
       <div className="field-row">
         <span className="grow small">{total === 10000 ? (treasury.split ? 'A change counts after 7 days, so nobody is surprised by it.' : 'The first split counts right away.') : `Adds up to ${pct(total)}: it has to be 100%.`}</span>
+        <button onClick={onDone}>Cancel</button>
         <AsyncButton
           className="default"
-          onClick={() =>
-            attempt(
-              () => api('setSplit', { project: project.id, ...(preset ? { preset } : { shares }), ...(community && shares.community ? { community } : {}) }).then(bump),
+          onClick={async () => {
+            const done = await attempt(
+              () => api('setSplit', { project: project.id, ...(preset ? { preset } : { shares: saved }), ...(named && saved.community ? { community: named.id } : {}) }).then(bump),
               treasury.split ? 'Split changed: it counts in 7 days' : 'Split set',
-            )
-          }
+            );
+            if (done !== undefined) onDone();
+          }}
         >
           Save split
         </AsyncButton>
@@ -99,17 +123,51 @@ function SplitEditor({ project, treasury, communities }: { project: SpaceInfo; t
   );
 }
 
-/** In a project's settings: its treasury's address, owners and split. */
-export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spaces: SpaceInfo[] }) {
+/**
+ * Whether a project's payments show (its treasury and split in Settings, new
+ * shows in Live): once you turned them on here, or while the project uses them.
+ */
+export function usePayments(project: SpaceInfo) {
+  const [turnedOn, turn] = usePaymentsSwitch(project.id);
+  const { data: treasury } = useApi(() => api<TreasuryInfo>('treasury', project.id).catch(() => undefined), [project.id]);
+  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id).catch(() => []), [project.id]);
+  const inUse = !!(treasury?.split || treasury?.pending || shows?.length);
+  return { on: turnedOn || inUse, inUse, turn };
+}
+
+/** In a project's settings: payments, off until someone turns them on; then its treasury. */
+export function PaymentsSettings({ project, spaces }: { project: SpaceInfo; spaces: SpaceInfo[] }) {
+  const payments = usePayments(project);
+  if (!payments.on)
+    return (
+      <fieldset>
+        <legend>Payments</legend>
+        <p className="small">
+          Off. Turned on, the project gets a treasury (a Safe its maintainers' wallets own), a split of what it earns, and ticketed shows in Live. On a test network: no real money yet.
+        </p>
+        <div className="buttons">
+          <button onClick={() => payments.turn(true)}>Turn on payments</button>
+        </div>
+      </fieldset>
+    );
+  return <TreasurySettings project={project} spaces={spaces} onTurnOff={payments.inUse ? undefined : () => payments.turn(false)} />;
+}
+
+/** Its treasury's address, owners and split. */
+function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; spaces: SpaceInfo[]; onTurnOff?(): void }) {
   const { data: treasury } = useApi(() => api<TreasuryInfo>('treasury', project.id), [project.id]);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
+  const [editing, setEditing] = useState(false);
   if (!treasury) return null;
+  const name = (p: { did: string; name?: string }) => p.name ?? shortDid(p.did);
+  const communityName = (id?: string) => (id ? `r/${spaces.find((x) => x.id === id)?.name ?? 'a community'}` : undefined);
   return (
     <fieldset>
-      <legend>Treasury</legend>
-      <p className="small">
-        The project's own wallet: a Safe its maintainers' wallets own ({treasury.threshold} of {Math.max(treasury.owners.length, 1)} must sign). Weave holds no keys or money. On {treasury.chain.name}, a test network: no real money yet.
-      </p>
+      <legend>Payments</legend>
+      <div className="field-row">
+        <b className="grow">Treasury</b>
+        <span className="small muted">{treasury.chain.name}, a test network</span>
+      </div>
       {treasury.address ? (
         <div className="field-row">
           <Icon name="lock" />
@@ -120,20 +178,14 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
           </a>
         </div>
       ) : (
-        <p className="small">No address yet: it's made from the maintainers' wallets, and none is linked.</p>
+        <p className="small">No address yet: the treasury is a Safe made from its maintainers' wallets, and none is linked.</p>
       )}
-      {treasury.owners.map((o) => (
-        <div className="field-row small" key={o.person.did}>
-          <span className="grow">{o.person.name ?? shortDid(o.person.did)}</span>
-          <code>{o.address}</code>
-        </div>
-      ))}
-      {treasury.missing.map((p) => (
-        <div className="field-row small" key={p.did}>
-          <span className="grow">{p.name ?? shortDid(p.did)}</span>
-          <span className="muted">no wallet linked: not an owner yet</span>
-        </div>
-      ))}
+      <p className="small">
+        Owned by {treasury.owners.length ? treasury.owners.map((o) => name(o.person)).join(', ') : 'nobody yet'}
+        {treasury.owners.length > 1 && ` (${treasury.threshold} of ${treasury.owners.length} sign)`}
+        {treasury.missing.length > 0 && <span className="muted"> · no wallet yet: {treasury.missing.map(name).join(', ')}</span>}. Weave holds no keys or money.
+      </p>
+      {treasury.maintainer && !wallet && <WalletNeeded why="Your wallet makes you an owner, with the other maintainers." />}
       {treasury.address && <SafeProposals safe={treasury.address} />}
       {treasury.retired.map((r) => (
         <div key={r.address}>
@@ -157,16 +209,25 @@ export function TreasurySettings({ project, spaces }: { project: SpaceInfo; spac
           <SafeProposals safe={r.address} />
         </div>
       ))}
-      {treasury.maintainer && !wallet && <WalletLink intro="Link your wallet to own this treasury with the other maintainers (also in Keys & devices). Weave never sees its key." />}
-      <h4>Split</h4>
-      {treasury.split ? <SplitBar shares={treasury.split.shares} /> : <p className="small">No split yet.</p>}
+      <div className="field-row" style={{ marginTop: 10 }}>
+        <b className="grow">Split of what it earns</b>
+        {treasury.maintainer && !editing && <button onClick={() => setEditing(true)}>{treasury.split ? 'Change…' : 'Set a split…'}</button>}
+      </div>
+      {treasury.split ? <SplitBar shares={treasury.split.shares} community={communityName(treasury.split.community)} /> : !editing && <p className="small">None yet: income stays in the treasury.</p>}
       {treasury.pending && (
         <>
           <p className="small">From {new Date(treasury.pending.from).toLocaleDateString()}:</p>
-          <SplitBar shares={treasury.pending.shares} />
+          <SplitBar shares={treasury.pending.shares} community={communityName(treasury.pending.community)} />
         </>
       )}
-      {treasury.maintainer && <SplitEditor key={JSON.stringify(treasury.pending ?? treasury.split ?? null)} project={project} treasury={treasury} communities={spaces.filter((s) => s.kind === 'community')} />}
+      {editing && <SplitEditor key={JSON.stringify(treasury.pending ?? treasury.split ?? null)} project={project} treasury={treasury} communities={spaces.filter((s) => s.kind === 'community')} onDone={() => setEditing(false)} />}
+      {onTurnOff && (
+        <div className="buttons">
+          <button className="link" onClick={onTurnOff}>
+            Turn off payments
+          </button>
+        </div>
+      )}
     </fieldset>
   );
 }

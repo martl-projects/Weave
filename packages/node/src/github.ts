@@ -244,9 +244,9 @@ export class GitHub {
     return { body: res.body, ...(size > 0 ? { size } : {}) };
   }
 
-  /** Give someone read access; GitHub sends them an invitation to accept. */
-  async invite(repo: string, login: string): Promise<void> {
-    await this.#call('PUT', `/repos/${repo}/collaborators/${encodeURIComponent(login)}`, { permission: 'pull' });
+  /** Give someone access (read, or write where they were picked to write); GitHub sends them an invitation to accept. */
+  async invite(repo: string, login: string, permission: 'pull' | 'push' = 'pull'): Promise<void> {
+    await this.#call('PUT', `/repos/${repo}/collaborators/${encodeURIComponent(login)}`, { permission });
   }
 
   /** Take access away again: the collaborator, or the invitation they haven't accepted. */

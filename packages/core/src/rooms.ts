@@ -333,11 +333,11 @@ export const MANIFEST_RULES = [
   'app: a short id, lowercase letters, digits and dashes (it stays the same across versions). name: what people see.',
   'services: the ports the app listens on, at most 8. A room shares exactly these ports and nothing else on the host\'s computer. Each has a port, an optional id, and protocol "http" (default) or "tcp".',
   'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label. Without open, everyone opens "/". Either way anyone can type any path: to tell host and players apart for real, ask Weave with @weave/sdk.',
-  'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after the host approves it once.',
+  'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after whoever opens a room with it approves it.',
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Each host types it in Weave (Live tab, or weave app set), it stays on their computer, and Weave hands it to this app alone when it starts it. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
@@ -346,6 +346,39 @@ export const MANIFEST_RULES = [
 /** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */
 export const startCommand = (app: AppManifest | undefined, platform: string, releaseBuild: boolean): string[] | undefined =>
   (releaseBuild ? app?.start?.release?.[platform] : undefined) ?? app?.start?.command;
+
+/**
+ * An artifact: one release a project published (a weave.app with a tag and its files or image, by a maintainer).
+ * Anyone in the project can start it as a service, pinned to exactly this release, in any space of theirs.
+ */
+export interface Artifact {
+  /** The weave.app event that published it. */
+  id: string;
+  tag: string;
+  manifest: AppManifest;
+  /** Who released it (a maintainer), and the key that signed (theirs, or their agent's). */
+  author: Did;
+  signer: string;
+  time: string;
+}
+
+/** A project's artifacts, newest first: each tag once (its latest release), only by maintainers, only with something to start. */
+export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
+  const byTag = new Map<string, Artifact>();
+  for (const e of [...entries].filter((x) => x.kind === KIND_APP).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+    if (!maintainers.has(e.event.author)) continue;
+    let manifest: AppManifest;
+    try {
+      manifest = parseManifest(e.body);
+    } catch {
+      continue;
+    }
+    const tag = manifest.install?.tag;
+    if (!tag || !(manifest.install?.assets || manifest.install?.image)) continue;
+    byTag.set(tag, { id: e.id, tag, manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
+  }
+  return [...byTag.values()].sort((a, b) => b.time.localeCompare(a.time));
+}
 
 export interface Room {
   id: string;
@@ -361,19 +394,45 @@ export interface Room {
   show?: string;
   /** Groups (tiers, say) whose members may join; with a show, either a ticket or one of these lets someone in. */
   groups?: string[];
+  /** The service that offers it (its key), when a service announced it rather than its person. */
+  agent?: Did;
+  /** Which page each side opens, and the ▶ label: whoever runs it (host), and everyone who joins. */
+  pages?: RoomPages;
   open: boolean;
   time: string;
 }
 
+export interface RoomPages {
+  host?: { path: string; label: string };
+  joiner?: { path: string; label: string };
+}
+
+/** Pages from untrusted input: a path from the root and a short label, for either side. */
+export function parsePages(value: unknown): RoomPages | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  const side = (raw: unknown) => {
+    const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const at = text(s.path, 200);
+    return at.startsWith('/') ? { path: at, label: text(s.label, 30) || 'Open' } : undefined;
+  };
+  const host = side(v.host);
+  const joiner = side(v.joiner);
+  return host || joiner ? { ...(host ? { host } : {}), ...(joiner ? { joiner } : {}) } : undefined;
+}
+
 /** Rooms from announcements, the latest per room by its host counting. */
-export function roomsOf(entries: Array<{ event: { author: Did; time: string }; kind: string; body: Json }>): Room[] {
+export function roomsOf(entries: Array<{ event: { author: Did; signer?: string; time: string }; kind: string; body: Json }>): Room[] {
   const rooms = new Map<string, Room>();
   for (const e of [...entries].filter((x) => x.kind === KIND_ROOM).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
     const b = (e.body && typeof e.body === 'object' ? e.body : {}) as Record<string, unknown>;
     const id = text(b.room, 64);
     if (!id) continue;
     const before = rooms.get(id);
-    if (before && before.host !== e.event.author) continue; // only the host changes a room
+    // Only the host changes a room; a service's room, only that service. A service names itself as `agent`, and
+    // that counts only when its own key signed (a person's devices sign their rooms too, and offer none).
+    const agent = isDid(b.agent) && e.event.signer === b.agent ? b.agent : undefined;
+    if (before && (before.host !== e.event.author || before.agent !== agent)) continue;
     if (b.open === false) {
       if (before) before.open = false;
       continue;
@@ -383,7 +442,8 @@ export function roomsOf(entries: Array<{ event: { author: Did; time: string }; k
     const invite = Array.isArray(b.invite) ? b.invite.filter(isDid) : 'participants';
     const show = text(b.show, 100);
     const groups = Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string' && g.length <= 100).slice(0, 10) : [];
-    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), open: true, time: e.event.time });
+    const pages = parsePages(b.pages);
+    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), ...(agent ? { agent } : {}), ...(pages ? { pages } : {}), open: true, time: e.event.time });
   }
   return [...rooms.values()];
 }

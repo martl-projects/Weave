@@ -1,9 +1,16 @@
 export type {
   Actor,
+  DeskInfo,
+  RoutineInfo,
+  WorkTarget,
+  SessionInfo,
+  SessionRef,
+  StackPost,
+  ClaudeCodeFollow,
+  MentionInfo,
   Admission,
   AgentInfo,
   Backend,
-  AppLaunchInfo,
   BoardInfo,
   GranteeInfo,
   InviteOptions,
@@ -73,6 +80,12 @@ export type {
   SpaceInfo,
   SpaceRef,
   SpaceRepos,
+  ServiceGate,
+  ServiceInfo,
+  HostedRoomInfo,
+  ArtifactInfo,
+  ServiceProfileInfo,
+  ServiceRequestInfo,
   Status,
   ThreadInfo,
   Whoami,
@@ -83,6 +96,8 @@ export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } f
 export { checkGumroadLicense, createGumroadMembership, startGumroadSignIn, type CreatedGumroadMembership, type GumroadSignIn, type NewGumroadMembership } from './gumroad.ts';
 export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
+export { startLinks, type LinkServer } from './links.ts';
+export { claudeBundle, zip, type ClaudeBundleOptions } from './mcpb.ts';
 export { ApiClient, connectDaemon, daemonInfo, followDaemon, stopDaemon, type DaemonInfo } from './client.ts';
 export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts';
 export { startDaemon, type Daemon } from './daemon.ts';

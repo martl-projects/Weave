@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WeaveNode } from '@weave/node';
-import { createWeaveMcp } from '../src/index.ts';
+import { createWeaveMcp, sessionFromEnv } from '../src/index.ts';
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -199,6 +199,76 @@ describe('Weave over MCP', () => {
     expect(data.chat.map((m: { text: string }) => m.text)).toEqual(['Thanks @forge', 'You are welcome']);
     expect(data.score).toBe(1);
     expect((await call('weave_posts', { space: 'Weave', board: 'releases' })).data[0].title).toBe('Nightly build');
+    close();
+  });
+
+  it("keeps the session's work items as a stack: new work on top, interrupted work comes back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-'));
+    dirs.push(dir);
+    const node = WeaveNode.init('Martin', dir);
+    await node.createProject({ name: 'Desk' });
+    await node.addAgent('claude', ['weave.post', 'weave.issue', 'weave.issue.status']);
+    const session = sessionFromEnv({ CLAUDE_CODE_SESSION_ID: 'e360e3d1-test', CLAUDE_CODE_HOST_SESSION_ID: 'local_5499-test' }, 'C:\\desk');
+    expect(session).toEqual({ provider: 'claude-code', id: 'e360e3d1-test', host: 'local_5499-test', folder: 'C:\\desk' });
+    const { server, close } = createWeaveMcp(node, { as: 'claude', session });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test-harness', version: '1.0.0' });
+    await client.connect(clientSide);
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = (await client.callTool({ name, arguments: args })) as { content: Array<{ text: string }>; isError?: boolean };
+      if (result.isError) throw new Error(result.content[0].text);
+      return JSON.parse(result.content[0].text);
+    };
+    const titles = (s: { stack: Array<{ post: { title: string } }> }) => s.stack.map((i) => i.post.title);
+
+    const journal = await node.submit({ space: 'Desk', board: 'ideas', title: 'Thursday, 23 October 2026', prompt: 'This is journaling: turn what deserves it into work items.' });
+    expect(journal.prompt).toBe('This is journaling: turn what deserves it into work items.');
+    let s = await call('weave_work_on', { post: journal.url });
+    expect(s).toMatchObject({ provider: 'claude-code', id: 'e360e3d1-test', host: 'local_5499-test', folder: 'C:\\desk' });
+    expect(s.stack[0].post).toMatchObject({ title: 'Thursday, 23 October 2026', prompt: 'This is journaling: turn what deserves it into work items.' });
+
+    // Standup interrupts the journal; a new issue interrupts the standup.
+    const standup = await node.submit({ space: 'Desk', board: 'ideas', title: 'Standup' });
+    s = await call('weave_work_on', { post: standup.id });
+    s = await call('weave_work_on', { create: { space: 'Desk', board: 'issues', title: 'Fix the login', prompt: 'Find why sign-in fails and fix it.' } });
+    expect(titles(s)).toEqual(['Fix the login', 'Standup', 'Thursday, 23 October 2026']);
+    expect(s.stack[0].post).toMatchObject({ type: 'issue', prompt: 'Find why sign-in fails and fix it.' });
+
+    // Done with the issue (closing it): back to the standup, then the journal.
+    s = await call('weave_done', { close: true });
+    expect(titles(s)).toEqual(['Standup', 'Thursday, 23 October 2026']);
+    expect((await node.issues('Desk'))[0].status).toBe('done');
+    s = await call('weave_stack', { posts: [journal.id] });
+    expect(titles(s)).toEqual(['Thursday, 23 October 2026', 'Standup']);
+    s = await call('weave_stack', { remove: [standup.id] });
+    expect(titles(await call('weave_session'))).toEqual(['Thursday, 23 October 2026']);
+
+    // The stack is the person's: sealed to them, listed with the session.
+    expect((await node.sessions()).map((x) => [x.id, x.stack.length])).toEqual([['e360e3d1-test', 1]]);
+    await expect(call('weave_done', { post: standup.id })).rejects.toThrow(/isn't on this session's stack/);
+    close();
+  });
+
+  it('asks for the session where the harness says nothing', async () => {
+    const { call, close } = await setup();
+    expect((await call('weave_session')).error).toMatch(/pass session_id/);
+    expect((await call('weave_session', { session_id: 'some-session' })).data).toMatchObject({ id: 'some-session', stack: [] });
+    close();
+  });
+
+  it('shows posts in the Mentions panel, and as cards where the host renders MCP Apps', async () => {
+    const { node, client, call, close } = await setup(['weave.post']);
+    const idea = await node.submit({ space: 'Weave', board: 'ideas', title: 'KMS System' });
+    const tool = (await client.listTools()).tools.find((t) => t.name === 'weave_show');
+    expect(tool?._meta).toEqual({ ui: { resourceUri: 'ui://weave/post-cards' } });
+    const view = await client.readResource({ uri: 'ui://weave/post-cards' });
+    expect(view.contents[0]).toMatchObject({ uri: 'ui://weave/post-cards', mimeType: 'text/html;profile=mcp-app' });
+    expect((view.contents[0] as { text: string }).text).toContain("request('ui/initialize'");
+
+    const { data } = await call('weave_show', { posts: [idea.url], note: 'From our plan' });
+    expect(data).toMatchObject([{ source: 'agent', agent: 'forge', note: 'From our plan', post: { title: 'KMS System', url: idea.url } }]);
+    expect((await node.mentions()).length).toBe(1);
     close();
   });
 

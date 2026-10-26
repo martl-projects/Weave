@@ -82,7 +82,7 @@ export class ManagedKeys {
     if (inner.kind === KIND_MANAGED && r.author === space.founder && b?.provider && Number(b.ttlMinutes) > 0 && Number(b.graceHours) >= 0 && (!into.setting || r.time >= into.setting.time))
       into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), ...(Number.isSafeInteger(b.from) ? { from: b.from as number } : {}), by: r.author, time: r.time };
     if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string') {
-      // Every author's part kept apart: which counts is decided by whose rekey we seal with ().
+      // Every author's part kept apart: which counts is decided by whose rekey we seal with (kmsParts).
       let byAuthor = into.parts.get(b.epoch as number);
       if (!byAuthor) into.parts.set(b.epoch as number, (byAuthor = new Map()));
       if (!byAuthor.has(r.author)) byAuthor.set(r.author, b.wrapped);

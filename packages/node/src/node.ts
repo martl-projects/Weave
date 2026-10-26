@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   accessOf,
   accountsOf,
@@ -11,6 +11,10 @@ import {
   KIND_GITHUB_REPO,
   planSync,
   reposOf,
+  REPO_ACCESS,
+  MAX_WRITERS,
+  type RepoAccess,
+  type RepoLink,
   b64u,
   BLOB_TYPES,
   boardKeyFor,
@@ -192,6 +196,28 @@ import {
   coauthorsOf,
   MAX_COAUTHORS,
   postRefOf,
+  postRefsIn,
+  dayKey,
+  dueOccurrence,
+  KIND_ROUTINE,
+  nextRun,
+  parseCreate,
+  parseTrigger,
+  renderTitle,
+  routinesOf,
+  type Routine,
+  KIND_SESSION,
+  pushOnto,
+  reorder,
+  sessionKey,
+  sessionsOf,
+  takeOff,
+  type SessionRecord,
+  type StackItem,
+  postTargetOf,
+  postUrl,
+  shortPrefixes,
+  type PostTarget,
   type KeyFacts,
   KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
@@ -270,6 +296,10 @@ import {
   openRekey,
   parseManifest,
   startCommand,
+  artifactsOf,
+  parsePages,
+  type RoomPages,
+  type Artifact,
   type AppAsset,
   type AppImage,
   type AppInstall,
@@ -302,6 +332,7 @@ import {
   tiersOf,
   visibleIn,
   type AppManifest,
+  type AppSetting,
   type Board,
   type Member,
   type BoardType,
@@ -358,6 +389,19 @@ import {
   parseVersion,
   TEXT_LIMITS,
   tooLong,
+  KIND_SERVICE_PROFILE,
+  KIND_SERVICE_REQUEST,
+  KIND_SERVICE_RESULT,
+  KIND_SERVICE_IN,
+  servicesIn as servicesInSpace,
+  SERVICE_PREFIX,
+  parseContract,
+  profilesOf,
+  requestsOf,
+  serviceName,
+  servicePermissions,
+  serviceReads,
+  type ServiceContract,
 } from '@weave/core';
 import { roomKeyPair, SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
@@ -367,7 +411,7 @@ import {
   type Admission,
   type AgentInfo,
   type AppEnv,
-  type AppLaunchInfo,
+
   type AppPerson,
   type UpdateInfo,
   type Backend,
@@ -379,11 +423,25 @@ import {
   type HarnessInfo,
   type PermissionRequest,
   type AppOpen,
+  type ClaudeCodeFollow,
+  type MentionInfo,
+  type SessionInfo,
+  type SessionRef,
+  type WorkTarget,
+  type DeskInfo,
+  type RoutineInfo,
+  type StackPost,
   type HubGitHub,
   type RepoInfo,
   type SpaceRepos,
   type MembershipRequestInfo,
   type BadgeInfo,
+  type ServiceGate,
+  type ServiceInfo,
+  type ArtifactInfo,
+  type HostedRoomInfo,
+  type ServiceProfileInfo,
+  type ServiceRequestInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
   type PaymentRequestInfo,
@@ -450,6 +508,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
+import { AppLogFollower, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
@@ -458,9 +517,9 @@ import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type 
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createPublicKey, createVerify, hkdfSync, createHmac } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { createHash, createHmac, createPublicKey, createVerify, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
+import { cpSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
@@ -492,17 +551,18 @@ import {
   type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
-import { AppProcesses, launchFingerprint } from './applaunch.ts';
+import { launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
+import { Desk, type DeskCore } from './desk.ts';
 import { Forgetting, type ForgettingCore } from './retention.ts';
 import { Holding, type HoldingCore } from './holding.ts';
 import { Repos, type ReposCore } from './repos.ts';
-import { Apps, type AppsCore } from './apps.ts';
+import { Services, type ServicesCore } from './services.ts';
 import { Payments, type PaymentsCore } from './payments.ts';
 import { Badges, type BadgesCore } from './badges.ts';
 import { Companies, type CompaniesCore } from './companies.ts';
@@ -526,7 +586,38 @@ export const SELF_SCOPE = 'self';
 
 
 
-/** An event as this node can read it, before names are resolved. */
+
+
+/** A room the room service runs: in one of its projects, answered by its handler. */
+export interface StoredRoom {
+  id: string;
+  project: string;
+  name: string;
+  handler: RoomHandler;
+  /** Where the handler listens, on this computer: what the room's clients reach. */
+  port: number;
+  /** The handler's settings (its environment). */
+  settings: Record<string, string>;
+  /** Its own token: the handler's way into the app API (for its room only), and the key of X-Weave-Person. */
+  token: string;
+  /** Who may join, when not every participant: these people, a show's ticket holders, members of tiers. */
+  access?: { invite?: Did[]; show?: string; groups?: string[] };
+  /** Which page each side opens (an artifact's from its manifest). */
+  pages?: RoomPages;
+}
+
+/** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
+export type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
+
+export interface StoredArtifact {
+  /** The project that released it. */
+  project: string;
+  /** The weave.app event of the release. */
+  id: string;
+  tag: string;
+  manifest: AppManifest;
+}
+
 export interface Decoded {
   event: WeaveRecord;
   /** Restated in a carry, not decoded from the event itself (see #expandCarry). */
@@ -553,7 +644,7 @@ export const KIND_NODE_INDEX = 'weave.node.index';
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
-const NODE_PREFIX = 'node:';
+export const NODE_PREFIX = 'node:';
 
 
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
@@ -603,15 +694,10 @@ export const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
 
-/**
- * One person's node: their keys, their replica of the logs they know, the
- * groups and projects they belong to, and optionally a live connection to
- * peers. The CLI uses it directly when no daemon runs; the daemon wraps it
- * with networking and the HTTP API.
- */
+
 /** Why a person's repository can't follow a space, and what to do about it. */
 export const personalRepo = (repo: string) =>
-  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again`;
+  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Link it without access (access: none), give write access to people you pick one by one (access: write), or move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again for read access for all members`;
 
 
 export class WeaveNode implements Backend {
@@ -638,14 +724,22 @@ export class WeaveNode implements Backend {
       const grant = this.replica.authority.grant(signer);
       return grant && grant.revokedAfter !== undefined ? undefined : person;
     },
-    mayJoin: (room, person) => this.#appsHere.mayJoin(room, person),
-    servicePort: (room) => this.#appsHere.roomService(room)?.port,
-    personHeader: (room, person) => this.#appsHere.personHeader(room, person),
-    seed: (roomId) => this.#appsHere.roomSeed(roomId),
+    mayJoin: (room, person) => this.#services.mayJoin(room, person),
+    servicePort: (room) => this.#services.roomService(room)?.port,
+    personHeader: (room, person) => this.#services.personHeader(room, person),
+    seed: (roomId) => this.#services.roomSeed(roomId),
     nameOf: (did) => this.nameOf(did),
-    changed: () => this.#appsHere.emitLive(),
+    changed: () => this.#services.emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
+  /** Posts agents pointed to, newest first (the Mentions panel), and who's watching for more. */
+  #mentions: MentionInfo[] = [];
+  readonly #mentionListeners = new Set<(mention: MentionInfo) => void>();
+  /** Claude Code sessions followed for links to posts, while that's on (see followClaudeCode). */
+  #follower?: TranscriptFollower;
+  /** The Claude app's log, for the session you're looking at, while that's on too. */
+  #appLog?: AppLogFollower;
+  readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -690,7 +784,7 @@ export class WeaveNode implements Backend {
     name: () => this.nameOf(this.identity.author),
     call: (method, args) => (this[method] as (...a: unknown[]) => Promise<unknown>).apply(this, args),
     watch: (onItem, signal) => this.watch(onItem, signal),
-    roomPort: async (roomId) => this.#appsHere.roomPort(roomId),
+    roomPort: async (roomId) => this.#services.roomPort(roomId),
   });
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
@@ -780,6 +874,47 @@ export class WeaveNode implements Backend {
       invalidateDecoded: this.#invalidateDecoded.bind(this),
     });
     // More concern modules, each over its own narrow core:
+    this.#desk = new Desk(this, {
+      allPosts: this.#allPosts.bind(this),
+      get appLog() {
+        return node.#appLog;
+      },
+      get spaces() {
+        return node.#spaces;
+      },
+      spacePosts: this.#spacePosts.bind(this),
+      maintainerState: this.#maintainerState.bind(this),
+      board: this.#board.bind(this),
+      get managed() {
+        return node.#managed;
+      },
+      space: this.#space.bind(this),
+      entries: this.#entries.bind(this),
+      state: this.#state.bind(this),
+      get services() {
+        return node.#services;
+      },
+      decodeAll: this.#decodeAll.bind(this),
+      sealForSelf: this.#sealForSelf.bind(this),
+      requests: this.#requests.bind(this),
+      get agents() {
+        return node.#agents;
+      },
+      get requestsFile() {
+        return node.#requestsFile;
+      },
+      page: this.#page.bind(this),
+      access: this.#access.bind(this),
+      managers: this.#managers.bind(this),
+      get seenAt() {
+        return node.#seenAt;
+      },
+      follows: this.#follows.bind(this),
+      ruleInfo: this.#ruleInfo.bind(this),
+      project: this.#project.bind(this),
+      knownGroup: this.#knownGroup.bind(this),
+      reconcileBoards: this.#reconcileBoards.bind(this),
+    });
     this.#retention = new Forgetting(this, {
       space: this.#space.bind(this),
       state: this.#state.bind(this),
@@ -852,7 +987,7 @@ export class WeaveNode implements Backend {
       selfBodies: this.#selfBodies.bind(this),
       sealForSelf: this.#sealForSelf.bind(this),
     });
-    this.#appsHere = new Apps(this, {
+    this.#services = new Services(this, {
       project: this.#project.bind(this),
       agentMay: this.#agentMay.bind(this),
       maintainerState: this.#maintainerState.bind(this),
@@ -867,26 +1002,38 @@ export class WeaveNode implements Backend {
       get live() {
         return node.#live;
       },
+      spaceName: this.#spaceName.bind(this),
       get payments() {
         return node.#payments;
       },
       get badges() {
         return node.#badges;
       },
-      get githubApp() {
-        return node.#repos.githubApp.bind(node.#repos);
+      get isLinkedNode() {
+        return node.#isLinkedNode;
       },
-      get swarm() {
-        return node.#swarm;
+      agentName: this.#agentName.bind(this),
+      selfSecret: this.#selfSecret.bind(this),
+      get agents() {
+        return node.#agents;
+      },
+      get liveListeners() {
+        return node.#liveListeners;
       },
       space: this.#space.bind(this),
       get managed() {
         return node.#managed;
       },
-      selfSecret: this.#selfSecret.bind(this),
-      get liveListeners() {
-        return node.#liveListeners;
+      actor: this.#actor.bind(this),
+      get swarm() {
+        return node.#swarm;
       },
+      decodeAll: this.#decodeAll.bind(this),
+      sealForSelf: this.#sealForSelf.bind(this),
+      setAgents: this.#setAgents.bind(this),
+      toItem: this.#toItem.bind(this),
+      decode: this.#decode.bind(this),
+      find: this.#find.bind(this),
     });
     this.#payments = new Payments(this, {
       createSpace: this.#createSpace.bind(this),
@@ -936,7 +1083,7 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#repos.githubFile, this.#payments.gumroadFile, this.#appsHere.appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
+    for (const file of [this.#repos.githubFile, this.#payments.gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
     this.#managed.loadHalves();
     // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
@@ -1243,12 +1390,12 @@ export class WeaveNode implements Backend {
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
     await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
-    for (const { room } of this.#appsHere.allRooms()) if (room.open && room.host === this.identity.author) await this.#live.host(room).catch(() => {});
+    for (const { room } of this.#services.allRooms()) if (room.open && this.#services.hostedHere(room)) await this.#live.host(room).catch(() => {});
     await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
   }
 
   async goOffline(): Promise<void> {
-    await this.#appsHere.shutdownApps();
+    await this.#services.closeAppApi();
     await this.#remote.close();
     await this.#live.close();
     await this.#swarm?.destroy();
@@ -1257,6 +1404,9 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
+    this.#services.stopServiceProcesses();
+    this.#follower?.stop();
+    this.#appLog?.stop();
     // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
     await Promise.race([Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id))), new Promise((r) => setTimeout(r, 15_000).unref())]);
     await this.#companies.scimServer?.close();
@@ -1424,9 +1574,17 @@ export class WeaveNode implements Backend {
     // Not an event either: the app comes to the front there; other watchers see no text and leave it.
     const onOpen = (open: AppOpen) => onItem({ id: `open-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.open', scope: 'live', body: open as unknown as Json, author: me, signer: me, seq: 0 });
     this.#openListeners.add(onOpen);
+    // Neither: a post an agent pointed to, for the Mentions panel.
+    const onMention = (mention: MentionInfo) => onItem({ id: mention.id, time: mention.time, kind: 'weave.mention', scope: 'live', body: mention as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#mentionListeners.add(onMention);
+    // You switched sessions in the Claude app: the panel follows.
+    const onFocus = (session: SessionInfo | null) => onItem({ id: `focus-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.focus', scope: 'live', body: session as unknown as Json, author: me, signer: me, seq: 0 });
+    this.#focusListeners.add(onFocus);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
+    this.#mentionListeners.delete(onMention);
+    this.#focusListeners.delete(onFocus);
     unsubscribe();
   }
 
@@ -2072,6 +2230,8 @@ export class WeaveNode implements Backend {
   }
 
   async post(ref: string): Promise<PostInfo> {
+    const target = postTargetOf(ref ?? '');
+    if (target) return this.#postAt(target);
     ref = postRefOf(ref ?? '');
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
@@ -2086,7 +2246,7 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -2099,10 +2259,13 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
-    if (input.with?.length) body.with = this.#coauthorList(space, input.with);
+    if (input.with?.length) body.with = this.#desk.coauthorList(space, input.with);
+    const prompt = input.prompt?.trim();
+    if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
+    if (prompt) body.prompt = prompt;
     if (space.kind === 'project') {
       const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
-      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
+      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name, prompt })).id);
       if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
       body.board = board.name;
     }
@@ -2115,7 +2278,7 @@ export class WeaveNode implements Backend {
     const agent = input.as ? this.#agents.find((a) => a.name === input.as) : undefined;
     if (input.as && !agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
     const me = agent?.did ?? this.identity.author;
-    const named = this.#namedIn(post.id);
+    const named = this.#desk.namedIn(post.id);
     if (!named) throw new Error("that post doesn't name any co-authors");
     if (!named.includes(me) && !named.some((did) => this.replica.authority.personOf(did) === this.identity.author && !agent)) {
       throw new Error(agent ? `that post doesn't name ${agent.name} as a co-author` : "that post doesn't name you as a co-author");
@@ -2128,10 +2291,10 @@ export class WeaveNode implements Backend {
     const me = this.identity.author;
     const mine = new Map(this.#agents.map((a) => [a.did, a.name]));
     const out: CoauthorRequest[] = [];
-    for (const { posts, entries, space } of this.#postSources()) {
+    for (const { posts, entries, space } of this.#desk.postSources()) {
       for (const p of posts) {
         if (!p.with || p.author === me) continue;
-        for (const c of coauthorsOf(p, entries, this.#keyFacts)) {
+        for (const c of coauthorsOf(p, entries, this.#desk.keyFacts)) {
           if (c.state !== 'asked' || (c.did !== me && !mine.has(c.did))) continue;
           out.push({
             post: { id: p.id, short: p.id.slice(0, 8), title: p.title, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}) },
@@ -2181,7 +2344,7 @@ export class WeaveNode implements Backend {
     const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: missing, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
     // Keep what's pending, and the last few answers.
     writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
-    this.#appsHere.emitLive({
+    this.#services.emitLive({
       type: 'permission',
       category: 'requests',
       title: `Your agent ${agent.name} asks for a permission`,
@@ -2191,8 +2354,15 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox'].includes(input.what)) throw new Error('what is link-repo, space or inbox');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen> {
+    if (!['link-repo', 'space', 'inbox', 'post'].includes(input.what)) throw new Error('what is link-repo, space, inbox or post');
+    if (input.what === 'post') {
+      if (!input.post) throw new Error('say which post');
+      const post = await this.post(input.post);
+      const open: AppOpen = { what: 'post', post: { id: post.id, title: post.title }, ...(post.space ? { space: post.space } : {}) };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     const space = input.space ? this.#space(input.space) : undefined;
     if (input.what !== 'inbox' && !space) throw new Error('say which space');
     const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
@@ -2202,253 +2372,200 @@ export class WeaveNode implements Backend {
     return open;
   }
 
-  async permissionRequests(): Promise<PermissionRequest[]> {
-    return this.#requests().filter((r) => r.state === 'pending' && this.#agents.some((a) => a.name === r.agent));
-  }
-
-  async answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest> {
-    const requests = this.#requests();
-    const request = requests.find((r) => r.id === input.id);
-    if (!request) throw new Error('no such request (it may have been answered already)');
-    if (request.state !== 'pending') return request;
-    if (input.allow) {
-      const agent = this.#agents.find((a) => a.name === request.agent);
-      if (!agent) throw new Error(`the agent ${request.agent} is gone`);
-      await this.updateAgent({ name: agent.name, permissions: [...agent.permissions, ...request.kinds] });
+  async showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]> {
+    if (input.as && !this.#agents.some((a) => a.name === input.as)) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (!input.posts?.length) throw new Error('say which posts to show');
+    const note = input.note?.trim().slice(0, 500) || undefined;
+    const shown: MentionInfo[] = [];
+    for (const ref of input.posts.slice(0, 20)) {
+      const post = await this.post(ref);
+      shown.push(this.#mention(post, { source: 'agent', ...(input.as ? { agent: input.as } : {}), ...(note ? { note } : {}) }));
     }
-    request.state = input.allow ? 'allowed' : 'declined';
-    writeJson(this.#requestsFile, requests);
-    this.#appsHere.emitLive();
-    return request;
+    return shown;
   }
 
-  /** What co-authorship needs to know about keys. */
-  #keyFacts: KeyFacts = {
-    personOf: (key) => this.replica.authority.personOf(key),
-    isAgent: (key) => this.replica.authority.grant(key)?.role === 'agent',
-  };
+  async mentions(): Promise<MentionInfo[]> {
+    return this.#mentions;
+  }
 
-  /** A co-author by name, did:key, your agent's name, or someone's agent as "person·agent". */
-  /** Co-authors to name in a space: resolved, each one a member who can confirm. */
-  #coauthorList(space: StoredSpace, refs: string[]): Did[] {
-    if (refs.length > MAX_COAUTHORS) throw new Error(`name at most ${MAX_COAUTHORS} co-authors`);
-    const state = this.#state(space);
-    const named = [...new Set(refs.map((ref) => this.#resolveCoauthor(ref)))];
-    for (const did of named) {
-      const person = this.replica.authority.personOf(did);
-      if (!state.members.has(person)) throw new Error(`${this.nameOf(person) ?? did} isn't in ${space.name}, so they can't confirm`);
+  async followClaudeCode(input: { on: boolean }): Promise<ClaudeCodeFollow> {
+    this.config = { ...this.config, followClaudeCode: input.on || undefined };
+    saveConfig(this.home, this.config);
+    if (input.on) this.startFollowing();
+    else {
+      this.#follower?.stop();
+      this.#follower = undefined;
+      this.#appLog?.stop();
+      this.#appLog = undefined;
     }
-    return named;
+    return this.claudeCode();
   }
 
-  #resolveCoauthor(ref: string): Did {
-    const text = ref.trim();
-    if (isDid(text)) return text;
-    const split = /^(.+?)\s*[·/]\s*([a-z0-9-]+)$/.exec(text);
-    if (split) {
-      const person = this.resolve(split[1]);
-      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.name === split[2] && g.revokedAfter === undefined);
-      if (!grant) throw new Error(`${split[1]} has no agent named "${split[2]}"`);
-      return grant.subject;
-    }
-    const mine = this.#agents.find((a) => a.name === text);
-    return mine ? mine.did : this.resolve(text);
+  async claudeCode(): Promise<ClaudeCodeFollow> {
+    const follower = this.#follower ?? new TranscriptFollower(() => {});
+    return { on: !!this.config.followClaudeCode, dir: follower.dir, found: existsSync(follower.dir) };
   }
 
-  /** A key as an actor: an agent shows with its person. */
-  #keyActor(did: Did) {
-    const grant = this.replica.authority.grant(did);
-    if (grant?.role === 'agent') return { did: grant.author, ...(this.nameOf(grant.author) ? { name: this.nameOf(grant.author) } : {}), ...(grant.name ? { agent: grant.name } : {}) };
-    return { did, ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}) };
-  }
-
-  /** The co-authors a post names, wherever it is. */
-  #namedIn(postId: string): Did[] | undefined {
-    for (const { posts } of this.#postSources()) {
-      const post = posts.find((p) => p.id === postId);
-      if (post) return post.with;
-    }
-    return undefined;
-  }
-
-  /** Every post this node can read, with the entries around it: per project and community, and the public ones. */
-  #postSources(): Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> {
-    const out: Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> = [];
-    for (const space of this.#spaces.values()) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
-      const entries = this.#entries(space);
-      out.push({ posts: postsOf(space.kind, entries, this.#state(space).maintainers), entries, space });
-    }
-    const entries = this.#decodeAll()
-      .filter((d) => !d.space && !d.private)
-      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    out.push({ posts: postsOf(undefined, entries), entries });
-    return out;
-  }
-
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; as?: string }): Promise<PostInfo> {
-    const post = await this.#ownPost(input.post, 'edit');
-    const body: Record<string, Json> = { target: post.id };
-    if (input.title !== undefined) {
-      const title = input.title.trim();
-      if (!title) throw new Error('a post needs a title');
-      if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
-      body.title = title;
-    }
-    if (input.text !== undefined) body.text = input.text;
-    if (input.link !== undefined) {
-      const link = input.link.trim();
-      if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
-      body.link = link;
-    }
-    if (input.image !== undefined) {
-      const image = input.image.trim();
-      if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
-      body.image = image;
-    }
-    if (input.with !== undefined) {
-      const space = post.space && this.#spaces.get(post.space.id);
-      if (!space) throw new Error("co-authors are named in the space a post is in, and you aren't in it");
-      body.with = this.#coauthorList(space, input.with);
-    }
-    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link, image or co-authors');
-    await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
-    return this.post(post.id);
-  }
-
-  async deletePost(input: { post: string; as?: string }): Promise<void> {
-    const post = await this.#ownPost(input.post, 'delete');
-    await this.publish({ kind: KIND_POST_DELETE, body: { target: post.id }, space: post.space?.id, as: input.as });
-  }
-
-  /** A post you may edit (yours) or delete (yours, or any in a space you maintain or moderate). */
-  async #ownPost(ref: string, action: 'edit' | 'delete'): Promise<PostInfo> {
-    const post = await this.post(ref);
-    if (post.type !== 'post') throw new Error(`only posts can be changed this way; this is a ${post.type}`);
-    // Old ideas threads show up as posts too, but are weave.thread events.
-    if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && d.id === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
-    if (post.by.did === this.identity.author) return post;
-    const space = post.space && this.#spaces.get(post.space.id);
-    if (action === 'delete' && space && mayAct(this.#state(space), this.identity.author, 'curate').ok) return post;
-    throw new Error(action === 'edit' ? 'only its author can edit a post' : `only its author${space ? ` or the ${space.kind === 'community' ? 'moderators' : 'maintainers'}` : ''} can delete a post`);
-  }
-
-  async upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo> {
-    if (![1, 0, -1].includes(input.value)) throw new Error('upvote with 1, -1, or 0 to take it back');
-    const post = await this.post(input.target);
-    await this.publish({ kind: KIND_UPVOTE, body: { target: post.id, value: input.value }, space: post.space?.id, as: input.as });
-    return this.post(post.id);
-  }
-
-  async save(input: { target: string; mode: SaveMode | null }): Promise<void> {
-    if (input.mode !== null && !SAVE_MODES.includes(input.mode)) throw new Error(`save as ${SAVE_MODES.join(' or ')}, or null to forget`);
-    const post = await this.post(input.target);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SAVE, body: { target: post.id, mode: input.mode } }));
-  }
-
-  async share(input: { post: string; to: string; text?: string }): Promise<PostInfo> {
-    const post = await this.post(input.post);
-    const project = post.project ? { id: post.project.id, name: post.project.name, description: post.project.description, status: post.project.status, ...(post.project.icon ? { icon: post.project.icon } : {}) } : undefined;
-    const text = input.text?.trim() || post.text;
-    if (input.to === 'followers') {
-      const page = project && this.#spaces.has(project.id) ? this.#page(this.#spaces.get(project.id)!, this.#state(this.#spaces.get(project.id)!)) : undefined;
-      if (!project || !page?.public) throw new Error('only projects with a public page can be shared with your followers; share other posts into a community');
-      const { id } = await this.publish({ kind: KIND_POST, body: { title: post.title, text, share: { post: post.id, project } } });
-      return this.post(id);
-    }
-    const target = this.#space(input.to);
-    if (target.kind !== 'community') throw new Error(`share into a community (or "followers"); ${target.name} is a ${target.kind}`);
-    const share: Record<string, Json> = { post: post.id, ...(post.space ? { space: { ...post.space } } : {}), ...(project ? { project } : {}) };
-    const body: Record<string, Json> = { title: post.title, text, share };
-    if (post.link) body.link = post.link;
-    if (post.image) body.image = post.image;
-    const { id } = await this.publish({ kind: KIND_POST, body, space: target.id });
-    return this.post(id);
-  }
-
-  async boards(ref: string): Promise<BoardInfo[]> {
-    const space = this.#space(ref);
-    const { posts, boards } = this.#spacePosts(space);
-    const state = this.#state(space);
-    const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
-    const me = this.identity.author;
-    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt);
-    return boards
-      .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
-      .map((b) => {
-        const inBoard = posts.filter((p) => p.board === b.name);
-        const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
-        const rules = access?.rules.get(b.name);
-        const info = (list?: Grantee[]) => list?.map((g) => this.#granteeInfo(g, state));
-        return {
-          ...b,
-          count: inBoard.length,
-          ...(active ? { active } : {}),
-          access: { ...(rules?.read ? { read: info(rules.read) } : {}), ...(rules?.write ? { write: info(rules.write) } : {}) },
-          canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
-          ...(space.kind === 'project' ? { following: this.#follows(space.id, b.name) } : {}),
-          ...(forgetting.get(b.name) ? { rule: this.#ruleInfo(forgetting.get(b.name)!) } : {}),
-        };
-      });
-  }
-
-  async setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const board = this.#board(project, this.#spacePosts(project).boards, input.board);
-    const before = this.#access(project, state, this.#entries(project)).rules.get(board.name) ?? {};
-    const grantees = (list: string[] | null | undefined, keep?: Grantee[]): Grantee[] | null => {
-      if (list === null) return null;
-      if (list === undefined) return keep ?? null;
-      return list.map((ref) => {
-        if (ref.startsWith('group:')) return { group: this.#knownGroup(project, ref.slice(6)).id };
-        const did = this.resolve(ref);
-        if (!state.members.has(did)) throw new Error(`${ref} isn't in ${project.name}`);
-        return { person: did };
-      });
-    };
-    const read = grantees(input.read, before.read);
-    const write = grantees(input.write, before.write);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD_ACCESS, body: { board: board.name, read: read as unknown as Json, write: write as unknown as Json } }));
-    await this.#reconcileBoards(project);
-    return this.boards(project.id);
-  }
-
-  #granteeInfo(g: Grantee, state: SpaceState): GranteeInfo {
-    if ('person' in g) return { person: g.person, ...(this.nameOf(g.person) ? { name: this.nameOf(g.person) } : {}) };
-    return { group: g.group, name: this.#spaces.get(g.group)?.name ?? state.groups.get(g.group)?.name ?? 'group' };
-  }
-
-  async setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const name = boardName(input.name);
-    if (!name) throw new Error('board names use letters, digits and dashes');
-    if (input.sort !== undefined && !POST_SORTS.includes(input.sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);
-    const body: Record<string, Json> = { name };
-    const isNew = !(await this.boards(project.id)).some((b) => b.name === name);
-    const title = input.title ?? (isNew ? input.name : undefined);
-    if (title !== undefined) body.title = title.trim().slice(0, 40);
-    if (input.type !== undefined) body.type = input.type;
-    if (input.sort !== undefined) body.sort = input.sort;
-    if (input.position !== undefined) body.position = input.position;
-    if (input.on === false) body.on = false;
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD, body }));
-    return this.boards(project.id);
-  }
-
-  async curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]> {
-    const space = this.#space(input.space);
-    this.#maintainerState(space);
-    const { posts, boards } = this.#spacePosts(space);
-    const board = this.#board(space, boards, input.board ?? (space.kind === 'community' ? COMMUNITY_BOARD : ''));
-    const pinned = (input.pinned ?? []).map((ref) => {
-      const match = posts.filter((p) => p.board === board.name && p.id.startsWith(ref));
-      if (match.length !== 1) throw new Error(`no single post ${ref} in ${board.title}`);
-      return match[0].id;
+  /** Follow Claude Code sessions if the person turned that on (the daemon calls this when it starts). */
+  startFollowing(): void {
+    if (!this.config.followClaudeCode || this.#follower?.running) return;
+    this.#follower = new TranscriptFollower((said) => this.#mentionsIn(said));
+    this.#follower.start();
+    this.#appLog = new AppLogFollower(() => {
+      void this.#desk.attachExpected()
+        .catch(() => {})
+        .then(() => this.focusedSession())
+        .then((session) => {
+          for (const listener of this.#focusListeners) listener(session);
+        });
     });
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CURATE, body: { board: board.name, pinned } }));
-    return this.boards(space.id);
+    this.#appLog.start();
+  }
+
+  /** Links to posts in what an agent said in a Claude Code session: each post once per session and hour. */
+  #mentionsIn(said: SessionText): void {
+    for (const ref of postRefsIn(said.text)) {
+      let post: PostInfo;
+      try {
+        post = postTargetOf(ref) ? this.#postAt(postTargetOf(ref)!) : this.#allPosts().find((p) => p.id.startsWith(ref))!;
+      } catch {
+        continue; // not a post you can see here
+      }
+      if (!post) continue;
+      const hour = Date.now() - 60 * 60 * 1000;
+      if (this.#mentions.some((m) => m.post.id === post.id && m.session?.id === said.session && Date.parse(m.time) > hour)) continue;
+      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
+    }
+  }
+
+  #mention(post: PostInfo, how: Pick<MentionInfo, 'source'> & Partial<Pick<MentionInfo, 'agent' | 'session' | 'note'>>): MentionInfo {
+    const mention: MentionInfo = {
+      id: `mention-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      time: new Date().toISOString(),
+      post,
+      ...how,
+    };
+    this.#mentions = [mention, ...this.#mentions].slice(0, 100);
+    for (const listener of this.#mentionListeners) listener(mention);
+    return mention;
+  }
+
+  // Agent sessions and their stacks of work items, your desk and its routines: desk.ts (Desk). The node delegates.
+
+  sessions(...args: Parameters<Desk['sessions']>): ReturnType<Desk['sessions']> {
+    return this.#desk.sessions(...args);
+  }
+
+  activeSessions(...args: Parameters<Desk['activeSessions']>): ReturnType<Desk['activeSessions']> {
+    return this.#desk.activeSessions(...args);
+  }
+
+  focusedSession(...args: Parameters<Desk['focusedSession']>): ReturnType<Desk['focusedSession']> {
+    return this.#desk.focusedSession(...args);
+  }
+
+  session(...args: Parameters<Desk['session']>): ReturnType<Desk['session']> {
+    return this.#desk.session(...args);
+  }
+
+  workOn(...args: Parameters<Desk['workOn']>): ReturnType<Desk['workOn']> {
+    return this.#desk.workOn(...args);
+  }
+
+  doneWith(...args: Parameters<Desk['doneWith']>): ReturnType<Desk['doneWith']> {
+    return this.#desk.doneWith(...args);
+  }
+
+  restack(...args: Parameters<Desk['restack']>): ReturnType<Desk['restack']> {
+    return this.#desk.restack(...args);
+  }
+
+  desk(...args: Parameters<Desk['desk']>): ReturnType<Desk['desk']> {
+    return this.#desk.desk(...args);
+  }
+
+  deskFolder(...args: Parameters<Desk['deskFolder']>): ReturnType<Desk['deskFolder']> {
+    return this.#desk.deskFolder(...args);
+  }
+
+  setupDesk(...args: Parameters<Desk['setupDesk']>): ReturnType<Desk['setupDesk']> {
+    return this.#desk.setupDesk(...args);
+  }
+
+  routines(...args: Parameters<Desk['routines']>): ReturnType<Desk['routines']> {
+    return this.#desk.routines(...args);
+  }
+
+  setRoutine(...args: Parameters<Desk['setRoutine']>): ReturnType<Desk['setRoutine']> {
+    return this.#desk.setRoutine(...args);
+  }
+
+  removeRoutine(...args: Parameters<Desk['removeRoutine']>): ReturnType<Desk['removeRoutine']> {
+    return this.#desk.removeRoutine(...args);
+  }
+
+  runRoutine(...args: Parameters<Desk['runRoutine']>): ReturnType<Desk['runRoutine']> {
+    return this.#desk.runRoutine(...args);
+  }
+
+  tickRoutines(...args: Parameters<Desk['tickRoutines']>): ReturnType<Desk['tickRoutines']> {
+    return this.#desk.tickRoutines(...args);
+  }
+
+  expectSession(...args: Parameters<Desk['expectSession']>): ReturnType<Desk['expectSession']> {
+    return this.#desk.expectSession(...args);
+  }
+
+  workTarget(...args: Parameters<Desk['workTarget']>): ReturnType<Desk['workTarget']> {
+    return this.#desk.workTarget(...args);
+  }
+
+  rememberFolder(...args: Parameters<Desk['rememberFolder']>): ReturnType<Desk['rememberFolder']> {
+    return this.#desk.rememberFolder(...args);
+  }
+
+  permissionRequests(...args: Parameters<Desk['permissionRequests']>): ReturnType<Desk['permissionRequests']> {
+    return this.#desk.permissionRequests(...args);
+  }
+
+  answerPermission(...args: Parameters<Desk['answerPermission']>): ReturnType<Desk['answerPermission']> {
+    return this.#desk.answerPermission(...args);
+  }
+
+  editPost(...args: Parameters<Desk['editPost']>): ReturnType<Desk['editPost']> {
+    return this.#desk.editPost(...args);
+  }
+
+  deletePost(...args: Parameters<Desk['deletePost']>): ReturnType<Desk['deletePost']> {
+    return this.#desk.deletePost(...args);
+  }
+
+  upvote(...args: Parameters<Desk['upvote']>): ReturnType<Desk['upvote']> {
+    return this.#desk.upvote(...args);
+  }
+
+  save(...args: Parameters<Desk['save']>): ReturnType<Desk['save']> {
+    return this.#desk.save(...args);
+  }
+
+  share(...args: Parameters<Desk['share']>): ReturnType<Desk['share']> {
+    return this.#desk.share(...args);
+  }
+
+  boards(...args: Parameters<Desk['boards']>): ReturnType<Desk['boards']> {
+    return this.#desk.boards(...args);
+  }
+
+  setBoardAccess(...args: Parameters<Desk['setBoardAccess']>): ReturnType<Desk['setBoardAccess']> {
+    return this.#desk.setBoardAccess(...args);
+  }
+
+  setBoard(...args: Parameters<Desk['setBoard']>): ReturnType<Desk['setBoard']> {
+    return this.#desk.setBoard(...args);
+  }
+
+  curate(...args: Parameters<Desk['curate']>): ReturnType<Desk['curate']> {
+    return this.#desk.curate(...args);
   }
 
   // ---------------------------------------------------------------- projects
@@ -2656,6 +2773,8 @@ export class WeaveNode implements Backend {
       this.#writeNodeIndex();
     }
     this.#holding.recoverSpaces();
+    // On an always-on node: services handed over by its person's computers.
+    changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -2693,6 +2812,10 @@ export class WeaveNode implements Backend {
 
   disconnectGithub(...args: Parameters<Repos['disconnectGithub']>): ReturnType<Repos['disconnectGithub']> {
     return this.#repos.disconnectGithub(...args);
+  }
+
+  githubRepoOwner(...args: Parameters<Repos['githubRepoOwner']>): ReturnType<Repos['githubRepoOwner']> {
+    return this.#repos.githubRepoOwner(...args);
   }
 
   githubRepos(...args: Parameters<Repos['githubRepos']>): ReturnType<Repos['githubRepos']> {
@@ -2840,86 +2963,106 @@ export class WeaveNode implements Backend {
       }));
   }
 
-  // A project's app, installed and run by hosts, its API, settings and updates, and live rooms: apps.ts (Apps). The node delegates.
+  // Services and apps: code run under keys of their own, artifacts, rooms of the room service, app releases and the app API: services.ts (Services). The node delegates.
 
-  projectApp(...args: Parameters<Apps['projectApp']>): ReturnType<Apps['projectApp']> {
-    return this.#appsHere.projectApp(...args);
+  projectApp(...args: Parameters<Services['projectApp']>): ReturnType<Services['projectApp']> {
+    return this.#services.projectApp(...args);
   }
 
-  publishApp(...args: Parameters<Apps['publishApp']>): ReturnType<Apps['publishApp']> {
-    return this.#appsHere.publishApp(...args);
+  publishApp(...args: Parameters<Services['publishApp']>): ReturnType<Services['publishApp']> {
+    return this.#services.publishApp(...args);
   }
 
-  appLaunch(...args: Parameters<Apps['appLaunch']>): ReturnType<Apps['appLaunch']> {
-    return this.#appsHere.appLaunch(...args);
+  updateCheck(...args: Parameters<Services['updateCheck']>): ReturnType<Services['updateCheck']> {
+    return this.#services.updateCheck(...args);
   }
 
-  updateCheck(...args: Parameters<Apps['updateCheck']>): ReturnType<Apps['updateCheck']> {
-    return this.#appsHere.updateCheck(...args);
+  appReleases(...args: Parameters<Services['appReleases']>): ReturnType<Services['appReleases']> {
+    return this.#services.appReleases(...args);
   }
 
-  appReleases(...args: Parameters<Apps['appReleases']>): ReturnType<Apps['appReleases']> {
-    return this.#appsHere.appReleases(...args);
+  roomEnv(...args: Parameters<Services['roomEnv']>): ReturnType<Services['roomEnv']> {
+    return this.#services.roomEnv(...args);
   }
 
-  setAppFolder(...args: Parameters<Apps['setAppFolder']>): ReturnType<Apps['setAppFolder']> {
-    return this.#appsHere.setAppFolder(...args);
+  releaseApp(...args: Parameters<Services['releaseApp']>): ReturnType<Services['releaseApp']> {
+    return this.#services.releaseApp(...args);
   }
 
-  launchApp(...args: Parameters<Apps['launchApp']>): ReturnType<Apps['launchApp']> {
-    return this.#appsHere.launchApp(...args);
+  rooms(...args: Parameters<Services['rooms']>): ReturnType<Services['rooms']> {
+    return this.#services.rooms(...args);
   }
 
-  setAppSetting(...args: Parameters<Apps['setAppSetting']>): ReturnType<Apps['setAppSetting']> {
-    return this.#appsHere.setAppSetting(...args);
+  endRoom(...args: Parameters<Services['endRoom']>): ReturnType<Services['endRoom']> {
+    return this.#services.endRoom(...args);
   }
 
-  appEnv(...args: Parameters<Apps['appEnv']>): ReturnType<Apps['appEnv']> {
-    return this.#appsHere.appEnv(...args);
+  joinRoom(...args: Parameters<Services['joinRoom']>): ReturnType<Services['joinRoom']> {
+    return this.#services.joinRoom(...args);
   }
 
-  installApp(...args: Parameters<Apps['installApp']>): ReturnType<Apps['installApp']> {
-    return this.#appsHere.installApp(...args);
+  leaveRoom(...args: Parameters<Services['leaveRoom']>): ReturnType<Services['leaveRoom']> {
+    return this.#services.leaveRoom(...args);
   }
 
-  installDone(...args: Parameters<Apps['installDone']>): ReturnType<Apps['installDone']> {
-    return this.#appsHere.installDone(...args);
+  roomChat(...args: Parameters<Services['roomChat']>): ReturnType<Services['roomChat']> {
+    return this.#services.roomChat(...args);
   }
 
-  releaseApp(...args: Parameters<Apps['releaseApp']>): ReturnType<Apps['releaseApp']> {
-    return this.#appsHere.releaseApp(...args);
+  sayInRoom(...args: Parameters<Services['sayInRoom']>): ReturnType<Services['sayInRoom']> {
+    return this.#services.sayInRoom(...args);
   }
 
-  stopApp(...args: Parameters<Apps['stopApp']>): ReturnType<Apps['stopApp']> {
-    return this.#appsHere.stopApp(...args);
+  servicesIn(...args: Parameters<Services['servicesIn']>): ReturnType<Services['servicesIn']> {
+    return this.#services.servicesIn(...args);
   }
 
-  rooms(...args: Parameters<Apps['rooms']>): ReturnType<Apps['rooms']> {
-    return this.#appsHere.rooms(...args);
+  artifacts(...args: Parameters<Services['artifacts']>): ReturnType<Services['artifacts']> {
+    return this.#services.artifacts(...args);
   }
 
-  hostRoom(...args: Parameters<Apps['hostRoom']>): ReturnType<Apps['hostRoom']> {
-    return this.#appsHere.hostRoom(...args);
+  openRoom(...args: Parameters<Services['openRoom']>): ReturnType<Services['openRoom']> {
+    return this.#services.openRoom(...args);
   }
 
-  endRoom(...args: Parameters<Apps['endRoom']>): ReturnType<Apps['endRoom']> {
-    return this.#appsHere.endRoom(...args);
+  roomReady(...args: Parameters<Services['roomReady']>): ReturnType<Services['roomReady']> {
+    return this.#services.roomReady(...args);
   }
 
-  joinRoom(...args: Parameters<Apps['joinRoom']>): ReturnType<Apps['joinRoom']> {
-    return this.#appsHere.joinRoom(...args);
+  addService(...args: Parameters<Services['addService']>): ReturnType<Services['addService']> {
+    return this.#services.addService(...args);
   }
 
-  leaveRoom(...args: Parameters<Apps['leaveRoom']>): ReturnType<Apps['leaveRoom']> {
-    return this.#appsHere.leaveRoom(...args);
+  services(...args: Parameters<Services['services']>): ReturnType<Services['services']> {
+    return this.#services.services(...args);
   }
 
-  roomChat(...args: Parameters<Apps['roomChat']>): ReturnType<Apps['roomChat']> {
-    return this.#appsHere.roomChat(...args);
+  setService(...args: Parameters<Services['setService']>): ReturnType<Services['setService']> {
+    return this.#services.setService(...args);
   }
 
-  sayInRoom(...args: Parameters<Apps['sayInRoom']>): ReturnType<Apps['sayInRoom']> {
-    return this.#appsHere.sayInRoom(...args);
+  removeService(...args: Parameters<Services['removeService']>): ReturnType<Services['removeService']> {
+    return this.#services.removeService(...args);
+  }
+
+  serviceProfiles(...args: Parameters<Services['serviceProfiles']>): ReturnType<Services['serviceProfiles']> {
+    return this.#services.serviceProfiles(...args);
+  }
+
+  askService(...args: Parameters<Services['askService']>): ReturnType<Services['askService']> {
+    return this.#services.askService(...args);
+  }
+
+  serviceRequests(...args: Parameters<Services['serviceRequests']>): ReturnType<Services['serviceRequests']> {
+    return this.#services.serviceRequests(...args);
+  }
+
+  serviceGate(...args: Parameters<Services['serviceGate']>): ReturnType<Services['serviceGate']> {
+    return this.#services.serviceGate(...args);
+  }
+
+  runServices(...args: Parameters<Services['runServices']>): ReturnType<Services['runServices']> {
+    return this.#services.runServices(...args);
   }
 
   // ---------------------------------------------------------------- identity and keys
@@ -3197,7 +3340,8 @@ export class WeaveNode implements Backend {
   #agentName(signer: Did, author: Did): string | undefined {
     if (signer === author) return undefined;
     const grant = this.replica.authority.grant(signer);
-    return grant?.role === 'agent' ? grant.name : undefined;
+    // A service shows by its own name ("martl · files"), like any agent.
+    return grant?.role === 'agent' ? grant.name?.replace(SERVICE_PREFIX, '') : undefined;
   }
 
   // Paid memberships, wallets, treasuries, Safe transactions and ticketed shows: payments.ts (Payments). The node delegates.
@@ -3489,11 +3633,12 @@ export class WeaveNode implements Backend {
     return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
   }
 
-  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string }): Promise<IssueInfo> {
+  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo> {
     if (!input.title?.trim()) throw new Error('an issue needs a title');
     const project = this.#project(input.project);
     const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
     if (input.board) body.board = input.board;
+    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
     const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
     return (await this.issues(project.id)).find((i) => i.id === id)!;
   }
@@ -4027,6 +4172,9 @@ export class WeaveNode implements Backend {
   #companies!: Companies;
   // (further concern modules)
 
+  /** Agent sessions and their stacks of work items, your desk and its routines (desk.ts). */
+  #desk!: Desk;
+
   /** Retention: holds, forgetting by rule, shredding old keys and carrying forward what stays (retention.ts). */
   #retention!: Forgetting;
 
@@ -4036,14 +4184,19 @@ export class WeaveNode implements Backend {
   /** GitHub repositories that follow a space: sign-in, linking, members' read access (repos.ts). */
   #repos!: Repos;
 
-  /** A project's app, installed and run by hosts, its API, settings and updates, and live rooms (apps.ts). */
-  #appsHere!: Apps;
+  /** Services and apps: code run under keys of their own, artifacts, rooms of the room service, app releases and the app API (services.ts). */
+  #services!: Services;
 
   /** Paid memberships, wallets, treasuries, Safe transactions and ticketed shows (payments.ts). */
   #payments!: Payments;
 
   /** Badges: series, badges given, transferred, notes (badges.ts). */
   #badges!: Badges;
+
+  /** The agent keys this node holds, replaced (a service's key added or dropped). */
+  #setAgents(agents: AgentKey[]): void {
+    this.#agents = agents;
+  }
 
   /** Decoded views go stale (keys came or went, bodies were dropped): decode again when next asked. */
   #invalidateDecoded(): void {
@@ -4459,10 +4612,10 @@ export class WeaveNode implements Backend {
     const pinned = new Set(boards.flatMap((b) => b.pinned));
     const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
     const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries };
     const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
     const around = this.#aroundPosts(entries);
     const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
+    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
     const minDays = this.#companies.companyRetention(space)?.minDays;
     // Each author's share of each board with a rule: their bytes against an even split (stage 8).
     const overuse = new Map<string, number>();
@@ -4540,6 +4693,7 @@ export class WeaveNode implements Backend {
     return {
       id: created.id,
       short: created.id.slice(0, 8),
+      url: postUrl({ id: created.id, title: project.name, space: project, project: true }, this.#prefix()),
       type: 'project',
       space: { id: project.id, kind: 'project', name: project.name },
       by: this.#actor(project.founder, project.founder),
@@ -4556,13 +4710,14 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[] }): PostInfo {
+  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[]; prefixes?: Map<string, string> }): PostInfo {
     const score = ctx.scores.get(p.id);
     const chat = ctx.chats.get(p.id);
     const saved = ctx.saves.get(p.id);
     const info: PostInfo = {
       id: p.id,
       short: p.id.slice(0, 8),
+      url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
       by: this.#actor(p.author, p.signer),
@@ -4570,6 +4725,8 @@ export class WeaveNode implements Backend {
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
       ...(p.image ? { image: p.image } : {}),
+      ...(p.prompt ? { prompt: p.prompt } : {}),
+      ...(p.routine ? { routine: p.routine } : {}),
       time: p.time,
       ...(p.edited ? { edited: p.edited } : {}),
       active: chat && chat.last > p.time ? chat.last : p.time,
@@ -4582,9 +4739,9 @@ export class WeaveNode implements Backend {
     if (p.with && ctx.entries) {
       // Everyone sees confirmed co-authors; the post's author also sees who was asked and who declined.
       const own = p.author === this.identity.author;
-      const coauthors = coauthorsOf(p, ctx.entries, this.#keyFacts)
+      const coauthors = coauthorsOf(p, ctx.entries, this.#desk.keyFacts)
         .filter((c) => own || c.state === 'confirmed')
-        .map((c) => ({ ...this.#keyActor(c.did), state: c.state }));
+        .map((c) => ({ ...this.#desk.keyActor(c.did), state: c.state }));
       if (coauthors.length) info.coauthors = coauthors;
     }
     if (p.share) {
@@ -4605,10 +4762,9 @@ export class WeaveNode implements Backend {
     const entries = this.#decodeAll()
       .filter((d) => !d.space && !d.private)
       .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries };
-    return postsOf(undefined, entries)
-      .filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author))
-      .map((p) => this.#postInfo(p, undefined, ctx));
+    const posts = postsOf(undefined, entries).filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author));
+    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries, prefixes: shortPrefixes(posts.map((p) => p.id)) };
+    return posts.map((p) => this.#postInfo(p, undefined, ctx));
   }
 
   /**
@@ -4709,6 +4865,26 @@ export class WeaveNode implements Backend {
     const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
     // Posts of followed boards are on Home too: each post once.
     return [...new Map([...this.#homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
+  }
+
+  /**
+   * Short ids for addresses: a post's within its list (`posts`), a space's
+   * among your spaces. Anything else keeps 8 characters.
+   */
+  #prefix(posts?: Map<string, string>): (id: string) => string {
+    const spaces = shortPrefixes(this.#spaces.keys());
+    return (id) => posts?.get(id) ?? spaces.get(id) ?? id.slice(0, 8);
+  }
+
+  /** The post an address points to (see postTargetOf): its project or community by id prefix, then the post. */
+  #postAt(target: PostTarget): PostInfo {
+    const posts = this.#allPosts().filter((p) =>
+      target.public ? !p.space : !!target.space && !!p.space?.id.startsWith(target.space) && (target.post ? p.type !== 'project' : p.type === 'project'),
+    );
+    const matches = target.post ? posts.filter((p) => p.id.startsWith(target.post!)) : posts;
+    if (matches.length === 0) throw new Error(`no post found at that address (it may be in a project or community you're not in)`);
+    if (matches.length > 1) throw new Error(`that address fits ${matches.length} posts here: use more characters of the id`);
+    return matches[0];
   }
 
   /** Where a post's chat lives; a project's own chat is its channels. */

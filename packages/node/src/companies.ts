@@ -1,7 +1,8 @@
+import { KIND_BLOCK, KIND_IDENTITY, KIND_LEAVE, KIND_MUTE, KIND_REKEY, KIND_ROTATE } from '@weave/core';
 import { KIND_THEME } from './theme.ts';
 import { createPublicKey, createVerify } from 'node:crypto';
 import { type StoredSpace } from './spacestore.ts';
-import { b64u, type Box, boxTo, currentEpoch, decodeContact, type Did, gift, type Invite, isDid, type Json, KIND_ADMIT, KIND_ATTEST, KIND_BLOCK, KIND_CARRY, KIND_FOLLOW, KIND_IDENTITY, KIND_JOIN, KIND_LEAVE, KIND_LINK, KIND_MAINTAINER, KIND_MANAGED, KIND_MUTE, KIND_ORG_CHAT, KIND_ORG_CONSOLE, KIND_ORG_DONE, KIND_ORG_FREEZE, KIND_ORG_MAP, KIND_ORG_POLICY, KIND_ORG_REQUEST, KIND_ORG_SETTINGS, KIND_ORG_START, KIND_POST_DELETE, KIND_POST_EDIT, KIND_REKEY, KIND_REMOVE, KIND_ROTATE, KIND_SETTLE, KIND_SIGNIN, type ManagedSetting, mayAct, openBox, parseScope, randomBytes, type Recipient, sealFor, type SpaceKeys, type SpaceKind, spaceScope, type SpaceState } from '@weave/core';
+import { b64u, type Box, boxTo, currentEpoch, decodeContact, type Did, gift, type Invite, isDid, type Json, KIND_ADMIT, KIND_ATTEST, KIND_CARRY, KIND_FOLLOW, KIND_JOIN, KIND_LINK, KIND_MAINTAINER, KIND_MANAGED, KIND_ORG_CHAT, KIND_ORG_CONSOLE, KIND_ORG_DONE, KIND_ORG_FREEZE, KIND_ORG_MAP, KIND_ORG_POLICY, KIND_ORG_REQUEST, KIND_ORG_SETTINGS, KIND_ORG_START, KIND_POST_DELETE, KIND_POST_EDIT, KIND_REMOVE, KIND_SETTLE, KIND_SIGNIN, type ManagedSetting, mayAct, openBox, parseScope, randomBytes, type Recipient, sealFor, type SpaceKeys, type SpaceKind, spaceScope, type SpaceState } from '@weave/core';
 import { ManagedKeys } from './managed.ts';
 import { type SqliteStore } from './sqlitestore.ts';
 import { type AuditStreamInfo, type CompanyAgentInfo, type CompanyDeviceInfo, type CompanyInfo, type ConsoleInfo, type ConsoleRole, type CreateCompanyInput, type ExportLine, type LinkInfo, type Profile, type ScimInfo, type SignInStatus, type SpaceInfo } from './backend.ts';
@@ -13,11 +14,11 @@ import { loadConfig, saveConfig } from './config.ts';
 import { providerFor, type ProviderSpec } from './keyproviders.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
-import { startConsole } from './console.ts';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { type AuditSink, type AuditSinkInput, newSink, sendLines, sinkTarget, type StreamedLine } from './auditsinks.ts';
 import { machinePolicy } from './machine.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, type ScimDirectory, scimHandle, type ScimRequest, type ScimResponse, startScimServer, tokenMatches } from './scim.ts';
+import { startConsole } from './console.ts';
 import { type WeaveNode, DAY_MS, type Decoded, withoutSecrets } from './node.ts';
 
 /*
@@ -27,6 +28,8 @@ import { type WeaveNode, DAY_MS, type Decoded, withoutSecrets } from './node.ts'
  * by mayAct (core) and by the company's own vouching here. It sees the node's
  * internals only through CompaniesCore.
  */
+
+
 
 /** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
 const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);

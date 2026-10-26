@@ -10,12 +10,15 @@ import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
-import { RoomsView } from './rooms.tsx';
+import { ProjectServicesView } from './rooms.tsx';
+import { MentionsPanel } from './overlay.tsx';
+import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, POST_LINK, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
+import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
+import { SpaceServices } from './services.tsx';
 import {
   CommunityAbout,
   GroupSettings,
@@ -34,7 +37,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -78,7 +81,8 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="zap" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
           {space.kind === 'group' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} />}
@@ -198,6 +202,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         {online.map((m) => row(m, true))}
         {offline.length > 0 && <h4>Away — {offline.length}</h4>}
         {offline.map((m) => row(m, false))}
+        <SpaceServices space={space} />
       </div>
     </aside>
   );
@@ -218,7 +223,7 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
   return (
     <nav className="project-sections mobile-only">
       {link(base, 'hash', 'general', !view)}
-      {link(`${base}/live`, 'zap', `Live${rooms?.length ? ` (${rooms.length})` : ''}`, view === 'live', !!rooms?.length)}
+      {link(`${base}/services`, 'zap', `Services${rooms?.length ? ` (${rooms.length} live)` : ''}`, view === 'services' || view === 'live', !!rooms?.length)}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
       {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
     </nav>
@@ -304,10 +309,12 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           empty={<>Nothing in {board?.title ?? arg} yet.</>}
         />
       );
-  } else if (view === 'live') {
-    body = <RoomsView project={space} members={list} meDid={me.did} />;
+  } else if (view === 'services' || view === 'live') {
+    body = <ProjectServicesView project={space} members={list} meDid={me.did} />;
+  } else if (view === 'routines') {
+    body = <RoutinesPage project={space} />;
   } else if (view === 'settings') {
-    body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} />;
+    body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} tab={arg} />;
   } else {
     body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} />;
   }
@@ -317,7 +324,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
       <div className="center">
         {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
         {mine.length > 0 && view !== 'settings' && (
-          <a className="notice" href={`${spaceHref(space)}/settings`}>
+          <a className="notice" href={`${spaceHref(space)}/settings/people`}>
             <Icon name="inbox" /> {mine[0].name ?? 'Someone'} from group {mine[0].group.name} is waiting to join{mine.length > 1 ? ` (+${mine.length - 1} more)` : ''}. Open Settings to decide.
           </a>
         )}
@@ -372,21 +379,53 @@ function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: Space
   return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
 
-/** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. */
+/** Where a Weave link goes: this window, or, from the side panel, the main window. */
+const go = (hash: string) => (location.hash.startsWith('#/overlay') && bridge.route ? void bridge.route(hash) : navigate(hash));
+
+/** Weave links: clicked in a message, or handed over by the OS when clicked elsewhere. Post addresses open here, not in a browser. */
 function openLink(link: string): void {
-  const post = POST_LINK.exec(link);
+  const ref = postRefOfHref(link);
   const space = SPACE_LINK.exec(link);
-  if (post) navigate(`#/post/${post[1]}`);
-  else if (space) navigate(spaceRoute(space[1], space[2]));
-  else if (link.startsWith('weave:enroll:')) {
+  if (space) return go(spaceRoute(space[1], space[2]));
+  if (link.startsWith('weave:enroll:')) {
     if (document.querySelector('.welcome')) enrollLinkOpened(link);
     else toast('This is a link to set up a company account. This computer has a Weave account already.');
+    return;
   }
-  else toast('Paste this link into “Join with an invite link…” or “Add someone”');
+  if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
+  if (!ref.startsWith('http')) return go(`#/post/${ref}`);
+  api<PostInfo>('post', ref).then(
+    (post) => go(postHref(post)),
+    () => toast("This post isn't on this computer. It may be in a project or community you're not in.", 'error'),
+  );
 }
 bridge.onLink(openLink);
+// The side panel's links open here.
+bridge.onRoute?.(navigate);
+
+/** Ctrl+click (Cmd+click on a Mac) on a post: work on it in the Claude app. */
+document.addEventListener(
+  'click',
+  (event) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const post = (event.target as Element | null)?.closest?.<HTMLElement>('[data-post]')?.dataset.post;
+    if (!post) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!bridge.workOn) return toast('Ctrl+click opens a work item in the Claude app: that works in the desktop app');
+    bridge.workOn(post).then(
+      (r) => {
+        if (r.how === 'cancelled') return;
+        if (r.delivered === 'clipboard') toast('The message is on your clipboard: paste it in Claude (Ctrl+V)');
+        else toast(r.how === 'new' ? `New Claude session in ${r.where}: the message is in its text box` : `Back in “${r.where}”: the message is in its text box`);
+      },
+      (error: Error) => toast(error.message, 'error'),
+    );
+  },
+  true,
+);
 document.addEventListener('click', (event) => {
-  const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"]');
+  const anchor = (event.target as Element | null)?.closest?.('a[href^="weave:"], a[href^="http://weave.localhost"]');
   if (!anchor) return;
   event.preventDefault();
   openLink(anchor.getAttribute('href')!);
@@ -509,6 +548,7 @@ function Shell() {
           items={[
             { label: 'New project, community or group…', onClick: () => setDialog({ kind: 'new' }) },
             { label: 'Join with an invite link…', onClick: () => setDialog({ kind: 'new' }) },
+            { label: 'Your desk…', onClick: () => setDialog({ kind: 'desk' }) },
             'sep',
             { label: 'Close', onClick: () => window.close() },
           ]}
@@ -522,6 +562,7 @@ function Shell() {
             { label: 'People', onClick: () => navigate('#/people') },
             { label: 'My hub', onClick: () => navigate('#/space') },
             { label: 'Keys & devices', onClick: () => navigate('#/keys') },
+            ...(bridge.mentions ? [{ label: 'Mentions panel', onClick: () => void bridge.mentions!('show') }] : []),
             'sep',
             { label: 'Refresh', onClick: bump },
             { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
@@ -604,6 +645,7 @@ function Shell() {
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
+      {dialog?.kind === 'desk' && <SetupDeskDialog onClose={close} />}
     </div>
   );
 }
@@ -630,6 +672,8 @@ function App() {
         <Onboarding onDone={refresh} />
       ) : !state.connected ? (
         <NotConnected home={state.home} onRetry={refresh} />
+      ) : location.hash.startsWith('#/overlay') ? (
+        <MentionsPanel />
       ) : (
         <>
           <Shell />

@@ -113,7 +113,6 @@ button .icon { vertical-align: -3px; }
 .buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
 .field-row { flex-wrap: wrap; gap: 6px; }
 .field-row > * + * { margin-left: 0; }
-.radio-row { display: flex; gap: 8px; align-items: baseline; margin: 4px 0; }
 .rule-line { margin: 4px 8px; display: flex; gap: 6px; align-items: center; }
 .lifetime { display: flex; gap: 4px; align-items: center; margin: 2px 0 6px; }
 .notice { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #ffffe1; border: 1px solid #000; color: #000; text-decoration: none; font-family: var(--content-font); font-size: 12px; }
@@ -413,6 +412,11 @@ menu[role='tablist'] { margin-bottom: 0; }
 .person { display: flex; align-items: center; gap: 10px; padding: 6px; border-bottom: 1px solid #ddd; }
 .boards-table { border-collapse: collapse; margin-bottom: 8px; }
 .boards-table td { padding: 2px 6px 2px 0; }
+.boards-table th { padding: 0 6px 4px 0; text-align: left; font-weight: normal; }
+.people-table { width: 100%; border-collapse: collapse; }
+.people-table td { padding: 3px 6px 3px 0; vertical-align: middle; }
+.people-table td.grow { width: 100%; }
+.people-table td:last-child { text-align: right; white-space: nowrap; }
 .small-btn { min-width: 0; padding: 0 6px; }
 
 /* ---------- someone's hub, in their own theme (MySpace-style boxes) */
@@ -581,6 +585,67 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .release-list td { padding: 4px 2px; border-bottom: 1px solid #c0c0c0; }
 .release-list td:last-child { text-align: right; white-space: nowrap; }
 
+.page > menu[role='tablist'] { flex-wrap: wrap; max-width: 100%; }
+.boards-table .board-actions { white-space: nowrap; text-align: right; }
+.boards-table .board-actions button { min-width: 0; padding: 0 5px; }
+.boards-table td:nth-child(2) { width: 100%; }
+
+/* The Mentions panel: its own small window beside the work (overlay.tsx). */
+.mentions-window { height: 100%; display: flex; flex-direction: column; margin: 0; }
+.mentions-drag { -webkit-app-region: drag; }
+.mentions-drag button { -webkit-app-region: no-drag; }
+.mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
+.mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
+.mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
+.panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
+.stack-item { display: flex; flex-direction: column; gap: 3px; }
+.stack-state { font-family: var(--content-font); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .65; }
+.stack-item.now .stack-state { opacity: 1; font-weight: 700; }
+.stack-prompt { margin: 4px 0 0; padding: 6px 8px; border-left: 3px solid currentColor; font-family: var(--content-font); font-size: 12px; opacity: .85; }
+.stack-prompt b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.stack-prompt p { margin: 0; white-space: pre-wrap; }
+.panel-bar { display: flex; align-items: center; gap: 8px; font-family: var(--content-font); font-size: 12px; }
+.panel-bar-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-bar button.active, .panel-toggles button.active { font-weight: 700; }
+.panel-current { display: flex; flex-direction: column; gap: 6px; }
+.panel-current .post-full { margin: 0; }
+.panel-current .post-title { font-size: 16px; }
+.panel-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+.panel-lines, .panel-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-family: var(--content-font); font-size: 12px; }
+.panel-line { display: flex; flex-direction: column; padding: 4px 0 4px 8px; border-left: 2px solid currentColor; opacity: .85; }
+.panel-line-note, .panel-session-now { font-size: 11px; opacity: .7; }
+.panel-session { display: flex; align-items: center; gap: 6px; padding: 6px 0 6px 8px; border-left: 3px solid transparent; }
+.panel-session.running { border-left-color: #2fa36b; }
+.panel-session.focused { border-left-color: var(--cl-accent, var(--accent)); }
+.panel-session-pick { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
+.panel-session-pick b { font-size: 13px; }
+.panel-foot { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
+.panel-pick { width: 100%; }
+.routine-row { align-items: center; gap: 6px; }
+.routines { display: flex; flex-direction: column; gap: 10px; font-family: var(--content-font); }
+.routines > button { align-self: flex-start; }
+.routine-card { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.routine-card.off { opacity: .6; }
+.routine-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.routine-when { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+.routine-foot { display: flex; align-items: center; gap: 6px; }
+.routine-days { flex-wrap: wrap; gap: 8px; }
+.stack-item:not(.now) .post-embed-card { opacity: .8; }
+.mention-line { font-family: var(--content-font); font-size: 12px; margin-bottom: 4px; }
+.mention-when { display: block; color: #666; font-size: 11px; }
+.mention-note { font-family: var(--content-font); font-size: 12px; font-style: italic; margin-bottom: 4px; }
+.mentions-weave { align-self: flex-end; }
 /* New Weave version (update.tsx) */
 .update-prompt { max-width: 520px; }
 .update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }
+
+/* Services (services.tsx): in Keys & devices, and under a space's members. */
+.service-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.service-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.service-spaces { max-height: 140px; overflow-y: auto; padding: 4px 6px; }
+.service-requests { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+.service-request { padding-left: 8px; border-left: 2px solid currentColor; }
+.service-answer { margin: 2px 0 0 10px; }
+.service-member { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: none; box-shadow: none; padding: 4px 6px; cursor: pointer; }

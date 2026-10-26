@@ -43,7 +43,8 @@ declare module 'hyperswarm' {
     join(topic: Buffer, options?: { server?: boolean; client?: boolean }): Discovery;
     leave(topic: Buffer): Promise<void>;
     flush(): Promise<void>;
-    destroy(): Promise<void>;
+    /** force: leave without unannouncing topics first. */
+    destroy(options?: { force?: boolean }): Promise<void>;
     on(event: 'connection', listener: (socket: Duplex, info: PeerInfo) => void): this;
   }
 }

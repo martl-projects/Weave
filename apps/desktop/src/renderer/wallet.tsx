@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WalletInfo } from '@weave/node/client';
 import { TREASURY_CHAIN } from '@weave/core/chain';
 import { Icon } from './icons.tsx';
@@ -77,14 +77,35 @@ export function WalletLink({ intro }: { intro?: string }) {
   );
 }
 
+/** Where your wallet is linked: elsewhere, a link there instead of asking for an address. */
+export const WALLET_HREF = '#/keys/wallet';
+
+/** Said where a wallet is needed and none is linked: what for, and the way to Keys & devices. */
+export function WalletNeeded({ why }: { why: string }) {
+  return (
+    <p className="small">
+      {why}{' '}
+      <a href={WALLET_HREF}>
+        <Icon name="lock" /> Link your wallet in Keys &amp; devices
+      </a>
+    </p>
+  );
+}
+
 /** In Keys & devices: your wallet. */
 export function WalletBox() {
   // null: no wallet linked; undefined: still asking.
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   const [changing, setChanging] = useState(false);
+  const box = useRef<HTMLFieldSetElement>(null);
+  // Sent here to link one (WALLET_HREF): bring it into view.
+  const loaded = wallet !== undefined;
+  useEffect(() => {
+    if (loaded && location.hash === WALLET_HREF) box.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [loaded]);
   if (wallet === undefined) return null;
   return (
-    <fieldset>
+    <fieldset id="wallet" ref={box}>
       <legend>Wallet</legend>
       {wallet ? (
         <>

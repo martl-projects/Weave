@@ -1,5 +1,5 @@
 import type { WeaveNode } from './node.ts';
-import { asEthSign, b64u, checksumAddress, contractWalletCheck, contractWalletLinks, contractWalletSaysYes, type Did, type Entry, erc20BalanceOf, erc20Transfer, type EventFields, execTransactionData, formatUnits, gift, grantUntil, type GumroadLink, type Inner, type Invite, isAddress, isDid, isTxHash, type Json, KIND_LABEL, KIND_MEMBERSHIP, KIND_MEMBERSHIP_HANDLED, KIND_MEMBERSHIP_LICENSE, KIND_MEMBERSHIP_PENDING, KIND_MEMBERSHIP_REQUEST, KIND_REMOVE, KIND_SAFE_PROPOSAL, KIND_SAFE_RETIRED, KIND_SAFE_SIGNATURE, KIND_SHOW, KIND_TICKET, KIND_TICKET_RECORD, KIND_TICKET_REQUEST, KIND_TIER, KIND_TREASURY, KIND_TREASURY_SPLIT, KIND_WALLET, KIND_WALLET_CHECKED, labelsOf, labelTarget, mayAct, membershipRequest, MULTI_SEND_CALL_ONLY, multiSendData, type OnchainPrice, openMembershipRequest, openTicket, openTicketRequest, parseGumroadLink, parseLabelTarget, parseOnchainPrice, parseSafeTx, parseShares, parseShowSplit, type PaymentCheck, payouts, randomBytes, type Recipient, rekey, retiredOf, SAFE_CALLS, safeAddress, safeBatch, safeDeployment, safeProposalsOf, safeSigner, safeTxTypedData, sealFor, type Show, showOpen, showSaltNonce, showsOf, type SpaceKeys, type SpaceKind, spaceScope, type SpaceState, type Split, SPLIT_PRESETS, splitAllocations, splitDeployedCall, splitDeployment, splitOf, splitRecipients, splitSalt, TEST_USDC, ticketFor, ticketRequest, type Tier, tiersOf, TRANSFER_TOPIC, treasuriesOf, TREASURY_CHAIN, treasurySaltNonce, treasuryThreshold, verifyWalletProof, walletHistoryOf, walletsOf, WEAVE_FOUNDATION_PROJECT, type WeaveRecord, walletMessage } from '@weave/core';
+import { asEthSign, b64u, checksumAddress, contractWalletCheck, contractWalletLinks, contractWalletSaysYes, type Did, type Entry, erc20BalanceOf, erc20Transfer, type EventFields, execTransactionData, formatUnits, gift, grantUntil, type GumroadLink, type Inner, type Invite, isAddress, isDid, isTxHash, type Json, KIND_LABEL, KIND_MEMBERSHIP, KIND_MEMBERSHIP_HANDLED, KIND_MEMBERSHIP_LICENSE, KIND_MEMBERSHIP_PENDING, KIND_MEMBERSHIP_REQUEST, KIND_REMOVE, KIND_SAFE_PROPOSAL, KIND_SAFE_RETIRED, KIND_SAFE_SIGNATURE, KIND_SHOW, KIND_TICKET, KIND_TICKET_RECORD, KIND_TICKET_REQUEST, KIND_TIER, KIND_TREASURY, KIND_TREASURY_SPLIT, KIND_WALLET, KIND_WALLET_CHECKED, labelsOf, labelTarget, mayAct, membershipRequest, MULTI_SEND_CALL_ONLY, multiSendData, type OnchainPrice, openMembershipRequest, openTicket, openTicketRequest, parseGumroadLink, parseLabelTarget, parseOnchainPrice, parseSafeTx, parseShares, parseShowSplit, type PaymentCheck, payouts, randomBytes, type Recipient, rekey, retiredOf, SAFE_CALLS, safeAddress, safeBatch, safeDeployment, safeProposalsOf, safeSigner, safeTxTypedData, sealFor, type Show, showOpen, showSaltNonce, showsOf, type SpaceKeys, type SpaceKind, spaceScope, type SpaceState, type Split, SPLIT_PRESETS, splitAllocations, splitDeployedCall, splitDeployment, splitOf, splitRecipients, splitSalt, TEST_USDC, ticketFor, ticketRequest, type Tier, tiersOf, TRANSFER_TOPIC, treasuriesOf, TREASURY_CHAIN, treasurySaltNonce, treasuryThreshold, verifyWalletProof, walletHistoryOf, walletMessage, walletsOf, WEAVE_FOUNDATION_PROJECT, type WeaveRecord } from '@weave/core';
 import { type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
 import { type GumroadSignIn, type LicenseCheck } from './gumroad.ts';
@@ -15,6 +15,8 @@ import { saveConfig } from './config.ts';
  * Safe transactions signed together, paying from a wallet, and ticketed shows.
  * It sees the node's internals only through PaymentsCore.
  */
+
+
 
 /** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
 const ONCHAIN_RECORD = 'tx:';
@@ -1032,9 +1034,21 @@ export class Payments {
       .map((t) => ({ holder: person(this.node.identity.author), tx: t.tx, ok: true }));
   }
 
-  async settleShow(input: { show: string; action: 'payout' | 'refund' }): Promise<ShowSettlement> {
-    const show = this.showRef(input.show);
+  async settleShow(input: { show: string; action: 'payout' | 'refund'; split?: Array<{ to: string; share: number }> }): Promise<ShowSettlement> {
+    let show = this.showRef(input.show);
     if (!show.hosts.includes(this.node.identity.author)) throw new Error(`only the hosts of ${show.name} can settle it`);
+    if (input.action === 'payout' && input.split?.length) {
+      // Who gets what is decided after the show: the host records it on the show, then pays out by it.
+      if (show.host !== this.node.identity.author) throw new Error(`only ${this.node.nameOf(show.host) ?? 'its host'} decides how ${show.name} pays out`);
+      if (show.cancelled) throw new Error(`${show.name} is called off: pay everyone back instead (refund)`);
+      if (Date.parse(show.ends) > this.node.clock()) throw new Error(`${show.name} isn't over yet: pay out after it (${show.ends})`);
+      const project = show.project ? this.core.spaces.get(show.project) : undefined;
+      const split = input.split.map((part) => ({ to: part.to.startsWith('project:') ? part.to : this.showRecipient(part.to, project), share: part.share }));
+      if (!parseShowSplit(split)) throw new Error('a split names people or addresses with whole basis points adding up to 10000');
+      const { id, host: _host, time: _time, ...rest } = show;
+      this.node.replica.write(this.node.identity, { kind: KIND_SHOW, body: { show: id, ...rest, split } as unknown as Json });
+      show = this.showRef(id);
+    }
     const info = this.showInfo(show);
     const balance = BigInt(await this.node.callChain(show.price.chain, { to: show.price.token, data: erc20BalanceOf(info.safe.address) }));
     let calls: Array<{ to: string; data: string }>;

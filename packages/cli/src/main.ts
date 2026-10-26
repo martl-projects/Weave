@@ -5,8 +5,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { formatUnits, isAddress, parseUnits, TEST_USDC } from '@weave/core';
+import { formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract } from '@weave/core';
 import {
+  claudeBundle,
   connectDaemon,
   daemonInfo,
   stopDaemon,
@@ -33,6 +34,9 @@ import {
   type GitHubInfo,
   type GumroadInfo,
   type SpaceRepos,
+  type SpaceRef,
+  type ServiceInfo,
+  type HostedRoomInfo,
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
@@ -40,7 +44,6 @@ import {
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
-  type AppLaunchInfo,
   type KnockInfo,
   type SpaceInfo,
   type ThreadInfo,
@@ -93,6 +96,8 @@ A company's own projects and groups are its company spaces.
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
   mcp                        serve this node to an agent harness over MCP (stdio)  [--as <agent>]
+  claude-bundle              write weave.mcpb: Weave for the Claude desktop app's chat, as an agent
+                             [--as <agent>] [--out <file>] [--open: show Claude's install dialog]
   join <topic>               listen on a DHT topic
   agent add <name>           create a key for an agent [--can <kinds>]  default: weave.post,weave.reply
   agent can <name> <kinds>   change what an agent may sign, e.g. weave.post,weave.post.coauthor
@@ -115,8 +120,7 @@ projects — something being built; participants chat, discuss, vote and work on
   project page <project>                 change the page   [--title <t>] [--subtitle <t>] [--text <markdown> | --file <page.md>]
                                                            [--icon <image>] [--banner <image>] ("" removes one)
                                                            [--status idea|active|paused|shipped|archived] [--public | --private]
-  app folder [path] -p <project>         where this computer's copy of the app is (default: here)
-  app start|stop|status -p <project>     run the manifest's start command (asks you once), stop it, see its output
+
   image <file>                           upload an image; prints its wblob: reference for Markdown: ![alt](wblob:…)
   project invite <project>               print an invite link (maintainers)  [--hours <n>] [--accept]
                                          [--read-board <b,…>] [--write-board <b,…>]: board rights the link gives
@@ -189,15 +193,28 @@ github — repositories that follow a group, tier or project (members who give t
   github repos               repositories you can link (the app is installed on them and you're admin)
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  service add <name>         run code under a key of its own, with exactly these rights:
+                             --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
+                             [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
+  service add room --builtin room   the room service Weave ships: a way to join in with a project's participants
+                             [--spaces <project,…>]: where it opens rooms (weave room open)
+  service artifacts <project>  a project's releases: what a room can run
+  service list               the services this computer runs; service profiles: everyone's you know
+  service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
+                             [--in <space> --setting KEY=VALUE]: a setting for one space only
+  service start|stop <name>  run it or not
+  service remove <name>      stop it for good (its key is revoked)
+  service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
+                             a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
   repo unlink <space> <owner/name>   stop it (access Weave gave is taken back)
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
                              on your home: [--from all|communities|projects|mine|friends|following]
   home hide <space> / home show <space>   leave a community or project off your home (only you know)
-  read <id|link>             a post and its chat (and its weave:post: link to send)
+  read <id|link>             a post and its chat (and its link to send: http://weave.localhost:7710/…)
   submit <title...>          post something             [-b <board>] [--text <t>] [--link <url>] [--image <file>]
                              [--with <who,…>]: co-authors (people, your agents, or person·agent); each confirms first
   coauthor <id> yes|no       confirm (or decline) being named as co-author  [--as <agent>] for your agent
@@ -263,7 +280,7 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
   ticket <show> --payment <tx hash>   ask for a ticket you paid from your linked wallet
   tickets <show>             for the host: every ticket sold, and requests not let in
   show cancel <show>         call it off: tickets stop letting people in
-  show settle <show> payout|refund [--file batch.json]   the Safe transaction that pays out by the split, or back
+  show settle <show> payout|refund [--split Lena=6000,project=4000] [--file batch.json]   the Safe transaction that pays out (by the split, or one decided now) or back
   safe proposals [address]   transactions waiting for a Safe's owners (treasuries, shows' Safes)
   safe show <proposal> [--file typed.json]   what to sign: the hash, and the typed data for your wallet
   safe sign <proposal> --signature <0x…>     add your wallet's signature (typed data, or the hash signed as a message)
@@ -273,20 +290,20 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
                              [--shares makers=7000,treasury=1500,community=1400,foundation=100: your own, in basis points]
                              a changed split counts after 7 days; the Weave Foundation's part is a suggestion, 0 is fine
 
-rooms: share a project's app live with its participants (needs a running daemon):
-  app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
-  app show -p <project>      the project's app: ports it shares, buttons
-  app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
+artifacts and rooms: a project's releases, and rooms that run them (needs a running daemon):
+  app publish -p <project>   maintainers: publish the project's artifact description from weave.app.json  [--file <path>]
+  app show -p <project>      what it describes: its web page's port, how it starts, its settings
   app check [file]           check a weave.app.json (default: here), every problem at once
-  app set <NAME> -p <p>      fill in a setting the app asks for (an API key…), typed, kept on this computer only
-  app unset <NAME> -p <p>    remove it again
-  app env -p <project>       WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT for an app you start yourself (@weave/sdk reads them)
   app example                an annotated weave.app.json and its rules
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   rooms [-p <project>]       open rooms
-  room host <name> -p <p>    open a room sharing the project's app  [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
+  room open <name> -p <p>    a room of your room service, answered by: --artifact <project>[@tag] (a release, fetched and
+                             checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
+                             [--setting KEY=VALUE] [--service <room service>]; running code asks you to approve it
+                             [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
+  room env <room>            WEAVE_API and the room's token, for what answers it when it runs by itself (@weave/sdk reads them)
   room join <room>           join: prints the address to open
   room leave|end <room>      leave a room, or end the one you host
   room chat <room>           the room's chat (never stored)
@@ -343,6 +360,8 @@ const { values, positionals } = parseArgs({
   options: {
     home: { type: 'string' },
     json: { type: 'boolean', default: false },
+    out: { type: 'string' },
+    open: { type: 'boolean', default: false },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -375,6 +394,19 @@ const { values, positionals } = parseArgs({
     title: { type: 'string' },
     with: { type: 'string' },
     asset: { type: 'string', multiple: true },
+    reads: { type: 'string' },
+    writes: { type: 'string' },
+    'offers-room': { type: 'boolean', default: false },
+    'contract-version': { type: 'string' },
+    run: { type: 'string' },
+    spaces: { type: 'string' },
+    setting: { type: 'string', multiple: true },
+    node: { type: 'string' },
+    artifact: { type: 'string' },
+    builtin: { type: 'string' },
+    folder: { type: 'string' },
+    port: { type: 'string' },
+    service: { type: 'string' },
     repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
@@ -418,6 +450,8 @@ const { values, positionals } = parseArgs({
     symbol: { type: 'string' },
     ref: { type: 'string' },
     personal: { type: 'string' },
+    access: { type: 'string' },
+    writers: { type: 'string' },
     name: { type: 'string' },
     'id-token': { type: 'string' },
     'client-id': { type: 'string' },
@@ -487,6 +521,9 @@ function needSpace(): string {
 }
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
+const contractLine = (c: ServiceContract) =>
+  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.room ? '; offers a room' : ''}; contract ${c.version}`;
+
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
   const count = s.limit ? `${s.given} of ${s.limit}` : `${s.given} given`;
@@ -607,26 +644,6 @@ async function sellOnGumroad(b: Backend, t: TierInfo, token: string | undefined)
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
 
-const launchText = (l: AppLaunchInfo) =>
-  [
-    l.command ? `start command: ${l.command.join(' ')}${l.approved ? ' (approved)' : ''}` : `no start command${l.hint ? `; start it yourself: ${l.hint}` : ''}`,
-    `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
-    l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? (l.exit.stopped ? 'stopped' : `exited by itself (code ${l.exit.code ?? '-'})`) : 'not running',
-    ...(l.install ? [installText(l.install)] : []),
-    ...(l.settings?.length ? [`settings (kept on this computer):\n${l.settings.map((x) => `  ${x.name.padEnd(22)} ${x.set ? '✓ set' : x.optional ? '– not set (optional)' : '✗ not set: weave app set ' + x.name} · ${x.label}`).join('\n')}`] : []),
-  ].join('\n');
-
-const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
-  [
-    i.version ? `release: ${i.version}${i.repo ? ` from github.com/${i.repo}` : ''}${i.asset ? ` · ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}` : ` · no file for ${i.platform}`}` : '',
-    i.command && !i.installed ? `the installed build starts with: ${i.command.join(' ')}` : '',
-    i.installed ? `installed here: ${i.installed}${i.version && i.installed !== i.version ? ` (update: weave app install)` : ''}` : i.asset ? 'not installed here (weave app install)' : '',
-    i.error ? `last install failed: ${i.error}` : '',
-    i.steps ? `steps for installing by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-
 /** A line typed without showing it (for secrets), from a terminal only. */
 async function askHidden(question: string): Promise<string> {
   if (!process.stdin.isTTY) throw new Error('run this in a terminal: it asks you to type the value (it never goes on the command line, where it would end up in your shell history)');
@@ -652,6 +669,27 @@ async function askHidden(question: string): Promise<string> {
     process.stdout.write('\n');
   }
 }
+
+/** Running someone's code (a release, a command): Weave says what would run, and the person approves it here. */
+async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
+  try {
+    return await run(false);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (!message.startsWith('approve it first:')) throw error;
+    const answer = await askLine(`${message.slice('approve it first: '.length)}.\nRun it? [y/N] `);
+    if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not approved: nothing runs');
+    return run(true);
+  }
+}
+
+/** How a room of the room service is doing. */
+const hostedLine = (r: HostedRoomInfo): string => {
+  const h = r.handler;
+  const what = h.kind === 'artifact' ? `${h.artifact.name} ${h.artifact.tag}${h.artifact.latest ? ` (${h.artifact.latest} is out)` : ''}` : h.kind === 'command' ? h.command.join(' ') : `port ${r.port}`;
+  const state = r.progress ? `fetching (${Math.round((r.progress.done / (r.progress.total || 1)) * 100)}%)` : r.error ? r.error : r.running ? 'running' : 'starting';
+  return `${what}, ${state}`;
+};
 
 /** One line from the terminal, for questions only a person should answer. */
 async function askLine(question: string): Promise<string> {
@@ -918,7 +956,9 @@ async function main(): Promise<void> {
         throw new Error('the daemon did not come back within 30 seconds (start it with weave daemon to see why)');
       }
       if (args[0]) throw new Error('usage: weave daemon [stop|restart] [--force]');
-      let shutdown = async () => {};
+      // A stop asked for while it's still starting (its API is up first) is kept, and done once it can be.
+      let stopAsked = false;
+      let shutdown = async () => void (stopAsked = true);
       const daemon = await startDaemon(home.dir, { version: VERSION, build: BUILD, startedBy: process.env.WEAVE_DAEMON_STARTED_BY === 'app' ? 'app' : 'cli', onStopRequest: () => void shutdown() });
       const status = await daemon.node.status();
       console.log(`weave daemon for ${status.name ?? status.did}`);
@@ -934,6 +974,7 @@ async function main(): Promise<void> {
       };
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
+      if (stopAsked) void shutdown();
       return new Promise(() => {}); // run until stopped
     }
 
@@ -1053,6 +1094,28 @@ async function main(): Promise<void> {
       const b = followDaemon(home);
       const { serveStdio } = await import('@weave/mcp');
       return serveStdio(b, { as: values.as });
+    }
+
+    case 'claude-bundle': {
+      // How Claude starts Weave here: this very program (node with the CLI, or the app's
+      // own Node with its bundled CLI), for this home.
+      const agent = values.as ?? 'claude';
+      const known = (await (await backend()).whoami()).agents.map((a) => a.name);
+      if (!known.includes(agent)) throw new Error(`no agent "${agent}" here${known.length ? ` (you have ${known.join(', ')})` : ''}: add one with weave agent add ${agent}`);
+      const launch = {
+        command: process.execPath,
+        args: [resolvePath(process.argv[1]), ...(values.home || process.env.WEAVE_HOME ? ['--home', home.dir] : [])],
+        env: (process.versions.electron || process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : {}) as Record<string, string>,
+      };
+      const iconFile = [join(dirname(process.argv[1]), '..', 'icon.png'), join(dirname(process.argv[1]), '..', '..', '..', 'apps', 'desktop', 'assets', 'icon.png')].find((f) => existsSync(f));
+      const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.out ?? 'weave.mcpb');
+      writeFileSync(file, claudeBundle({ agent, launch, version: VERSION, ...(iconFile ? { icon: readFileSync(iconFile) } : {}) }));
+      if (values.open) {
+        const { spawn } = await import('node:child_process');
+        const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${file}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', file];
+        spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
+      }
+      return out({ file, agent, launch }, () => `wrote ${file}\n  Claude's chat will use Weave as your agent "${agent}". Open the file to install it in the Claude app (Settings → Extensions).`);
     }
 
     case 'join': {
@@ -1318,12 +1381,83 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       throw new Error('usage: weave github [connect|disconnect|app <link>|default|repos|hub [off]|share <space>|unshare <space>]');
     }
 
+    case 'service': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
+      const line = (s: ServiceInfo) =>
+        [
+          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
+          `  ${s.did}`,
+          ...(s.description ? [`  ${s.description}`] : []),
+          `  ${contractLine(s.contract)}`,
+          ...(s.rooms ?? []).map((r) => `  room "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
+          ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
+          ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
+          ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
+        ].join('\n');
+      const words = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+      const list = (text?: string) => text?.split(',').map((x) => x.trim()).filter(Boolean);
+      const settingsOf = () =>
+        Object.fromEntries((values.setting ?? []).map((s) => {
+          const at = s.indexOf('=');
+          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it)');
+          return [s.slice(0, at), s.slice(at + 1) || null];
+        }));
+      if (sub === 'artifacts') {
+        const all = await b.artifacts(ref ?? needSpace());
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+      }
+      if (sub === 'add' && values.builtin) {
+        if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
+        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'room', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
+        return out(s, () => `${line(s)}\n\nIt signs rooms as you · ${s.name}. Open one: weave room open <name> -p <project> --artifact <project>`);
+      }
+      if (sub === 'add' && ref) {
+        const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
+        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-room'] ? { room: true } : {}), version: values['contract-version'] ?? '1.0' };
+        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.node ? { node: values.node } : {}) });
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);
+      }
+      if (sub === 'list') {
+        const all = await b.services();
+        return out(all, () => all.map(line).join('\n\n') || '(no services on this computer)');
+      }
+      if (sub === 'profiles') {
+        const all = await b.serviceProfiles();
+        return out(all, () => all.map((p) => `${p.person.name ?? p.person.did} · ${p.name}  ${p.description}\n  ${p.did}\n  ${contractLine(p.contract)}`).join('\n\n') || '(no services known)');
+      }
+      if (sub === 'set' && ref) {
+        const settings = settingsOf();
+        const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
+        const s = await b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...(values.text !== undefined ? { description: values.text } : {}) });
+        return out(s, () => line(s));
+      }
+      if ((sub === 'start' || sub === 'stop') && ref) {
+        const s = await b.setService({ name: ref, enabled: sub === 'start' });
+        return out(s, () => line(s));
+      }
+      if (sub === 'remove' && ref) {
+        await b.removeService(ref);
+        return out({ removed: ref }, () => `removed ${ref}: its key is revoked, nothing it signs counts any more`);
+      }
+      if (sub === 'ask' && ref && args.length > 2) {
+        const r = await b.askService({ space: needSpace(), service: ref, text: args.slice(2).join(' '), as: values.as });
+        return out(r, () => `asked ${r.to.name ?? r.to.did}: ${r.text}\n  ${r.id}`);
+      }
+      if (sub === 'requests') {
+        const all = await b.serviceRequests({ space: needSpace(), ...(ref ? { service: ref } : {}) });
+        return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
+      }
+      throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests — see "weave --help"');
+    }
+
     case 'repo': {
       const [sub, ref, repo] = args;
       const b = await backend();
       const show = (r: SpaceRepos) =>
         [
-          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
+          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}${x.access === 'none' ? ' (linked only)' : x.access === 'write' ? ` (can write: ${(x.writers ?? []).map(actor).join(', ')})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
           r.repos.length ? '' : '(no repositories)',
           r.shared ? `you gave it your GitHub account ${r.shared}` : r.repos.length ? 'you haven\'t given it your GitHub account (weave github share)' : '',
           r.missing?.length ? `without a GitHub account here: ${r.missing.map(actor).join(', ')}` : '',
@@ -1335,10 +1469,12 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(r, () => show(r));
       }
       if ((sub === 'link' || sub === 'unlink') && ref && repo) {
-        const r = await b.linkRepo({ space: ref, repo, board: values.board, on: sub === 'link' });
+        const access = values.access as RepoAccess | undefined;
+        const writers = values.writers?.split(',').map((w) => w.trim()).filter(Boolean);
+        const r = await b.linkRepo({ space: ref, repo, board: values.board, ...(access ? { access } : {}), ...(writers ? { writers } : {}), on: sub === 'link' });
         return out(r, () => show(r));
       }
-      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] | repo unlink <space> <owner/name>');
+      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] [--access none|write --writers <who,…>] | repo unlink <space> <owner/name>');
     }
 
     case 'home': {
@@ -1357,7 +1493,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         [
           postLine(p),
           p.text ? `\n${p.text}\n` : '',
-          `  link: weave:post:${p.id}`,
+          `  link: ${p.url}`,
           p.project && !p.project.member ? `  (a project you're not in: ${p.project.name} [${p.project.status}] — ask in the chat to be invited)` : '',
           p.type === 'project' ? `  chat in its channels: weave chat -p "${p.title}"` : '',
           ...chat.map((m) => `  ${m.short}  ${actor(m.by).padEnd(20)}  ${m.text}`),
@@ -2034,7 +2170,7 @@ ${postLine(p)}`);
         return out(deploy, () => `send this from any wallet to put ${sh.safe.address} on chain (it belongs to the hosts):\n  to:   ${deploy.to}\n  data: ${deploy.data}`);
       }
       if (sub === 'settle' && ref && (action === 'payout' || action === 'refund')) {
-        const settlement = await b.settleShow({ show: ref, action });
+        const settlement = await b.settleShow({ show: ref, action, ...(values.split ? { split: values.split.split(',').map((part) => { const [to, share] = part.split('='); return { to: to.trim(), share: Number(share) }; }) } : {}) });
         if (values.file) writeFileSync(resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file), JSON.stringify(settlement.batch, null, 2));
         return out(settlement, () => [`${action === 'refund' ? 'pay back' : 'pay out'} ${settlement.total} of ${settlement.balance} (smallest unit) from the Safe ${settlement.safe}, in ${settlement.calls.length} transfer${settlement.calls.length === 1 ? '' : 's'}`, values.file ? `wrote ${values.file}: load it in the Safe app's Transaction Builder (app.safe.global), check it, sign it in your wallets` : 'add --file batch.json for the Safe app'].join('\n'));
       }
@@ -2104,38 +2240,12 @@ ${postLine(p)}`);
       if (sub === 'publish') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
-        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')), folder: dirname(file) });
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
         return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.github ? ` (${app.install.github})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
-      }
-      if (sub === 'folder') {
-        const info = await b.setAppFolder({ project: needProject(), folder: args[1] === undefined ? (process.env.INIT_CWD ?? process.cwd()) : args[1] && resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1]) });
-        return out(info, () => launchText(info));
-      }
-      if (sub === 'install') {
-        const project = needProject();
-        const info = await b.appLaunch(project);
-        const i = info.install;
-        if (!i?.asset) throw new Error(`no release file for this computer${i ? ` (${i.platform})` : ''}${i?.steps ? `; install it by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : ''}`);
-        const answer = await askLine(`Install ${i.version} from github.com/${i.repo}: ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}, checked against its published SHA-256.${info.command ? `\nIt then starts with: ${info.command.join(' ')}` : ''}\nInstall${info.command ? ' and approve that command' : ''}? [y/N] `);
-        if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not installed');
-        await b.installApp({ project, approve: true });
-        let last = '';
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 500));
-          const now = await b.appLaunch(project);
-          const p = now.install?.progress;
-          if (!p) {
-            if (now.install?.error) throw new Error(now.install.error);
-            return out(now, () => `installed ${now.install?.installed} in ${now.folder}\n${launchText(now)}`);
-          }
-          const line = `${p.state} ${Math.round(p.done / 1e6)}${p.total ? ` of ${Math.round(p.total / 1e6)}` : ''} MB`;
-          if (line !== last) console.error(line);
-          last = line;
-        }
       }
       if (sub === 'check') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1] ?? values.file ?? 'weave.app.json');
@@ -2158,23 +2268,6 @@ ${postLine(p)}`);
         if (checked.problems.length) process.exitCode = 1;
         return;
       }
-      if (sub === 'set' && args[1]) {
-        const project = needProject();
-        const setting = (await b.appLaunch(project)).settings?.find((x) => x.name === args[1]);
-        if (!setting) throw new Error(`the app doesn't ask for ${args[1]}: weave app status -p ${project} lists its settings`);
-        const value = setting.secret ? await askHidden(`${setting.label} (not shown): `) : await askLine(`${setting.label}: `);
-        const info = await b.setAppSetting({ project, name: setting.name, value });
-        return out(info.settings, () => `${setting.label} ${value.trim() ? 'saved on this computer' : 'not changed (empty)'}; ${info.settings?.filter((x) => !x.optional && !x.set).length ? 'still missing: ' + info.settings.filter((x) => !x.optional && !x.set).map((x) => x.name).join(', ') : 'the app has what it needs'}`);
-      }
-      if (sub === 'unset' && args[1]) {
-        const info = await b.setAppSetting({ project: needProject(), name: args[1], value: null });
-        return out(info.settings, () => `${args[1]} removed from this computer`);
-      }
-      if (sub === 'env') {
-        const env = await b.appEnv(needProject());
-        const line = ([k, v]: [string, string]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
-        return out(env, () => [...Object.entries(env).map(line), '# set these where you start the app; they last until Weave restarts'].join('\n'));
-      }
       if (sub === 'example') {
         return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
       }
@@ -2185,23 +2278,9 @@ ${postLine(p)}`);
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
         const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
-        return out(app, () => `${app.name} now installs ${app.install?.tag} from github.com/${app.install?.github}:\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}`);
+        return out(app, () => `${app.name} ${app.install?.tag} is released from github.com/${app.install?.github}: rooms can run it\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}`);
       }
-      if (sub === 'start') {
-        const project = needProject();
-        let info = await b.appLaunch(project);
-        if (info.command && info.folder && !info.approved) {
-          const answer = await askLine(`Weave will run this on your computer:\n  ${info.command.join(' ')}\n  in ${info.folder}\nRun it? [y/N] `);
-          if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not started');
-        }
-        info = await b.launchApp({ project, approve: true });
-        return out(info, () => launchText(info));
-      }
-      if (sub === 'stop' || sub === 'status') {
-        const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
-        return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
-      }
-      throw new Error('usage: weave app publish|show|check|set <NAME>|unset <NAME>|env|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
     }
 
     case 'rooms': {
@@ -2212,9 +2291,36 @@ ${postLine(p)}`);
     case 'room': {
       const [sub, ref, ...words] = args;
       const b = await backend({ needsDaemon: sub !== 'chat' });
-      if (sub === 'host' && ref) {
-        const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean), show: values.show, groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean) });
-        return out(r, () => `${roomLine(r)}${r.service?.ready ? '' : `\n  start the app first${r.app?.startHint ? `: ${r.app.startHint}` : ''}`}`);
+      if (sub === 'open' && ref) {
+        const at = values.artifact ? values.artifact.lastIndexOf('@') : -1;
+        const artifact = values.artifact ? (at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact }) : undefined;
+        const settings = Object.fromEntries((values.setting ?? []).map((s) => {
+          const eq = s.indexOf('=');
+          if (eq < 1) throw new Error('a setting is KEY=VALUE');
+          return [s.slice(0, eq), s.slice(eq + 1)];
+        }));
+        const command = values.run ? [...values.run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]) : undefined;
+        const r = await approving((approve) =>
+          b.openRoom({
+            project: needProject(),
+            name: [ref, ...words].join(' '),
+            ...(values.service ? { service: values.service } : {}),
+            ...(artifact ? { artifact } : {}),
+            ...(command ? { command, folder: values.folder ?? process.cwd() } : {}),
+            ...(values.port ? { port: Number(values.port) } : {}),
+            ...(Object.keys(settings).length ? { settings } : {}),
+            invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean),
+            show: values.show,
+            groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean),
+            approve,
+          }),
+        );
+        return out(r, () => `${roomLine(r)}\n  it opens for everyone once its handler answers (weave service list shows how it's doing)`);
+      }
+      if (sub === 'env' && ref) {
+        const env = await b.roomEnv(ref);
+        const line = ([k, v]: [string, string | undefined]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
+        return out(env, () => [...Object.entries(env).map(line), '# set these where you start what answers the room; they last until Weave restarts'].join('\n'));
       }
       if (sub === 'join' && ref) {
         await b.joinRoom(ref);
@@ -2237,7 +2343,7 @@ ${postLine(p)}`);
         await b.sayInRoom({ room: ref, text: words.join(' ') });
         return out({ said: words.join(' ') }, () => 'said');
       }
-      throw new Error('usage: weave room host|join|leave|end|chat|say — see "weave --help"');
+      throw new Error('usage: weave room open|join|leave|end|chat|say — see "weave --help"');
     }
 
     case 'chats': {

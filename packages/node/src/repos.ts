@@ -1,5 +1,5 @@
 import { type DeviceCode } from './github.ts';
-import { type Access, accountsOf, boardsOf, type Did, type Entry, type EventFields, githubProofText, type Inner, isLogin, isRepoName, type Json, KIND_GITHUB_ACCOUNT, KIND_GITHUB_ADDED, KIND_GITHUB_PUBLIC, KIND_GITHUB_REPO, mayAct, planSync, readersOf, reposOf, type SpaceKind, type SpaceState } from '@weave/core';
+import { type Access, accountsOf, boardsOf, type Did, type Entry, type EventFields, githubProofText, type Inner, isLogin, isRepoName, type Json, KIND_GITHUB_ACCOUNT, KIND_GITHUB_ADDED, KIND_GITHUB_PUBLIC, KIND_GITHUB_REPO, MAX_WRITERS, mayAct, planSync, readersOf, REPO_ACCESS, type RepoAccess, type RepoLink, reposOf, type SpaceKind, type SpaceState } from '@weave/core';
 import { type StoredSpace } from './spacestore.ts';
 import { type Actor, type GitHubInfo, type Profile, type RepoInfo, type SpaceRepos } from './backend.ts';
 import { join as joinPath } from 'node:path';
@@ -49,6 +49,7 @@ export class Repos {
   // ---------------------------------------------------------------- GitHub: repos that follow a space
 
   githubLogin?: GitHubLogin;
+
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
 
@@ -131,6 +132,12 @@ export class Repos {
     return organization;
   }
 
+  async githubRepoOwner(repo: string): Promise<'organization' | 'personal'> {
+    const auth = this.githubAuth();
+    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
+    return (await this.ownedByOrganization(new GitHub(auth.token, this.node.githubSetup.fetch), repo)) ? 'organization' : 'personal';
+  }
+
   async githubRepos(): Promise<string[]> {
     const auth = this.githubAuth();
     if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
@@ -152,6 +159,9 @@ export class Repos {
           repo: r.repo,
           url: `https://github.com/${r.repo}`,
           ...(r.board ? { board: r.board } : {}),
+          access: r.access,
+          ...(r.writers ? { writers: r.writers.map((did) => this.core.actor(did, did)) } : {}),
+          ...(r.by !== me && this.repoPeople(space, state, entries, r).includes(me) ? { forYou: true as const } : {}),
           by: this.core.actor(r.by, r.by),
           ...(r.by === me ? { mine: true as const } : {}),
           ...(synced ? { synced: new Date(synced.at).toISOString() } : {}),
@@ -161,9 +171,10 @@ export class Repos {
       canLink: mayAct(state, me, 'manage').ok,
       ...(accounts.has(me) ? { shared: accounts.get(me)! } : {}),
     };
+    if (out.canLink) out.mayWrite = [...state.members.keys()].filter((did) => did !== me && this.mayWrite(state, did)).map((did) => this.core.actor(did, did));
     const mine = repos.filter((r) => r.by === me);
     if (mine.length) {
-      const wanted = new Set(mine.flatMap((r) => this.repoReaders(space, state, entries, r.board)));
+      const wanted = new Set(mine.flatMap((r) => this.repoPeople(space, state, entries, r)));
       wanted.delete(me);
       out.missing = [...wanted].filter((did) => !accounts.has(did)).map((did) => this.core.actor(did, did));
       out.accounts = [...accounts].filter(([did]) => wanted.has(did)).map(([did, login]) => ({ who: this.core.actor(did, did), login }));
@@ -171,7 +182,7 @@ export class Repos {
     return out;
   }
 
-  async linkRepo(input: { space: string; repo: string; board?: string; on: boolean; as?: string }): Promise<SpaceRepos> {
+  async linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos> {
     if (input.as) this.core.agentMay(input.as, KIND_GITHUB_REPO);
     const space = this.core.space(input.space);
     if (space.kind === 'direct') throw new Error('direct chats have no repositories');
@@ -189,9 +200,22 @@ export class Repos {
       }
       const match = (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
       if (!match) throw new Error(`the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
-      // Members get read access; a person's repositories only have collaborators who can write.
-      if (!(await this.ownedByOrganization(new GitHub(this.githubAuth()!.token, this.node.githubSetup.fetch), match))) throw new Error(personalRepo(match));
       body.repo = match;
+      if (input.access !== undefined && !REPO_ACCESS.includes(input.access)) throw new Error('access is read, none or write');
+      // Members get read access; a person's repositories only have collaborators who can write: linked only, or written to by people picked.
+      const organization = await this.ownedByOrganization(new GitHub(this.githubAuth()!.token, this.node.githubSetup.fetch), match);
+      const access = input.access ?? (organization ? 'read' : undefined);
+      if (!access || (access === 'read' && !organization)) throw new Error(personalRepo(match));
+      if (access === 'write' && organization) throw new Error(`${match} belongs to an organization: its members get read access (access: read); give write access on GitHub`);
+      if (access !== 'read') body.access = access;
+      if (access === 'write') {
+        if (body.board) throw new Error('write access goes to the people you pick, not to the readers of a board');
+        const writers = [...new Set((input.writers ?? []).map((who) => this.node.resolve(who)))].filter((did) => did !== this.node.identity.author);
+        if (!writers.length) throw new Error('pick the people who may write (writers)');
+        if (writers.length > MAX_WRITERS) throw new Error(`at most ${MAX_WRITERS} people can be picked to write`);
+        for (const did of writers) if (!this.mayWrite(state, did)) throw new Error(`${this.node.nameOf(did) ?? did} can't be picked to write: only people in ${space.name} personally, not through a group or tier`);
+        body.writers = writers;
+      }
     }
     await this.node.publish({ kind: KIND_GITHUB_REPO, body, space: space.id, as: input.as });
     this.githubSynced.delete(repo.toLowerCase());
@@ -236,6 +260,22 @@ export class Repos {
   }
 
   /** Who a repo linked to a space should include: its members, or in a project the readers of one board. */
+  /**
+   * Who may be picked to write to a person's repository: members in personally, never through a group (a project's
+   * participants who came with one) nor a tier's membership, so nobody gets write access by joining something.
+   */
+  mayWrite(state: SpaceState, did: Did): boolean {
+    const member = state.members.get(did);
+    return !!member && !member.via && !member.until;
+  }
+
+  /** Who a link gives access: its readers (read), nobody (none), or the people picked who still may write (write). */
+  repoPeople(space: StoredSpace, state: SpaceState, entries: Entry[], link: RepoLink): Did[] {
+    if (link.access === 'none') return [];
+    if (link.access === 'write') return (link.writers ?? []).filter((did) => this.mayWrite(state, did));
+    return this.repoReaders(space, state, entries, link.board);
+  }
+
   repoReaders(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
     if (!board || space.kind !== 'project') return [...state.members.keys()];
     return readersOf(board, state, this.core.access(space, state, entries));
@@ -251,7 +291,7 @@ export class Repos {
     const auth = this.githubAuth();
     const me = this.node.identity.author;
     // Every repo this person linked, with everyone it should include.
-    const wanted = new Map<string, { repo: string; logins: Set<string> }>();
+    const wanted = new Map<string, { repo: string; logins: Set<string>; write: boolean }>();
     for (const space of this.core.spaces.values()) {
       if (space.kind === 'direct') continue;
       const state = this.core.state(space);
@@ -262,8 +302,9 @@ export class Repos {
       const accounts = accountsOf(entries);
       for (const link of links) {
         const key = link.repo.toLowerCase();
-        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>() };
-        for (const did of this.repoReaders(space, state, entries, link.board)) if (did !== me && accounts.has(did)) entry.logins.add(accounts.get(did)!.toLowerCase());
+        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>(), write: false };
+        if (link.access === 'write') entry.write = true;
+        for (const did of this.repoPeople(space, state, entries, link)) if (did !== me && accounts.has(did)) entry.logins.add(accounts.get(did)!.toLowerCase());
         wanted.set(key, entry);
       }
     }
@@ -286,6 +327,11 @@ export class Repos {
       const shape = JSON.stringify([[...want].sort(), gave.sort()]);
       const last = this.githubSynced.get(key);
       if (last && last.shape === shape && now - last.at < (last.problem ? 60_000 : 10 * 60_000)) continue;
+      // Nobody to give access and nothing given (a repository linked only): nothing to ask GitHub.
+      if (!want.size && !gave.length) {
+        this.githubSynced.set(key, { at: now, shape });
+        continue;
+      }
       if (!auth) {
         this.githubSynced.set(key, { at: now, shape, problem: 'not connected to GitHub on this device' });
         continue;
@@ -293,12 +339,14 @@ export class Repos {
       try {
         const client = new GitHub(auth.token, this.node.githubSetup.fetch);
         const plan = planSync(want, await client.access(repo), gave);
-        // Linked before Weave checked: a person's repository can't take read-only collaborators (GitHub refuses with 422).
-        // Nobody new is invited there; what Weave gave is still taken back.
-        const personal = plan.invite.length > 0 && !(await this.ownedByOrganization(client, repo));
+        // People picked to write are invited to write; everyone else to read.
+        const write = !!wanted.get(key)?.write;
+        // Linked for reading before Weave checked: a person's repository can't take read-only collaborators (GitHub
+        // refuses with 422). Nobody new is invited there; what Weave gave is still taken back.
+        const personal = !write && plan.invite.length > 0 && !(await this.ownedByOrganization(client, repo));
         if (personal) plan.invite = [];
         for (const login of plan.invite) {
-          await client.invite(repo, login);
+          await client.invite(repo, login, write ? 'push' : 'pull');
           this.node.replica.write(this.node.identity, this.core.sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
           changed++;
         }

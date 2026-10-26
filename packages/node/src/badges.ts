@@ -9,6 +9,8 @@ import { type BadgeInfo, type BadgeSeriesInfo } from './backend.ts';
  * sees the node's internals only through BadgesCore.
  */
 
+
+
 /** What Badges needs of the node's internals, and nothing more (the node builds it in its constructor). */
 export interface BadgesCore {
   project(ref: string): StoredSpace;

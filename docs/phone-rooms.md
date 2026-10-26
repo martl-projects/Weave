@@ -17,7 +17,7 @@ phone browser ──TCP──▶ phone worker (127.0.0.1:p) ══encrypted═�
 
 ## What the phone can and can't do
 
-- It reaches only rooms its computer is in right now. Joining and leaving are the same allowed calls as before (`joinRoom`, `leaveRoom`). It can't reach any other port on the computer, and can't host or start apps (`hostRoom`, `launchApp` stay off `PHONE_METHODS`).
+- It reaches only rooms its computer is in right now. Joining and leaving are the same allowed calls as before (`joinRoom`, `leaveRoom`). It can't reach any other port on the computer, and can't open rooms or start anything (`openRoom`, `addService` stay off `PHONE_METHODS`).
 - Room auth stays on the computer. The phone never sees a room key or a device key.
 - Unpairing the phone on the computer cuts its open tunnels at once. **Forget this computer** on the phone closes its local ports and their connections.
 - The local port on the phone is open to the phone itself, like the room's port on a computer is open to that computer.
