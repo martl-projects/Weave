@@ -270,16 +270,12 @@ export interface HostedWebsiteInfo {
   id: string;
   project: SpaceRef;
   name: string;
-  /** Where the handler listens on this computer. */
+  /** Where what answers it listens on this computer. */
   port: number;
-  handler:
-    | { kind: 'artifact'; artifact: { project: { id: string; name?: string }; tag: string; app: string; name: string; latest?: string }; command: string[] }
-    | { kind: 'command'; command: string[]; folder: string }
-    | { kind: 'address' };
-  /** The names of the handler's settings (the values stay here). */
-  settings: string[];
+  /** What answers it: a service of this device (it serves it), or something you run yourself at the port. */
+  handler: { kind: 'service'; service: string } | { kind: 'address' };
   running: boolean;
-  /** Fetching its release, or why it doesn't run. */
+  /** Fetching the serving service's release, or why it doesn't run. */
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
 }
@@ -329,6 +325,8 @@ export interface ServiceGate {
   publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
   /** Answer a request addressed to it, in the request's space. */
   answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
+  /** Serve a website (its contract says `website`): its process listens on `port`, and the project's website service makes it reachable. */
+  serve(input: { space: string; port: number; name?: string; pages?: RoomPages }): Promise<WebsiteInfo>;
 }
 
 /** A request to a service in a space, and what the service answered. */
@@ -1577,10 +1575,10 @@ export interface Backend {
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
-   * A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or
-   * a port already answering. Who joins: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
+   * A website of your website service in one of its projects, reaching what already answers `port` on this device
+   * (services announce their own). Who visits: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
    */
-  openWebsite(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo>;
+  openWebsite(input: { service?: string; project: string; name: string; port?: number; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */

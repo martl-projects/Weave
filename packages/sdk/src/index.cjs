@@ -12,6 +12,9 @@
  * with the app's token. who(req) reads that first; it needs no call back to
  * Weave, and works where ports can't tell (an app in a container, behind a proxy).
  *
+ * A service with a web page of its own announces it with serve(): the website
+ * service of its project makes the port reachable for the project's people.
+ *
  * One file, no dependencies, Node 18+ or Bun: require it, import it, or copy it.
  */
 
@@ -35,6 +38,26 @@ class Weave {
     this.api = String(options.api).replace(/\/+$/, '');
     this.token = String(options.token);
     this.projectId = options.project ? String(options.project) : undefined;
+    this.serviceApi = options.serviceApi ? String(options.serviceApi).replace(/\/+$/, '') : undefined;
+  }
+
+  /**
+   * Serve a website: this service listens on `port`, and the website service of the project (`space`, or the
+   * service's only project) makes it reachable for the project's people. Asked again, it keeps the same website.
+   */
+  async serve(port, options) {
+    if (!this.serviceApi) throw new TypeError('serve() is for services: Weave starts them with WEAVE_SERVICE_API');
+    const space = (options && options.space) || this.projectId;
+    if (!space) throw new TypeError('serve() needs the space when the service is in several');
+    const res = await fetch(`${this.serviceApi}/website`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ space, port, ...(options && options.name ? { name: options.name } : {}), ...(options && options.pages ? { pages: options.pages } : {}) }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new WeaveError(res.status, (body && body.error) || `Weave answered ${res.status}`);
+    return body.result;
   }
 
   /** The host: the person running the app on this computer. */
@@ -133,7 +156,7 @@ function remoteOf(from) {
 function connect(env) {
   const vars = env || (typeof process !== 'undefined' ? process.env : {});
   if (!vars.WEAVE_API || !vars.WEAVE_TOKEN) return undefined;
-  return new Weave({ api: vars.WEAVE_API, token: vars.WEAVE_TOKEN, project: vars.WEAVE_PROJECT });
+  return new Weave({ api: vars.WEAVE_API, token: vars.WEAVE_TOKEN, project: vars.WEAVE_PROJECT, serviceApi: vars.WEAVE_SERVICE_API });
 }
 
 module.exports = { connect, Weave, WeaveError };

@@ -16,7 +16,7 @@ import type { Website } from './website.ts';
  * Services: code you run under keys of their own. A service has its own key ("martl · github"), a contract that
  * says what it reads and writes (its key may sign exactly that), the spaces you add it to, and settings sealed on the
  * node that runs it. It runs here, or on an always-on node it was handed over to; it's a command, an applet (a
- * project's release), or Weave's room service (see website.ts). Its process reaches Weave through its own token on
+ * project's release), or Weave's website service (see website.ts). Its process reaches Weave through its own token on
  * the local API (serviceGate).
  */
 
@@ -111,7 +111,7 @@ export class Services {
     };
   }
 
-  // Artifacts: a project's releases. A room runs one as its handler, pinned to it, in any project of yours.
+  // Artifacts: a project's releases. A service runs one, pinned to it, in any space of yours.
 
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.h.project(ref);
@@ -142,9 +142,19 @@ export class Services {
     return { project, artifact };
   }
 
-  /** Its web page, if it has one: what a room's clients reach. */
+  /** Its web page, if it has one: what its website's visitors reach. */
   artifactWeb(app: AppManifest): AppManifest['services'][number] | undefined {
     return app.services.find((s) => s.protocol === 'http');
+  }
+
+  /**
+   * What a release runs as: its manifest's contract, and with a web page it serves a website. A web app without a
+   * contract reads nothing and writes nothing: it only serves its page.
+   */
+  artifactContract(app: AppManifest): ServiceContract {
+    const web = !!this.artifactWeb(app);
+    if (app.service) return web && !app.service.website ? { ...app.service, website: true } : app.service;
+    return { reads: 'nothing', writes: [], website: true, version: '1.0' };
   }
 
   /** The release an applet runs: pinned, with a newer one of its project if there is one, and (here) how fetching it went. */
@@ -174,10 +184,11 @@ export class Services {
     const found = this.artifact(artifact.project, tag);
     if (found.artifact.id === artifact.id) return undefined;
     const manifest = found.artifact.manifest;
-    if (!manifest.service) throw new Error(`${manifest.name} ${found.artifact.tag} is an app, not an applet: it can't replace ${name}`);
+    if (!manifest.service && !this.artifactWeb(manifest)) throw new Error(`${manifest.name} ${found.artifact.tag} has nothing to run as a service: it can't replace ${name}`);
+    const contract = this.artifactContract(manifest);
     const fingerprint = releaseApproval(found.artifact);
-    if (!approve && !approved.includes(fingerprint)) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest.service)}`);
-    return { artifact: { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, contract: manifest.service, approved: approved.includes(fingerprint) ? approved : [...approved, fingerprint] };
+    if (!approve && !approved.includes(fingerprint)) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(contract)}`);
+    return { artifact: { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, contract, approved: approved.includes(fingerprint) ? approved : [...approved, fingerprint] };
   }
 
   /** A service's key gets the rights of a new contract (and loses the old ones), and its profile says so. */
@@ -201,8 +212,8 @@ export class Services {
     }
   }
 
-  // The room service: a service Weave ships. In each project it's added to, it opens rooms, each answered by a
-  // handler: an artifact (a project's release, fetched and checked), a command, or something already running.
+  // The website service: a service Weave ships. In each project it's added to, it makes ports of this device
+  // reachable: those services serve (serveWeb, gate serve), and programs of yours (openWebsite).
 
   /** The profile everyone sees: signed by the service's own key, public. */
   publishServiceProfile(stored: StoredService): void {
@@ -222,10 +233,10 @@ export class Services {
     const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
     if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
     const manifest = found?.artifact.manifest;
-    if (manifest && !manifest.service) throw new Error(`${manifest.name} is an app, not an applet: a website runs it (open one with your website service)`);
+    if (manifest && !manifest.service && !this.artifactWeb(manifest)) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${found!.artifact.tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
     const approved = found ? releaseApproval(found.artifact) : undefined;
-    if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest!.service!)}`);
+    if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
     const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
     this.checkSettings(manifest, settings);
     const missing = (manifest?.env ?? []).filter((e) => !e.optional && !settings[e.name]);
@@ -233,8 +244,8 @@ export class Services {
     const name = serviceName(input.name ?? builtin ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
-    // The room service writes rooms and nothing else; it reads only what's addressed to it. An applet: its manifest's contract.
-    const contract = parseContract(builtin ? { reads: 'nothing', writes: [], website: true, version: '1.0' } : (manifest?.service ?? input.contract));
+    // The website service reads nothing and writes its websites. A release: its manifest's contract.
+    const contract = parseContract(builtin ? { reads: 'nothing', writes: [], website: true, version: '1.0' } : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
     const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Websites: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
@@ -266,6 +277,7 @@ export class Services {
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
+    if (builtin) this.serveRunning();
     return this.serviceInfo(this.storedService(name));
   }
 
@@ -360,7 +372,7 @@ export class Services {
       else names.add(key);
     }
     const spaces = change.spaces ? this.serviceSpaces(change.spaces) : before.spaces;
-    // The room service's rooms: only in projects it's in, none while it's off.
+    // The website service's websites: only in projects it's in, none while it's off.
     const hosted = before.builtin ? Object.fromEntries(Object.entries(change.hosted ?? before.hosted ?? {}).filter(([, r]) => spaces.includes(r.project) && change.enabled !== false)) : undefined;
     const after: Omit<Handover, 'id'> = {
       ...rest,
@@ -397,8 +409,9 @@ export class Services {
       const before = list.find((s) => s.name === h.service);
       if (h.removed) {
         if (!before) continue;
-        // Its rooms end first, signed with its key, before the key goes.
+        // Its websites end first, signed with its key, before the key goes; and those it served.
         await this.web.closeHostedRooms(h.service);
+        await this.web.unserve(h.service);
         this.stopService(h.service);
         this.h.agents = this.h.agents.filter((a) => a.name !== h.service);
         rmSync(joinPath(this.h.home.agents, `${h.service}.json`), { force: true });
@@ -440,7 +453,7 @@ export class Services {
         token: before?.token ?? b64u.encode(randomBytes(24)),
         enabled: h.enabled !== false,
       };
-      // The room service: rooms gone from the handover end here; new ones are announced and run here.
+      // The website service: websites gone from the handover end here; new ones are announced here.
       const rooms = h.builtin && stored.enabled ? (h.hosted ?? {}) : {};
       await this.web.closeHostedRooms(h.service, (r) => !!rooms[r.id]);
       this.saveServices([...this.storedServices().filter((s) => s.name !== h.service), { ...stored, ...(h.builtin ? { hosted: { ...(this.storedServices().find((s) => s.name === h.service)?.hosted ?? {}), ...rooms } } : {}) }]);
@@ -448,9 +461,10 @@ export class Services {
         if (this.serviceApi) await this.web.startAppApi();
         for (const room of Object.values(rooms)) {
           this.web.announceRoom(h.service, room);
-          this.web.startRoom(h.service, room.id);
         }
+        if (stored.enabled) this.serveRunning();
       } else {
+        await this.web.unserve(h.service, (r) => stored.enabled && stored.spaces.includes(r.project));
         this.stopService(h.service);
         this.startService(this.storedService(h.service));
       }
@@ -523,12 +537,13 @@ export class Services {
     this.saveServices(this.storedServices().map((s) => (s.name === after.name ? after : s)));
     if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract)) this.publishServiceProfile(after);
     if (!this.h.isLinkedNode) this.announceService(this.serviceKey(after.name).did, before.spaces, after.spaces);
-    // Turned off, its rooms end; out of a project, its rooms there end.
+    // Turned off, its websites end; out of a project, its websites there end. The same for those it serves.
     if (before.enabled && !after.enabled) await this.web.closeHostedRooms(after.name);
     else await this.web.closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
+    await this.web.unserve(after.name, (room) => after.enabled && after.spaces.includes(room.project));
     if (after.builtin) {
       if (this.serviceApi) await this.web.startAppApi();
-      for (const id of Object.keys(this.storedService(after.name).hosted ?? {})) this.web.startRoom(after.name, id);
+      if (after.enabled) this.serveRunning();
       return this.serviceInfo(this.storedService(after.name));
     }
     // Settings and commands take effect on a fresh start.
@@ -548,6 +563,7 @@ export class Services {
     }
     const stored = this.storedService(name);
     await this.web.closeHostedRooms(name);
+    await this.web.unserve(name);
     this.stopService(name);
     const key = this.serviceKey(name);
     this.announceService(key.did, stored.spaces, []);
@@ -680,18 +696,18 @@ export class Services {
         inSpace(found.space.id);
         return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
       },
+      serve: (input) => this.web.serve(name, input),
     };
   }
 
   serviceApi?: string;
 
-  /** Start the enabled services and the room service's rooms, now that the local API is up (the daemon calls this). */
+  /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
     void this.web.startAppApi().then(() => {
       for (const stored of this.storedServices()) {
         this.startService(stored);
-        for (const id of Object.keys(stored.hosted ?? {})) this.web.startRoom(stored.name, id);
       }
     });
   }
@@ -732,6 +748,7 @@ export class Services {
     // An applet gets the settings its manifest names, nothing else; in a container, the local APIs are the host's.
     const settings = a ? Object.fromEntries((a.manifest.env ?? []).filter((e) => stored.settings[e.name]).map((e) => [e.name, stored.settings[e.name]])) : stored.settings;
     const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
+    const web = a && this.artifactWeb(a.manifest);
     this.h.runtime.start(
       `service:${stored.name}`,
       {
@@ -742,6 +759,7 @@ export class Services {
         env: {
           HOME: dir,
           ...settings,
+          ...(web ? { PORT: String(web.port) } : {}),
           WEAVE_API: `http://${host}:${this.web.appApiPort}`,
           WEAVE_TOKEN: stored.token,
           ...(project.length === 1 ? { WEAVE_PROJECT: project[0] } : {}),
@@ -758,6 +776,33 @@ export class Services {
         if (now) this.startService(now);
       },
     );
+    if (a) void this.serveWeb(stored);
+  }
+
+  /**
+   * A release with a web page serves it: the runtime tells the website service of each project the service is in,
+   * which makes the port reachable there. Services without a manifest serve theirs themselves (gate serve).
+   */
+  async serveWeb(stored: StoredService): Promise<void> {
+    const web = stored.artifact && this.artifactWeb(stored.artifact.manifest);
+    if (!web || !stored.contract.website) return;
+    const projects = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');
+    const errors: string[] = [];
+    for (const space of projects) {
+      try {
+        await this.web.serve(stored.name, { space, port: web.port, name: stored.artifact!.manifest.name, ...(web.open ? { pages: web.open } : {}) });
+      } catch (err) {
+        errors.push((err as Error).message);
+      }
+    }
+    const job = this.h.releases.jobs.get(`service:${stored.name}`);
+    if (errors.length) this.h.releases.jobs.set(`service:${stored.name}`, { ...job, error: errors.join('; ') });
+    else if (job?.error) this.h.releases.jobs.set(`service:${stored.name}`, { ...job, error: undefined });
+  }
+
+  /** A website service came to a project: the running services with a web page there serve it now. */
+  serveRunning(): void {
+    for (const s of this.storedServices()) if (s.enabled && this.h.runtime.running(`service:${s.name}`)) void this.serveWeb(s);
   }
 
   stopService(name: string): void {

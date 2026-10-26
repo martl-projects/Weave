@@ -1,24 +1,20 @@
-import { b64u, showOpen, KIND_ROOM, artifactsOf, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
+import { b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
-import { platformKey } from './appinstall.ts';
 import { createHash, createHmac } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { portOpen } from './live.ts';
 import { type AgentKey } from './keystore.ts';
-import { launchFingerprint } from './applaunch.ts';
-import { releaseApproval } from './runtime.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { type StoredSpace } from './spacestore.ts';
-import type { WebsiteHost, StoredService, StoredRoom, RoomHandler, Handover } from './node.ts';
+import type { WebsiteHost, StoredService, StoredRoom, Handover } from './node.ts';
 import type { Services } from './services.ts';
 
 /*
- * Websites (rooms, in the code and on the wire for now): what a room service serves to the people it lets in. A room
- * is announced in a project under the room service's key and reached through an encrypted tunnel (see live.ts);
- * whoever answers it learns who each visitor is from the app API, here too. The room service still starts what
- * answers a room (a release, a command); that moves to the runtime.
+ * Websites (rooms, in the code and on the wire for now): what the website service makes reachable for the people a
+ * project lets in. A website is a port on this device: a service's (it serves it, see serve) or a program you run
+ * yourself (openWebsite). The website service starts nothing: it announces the website in the project under its key,
+ * lets visitors in through an encrypted tunnel (see live.ts), and tells whatever answers who each visitor is, in a
+ * signed header and through the app API, here too.
  */
 
 export class Website {
@@ -67,8 +63,8 @@ export class Website {
     const services = this.svc.storedServices().filter((s) => s.enabled);
     const service = services.find((s) => sameToken(s.token, token));
     if (service) return `service:${service.name}`;
-    // A room's handler: its room only.
-    const room = services.flatMap((s) => Object.values(s.hosted ?? {})).find((r) => sameToken(r.token, token));
+    // What answers a website you run yourself: that website only.
+    const room = services.flatMap((s) => Object.values(s.hosted ?? {})).find((r) => !r.servedBy && sameToken(r.token, token));
     return room && `room:${room.id}`;
   }
 
@@ -80,11 +76,10 @@ export class Website {
     const stored = this.svc.storedServices().find((s) => s.name === name && s.enabled);
     if (!stored) throw new AppApiError(401, 'unauthorized');
     if (route === '/v1/who') {
-      const did = this.svc.serviceKey(name).did;
       const found = this.h.live.personOnPort(Number(params.get('port')));
-      const room = found && this.allRooms().find((r) => r.room.id === found.room && r.room.agent === did);
-      if (!room) throw new AppApiError(404, 'not a connection through one of this service’s rooms');
-      return room.project.id;
+      const room = found && this.hosted().find((h) => h.room.id === found.room && h.room.servedBy === name);
+      if (!room) throw new AppApiError(404, 'not a connection through one of this service’s websites');
+      return room.room.project;
     }
     const mine = stored.spaces.filter((id) => this.h.spaces.has(id));
     const asked = params.get('project');
@@ -115,9 +110,9 @@ export class Website {
       return { ...this.appPerson(project, found.person), room: { id: room.room.id, name: room.room.name } };
     }
     if (route === '/v1/project') {
-      // A service sees its own rooms only, and the settings it was given for this space.
-      const agent = service ? this.svc.serviceKey(service).did : undefined;
-      const rooms = this.allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.h.live.isHosting(r.room.id) && (!agent || r.room.agent === agent) && (!hosted || r.room.id === hosted.id));
+      // A service sees the websites it serves only, and the settings it was given for this space.
+      const served = service ? new Set(this.hosted().filter((h) => h.room.servedBy === service).map((h) => h.room.id)) : undefined;
+      const rooms = this.allRooms().filter((r) => r.project.id === projectId && r.room.open && r.room.host === me && this.h.live.isHosting(r.room.id) && (!served || served.has(r.room.id)) && (!hosted || r.room.id === hosted.id));
       return {
         id: project.id,
         name: project.name,
@@ -170,8 +165,9 @@ export class Website {
   personHeader(room: Room, person: Did): string | undefined {
     if (this.roomService(room)?.protocol !== 'http') return undefined;
     const found = this.allRooms().find((r) => r.room.id === room.id);
-    // A service's room is vouched for with the service's own token, which its process has.
-    const token = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id]?.token : undefined;
+    // Vouched for with the token of what answers it: the service that serves it, or the website's own (weave website env).
+    const stored = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
+    const token = stored?.servedBy ? this.svc.storedServices().find((s) => s.name === stored.servedBy)?.token : stored?.token;
     if (!found || !token) return undefined;
     const payload = Buffer.from(JSON.stringify({ ...this.appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.h.clock() / 1000) })).toString('base64url');
     return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
@@ -210,9 +206,9 @@ export class Website {
   }
 
   async closeWebsite(ref: string): Promise<void> {
-    const { room, project } = this.roomById(ref);
+    const { room } = this.roomById(ref);
     if (room.host !== this.h.identity.author || !room.agent) throw new Error('only the person whose website service offers a website closes it');
-    // A room of the room service: its handler stops, the room closes. On an always-on node: handed over as a change.
+    // A website of the website service closes. On an always-on node: handed over as a change.
     const service = this.svc.localServiceByKey(room.agent);
     if (service?.hosted?.[room.id]) return this.closeHostedRooms(service.name, (r) => r.id !== room.id);
     const away = this.h.isLinkedNode ? undefined : [...this.svc.handedOver().values()].find((h) => h.did === room.agent);
@@ -347,50 +343,18 @@ export class Website {
   }
 
   /**
-   * Open a room: in a project the room service was added to, answered by its handler. Running code (an artifact's
-   * release, a command) needs `approve` once per release or command; a handler already running needs nothing.
+   * Open a website: in a project the website service was added to, reaching something already running on this
+   * device at `port` (a program of yours; services announce their own with serve). Who may visit: every participant,
+   * or invited people, a show's ticket holders (while it's on), members of tiers.
    */
-  async openWebsite(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo> {
+  async openWebsite(input: { service?: string; project: string; name: string; port?: number; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo> {
     const service = this.roomServiceFor(input.service);
     const project = this.h.project(input.project);
     if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
     const name = input.name?.trim().slice(0, 60);
     if (!name) throw new Error('a website has a name');
-    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    if (input.artifact && command?.length) throw new Error('a website runs an artifact or a command, not both');
-    if (service.away && command?.length) throw new Error(`${service.name} runs on ${this.svc.nodeKey(service.away.node).name}: a website there runs a project's release, or something already running there, not a program of this computer`);
-    let handler: RoomHandler;
-    let port: number;
-    let approved: string | undefined;
-    if (input.artifact) {
-      const found = this.svc.artifact(input.artifact.project, input.artifact.tag);
-      const { id, tag, manifest } = found.artifact;
-      const web = this.svc.artifactWeb(manifest);
-      if (!web) throw new Error(`${manifest.name} has no web page (an http service in its weave.app.json): nothing for a website to reach`);
-      port = web.port;
-      // On an always-on node, its own platform decides; here, this computer's.
-      if (!service.away && !this.h.runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
-      approved = releaseApproval(found.artifact);
-      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${tag}, released in ${found.project.name}`);
-      handler = { artifact: { project: found.project.id, id, tag, manifest } };
-      this.svc.checkSettings(manifest, input.settings ?? {});
-      const missing = (manifest.env ?? []).filter((e) => !e.optional && !input.settings?.[e.name]);
-      if (missing.length) throw new Error(`${manifest.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
-    } else if (command?.length) {
-      const folder = input.folder ? resolvePath(input.folder) : undefined;
-      if (!folder || !existsSync(folder)) throw new Error('a command runs in a folder: say which (an existing one)');
-      port = this.roomPortOf(input.port);
-      approved = launchFingerprint(command, folder);
-      if (!input.approve && !(service.approved ?? []).includes(approved)) throw new Error(`approve it first: Weave would run "${command.join(' ')}" in ${folder}`);
-      handler = { command, folder };
-      this.svc.checkSettings(undefined, input.settings ?? {});
-    } else {
-      // Something already running: Weave only lets the room's clients reach it.
-      port = this.roomPortOf(input.port);
-      handler = { address: true };
-      if (input.settings && Object.keys(input.settings).length) throw new Error('settings go to a handler Weave starts: this one runs by itself');
-    }
-    // Who may join: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
+    const port = this.roomPortOf(input.port);
+    // Who may visit: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
     const invite = input.invite?.length ? input.invite.map((who) => this.h.resolve(who)) : ('participants' as const);
     const show = input.show ? this.h.showRef(input.show) : undefined;
     if (show && show.host !== this.h.identity.author) throw new Error(`only ${this.h.nameOf(show.host) ?? 'its host'} opens websites for ${show.name}: they let ticket holders in`);
@@ -400,29 +364,21 @@ export class Website {
       if (!this.h.state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
       return group.id;
     });
-    // Ports answer on one device: rooms there can't share one.
-    const busy = service.away ? Object.values(service.hosted) : this.svc.storedServices().flatMap((s) => Object.values(s.hosted ?? {}));
-    const taken = busy.find((r) => r.port === port);
-    if (taken) throw new Error(`port ${port} already answers the website "${taken.name}": close it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
+    this.portFree(service.away ? Object.values(service.hosted) : this.hosted().map((h) => h.room), port);
     const access = { ...(invite !== 'participants' ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
-    // The pages each side opens: the release's own (its manifest's open), or as given.
-    const web = 'artifact' in handler ? this.svc.artifactWeb(handler.artifact.manifest) : undefined;
-    const pages = parsePages(web ? web.open : input.pages);
+    const pages = parsePages(input.pages);
     const room: StoredRoom = {
       id: b64u.encode(randomBytes(12)),
       project: project.id,
       name,
-      handler,
       port,
-      settings: Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)])),
       token: b64u.encode(randomBytes(24)),
       ...(Object.keys(access).length ? { access } : {}),
       ...(pages ? { pages } : {}),
     };
-    const approvals = approved && !service.approved.includes(approved) ? [...service.approved, approved] : service.approved;
     if (service.away) {
-      // Its key is on the always-on node: the room goes there, sealed to yourself, and the node announces and runs it.
-      this.svc.changeNodeService(service.away, { hosted: { ...service.hosted, [room.id]: room }, approved: approvals });
+      // Its key is on the always-on node: the website goes there, sealed to yourself, and the node announces it.
+      this.svc.changeNodeService(service.away, { hosted: { ...service.hosted, [room.id]: room } });
       return {
         id: room.id,
         project: { id: project.id, kind: 'project', name: project.name },
@@ -438,12 +394,50 @@ export class Website {
         time: new Date(this.h.clock()).toISOString(),
       };
     }
-    this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room }, approved: approvals } : s)));
+    this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
     const announced = this.announceRoom(service.name, room)!;
-    if (this.svc.serviceApi) await this.startAppApi();
-    this.startRoom(service.name, room.id);
     this.h.emitLive();
     return this.roomInfo(announced, project);
+  }
+
+  /**
+   * A service on this device serves a website: its process listens on `port`, and the website service of this device
+   * that's in the project makes it reachable there. Asked again (after a restart), it keeps the same website.
+   */
+  async serve(by: string, input: { space: string; port: number; name?: string; pages?: RoomPages }): Promise<WebsiteInfo> {
+    const serving = this.svc.storedService(by);
+    if (!serving.contract.website) throw new Error(`service "${by}" doesn't serve websites in its contract`);
+    const project = this.h.project(input.space);
+    if (!serving.spaces.includes(project.id)) throw new Error(`service "${by}" wasn't added to ${project.name}`);
+    const port = this.roomPortOf(input.port);
+    const site = this.svc.storedServices().find((s) => s.builtin === 'website' && s.enabled && s.spaces.includes(project.id));
+    if (!site) throw new Error(`p/${project.name} has no website service on this device: add it there, and ${by} shows up as a website`);
+    const name = input.name?.trim().slice(0, 60) || serving.artifact?.manifest.name || by;
+    const pages = parsePages(input.pages);
+    const before = Object.values(site.hosted ?? {}).find((r) => r.servedBy === by && r.project === project.id && r.name === name);
+    // Its own websites may share its port: one process answers them all, in each project.
+    this.portFree(this.hosted().map((h) => h.room).filter((r) => r.servedBy !== by), port);
+    const room: StoredRoom = before ? { ...before, port, ...(pages ? { pages } : {}) } : { id: b64u.encode(randomBytes(12)), project: project.id, name, port, token: b64u.encode(randomBytes(24)), servedBy: by, ...(pages ? { pages } : {}) };
+    this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === site.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
+    const announced = this.announceRoom(site.name, room)!;
+    this.h.emitLive();
+    return this.roomInfo(announced, project);
+  }
+
+  /** Close the websites a service serves (all of them, or those `keep` doesn't keep): it stopped, left a project, or went. */
+  async unserve(by: string, keep: (room: StoredRoom) => boolean = () => false): Promise<void> {
+    for (const site of this.svc.storedServices().filter((s) => s.builtin === 'website')) await this.closeHostedRooms(site.name, (r) => r.servedBy !== by || keep(r));
+  }
+
+  /** The websites the website services of this device serve, with the service each belongs to. */
+  hosted(): Array<{ site: StoredService; room: StoredRoom }> {
+    return this.svc.storedServices().flatMap((site) => Object.values(site.hosted ?? {}).map((room) => ({ site, room })));
+  }
+
+  /** Ports answer on one device: websites there can't share one. */
+  portFree(rooms: StoredRoom[], port: number): void {
+    const taken = rooms.find((r) => r.port === port);
+    if (taken) throw new Error(`port ${port} already answers the website "${taken.name}": close it first, or use another port`);
   }
 
   /** A room of the room service, announced under its key (so everyone sees whose service offers it), and hosted here. */
@@ -466,19 +460,19 @@ export class Website {
     return announced;
   }
 
-  /** A port a room's clients may reach: one a handler listens on, on this computer. */
+  /** A port a website's visitors may reach: one something listens on, on this device. */
   roomPortOf(port: unknown): number {
     const n = Number(port);
-    if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error('which port does it listen on (on this computer)?');
+    if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error('which port does it listen on (on this device)?');
     return n;
   }
 
-  /** Your room service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
-  roomServiceFor(name?: string): { name: string; spaces: string[]; approved: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
+  /** Your website service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
+  roomServiceFor(name?: string): { name: string; spaces: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
     const here = this.svc.storedServices()
       .filter((s) => s.builtin === 'website')
-      .map((s) => ({ name: s.name, spaces: s.spaces, approved: s.approved ?? [], hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
-    const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'website').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
+      .map((s) => ({ name: s.name, spaces: s.spaces, hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
+    const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'website').map((h) => ({ name: h.service, spaces: h.spaces, hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
     const all = [...here, ...away];
     const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
     if (!found) throw new Error(name ? `"${name}" isn't one of your website services` : all.length ? `you have several website services: say which (${all.map((s) => s.name).join(', ')})` : 'add the website service first (weave service add website --builtin website)');
@@ -486,103 +480,30 @@ export class Website {
     return found;
   }
 
-  /** A room the room service runs, as its service lists it: its handler and how it's doing. */
+  /** A website the website service serves, as it lists it: what answers it, and how that's doing. */
   hostedRoomInfo(r: StoredRoom, here = true): HostedWebsiteInfo {
     const project = this.h.spaces.get(r.project);
-    const job = this.h.releases.jobs.get(r.id);
-    const h = r.handler;
-    let handler: HostedWebsiteInfo['handler'];
-    if ('artifact' in h) {
-      const from = this.h.spaces.get(h.artifact.project);
-      const latest = from ? artifactsOf(this.h.entries(from), this.h.state(from).maintainers)[0] : undefined;
-      handler = {
-        kind: 'artifact',
-        artifact: { project: { id: h.artifact.project, ...(from ? { name: this.h.spaceName(from) } : {}) }, tag: h.artifact.tag, app: h.artifact.manifest.app, name: h.artifact.manifest.name, ...(latest && latest.id !== h.artifact.id && latest.tag !== h.artifact.tag ? { latest: latest.tag } : {}) },
-        command: this.h.runtime.command(`weave-room-${r.id}`, h.artifact.manifest) ?? [],
-      };
-    } else if ('command' in h) handler = { kind: 'command', command: h.command, folder: h.folder };
-    else handler = { kind: 'address' };
+    const serving = r.servedBy ? this.svc.storedServices().find((s) => s.name === r.servedBy) : undefined;
+    const job = r.servedBy ? this.h.releases.jobs.get(`service:${r.servedBy}`) : undefined;
     return {
       id: r.id,
       project: { id: r.project, kind: 'project', name: project ? this.h.spaceName(project) : r.project },
       name: r.name,
       port: r.port,
-      handler,
-      settings: Object.keys(r.settings).sort(),
-      running: here && ('address' in h || this.h.runtime.running(`room:${r.id}`)),
+      handler: r.servedBy ? { kind: 'service', service: r.servedBy } : { kind: 'address' },
+      running: here && (!r.servedBy || (!!serving?.enabled && this.h.runtime.running(`service:${r.servedBy}`))),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
     };
   }
 
-  /** Fetch a room's release where it isn't here yet (checked against its fingerprints), then start its handler. */
-  startRoom(serviceName: string, roomId: string): void {
-    const stored = this.svc.storedServices().find((s) => s.name === serviceName);
-    const room = stored?.hosted?.[roomId];
-    if (!stored?.enabled || !room) return;
-    if (!('artifact' in room.handler)) return this.runRoomHandler(stored, room);
-    // Rooms with the same release share its folder: fetched once.
-    this.h.releases.ensure(stored.name, room.handler.artifact, roomId, () => {
-      const now = this.svc.storedServices().find((s) => s.name === serviceName);
-      if (now?.hosted?.[roomId]) this.runRoomHandler(now, now.hosted[roomId]);
-    });
-  }
-
-  /** Resolves when fetching a room's release ends (for tests and the CLI). */
-  async websiteReady(ref: string): Promise<WebsiteInfo> {
-    const { room, project } = this.roomById(ref);
-    await this.h.releases.done(room.id);
-    return this.roomInfo(room, project);
-  }
-
-  /** Start a room's handler: its process gets the room's port, its settings, and the app API for its room only. */
-  runRoomHandler(stored: StoredService, room: StoredRoom): void {
-    if (!this.svc.serviceApi || !this.appApiPort || this.h.runtime.running(`room:${room.id}`) || 'address' in room.handler) return;
-    const h = room.handler;
-    const container = 'artifact' in h && this.h.runtime.runs(h.artifact.manifest) === 'container' ? `weave-room-${room.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}` : undefined;
-    let command: string[];
-    let cwd: string;
-    if ('artifact' in h) {
-      const run = this.h.runtime.command(container ?? 'weave', h.artifact.manifest);
-      if (!run || !(stored.approved ?? []).includes(releaseApproval(h.artifact))) return void this.h.releases.jobs.set(room.id, { error: 'approve what it runs first' });
-      cwd = container ? joinPath(this.h.home.dir, 'services', stored.name) : this.h.releases.folder(stored.name, h.artifact);
-      command = run;
-    } else {
-      if (!(stored.approved ?? []).includes(launchFingerprint(h.command, h.folder))) return void this.h.releases.jobs.set(room.id, { error: 'approve its command first' });
-      cwd = h.folder;
-      command = h.command;
-    }
-    const dir = joinPath(this.h.home.dir, 'services', stored.name, 'websites', room.id);
-    const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
-    this.h.runtime.start(
-      `room:${room.id}`,
-      {
-        command,
-        cwd,
-        // Its settings, its port, and the app API for its room (who is who). Weave's own variables last.
-        env: { HOME: dir, ...room.settings, PORT: String(room.port), WEAVE_API: `http://${host}:${this.appApiPort}`, WEAVE_TOKEN: room.token, WEAVE_PROJECT: room.project, WEAVE_WEBSITE: room.id },
-        ...(container ? { container } : {}),
-        log: joinPath(dir, 'room.log'),
-        name: 'the handler',
-      },
-      () => this.startRoom(stored.name, room.id),
-    );
-  }
-
-  stopRoomHandler(roomId: string): void {
-    this.h.runtime.stop(`room:${roomId}`);
-  }
-
-  /** End rooms the room service runs (all of them, or those in projects it left): handler stopped, room closed for everyone. */
+  /** Close websites of a website service (all of them, or those `keep` doesn't keep): closed for everyone. */
   async closeHostedRooms(name: string, keep: (room: StoredRoom) => boolean = () => false): Promise<void> {
     const stored = this.svc.storedServices().find((s) => s.name === name);
     const key = this.h.agents.find((a) => a.name === name);
     if (!stored?.hosted || !key) return;
     const gone = Object.values(stored.hosted).filter((r) => !keep(r));
-    for (const room of gone) {
-      this.stopRoomHandler(room.id);
-      await this.closeServiceRoom(key, room.project, room.id);
-    }
+    for (const room of gone) await this.closeServiceRoom(key, room.project, room.id);
     if (gone.length) this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === name ? { ...s, hosted: Object.fromEntries(Object.entries(s.hosted ?? {}).filter(([id]) => !gone.some((g) => g.id === id))) } : s)));
     this.h.emitLive();
   }
@@ -592,6 +513,4 @@ export class Website {
     const project = this.h.spaces.get(projectId);
     if (project) this.h.replica.write(key, sealFor(this.h.cipher(project), { kind: KIND_ROOM, body: { room: roomId, agent: key.did, open: false } }));
   }
-
-  // Running services: one process each, started with the address of the local API and its own token.
 }

@@ -73,7 +73,7 @@ export declare class WeaveError extends Error {
 }
 
 export declare class Weave {
-  constructor(options: { api: string; token: string; project?: string });
+  constructor(options: { api: string; token: string; project?: string; serviceApi?: string });
   readonly api: string;
   readonly projectId?: string;
   /** The host: the person running the app on this computer. */
@@ -87,7 +87,9 @@ export declare class Weave {
   tickets(did: string): Promise<Ticket[]>;
   /** The project's badges someone holds: only valid ones, checked against the issuer's signatures. */
   badges(did: string): Promise<Badge[]>;
+  /** A service serves a website on `port`: the project's website service makes it reachable for the project's people. */
+  serve(port: number, options?: { space?: string; name?: string; pages?: { host?: { path: string; label: string }; joiner?: { path: string; label: string } } }): Promise<{ id: string; name: string }>;
 }
 
 /** Weave as the app was started with it (WEAVE_API, WEAVE_TOKEN, WEAVE_PROJECT), or undefined when Weave didn't start it. */
-export declare function connect(env?: { WEAVE_API?: string; WEAVE_TOKEN?: string; WEAVE_PROJECT?: string }): Weave | undefined;
+export declare function connect(env?: { WEAVE_API?: string; WEAVE_TOKEN?: string; WEAVE_PROJECT?: string; WEAVE_SERVICE_API?: string }): Weave | undefined;

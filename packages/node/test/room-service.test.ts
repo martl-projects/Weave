@@ -8,12 +8,12 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { platformKey } from '../src/appinstall.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { readSecretJson } from '../src/vault.ts';
 
 /*
- * The room service (block 4): a service Weave ships. Added to a project, it opens rooms there, any number, each
- * answered by its handler: a project's release (an artifact: fetched, checked, approved once per release), a command
- * (approved), or something already running. Handlers have no key: they only answer the room's clients, and ask the
- * app API about their own room.
+ * The website service: a service Weave ships. Added to a project, it makes ports of this device reachable there,
+ * any number, and starts nothing. A service with a web page serves it (a release's manifest says so, and the runtime
+ * tells the website service); a program of yours gets a website by its port.
  */
 
 const dirs: string[] = [];
@@ -37,12 +37,12 @@ const freePort = () =>
     });
   });
 
-/** A handler: a web server on PORT that says which version it is and what the app API tells it about its room. */
+/** A web app: a server on PORT that says which version it is and what the app API tells it about its project. */
 const serverCode = (version: string) => `const http = require('node:http');
 http.createServer(async (req, res) => {
   const r = await fetch(process.env.WEAVE_API + '/v1/project', { headers: { authorization: 'Bearer ' + process.env.WEAVE_TOKEN } });
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ version: ${JSON.stringify(version)}, status: r.status, project: await r.json(), room: process.env.WEAVE_WEBSITE, key: process.env.API_KEY ?? null }));
+  res.end(JSON.stringify({ version: ${JSON.stringify(version)}, status: r.status, project: await r.json(), service: process.env.WEAVE_SERVICE, key: process.env.API_KEY ?? null }));
 }).listen(Number(process.env.PORT), '127.0.0.1');
 `;
 
@@ -92,12 +92,15 @@ const syncAll = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
 
-type Answer = { version: string; status: number; project: { id?: string; name?: string; rooms?: unknown[] }; room: string; key: string | null };
+/** A service's token, as its process gets it (kept sealed on the node). */
+const tokenOf = (node: WeaveNode, name: string) => readSecretJson<Array<{ name: string; token: string }>>(node.home, join(node.home.dir, 'services.json'))!.find((s) => s.name === name)!.token;
+
+type Answer = { version: string; status: number; project: { id?: string; name?: string; rooms?: unknown[] }; service: string; key: string | null };
 const getJson = async (port: number) => (await fetch(`http://127.0.0.1:${port}/`)).json() as Promise<Answer>;
 const answers = (port: number) => vi.waitFor(() => getJson(port), { timeout: 15_000, interval: 200 });
 
-describe('the room service', { timeout: 60_000 }, () => {
-  it('opens rooms in its projects, each answered by an artifact, a command, or something already running', async () => {
+describe('the website service', { timeout: 60_000 }, () => {
+  it('makes ports reachable in its projects: services serve their web pages, and programs of yours get a website by port', async () => {
     const github = new FakeReleases();
     const racePort = await freePort();
     const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
@@ -111,7 +114,7 @@ describe('the room service', { timeout: 60_000 }, () => {
     syncAll([martl, lena]);
     await lena.createProject({ name: 'Party' });
 
-    // Lena adds Weave's room service to Party: it writes rooms and nothing else, and says it's the one Weave ships.
+    // Lena adds Weave's website service to Party: it reads nothing, writes websites, and says it's the one Weave ships.
     const service = await lena.addService({ builtin: 'website', spaces: ['Party'] });
     expect(service).toMatchObject({ name: 'website', builtin: 'website', contract: { reads: 'nothing', writes: [], website: true }, websites: [] });
     // It takes no requests: its key may sign its profile and its websites, not even answers.
@@ -123,61 +126,62 @@ describe('the room service', { timeout: 60_000 }, () => {
     try {
       lena.runServices({ port: api.port });
 
-      // A room with martl's release as its handler: in a project of the service's, approved first.
-      await expect(lena.openWebsite({ project: 'Horses', name: 'Race', artifact: { project: 'Horses' }, approve: true })).rejects.toThrow(/website isn't in Horses/);
-      await expect(lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" from Horse race v1\.0, released in Horses/);
-      const race = await lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' }, settings: { API_KEY: 'k-123' }, approve: true });
-      expect(race).toMatchObject({ name: 'Race', mine: true, offeredBy: { name: 'website' }, open: true });
-      await lena.websiteReady(race.id);
-      // The handler gets its port, its settings, and the app API for its own room.
-      const first = await answers(racePort);
-      expect(first).toMatchObject({ version: 'v1.0', status: 200, room: race.id, key: 'k-123', project: { name: 'Party' } });
-
-      // The release listens on its port: a second room with it waits until the first ends.
-      await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', artifact: { project: 'Horses' } })).rejects.toThrow(new RegExp(`port ${racePort} already answers the website "Race"`));
-
-      // Something already running: Weave starts nothing and asks for no approval.
+      // Something of hers already running: the website service starts nothing, it only makes the port reachable.
       const boardPort = await freePort();
       const board = createHttpServer((_, res) => res.end('board')).listen(boardPort, '127.0.0.1');
       try {
+        await expect(lena.openWebsite({ project: 'Horses', name: 'Board', port: boardPort })).rejects.toThrow(/website isn't in Horses/);
         const opened = await lena.openWebsite({ project: 'Party', name: 'Board', port: boardPort });
-        expect(opened).toMatchObject({ name: 'Board', offeredBy: { name: 'website' } });
+        expect(opened).toMatchObject({ name: 'Board', mine: true, offeredBy: { name: 'website' }, open: true });
 
-        // A command in a folder: approved first, then started with its port.
-        const folder = tempDir('weave-handler-');
-        writeFileSync(join(folder, 'server.cjs'), serverCode('own'));
-        const quizPort = await freePort();
-        await expect(lena.openWebsite({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" in /);
-        const quiz = await lena.openWebsite({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort, approve: true });
-        expect(await answers(quizPort)).toMatchObject({ version: 'own', room: quiz.id, project: { name: 'Party' } });
+        // martl's release, installed as a service in Party (approved first): a web app without a contract reads and
+        // writes nothing, and serves its web page.
+        await expect(lena.addService({ artifact: { project: 'Horses' }, spaces: ['Party'] })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" from Horse race v1\.0, released in Horses/);
+        const horses = await lena.addService({ artifact: { project: 'Horses' }, spaces: ['Party'], settings: { API_KEY: 'k-123' }, approve: true });
+        expect(horses).toMatchObject({ name: 'horses', contract: { reads: 'nothing', writes: [], website: true } });
+        await lena.serviceReady('horses');
+        // The runtime started it with its port and settings, and the website service serves it in Party.
+        const first = await answers(racePort);
+        expect(first).toMatchObject({ version: 'v1.0', status: 200, service: 'horses', key: 'k-123', project: { name: 'Party' } });
+        const sites = async () => ((await lena.services()).find((s) => s.name === 'website')!.websites ?? []).map((r) => [r.name, r.project.name, r.handler.kind === 'service' ? r.handler.service : r.handler.kind, r.running]).sort();
+        await vi.waitFor(async () => expect(await sites()).toEqual([['Board', 'Party', 'address', true], ['Horse race', 'Party', 'horses', true]]), { timeout: 10_000, interval: 200 });
+        expect((await lena.websites('Party')).filter((r) => r.offeredBy).map((r) => r.name).sort()).toEqual(['Board', 'Horse race']);
 
-        // Three rooms, one service.
-        const listed = (await lena.services()).find((s) => s.name === 'website')!;
-        expect(listed.websites!.map((r) => [r.name, r.handler.kind, r.running]).sort()).toEqual([
-          ['Board', 'address', true],
-          ['Quiz', 'command', true],
-          ['Race', 'artifact', true],
-        ]);
-        expect((await lena.websites('Party')).filter((r) => r.offeredBy).map((r) => r.name).sort()).toEqual(['Board', 'Quiz', 'Race']);
+        // Its port answers that website: another can't take it.
+        await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', port: racePort })).rejects.toThrow(new RegExp(`port ${racePort} already answers the website "Horse race"`));
 
-        // Ending a room stops its handler; opening it again runs the approved release without asking (and without fetching it again).
-        await lena.closeWebsite(race.id);
-        expect((await lena.websites('Party')).some((r) => r.id === race.id)).toBe(false);
+        // Stopped, its website ends; started again, the same website comes back, without fetching the release again.
+        const before = (await lena.websites('Party')).find((r) => r.name === 'Horse race')!.id;
+        await lena.setService({ name: 'horses', enabled: false });
+        expect(await sites()).toEqual([['Board', 'Party', 'address', true]]);
         await vi.waitFor(async () => expect(await getJson(racePort).then(() => 'up', () => 'down')).toBe('down'), { timeout: 10_000, interval: 200 });
         const downloads = github.downloads;
-        const again = await lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } });
-        await lena.websiteReady(again.id);
-        expect((await answers(racePort)).room).toBe(again.id);
+        await lena.setService({ name: 'horses', enabled: true });
+        await lena.serviceReady('horses');
+        await answers(racePort);
+        await vi.waitFor(async () => expect(await sites()).toEqual([['Board', 'Party', 'address', true], ['Horse race', 'Party', 'horses', true]]), { timeout: 10_000, interval: 200 });
         expect(github.downloads).toBe(downloads);
 
-        // The room service leaves Party: all its rooms there end.
-        await lena.setService({ name: 'website', spaces: [] });
+        // In a project without a website service it serves nothing there, and says why; once one comes, it does.
+        await lena.setService({ name: 'horses', spaces: ['Party', 'Horses'] });
+        await lena.serviceReady('horses');
+        await vi.waitFor(async () => expect((await lena.services()).find((s) => s.name === 'horses')!.artifact?.error).toMatch(/p\/Horses has no website service on this device/), { timeout: 10_000, interval: 200 });
+        await lena.setService({ name: 'website', spaces: ['Party', 'Horses'] });
+        await vi.waitFor(async () => expect((await sites()).map(([name, project]) => `${name} in ${project}`)).toEqual(['Board in Party', 'Horse race in Horses', 'Horse race in Party']), { timeout: 10_000, interval: 200 });
+
+        // A service serves websites only when its contract says so.
+        const quiet = await lena.addService({ name: 'quiet', contract: { reads: 'nothing', writes: [], version: '1.0' }, spaces: ['Party'] });
+        await expect(lena.serviceGate(tokenOf(lena, quiet.name))!.serve({ space: 'Party', port: boardPort })).rejects.toThrow(/doesn't serve websites in its contract/);
+
+        // The website service leaves Party: all websites there end.
+        await lena.setService({ name: 'website', spaces: ['Horses'] });
         expect((await lena.websites('Party')).filter((r) => r.offeredBy)).toEqual([]);
-        expect((await lena.services()).find((s) => s.name === 'website')!.websites).toEqual([]);
+        expect((await sites()).map(([name, project]) => `${name} in ${project}`)).toEqual(['Horse race in Horses']);
       } finally {
         board.close();
       }
     } finally {
+      await lena.removeService('horses').catch(() => {});
       await lena.removeService('website').catch(() => {});
       await api.close();
     }

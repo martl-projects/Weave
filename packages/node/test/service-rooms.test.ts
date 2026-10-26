@@ -1,6 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -9,8 +8,9 @@ import { startApi } from '../src/api.ts';
 import { closeOpenStores, loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
 
 /*
- * A room of the room service, answered by a program it starts (its handler): participants reach it from their own
- * nodes through the tunnel, and the handler knows who they are (weave.who); nobody else gets in.
+ * A website a service serves: its process listens on a port and says so (weave.serve), the website service makes it
+ * reachable; participants reach it from their own nodes through the tunnel, and the service knows who they are
+ * (weave.who); nobody else gets in.
  */
 
 const dirs: string[] = [];
@@ -41,7 +41,7 @@ const sync = (all: WeaveNode[]) => {
 };
 
 const getJson = (url: string) =>
-  new Promise<{ room: string; who: { did: string; name?: string } | null }>((resolve, reject) => {
+  new Promise<{ service: string; who: { did: string; name?: string } | null }>((resolve, reject) => {
     const { port, pathname } = new URL(url);
     const req = request({ host: '127.0.0.1', port: Number(port), path: pathname, agent: false }, (res) => {
       let body = '';
@@ -52,8 +52,8 @@ const getJson = (url: string) =>
     req.end();
   });
 
-describe('a room answered by a program', { timeout: 120_000 }, () => {
-  it('runs it with its port and its room token; participants reach it and are known by name, nobody else gets in', async () => {
+describe('a website a service serves', { timeout: 120_000 }, () => {
+  it('is reachable for participants, who are known by name; nobody else gets in', async () => {
     const martl = person('martl');
     const lena = person('Lena');
     const kofi = person('Kofi');
@@ -65,13 +65,15 @@ describe('a room answered by a program', { timeout: 120_000 }, () => {
     martl.runServices({ port: api.port });
     try {
       await martl.addService({ builtin: 'website', spaces: ['Party'] });
-      const port = await new Promise<number>((resolve) => {
-        const probe = createNetServer().listen(0, '127.0.0.1', () => {
-          const { port } = probe.address() as { port: number };
-          probe.close(() => resolve(port));
-        });
-      });
-      const offered = await martl.openWebsite({ project: 'Party', name: 'Board', command: [process.execPath, 'room-service.mjs'], folder: join(import.meta.dirname, 'helpers'), port, approve: true });
+      await martl.addService({ name: 'board', contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, spaces: ['Party'], command: [process.execPath, join(import.meta.dirname, 'helpers', 'room-service.mjs')] });
+      const offered = await vi.waitFor(
+        async () => {
+          const found = (await martl.websites('Party')).find((r) => r.name === 'Board');
+          expect(found).toBeTruthy();
+          return found!;
+        },
+        { timeout: 15_000, interval: 200 },
+      );
       expect(offered).toMatchObject({ name: 'Board', host: { name: 'martl' }, offeredBy: { name: 'website' }, open: true, mine: true });
 
       // Lena, a participant, joins it and the service knows it's her.
@@ -87,12 +89,12 @@ describe('a room answered by a program', { timeout: 120_000 }, () => {
         },
         { timeout: 30_000, interval: 300 },
       );
-      expect(await getJson(url)).toEqual({ room: offered.id, who: { did: lena.identity.author, name: 'Lena' } });
+      expect(await getJson(url)).toEqual({ service: 'board', who: { did: lena.identity.author, name: 'Lena' } });
 
-      // Kofi isn't in Party: he can't even see its rooms.
+      // Kofi isn't in Party: he can't even see its websites.
       await expect(kofi.visitWebsite(seen.id)).rejects.toThrow();
 
-      // The room service turned off: its rooms end, for everyone.
+      // The website service turned off: its websites end, for everyone.
       await martl.setService({ name: 'website', enabled: false });
       sync([martl, lena]);
       expect((await lena.websites('Party')).find((r) => r.id === seen.id)?.open ?? false).toBe(false);

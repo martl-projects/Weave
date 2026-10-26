@@ -101,7 +101,7 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     expect(released.install?.assets).toBeUndefined();
     syncAll([martl, lena]);
 
-    // Lena's computer has Docker: a room of hers runs the release's container, no copy of it needed.
+    // Lena's computer has Docker: installed as a service, the release runs as its container, no copy of it needed.
     const dockerDir = tempDir('weave-fake-docker-');
     process.env.FAKE_DOCKER_DIR = dockerDir;
     // On Linux the container shares the host's network (no -p): the stand-in needs to know the app's port.
@@ -119,9 +119,9 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     lena.runServices({ port: api.port });
     await lena.addService({ builtin: 'website', spaces: ['Gameshow'] });
-    await expect(lena.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' } })).rejects.toThrow(/approve it first/);
-    const room = await lena.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' }, approve: true });
-    expect(JSON.stringify((await lena.services())[0].websites)).not.toContain('s3cret-value');
+    await expect(lena.addService({ artifact: { project: 'Gameshow' }, spaces: ['Gameshow'], settings: { SECRET_KEY: 's3cret-value' } })).rejects.toThrow(/approve it first/);
+    await lena.addService({ artifact: { project: 'Gameshow' }, spaces: ['Gameshow'], settings: { SECRET_KEY: 's3cret-value' }, approve: true });
+    expect(JSON.stringify(await lena.services())).not.toContain('s3cret-value');
     const answer = await vi.waitFor(
       async () => {
         const res = await fetch(`http://127.0.0.1:${port}/`);
@@ -133,20 +133,22 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     expect(answer.env.SECRET_KEY).toBe('s3cret-value');
     expect(answer.env.WEAVE_TOKEN).toBeTruthy();
     expect(answer.env.WEAVE_API).toMatch(process.platform === 'linux' ? /^http:\/\/127\.0\.0\.1:\d+$/ : /^http:\/\/host\.docker\.internal:\d+$/);
-    // A container left from before was cleared first; ending the room stops it through Docker.
-    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^rm -f weave-room-/m);
-    await lena.closeWebsite(room.id);
-    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-room-/m);
+    // It serves its web page as a website of Gameshow.
+    await vi.waitFor(async () => expect((await lena.websites('Gameshow')).map((r) => r.name)).toContain(released.name), { timeout: 10_000, interval: 200 });
+    // A container left from before was cleared first; stopping the service stops it through Docker, and its website ends.
+    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^rm -f weave-service-gameshow/m);
+    await lena.setService({ name: 'gameshow', enabled: false });
+    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-service-gameshow/m);
+    expect((await lena.websites('Gameshow')).filter((r) => r.open)).toEqual([]);
     await api.close();
 
-    // Without Docker, and without a release file, there's nothing for a room to run.
+    // Without Docker, and without a release file, there's nothing to run.
     process.env.FAKE_DOCKER_DOWN = '1';
     const kofi = person('Kofi', fetchImpl);
     await kofi.joinSpace(await martl.invite('Gameshow'));
     syncAll([martl, kofi]);
     expect((await kofi.artifacts('Gameshow'))[0].runs).toBeUndefined();
-    await kofi.addService({ builtin: 'website', spaces: ['Gameshow'] });
-    await expect(kofi.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
+    await expect(kofi.addService({ artifact: { project: 'Gameshow' }, spaces: ['Gameshow'], approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
     for (const node of [martl, lena, kofi]) await node.close();
     expect(existsSync(dockerDir)).toBe(true);
   });

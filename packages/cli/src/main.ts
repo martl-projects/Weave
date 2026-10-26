@@ -197,10 +197,11 @@ github — repositories that follow a group, tier or project (members who give t
                              --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
-                             [--spaces <project,…>]: where it opens websites (weave website open)
-  service add [<name>] --artifact <project>[@tag]   install an applet: a project's release, as a service with the contract
-                             its manifest declares (asks you to approve it)  [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
-  service artifacts <project>  a project's releases: apps (a website runs them) and applets (installed as services)
+                             [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
+  service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
+                             declares (asks you to approve it); one with a web page serves it as a website in its projects
+                             [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
+  service artifacts <project>  a project's releases: what you can install as a service
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
@@ -302,9 +303,8 @@ artifacts and websites: a project's releases, and websites that run them (needs 
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   websites [-p <project>]    open websites (were: rooms)
-  website open <name> -p <p> a website of your website service, answered by: --artifact <project>[@tag] (a release, fetched
-                             and checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
-                             [--setting KEY=VALUE] [--service <website service>]; running code asks you to approve it
+  website open <name> -p <p> --port <n>   a website of your website service, reaching what you run on this computer at the
+                             port (services serve their own) [--service <website service>]
                              [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
   website env <website>      WEAVE_API and the website's token, for what answers it when it runs by itself (@weave/sdk reads them)
   website visit <website>    visit: prints the address to open
@@ -689,7 +689,7 @@ async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
 /** How a website of the website service is doing. */
 const hostedLine = (r: HostedWebsiteInfo): string => {
   const h = r.handler;
-  const what = h.kind === 'artifact' ? `${h.artifact.name} ${h.artifact.tag}${h.artifact.latest ? ` (${h.artifact.latest} is out)` : ''}` : h.kind === 'command' ? h.command.join(' ') : `port ${r.port}`;
+  const what = h.kind === 'service' ? `service ${h.service} on port ${r.port}` : `port ${r.port}`;
   const state = r.progress ? `fetching (${Math.round((r.progress.done / (r.progress.total || 1)) * 100)}%)` : r.error ? r.error : r.running ? 'running' : 'starting';
   return `${what}, ${state}`;
 };
@@ -1423,7 +1423,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       if (sub === 'add' && values.builtin) {
         if (values.builtin !== 'website' && values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin website');
         const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'website', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
-        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Open one: weave website open <name> -p <project> --artifact <project>`);
+        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`);
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
@@ -2311,30 +2311,17 @@ ${postLine(p)}`);
       const sub = given === 'join' ? 'visit' : given === 'end' ? 'close' : given;
       const b = await backend({ needsDaemon: sub !== 'chat' });
       if (sub === 'open' && ref) {
-        const at = values.artifact ? values.artifact.lastIndexOf('@') : -1;
-        const artifact = values.artifact ? (at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact }) : undefined;
-        const settings = Object.fromEntries((values.setting ?? []).map((s) => {
-          const eq = s.indexOf('=');
-          if (eq < 1) throw new Error('a setting is KEY=VALUE');
-          return [s.slice(0, eq), s.slice(eq + 1)];
-        }));
-        const command = values.run ? [...values.run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]) : undefined;
-        const r = await approving((approve) =>
-          b.openWebsite({
-            project: needProject(),
-            name: [ref, ...words].join(' '),
-            ...(values.service ? { service: values.service } : {}),
-            ...(artifact ? { artifact } : {}),
-            ...(command ? { command, folder: values.folder ?? process.cwd() } : {}),
-            ...(values.port ? { port: Number(values.port) } : {}),
-            ...(Object.keys(settings).length ? { settings } : {}),
-            invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean),
-            show: values.show,
-            groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean),
-            approve,
-          }),
-        );
-        return out(r, () => `${websiteLine(r)}\n  it opens for everyone once what answers it runs (weave service list shows how it's doing)`);
+        if (values.artifact || values.run) throw new Error('the website service runs nothing: install a release as a service (weave service add --artifact <project>) and it serves its web page, or start your program and give its --port');
+        const r = await b.openWebsite({
+          project: needProject(),
+          name: [ref, ...words].join(' '),
+          ...(values.service ? { service: values.service } : {}),
+          ...(values.port ? { port: Number(values.port) } : {}),
+          invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean),
+          show: values.show,
+          groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean),
+        });
+        return out(r, () => `${websiteLine(r)}\n  visitors reach port ${values.port} on this computer: start what answers it (weave website env ${r.id.slice(0, 8)} gives it its token)`);
       }
       if (sub === 'env' && ref) {
         const env = await b.websiteEnv(ref);

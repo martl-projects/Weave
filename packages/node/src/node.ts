@@ -602,26 +602,22 @@ export interface StoredService {
   artifact?: StoredArtifact;
 }
 
-/** A room the room service runs: in one of its projects, answered by its handler. */
+/** A website the website service serves: in one of its projects, a port on this device. */
 export interface StoredRoom {
   id: string;
   project: string;
   name: string;
-  handler: RoomHandler;
-  /** Where the handler listens, on this computer: what the room's clients reach. */
+  /** What its visitors reach: a port on this device. */
   port: number;
-  /** The handler's settings (its environment). */
-  settings: Record<string, string>;
-  /** Its own token: the handler's way into the app API (for its room only), and the key of X-Weave-Person. */
+  /** The service on this device that serves it (its process listens on the port), or none: something you run yourself. */
+  servedBy?: string;
+  /** Its own token, for something you run yourself: its way into the app API (this website only), and the key of X-Weave-Person. */
   token: string;
-  /** Who may join, when not every participant: these people, a show's ticket holders, members of tiers. */
+  /** Who may visit, when not every participant: these people, a show's ticket holders, members of tiers. */
   access?: { invite?: Did[]; show?: string; groups?: string[] };
-  /** Which page each side opens (an artifact's from its manifest). */
+  /** Which page each side opens (a service's from its manifest). */
   pages?: RoomPages;
 }
-
-/** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
-export type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
 
 export interface Decoded {
   event: WeaveRecord;
@@ -8878,10 +8874,6 @@ export class WeaveNode implements Backend {
 
   openWebsite(...args: Parameters<Website['openWebsite']>): ReturnType<Website['openWebsite']> {
     return this.#website.openWebsite(...args);
-  }
-
-  websiteReady(...args: Parameters<Website['websiteReady']>): ReturnType<Website['websiteReady']> {
-    return this.#website.websiteReady(...args);
   }
 }
 
