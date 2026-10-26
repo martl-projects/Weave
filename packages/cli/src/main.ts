@@ -36,6 +36,7 @@ import {
   type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
+  type ServiceOriginInfo,
   type HostedWebsiteInfo,
   type IssueInfo,
   type MemberInfo,
@@ -529,7 +530,17 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}; contract ${c.version}`;
+
+/** Where a service comes from, and whether that's checked here. */
+const originLine = (o: ServiceOriginInfo): string => {
+  if (o.kind === 'weave') return 'from Weave itself';
+  if (o.kind === 'unreleased') return 'from code its person runs without releasing it';
+  const where = `${o.project.name ? `p/${o.project.name}` : 'a project you aren\'t in'}, release ${o.tag}`;
+  if (o.checked === 'verified') return `from ${where}, released by ${o.publisher?.name ?? o.publisher?.did}${o.packaged ? ' (a Weave service)' : ''}: checked`;
+  if (o.checked === 'unmatched') return `claims to be from ${where}, but that project has no such release: don't trust it`;
+  return `from ${where}: not checked here`;
+};
 
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
@@ -1400,6 +1411,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
           `  ${contractLine(s.contract)}`,
           ...(s.websites ?? []).map((r) => `  website "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
           ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
+          ...(s.artifact?.deliveredBy ? [`  delivered by ${s.artifact.deliveredBy}, checked against the release`] : []),
           ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
           ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
           ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
@@ -1451,7 +1463,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'profiles') {
         const all = await b.serviceProfiles();
-        return out(all, () => all.map((p) => `${p.person.name ?? p.person.did} · ${p.name}  ${p.description}\n  ${p.did}\n  ${contractLine(p.contract)}`).join('\n\n') || '(no services known)');
+        return out(all, () => all.map((p) => `${p.person.name ?? p.person.did} · ${p.name}  ${p.description}\n  ${p.did}\n  ${contractLine(p.contract)}\n  ${originLine(p.origin)}`).join('\n\n') || '(no services known)');
       }
       if (sub === 'set' && ref) {
         const settings = settingsOf();

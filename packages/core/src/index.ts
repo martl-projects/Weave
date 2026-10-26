@@ -423,6 +423,8 @@ export {
   serviceReads,
   type ServiceContract,
   type ServiceProfile,
+  type ServiceOrigin,
+  parseOrigin,
   type ServiceReads,
   type ServiceRequest,
 } from './services.ts';

@@ -259,6 +259,8 @@ export interface ServiceArtifactInfo {
   latest?: string;
   /** Its files are here, checked against the release's fingerprints (or it runs as a container). */
   installed: boolean;
+  /** Who delivered its files here: a provider in its project, or GitHub itself. */
+  deliveredBy?: string;
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
   /** The settings it asks for. */
@@ -311,8 +313,20 @@ export interface ServiceProfileInfo {
   icon?: string;
   builtin?: Builtin;
   contract: ServiceContract;
+  /** Where it comes from, as far as this node can tell. */
+  origin: ServiceOriginInfo;
   time: string;
 }
+
+/**
+ * Where a service comes from: Weave itself; a project's release (checked here when the project is known here: the
+ * release is there, by a maintainer, running what the profile says; unknown otherwise); or code its person runs
+ * without releasing it.
+ */
+export type ServiceOriginInfo =
+  | { kind: 'weave' }
+  | { kind: 'release'; project: { id: string; name?: string }; tag: string; release: string; checked: 'verified' | 'unmatched' | 'unknown'; publisher?: Actor; packaged?: true }
+  | { kind: 'unreleased' };
 
 /**
  * What a running service may do, through its own token on the node that runs it: who it is, what it reads (only

@@ -86,6 +86,7 @@ export type {
   ServiceArtifactInfo,
   ArtifactInfo,
   ServiceProfileInfo,
+  ServiceOriginInfo,
   ServiceRequestInfo,
   Status,
   ThreadInfo,

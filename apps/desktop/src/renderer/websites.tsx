@@ -6,7 +6,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { contractText, ServiceCard } from './services.tsx';
+import { contractText, OriginText, ServiceCard } from './services.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -440,6 +440,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
         <Icon name={service.builtin === 'website' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
       </legend>
       <p className="small">{purpose(service)}</p>
+      <OriginText origin={service.origin} />
       {its.map((room) => (
         <div key={room.id}>
           <WebsiteCard room={room} shows={shows} />

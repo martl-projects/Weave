@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppAsset, AppManifest } from '@weave/core';
 import { platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
@@ -64,7 +64,7 @@ export class Releases {
   }
 
   /** The release file, from a provider in its project, or straight from GitHub when there's none (or it can't). */
-  async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number }> {
+  async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string }> {
     let refused: string | undefined;
     try {
       const located = await this.#locate(a);
@@ -72,7 +72,7 @@ export class Releases {
         const res = await this.#fetchFile()(located.url);
         if (res.ok && res.body) {
           const size = Number(res.headers.get('content-length'));
-          return { body: res.body, ...(size > 0 ? { size } : {}) };
+          return { body: res.body, ...(size > 0 ? { size } : {}), from: located.by };
         }
         refused = `${located.by} pointed at a download that answered ${res.status}`;
       }
@@ -86,7 +86,7 @@ export class Releases {
       const found = (await client.release(github, a.tag)).assets.find((x) => x.name === asset.file);
       if (!found) throw new Error(`the release ${a.tag} on GitHub has no file ${asset.file}`);
       const download = await client.download(github, found.id);
-      return { ...download, ...(download.size ? {} : { size: found.size }) };
+      return { ...download, ...(download.size ? {} : { size: found.size }), from: "GitHub, with this node's sign-in" };
     } catch (error) {
       throw new Error(refused ? `${refused}; and straight from GitHub: ${(error as Error).message}` : (error as Error).message);
     }
@@ -111,6 +111,8 @@ export class Releases {
     rmSync(file, { force: true });
     // The folder holds the release: say so the way a checkout would, with its manifest.
     if (!existsSync(join(root, 'weave.app.json'))) writeJson(join(root, 'weave.app.json'), app);
+    // Who delivered it, for the record: it matched the release either way.
+    writeJson(join(dir, `${tagFolder(a.tag)}.from.json`), { from: download.from });
     return root;
   }
 
@@ -145,6 +147,16 @@ export class Releases {
   }
 
   /** Whether a service has this release here. */
+  /** Who delivered a service's release here: a provider, or GitHub itself. */
+  from(service: string, a: ArtifactRef): string | undefined {
+    const file = join(this.#services(), service, 'artifacts', a.project, `${tagFolder(a.tag)}.from.json`);
+    try {
+      return (JSON.parse(readFileSync(file, 'utf8')) as { from?: string }).from;
+    } catch {
+      return undefined;
+    }
+  }
+
   has(service: string, a: ArtifactRef): boolean {
     return existsSync(join(this.#services(), service, 'artifacts', a.project, tagFolder(a.tag)));
   }

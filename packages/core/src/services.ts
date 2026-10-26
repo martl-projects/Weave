@@ -8,8 +8,11 @@ import { isDid, type Did } from './keys.ts';
  * limited API: it signs only as itself, only the kinds it may write, and reads
  * only what its contract says, in the spaces it was added to.
  *
- *   weave.service.profile  {name, description, icon?, contract}
- *                          public, signed by the service's own key: what it is and how to talk to it
+ *   weave.service.profile  {name, description, icon?, builtin?, contract, origin?}
+ *                          public, signed by the service's own key: what it is, how to talk to it, and where it
+ *                          comes from: a release (origin: {project, release, tag, fingerprint}, ids only, so it
+ *                          says nothing to those outside the project; its members check it against the release),
+ *                          or Weave itself (builtin). Neither: code its person runs without releasing it.
  *   weave.service.request  {to, text?, data?}
  *                          sealed in a space, by a member: a request for the service `to` (its key)
  *   weave.service.result   {request, text?, data?, error?}
@@ -88,7 +91,26 @@ export interface ServiceProfile {
   /** One Weave ships (the website or GitHub service), rather than someone's own code. */
   builtin?: Builtin;
   contract: ServiceContract;
+  /** The release it runs, as its profile claims it. */
+  origin?: ServiceOrigin;
   time: string;
+}
+
+/** Where a service comes from: a project's release (the weave.app event), and the fingerprint of what it runs. */
+export interface ServiceOrigin {
+  project: string;
+  release: string;
+  tag: string;
+  fingerprint: string;
+}
+
+/** An origin from untrusted input, or undefined. */
+export function parseOrigin(value: unknown): ServiceOrigin | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const o = value as Record<string, unknown>;
+  const id = (v: unknown) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(v);
+  if (!id(o.project) || !id(o.release) || typeof o.tag !== 'string' || !o.tag || o.tag.length > 100 || typeof o.fingerprint !== 'string' || !/^[A-Za-z0-9_+/=-]{8,200}$/.test(o.fingerprint)) return undefined;
+  return { project: o.project as string, release: o.release as string, tag: o.tag, fingerprint: o.fingerprint };
 }
 
 /** A kind name, as events use them: weave.something or an app's own (lowercase, dots, dashes). */
@@ -164,6 +186,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       ...(typeof body.icon === 'string' && body.icon.startsWith('wblob:') ? { icon: body.icon } : {}),
       ...(isBuiltin(body.builtin) ? { builtin: body.builtin } : {}),
       contract,
+      ...(parseOrigin(body.origin) ? { origin: parseOrigin(body.origin) } : {}),
       time: e.time,
     });
   }

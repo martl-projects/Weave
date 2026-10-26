@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { parseOrigin } from '@weave/core';
 import { readSecretJson } from '../src/vault.ts';
 
 /*
@@ -51,6 +52,11 @@ describe('services', () => {
     expect((await lena.serviceProfiles()).map((p) => [p.name, p.person.name, p.description])).toEqual([['echo', 'martl', 'Answers what you say']]);
     // And the members of its space see it there.
     expect((await lena.servicesIn('Weave')).map((p) => p.name)).toEqual(['echo']);
+    // Code martl runs without releasing it: its profile says so.
+    expect((await lena.servicesIn('Weave'))[0].origin).toEqual({ kind: 'unreleased' });
+    // An origin is ids only, and only a well-formed one counts.
+    expect(parseOrigin({ project: 'p1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' })).toEqual({ project: 'p1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' });
+    expect(parseOrigin({ project: 'p 1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' })).toBeUndefined();
     expect(await martl.servicesIn('Secret')).toEqual([]);
 
     // Lena asks it; she also posts, which it doesn't read.

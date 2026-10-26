@@ -115,6 +115,18 @@ describe('providers', { timeout: 60_000 }, () => {
       expect(installed.artifact).toMatchObject({ installed: true });
       expect(installed.artifact?.error).toBeUndefined();
       expect(github.delivered).toBe(1);
+      expect(installed.artifact?.deliveredBy).toBe('github (martl)');
+
+      // Where each comes from: Weave's own, and the release, checked by those in its project.
+      const profiles = async (node: WeaveNode) => Object.fromEntries((await node.serviceProfiles()).map((p) => [p.name, p.origin]));
+      await vi.waitFor(async () => expect(await profiles(martl)).toEqual({
+        github: { kind: 'weave' },
+        bot: { kind: 'release', project: { id: expect.any(String), name: 'Bot' }, tag: 'v1.0', release: expect.any(String), checked: 'verified', publisher: { did: martl.identity.author, name: 'martl' } },
+      }), { timeout: 5_000, interval: 100 });
+      // Someone outside the project sees the profiles (they're public), but can't check, or even see the project's name.
+      const outsider = person('Ola', github);
+      for (const e of [...martl.replica.events(), ...lena.replica.events()]) outsider.replica.ingest(e);
+      expect((await profiles(outsider)).bot).toEqual({ kind: 'release', project: { id: expect.any(String) }, tag: 'v1.0', release: expect.any(String), checked: 'unknown' });
       // The request and the answer are in the project, signed by the provider.
       const asked = (await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0];
       expect(asked.data).toEqual({ protocol: 'artifact.fetch', artifact: expect.any(String), platform: platformKey() });

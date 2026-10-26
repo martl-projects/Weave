@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { KeyInfo, ServiceInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
+import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
 import type { ServiceContract } from '@weave/core';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
@@ -17,6 +17,22 @@ export function contractText(c: ServiceContract): string {
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
   return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''} (contract ${c.version})`;
+}
+
+/** Where a service comes from, and whether this computer could check it. */
+export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
+  if (origin.kind === 'weave') return <div className="small muted">Comes with Weave</div>;
+  if (origin.kind === 'unreleased') return <div className="small muted">Its person's own code, not released in a project</div>;
+  const where = `${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, release ${origin.tag}`;
+  if (origin.checked === 'verified')
+    return (
+      <div className="small muted">
+        ✓ From {where}, released by {origin.publisher?.name ?? shortDid(origin.publisher?.did ?? '')}
+        {origin.packaged ? ' · a Weave service' : ''}
+      </div>
+    );
+  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but that project has no such release: don't trust it</div>;
+  return <div className="small muted">From {where} (only its participants can check)</div>;
 }
 
 /** Every kind name, comma or space separated. */
@@ -226,6 +242,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
               <div className="small">
                 Runs {s.artifact.name} {s.artifact.tag}, from p/{s.artifact.project.name ?? s.artifact.project.id}
                 {s.artifact.progress ? ' · fetching…' : ''}
+                {s.artifact.deliveredBy ? ` · delivered by ${s.artifact.deliveredBy}, checked` : ''}
                 {s.artifact.error ? <span className="error-text"> · {s.artifact.error}</span> : null}
                 {s.artifact.latest && (
                   <>

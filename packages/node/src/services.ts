@@ -1,5 +1,5 @@
-import { b64u, takesRequests, type Builtin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
-import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceRequestInfo } from './backend.ts';
+import { b64u, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -35,6 +35,16 @@ const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string 
   // Reads what's asked of it and answers: where to download a release's files.
   github: { contract: { reads: 'addressed', writes: [], offers: [PROTOCOL_ARTIFACT_FETCH], version: '1.0' }, description: 'Releases from GitHub: hands the project’s release files to its participants, with the GitHub sign-in of the node it runs on' },
 };
+
+/** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
+const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact'>): Json => ({
+  name: s.name,
+  description: s.description,
+  ...(s.icon ? { icon: s.icon } : {}),
+  ...(s.builtin ? { builtin: s.builtin } : {}),
+  contract: s.contract as unknown as Json,
+  ...(s.artifact ? { origin: { project: s.artifact.project, release: s.artifact.id, tag: s.artifact.tag, fingerprint: releaseApproval(s.artifact) } } : {}),
+});
 
 export class Services {
   readonly h: ServicesHost;
@@ -179,6 +189,7 @@ export class Services {
       name: a.manifest.name,
       ...(latest && latest.id !== a.id && latest.tag !== a.tag ? { latest: latest.tag } : {}),
       installed: here && (this.h.runtime.runs(a.manifest) === 'container' || fetched),
+      ...(here && fetched && this.h.releases.from(service, a) ? { deliveredBy: this.h.releases.from(service, a) } : {}),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
       settings: a.manifest.env ?? [],
@@ -226,7 +237,7 @@ export class Services {
 
   /** The profile everyone sees: signed by the service's own key, public. */
   publishServiceProfile(stored: StoredService): void {
-    this.h.replica.write(this.serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), ...(stored.builtin ? { builtin: stored.builtin } : {}), contract: stored.contract as unknown as Json } });
+    this.h.replica.write(this.serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: profileBody(stored) });
   }
 
   /**
@@ -349,7 +360,7 @@ export class Services {
     const description = input.description?.trim().slice(0, 1000) ?? '';
     const icon = input.icon?.startsWith('wblob:') ? input.icon : undefined;
     // The profile, signed by the service's own key, before the key leaves this computer for good.
-    this.h.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), ...(input.builtin ? { builtin: input.builtin } : {}), contract: contract as unknown as Json } });
+    this.h.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: profileBody({ name, description, ...(icon ? { icon } : {}), ...(input.builtin ? { builtin: input.builtin } : {}), contract, ...(input.artifact ? { artifact: input.artifact } : {}) }) });
     const handover: Omit<Handover, 'id'> = {
       service: name,
       node: node.did,
@@ -467,6 +478,8 @@ export class Services {
       const rooms = h.builtin && stored.enabled ? (h.hosted ?? {}) : {};
       await this.web.closeHostedRooms(h.service, (r) => !!rooms[r.id]);
       this.saveServices([...this.storedServices().filter((s) => s.name !== h.service), { ...stored, ...(h.builtin ? { hosted: { ...(this.storedServices().find((s) => s.name === h.service)?.hosted ?? {}), ...rooms } } : {}) }]);
+      // Moved to another release: its key is here now, so this node says where it comes from.
+      if (before && before.artifact?.id !== stored.artifact?.id) this.publishServiceProfile(stored);
       if (h.builtin) {
         if (this.serviceApi) await this.web.startAppApi();
         for (const room of Object.values(rooms)) {
@@ -545,7 +558,8 @@ export class Services {
     };
     if (next && JSON.stringify(servicePermissions(after.contract)) !== JSON.stringify(servicePermissions(before.contract))) this.grantContract(this.serviceKey(after.name).did, after.name, after.contract);
     this.saveServices(this.storedServices().map((s) => (s.name === after.name ? after : s)));
-    if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract)) this.publishServiceProfile(after);
+    // Another release is another origin: the profile says so.
+    if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract) || after.artifact?.id !== before.artifact?.id) this.publishServiceProfile(after);
     if (!this.h.isLinkedNode) this.announceService(this.serviceKey(after.name).did, before.spaces, after.spaces);
     // Turned off, its websites end; out of a project, its websites there end. The same for those it serves.
     if (before.enabled && !after.enabled) await this.web.closeHostedRooms(after.name);
@@ -600,8 +614,25 @@ export class Services {
       ...(p.icon ? { icon: p.icon } : {}),
       ...(p.builtin ? { builtin: p.builtin } : {}),
       contract: p.contract,
+      origin: this.originInfo(p.builtin, p.origin),
       time: p.time,
     }));
+  }
+
+  /**
+   * Where a service comes from, as far as this node can tell. A release's origin is checked where the project is
+   * known here: the release has to be there, by a maintainer, and run what the profile says (its fingerprint).
+   * Elsewhere it stays unchecked: only the project's people can see its releases.
+   */
+  originInfo(builtin: Builtin | undefined, origin: ServiceOrigin | undefined): ServiceOriginInfo {
+    if (builtin) return { kind: 'weave' };
+    if (!origin) return { kind: 'unreleased' };
+    const project = this.h.spaces.get(origin.project);
+    const base = { kind: 'release' as const, project: { id: origin.project, ...(project ? { name: this.h.spaceName(project) } : {}) }, tag: origin.tag, release: origin.release };
+    if (!project) return { ...base, checked: 'unknown' };
+    const found = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release);
+    if (!found || releaseApproval(found) !== origin.fingerprint) return { ...base, checked: 'unmatched' };
+    return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
   }
 
   /** A service by its key, or by "person/name" or its name when that's unique among the profiles known here. */
