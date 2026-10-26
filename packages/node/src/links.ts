@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { LINK_HOST, LINK_PORT, postLink } from '@weave/core';
+import { LINK_HOST, LINK_PORT, personTargetOf, postLink } from '@weave/core';
 import { Marked, type Tokens } from 'marked';
-import type { Actor, Backend, MessageInfo, PostInfo } from './backend.ts';
+import type { Actor, Backend, MessageInfo, PostInfo, Profile } from './backend.ts';
 
 export interface LinkServer {
   port: number;
@@ -30,8 +30,8 @@ export interface GitHubAppFlow {
  * Content-Security-Policy keeps whatever a post contains from running scripts
  * or loading anything from elsewhere.
  *
- *   GET  /<address>              the post and its chat
- *   POST /open/<address>         bring the Weave app to the post (same-origin forms only)
+ *   GET  /<address>              the post and its chat, or a person (@name~key)
+ *   POST /open/<address>         bring the Weave app to it (same-origin forms only)
  *   GET  /github/new-app?state   the App's description, sent to GitHub with one click
  *   GET  /github/app-created?code&state   GitHub's way back: the App's ID and key go to the GitHub service
  */
@@ -89,13 +89,23 @@ async function handle(backend: Backend, req: IncomingMessage, res: ServerRespons
     // A form on one of these pages, nothing else: browsers send Origin with every POST.
     if (req.headers.origin !== `http://${host}`) return page(res, 403, 'Weave', '<p class="note">Not from a Weave page.</p>');
     const address = path.slice('open/'.length);
-    const post = await backend.post(`http://${LINK_HOST}/${address}`);
-    await backend.openInApp({ what: 'post', post: post.id });
+    if (personTargetOf(address)) await backend.openInApp({ what: 'person', who: address });
+    else await backend.openInApp({ what: 'post', post: (await backend.post(`http://${LINK_HOST}/${address}`)).id });
     res.writeHead(303, { location: `/${address}?opened=1` });
     return void res.end();
   }
   if (req.method !== 'GET') return page(res, 405, 'Weave', '<p class="note">Only reading here.</p>');
   if (!path) return page(res, 200, 'Weave', '<h1>Weave</h1><p class="note">Post links open here: http://weave.localhost:7710/project~id/board/post. They show what you can see in Weave, on this computer only.</p>');
+
+  if (personTargetOf(path)) {
+    let person: Profile;
+    try {
+      person = await backend.profile(path);
+    } catch {
+      return page(res, 404, 'Not here', `<h1>Not here</h1><p class="note">Nobody with this address is known on this computer yet.</p>`);
+    }
+    return page(res, 200, person.name ?? 'Someone', personPage(person, path, url.searchParams.has('opened')));
+  }
 
   let post: PostInfo;
   try {
@@ -123,6 +133,19 @@ ${post.link && /^https?:\/\//.test(post.link) ? `<p><a href="${escape(post.link)
 <article>${markdown(post.text) || '<p class="note">No text.</p>'}</article>
 ${post.type === 'project' ? '<p class="note">The project\'s chat is in its channels, in Weave.</p>' : ''}
 ${chat.length ? `<section><h2>Chat</h2>${chat.map((m) => `<div class="msg"><div class="by">${escape(actor(m.by))} · ${escape(when(m.time))}</div>${markdown(m.text)}</div>`).join('')}</section>` : ''}`;
+}
+
+function personPage(person: Profile, path: string, opened: boolean): string {
+  const state = person.me ? 'you' : person.following && person.followsMe ? 'friend' : person.following ? 'you follow them' : person.followsMe ? 'follows you' : person.contact ? 'in your address book' : '';
+  const projects = person.projects.map((p) => `<li>${escape(p.name)}</li>`).join('');
+  return `
+<header>
+  <div class="where">person${state ? ` · ${escape(state)}` : ''}${person.company ? ` · ${escape(person.company.name ?? 'company account')}` : ''}</div>
+  <h1>${escape(person.name ?? 'Someone')}</h1>
+  <div class="by">${person.posts} public posts</div>
+</header>
+<div class="actions">${opened ? '<span class="note">Opened in Weave.</span>' : openButton(path, 'Open in Weave')}<code>${escape(person.did)}</code></div>
+${projects ? `<section><h2>Projects</h2><ul>${projects}</ul></section>` : ''}`;
 }
 
 const openButton = (path: string, label: string) => `<form method="post" action="/open/${escape(encodeURI(path))}"><button>${escape(label)}</button></form>`;

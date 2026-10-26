@@ -14,6 +14,7 @@ import { ProjectServicesView } from './websites.tsx';
 import { CatalogView } from './catalog.tsx';
 import { LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
+import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
@@ -700,6 +701,8 @@ function App() {
         <NotConnected home={state.home} onRetry={refresh} />
       ) : location.hash.startsWith('#/overlay') ? (
         <MentionsPanel />
+      ) : location.hash.startsWith('#/picker') ? (
+        <Picker />
       ) : (
         <>
           <Shell />

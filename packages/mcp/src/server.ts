@@ -93,6 +93,8 @@ Permissions: your person decides which kinds you may sign (weave_whoami lists yo
 
 Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
 
+Linking to people: people have urls too (http://weave.localhost:7710/@phil~fP5Q3XPCFjz1, the url in weave_people). Your person may paste one, often as a Markdown link like [Phil](…), from Weave's picker: it names exactly one person even where several share a name, so pass it as it is wherever a tool takes a person, and link people that way when you mention them.
+
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
@@ -282,12 +284,12 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_people',
     {
       title: 'Find people',
-      description: 'People this node knows of (profiles seen and the address book), optionally matching a name or did:key, with follow and friend state.',
+      description: 'People this node knows of (profiles seen and the address book), optionally matching a name, did:key or person url, with their url and follow and friend state.',
       inputSchema: { query: z.string().optional() },
       annotations: { readOnlyHint: true },
     },
     run(async ({ query }: { query?: string }) =>
-      (await backend.directory(query)).map((p) => ({ name: p.name, did: p.did, following: p.following, followsMe: p.followsMe, friend: p.following && p.followsMe, contact: p.contact }))),
+      (await backend.directory(query)).map((p) => ({ name: p.name, did: p.did, url: p.url, following: p.following, followsMe: p.followsMe, friend: p.following && p.followsMe, contact: p.contact }))),
   );
 
   server.registerTool(
@@ -454,7 +456,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Membership tiers',
       description: "The membership tiers someone offers (default: the person this node belongs to), with price per month in cents, benefits and, for the creator, member counts. Memberships give access, never votes.",
-      inputSchema: { who: z.string().optional().describe('Name or did:key of the creator') },
+      inputSchema: { who: z.string().optional().describe('Name, did:key or person url of the creator') },
       annotations: { readOnlyHint: true },
     },
     run(async ({ who }: { who?: string }) => backend.tiers(who)),
@@ -477,7 +479,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Message a friend',
       description: 'Send a direct message to a friend (someone the person follows who follows back). Signed as this agent, so the friend sees it came from the agent.',
-      inputSchema: { who: z.string().describe('Name or did:key'), text: z.string().min(1), reply_to: z.string().min(6).optional() },
+      inputSchema: { who: z.string().describe('Name, did:key or person url'), text: z.string().min(1), reply_to: z.string().min(6).optional() },
     },
     run(async ({ who, text, reply_to }: { who: string; text: string; reply_to?: string }) => {
       const chat = await backend.openChat(who);
@@ -653,16 +655,17 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url). Tell them what to do there.",
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub. Tell them what to do there.",
       inputSchema: {
-        what: z.enum(['link-repo', 'space', 'inbox', 'post']),
+        what: z.enum(['link-repo', 'space', 'inbox', 'post', 'person']),
         space: z.string().optional().describe('Group, tier or project name or id'),
         repo: z.string().optional().describe('For link-repo: owner/name'),
         post: z.string().optional().describe('For post: its id or url'),
+        who: z.string().optional().describe('For person: name, did:key or person url'),
       },
     },
-    run(async ({ what, space, repo, post }: { what: 'link-repo' | 'space' | 'inbox' | 'post'; space?: string; repo?: string; post?: string }) => ({
-      ...(await backend.openInApp({ what, space, repo, post })),
+    run(async ({ what, space, repo, post, who }: { what: 'link-repo' | 'space' | 'inbox' | 'post' | 'person'; space?: string; repo?: string; post?: string; who?: string }) => ({
+      ...(await backend.openInApp({ what, space, repo, post, who })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
   );

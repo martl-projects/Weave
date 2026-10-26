@@ -63,7 +63,7 @@ const RENAMED: Record<string, RpcMethod> = { rooms: 'websites', joinRoom: 'visit
 
 export const PHONE_METHODS: readonly RpcMethod[] = [
   // You and your node
-  'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
+  'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'find', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
   // Spaces and their members
   'spaces', 'createGroup', 'createProject', 'createCommunity', 'community', 'setCommunity', 'setModerator', 'project', 'setProjectPage', 'setMaintainer', 'invite', 'inviteGroup', 'uninviteGroup', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setRule', 'members', 'removeMember', 'admissions', 'admit', 'decline', 'knocks', 'answerKnock', 'audit',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',

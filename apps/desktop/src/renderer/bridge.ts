@@ -34,6 +34,12 @@ interface Bridge {
   workOn?(post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: 'pasted' | 'clipboard' | 'link'; where?: string }>;
   /** Bring a session (the Claude app's own id) to the front in the Claude app. Missing in a browser. */
   showSession?(host: string): Promise<void>;
+  /** In the address book picker: put it away and paste `text` where you were typing (or leave it on the clipboard). Missing in a browser. */
+  pick?(text: string): Promise<'pasted' | 'clipboard'>;
+  /** In the address book picker: put it away, pasting nothing. */
+  closePicker?(): Promise<void>;
+  /** In the address book picker: its shortcut was pressed again, so it starts afresh. */
+  onPickerOpen?(listener: () => void): void;
   /** In the side panel: show this session (after Ctrl+click). */
   onPanelSession?(listener: (session: string) => void): void;
   /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */

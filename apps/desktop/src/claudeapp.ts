@@ -66,6 +66,101 @@ export async function showSession(host: string): Promise<void> {
   await shell.openExternal(`claude://claude.ai/epitaxy/${host}`);
 }
 
+/*
+ * The address book picker pastes into whatever was in front when its shortcut
+ * was pressed (the Claude app's text box, usually). On Windows a helper
+ * remembers that window the moment the shortcut comes, before the picker
+ * takes the focus, and on a pick gives the focus back and presses Ctrl+V.
+ * It stays running, so compiling its bit of C# happens once, not per pick.
+ */
+const PICK_HELPER = `
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class WeavePick {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+}
+"@
+$target = [IntPtr]::Zero
+[Console]::Out.WriteLine('ready'); [Console]::Out.Flush()
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  if ($line -eq 'remember') { $target = [WeavePick]::GetForegroundWindow(); $answer = 'ok' }
+  elseif ($line -eq 'paste') {
+    $deadline = (Get-Date).AddSeconds(2)
+    while ([WeavePick]::GetForegroundWindow() -ne $target -and (Get-Date) -lt $deadline) { [void][WeavePick]::SetForegroundWindow($target); Start-Sleep -Milliseconds 50 }
+    if ($target -eq [IntPtr]::Zero -or [WeavePick]::GetForegroundWindow() -ne $target) { $answer = 'no' }
+    else {
+      Start-Sleep -Milliseconds 80
+      [WeavePick]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero); [WeavePick]::keybd_event(0x56, 0, 0, [UIntPtr]::Zero)
+      [WeavePick]::keybd_event(0x56, 0, 2, [UIntPtr]::Zero); [WeavePick]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
+      $answer = 'pasted'
+    }
+  }
+  else { $answer = 'no' }
+  [Console]::Out.WriteLine($answer); [Console]::Out.Flush()
+}
+`;
+
+let helper: { ask(line: string): Promise<string> } | undefined;
+
+/** The paste helper, started once; undefined where there's none (not Windows, or it didn't start). */
+function pickHelper(): Promise<typeof helper> {
+  if (process.platform !== 'win32') return Promise.resolve(undefined);
+  if (helper) return Promise.resolve(helper);
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PICK_HELPER], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    const waiting: Array<(answer: string) => void> = [];
+    let buffer = '';
+    let ready = false;
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      buffer += chunk;
+      let end: number;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end).trim();
+        buffer = buffer.slice(end + 1);
+        if (!ready && line === 'ready') {
+          ready = true;
+          helper = {
+            ask: (text) =>
+              new Promise((answer) => {
+                waiting.push(answer);
+                child.stdin.write(`${text}\n`);
+              }),
+          };
+          resolve(helper);
+        } else waiting.shift()?.(line);
+      }
+    });
+    const gone = () => {
+      helper = undefined;
+      waiting.splice(0).forEach((answer) => answer('no'));
+      if (!ready) resolve(undefined);
+    };
+    child.on('error', gone);
+    child.on('exit', gone);
+  });
+}
+
+/** Start the paste helper ahead of the first pick (it takes a moment to start), where there is one. */
+export const startPasteHelper = (): void => void pickHelper();
+
+/** The shortcut came: remember the window in front, to paste into it later. */
+export async function rememberFront(): Promise<void> {
+  await (await pickHelper())?.ask('remember');
+}
+
+/** A pick: give the focus back to the window that was in front and paste `text` there, or leave it on the clipboard. */
+export async function pasteBack(text: string): Promise<Exclude<Delivered, 'link'>> {
+  const previous = await clipboard.readText();
+  await clipboard.writeText(text);
+  const pasting = await pickHelper();
+  if (!pasting || (await pasting.ask('paste')) !== 'pasted') return 'clipboard';
+  // Put back what you had copied (text only), once the paste has happened.
+  setTimeout(() => clipboard.writeText(previous), 500);
+  return 'pasted';
+}
+
 /** Start a new Claude Code session in `folder` with `text` in its text box. */
 export async function newSession(folder: string, text: string): Promise<Delivered> {
   const url = `claude://code/new?folder=${encodeURIComponent(folder)}&q=${encodeURIComponent(text.slice(0, 4000))}`;

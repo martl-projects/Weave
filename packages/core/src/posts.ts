@@ -370,6 +370,40 @@ export function postRefsIn(text: string): string[] {
   return [...new Set(found.sort((a, b) => a.at - b.at).map((f) => f.ref))];
 }
 
+/*
+ * Person addresses, next to post addresses: a name for people to read and the
+ * start of the person's key for Weave to find them by.
+ *
+ *   http://weave.localhost:7710/@phil~fP5Q3XPCFjz1
+ *
+ * The key part is the did:key after its fixed `z6Mk` start, 12 characters
+ * (about 70 bits): unlike a post's short id it can't be the shortest unique
+ * one, since two computers know different people, and nobody can make a key
+ * that starts the same.
+ */
+const PERSON_KEY_LENGTH = 12;
+
+/** The part of a did:key that tells people apart: what follows its fixed start. */
+export const personKeyOf = (did: Did): string => did.replace(/^did:key:(?:z6Mk)?/, '');
+
+/** A person's address as text, without the host: `@phil~fP5Q3XPCFjz1`. */
+export const personPath = (name: string | undefined, did: Did): string => `@${slugOf(name ?? '', 32)}~${personKeyOf(did).slice(0, PERSON_KEY_LENGTH)}`;
+
+export const personUrl = (name: string | undefined, did: Did, port = LINK_PORT): string => `http://${LINK_HOST}:${port}/${personPath(name, did)}`;
+
+const PERSON_PATH = `@${SLUG}~(${ID})`;
+const PERSON_PATTERN = new RegExp(`^(?:\\[[^\\]]*\\]\\()?(?:https?://${LINK_HOST.replace('.', '\\.')}(?::\\d+)?/)?${PERSON_PATH}/?\\)?$`);
+
+/**
+ * The key start a person address names: the web address, its text form, or a
+ * Markdown link to it (`[Phil](http://weave.localhost:7710/@phil~fP5Q…)`), as
+ * the whole of `text`. Match it against personKeyOf of the people you know.
+ */
+export function personTargetOf(text: string): string | undefined {
+  const key = PERSON_PATTERN.exec(text.trim())?.[1];
+  return key && key.length >= PERSON_KEY_LENGTH ? key : undefined;
+}
+
 /** At most this many co-authors per post. */
 export const MAX_COAUTHORS = 10;
 

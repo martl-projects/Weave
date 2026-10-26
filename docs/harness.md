@@ -2,7 +2,8 @@
 
 Status: design draft. Built so far on the harness branch: post links
 (weave.localhost pages), the Mentions panel with Follow Claude Code, weave_show
-with post cards for hosts that render MCP Apps, and the Claude bundle (.mcpb).
+with post cards for hosts that render MCP Apps, the Claude bundle (.mcpb), and
+the address book picker with person links.
 
 The harness is where you and your agents plan and do the day's work: Claude
 Code sessions do the work, Weave is the map around them. Routines put the
@@ -489,6 +490,14 @@ around it.
   related items. It follows the active session through Claude Code's status
   line (`weave statusline` receives the session id, tells Weave, and prints
   the item, the agent and today's spend in Claude Code's status bar).
+- **The address book picker.** Ctrl+Alt+W (`WEAVE_PICKER_SHORTCUT` changes
+  it, `off` turns it off), from wherever you're typing: a search over the
+  people, projects and posts this computer knows. Enter pastes a Markdown
+  link to the pick where you were (on Windows; elsewhere it's left on the
+  clipboard). People have addresses for this, like posts:
+  `http://weave.localhost:7710/@phil~fP5Q3XPCFjz1`, a name and the first 12
+  characters of their key after `z6Mk`. So a link names one person however
+  many share the name, and every tool that takes a person takes it.
 - **The right agent per checkout.** Linking a project's checkout writes its
   local Claude Code config: the Weave MCP server as that project's agent
   (local scope, so nothing is committed), the hooks, the status line and the

@@ -80,4 +80,30 @@ describe('post links on this computer', () => {
     expect(opens.map((o) => o.body)).toEqual([{ what: 'post', post: { id: post.id, title: 'Open me' }, space: post.space }]);
     watching.abort();
   });
+
+  it('shows a person by their address, and opens their hub', async () => {
+    const martin = person('Martin');
+    const me = await martin.profile();
+    expect(me.url).toMatch(/^http:\/\/weave\.localhost:7710\/@martin~[1-9A-HJ-NP-Za-km-z]{12}$/);
+    expect(await martin.profile(me.url)).toMatchObject({ did: me.did });
+    expect(await martin.profile(`[Martin](${me.url})`)).toMatchObject({ did: me.did });
+    await expect(martin.profile('@martin~zzzzzzzzzzzz')).rejects.toThrow(/nobody with that address/);
+
+    const links = await startLinks(martin, 0);
+    closers.push(links.close);
+    const path = new URL(me.url).pathname;
+    const page = await get(links.port, path);
+    expect(page.status).toBe(200);
+    expect(page.body).toContain('<h1>Martin</h1>');
+    expect(page.body).toContain(me.did);
+    expect((await get(links.port, '/@someone~zzzzzzzzzzzz')).status).toBe(404);
+
+    const opens: FeedItem[] = [];
+    const watching = new AbortController();
+    void martin.watch((item) => item.kind === 'weave.open' && opens.push(item), watching.signal);
+    const opened = await get(links.port, `/open${path}`, { origin: `http://weave.localhost:${links.port}` }, 'POST');
+    expect(opened.status).toBe(303);
+    expect(opens.map((o) => o.body)).toEqual([{ what: 'person', person: { did: me.did, name: 'Martin' } }]);
+    watching.abort();
+  });
 });

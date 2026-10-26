@@ -1,0 +1,124 @@
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import type { Found } from '@weave/node/client';
+import { api, bridge } from './lib.ts';
+import { Icon, type IconName } from './icons.tsx';
+import { kindOf } from './overlay.tsx';
+
+/*
+ * The address book picker: a search over the people, projects and posts this
+ * computer knows, brought up by its shortcut from wherever you're typing. Enter
+ * pastes a Markdown link to the pick there, [Phil](http://weave.localhost:7710/@phil~…),
+ * which names exactly that person or post however many share the name: Weave's
+ * tools take the link wherever they take a person or a post.
+ */
+
+/** `[label](url)`, with the label's own brackets kept as text. */
+export const markdownLink = (label: string, url: string) => `[${label.replace(/[\\[\]]/g, '\\$&')}](${url})`;
+
+const linkOf = (f: Found) => (f.person ? markdownLink(f.person.name ?? 'someone', f.person.url) : markdownLink(f.post.title, f.post.url));
+
+/** What tells this one apart from others with the same name. */
+function noteOf(f: Found): string {
+  if (f.post) return `${kindOf(f.post)}${f.post.issue ? ` · ${f.post.issue.status}` : ''}`;
+  const p = f.person;
+  const state = p.following && p.followsMe ? 'friend' : p.following ? 'you follow them' : p.followsMe ? 'follows you' : p.contact ? 'in your address book' : 'person';
+  // The key part of their address (@phil~fP5Q3XPC…), as the pasted link names them.
+  return [state, p.company?.name, `~${p.url.split('~').pop()}`].filter(Boolean).join(' · ');
+}
+
+function iconOf(f: Found): IconName {
+  if (f.person) return 'user';
+  if (f.post.type === 'project') return 'zap';
+  if (f.post.type === 'issue') return 'bug';
+  if (f.post.type === 'proposal') return 'flag';
+  return f.post.board === 'ideas' ? 'lightbulb' : 'notes';
+}
+
+export function Picker() {
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState<Found[]>();
+  const [at, setAt] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    let current = true;
+    const search = () =>
+      void api<Found[]>('find', query, 30).then((f) => {
+        if (!current) return;
+        setFound(f);
+        setAt(0);
+      }, () => {});
+    const timer = setTimeout(search, query ? 80 : 0);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
+  // The shortcut again, after a pick or Escape: a fresh search.
+  useEffect(
+    () =>
+      bridge.onPickerOpen?.(() => {
+        setQuery('');
+        input.current?.focus();
+      }),
+    [],
+  );
+  useEffect(() => list.current?.querySelector('.picker-item.at')?.scrollIntoView({ block: 'nearest' }), [at]);
+
+  const close = () => void bridge.closePicker?.();
+  const pick = (f: Found | undefined) => {
+    if (!f) return;
+    const link = linkOf(f);
+    if (bridge.pick) void bridge.pick(link);
+    else void navigator.clipboard.writeText(link); // in a browser
+  };
+  const onKey = (event: KeyboardEvent) => {
+    const n = found?.length ?? 0;
+    if (event.key === 'Escape') close();
+    else if (event.key === 'ArrowDown' && n) setAt((i) => (i + 1) % n);
+    else if (event.key === 'ArrowUp' && n) setAt((i) => (i - 1 + n) % n);
+    else if (event.key === 'Enter') pick(found?.[at]);
+    else return;
+    event.preventDefault();
+  };
+
+  return (
+    <div className="window picker-window" onKeyDown={onKey}>
+      <div className="title-bar mentions-drag">
+        <div className="title-bar-text">Weave · Address book</div>
+        <div className="title-bar-controls">
+          <button aria-label="Close" onClick={close} />
+        </div>
+      </div>
+      <div className="window-body picker-body">
+        <div className="picker-search">
+          <Icon name="search" />
+          <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="A person, project, issue or post" spellCheck={false} />
+        </div>
+        <ul className="picker-list" ref={list} role="listbox">
+          {found?.map((f, i) => (
+            <li
+              key={f.person ? f.person.did : f.post.id}
+              className={`picker-item${i === at ? ' at' : ''}`}
+              role="option"
+              aria-selected={i === at}
+              onMouseMove={() => setAt(i)}
+              onClick={() => pick(f)}
+            >
+              <Icon name={iconOf(f)} />
+              <span className="picker-what">
+                <b>{f.person ? (f.person.name ?? 'Someone') : f.post.title}</b>
+                <span className="panel-line-note">{noteOf(f)}</span>
+              </span>
+            </li>
+          ))}
+          {found && !found.length && <li className="empty">Nobody and nothing by that name here.</li>}
+        </ul>
+        <div className="panel-foot picker-foot">
+          <span>↑↓ choose · Enter {bridge.platform === 'win32' ? 'pastes a link where you were typing' : 'copies a link to paste'} · Esc closes</span>
+        </div>
+      </div>
+    </div>
+  );
+}

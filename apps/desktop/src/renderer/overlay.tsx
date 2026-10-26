@@ -17,7 +17,7 @@ import { attempt } from './ui.tsx';
 const SINGULAR: Record<string, string> = { ideas: 'idea', issues: 'issue', proposals: 'proposal', releases: 'release', posts: 'post', showcase: 'showcase post', journal: 'journal entry' };
 
 /** "idea in p/Weave" */
-function kindOf(p: PostInfo): string {
+export function kindOf(p: PostInfo): string {
   const kind = p.type === 'project' ? 'project' : p.type === 'issue' || p.type === 'proposal' ? p.type : (SINGULAR[p.board ?? ''] ?? 'post');
   return p.space && p.type !== 'project' ? `${kind} in ${spaceLabel(p.space)}` : kind;
 }
