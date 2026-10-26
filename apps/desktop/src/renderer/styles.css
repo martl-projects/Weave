@@ -653,3 +653,12 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 /* New Weave version (update.tsx) */
 .update-prompt { max-width: 520px; }
 .update-notes { max-height: 260px; overflow: auto; padding: 6px 10px; margin: 8px 0; background: #fff; }
+
+/* Services (services.tsx): in Keys & devices, and under a space's members. */
+.service-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.service-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.service-spaces { max-height: 140px; overflow-y: auto; padding: 4px 6px; }
+.service-requests { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+.service-request { padding-left: 8px; border-left: 2px solid currentColor; }
+.service-answer { margin: 2px 0 0 10px; }
+.service-member { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: none; box-shadow: none; padding: 4px 6px; cursor: pointer; }

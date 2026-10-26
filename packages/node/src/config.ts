@@ -7,10 +7,6 @@ export interface Config {
   bootstrap: Array<{ host: string; port: number }>;
   /** Tiers to ask to join once the creator's node has been reached (e.g. from the app's bundle). */
   pendingMemberships: Array<{ tier: string; creator: string; note?: string }>;
-  /** Project id → this computer's copy of the project's app (never published). */
-  appFolders: Record<string, string>;
-  /** Project id → the start command and folder the person approved (a fingerprint, see applaunch.ts). */
-  approvedLaunches: Record<string, string>;
   /** You've been asked once whether to tell your agent harnesses about Weave. */
   agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
@@ -41,8 +37,6 @@ export function loadConfig(home: Home): Config {
     topics: stored.topics ?? [],
     bootstrap: stored.bootstrap ?? [],
     pendingMemberships: stored.pendingMemberships ?? [],
-    appFolders: stored.appFolders ?? {},
-    approvedLaunches: stored.approvedLaunches ?? {},
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
     // A company's node (stages 6 and 12): written by weave company create and friends, read back here.

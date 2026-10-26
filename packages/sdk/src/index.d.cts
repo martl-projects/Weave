@@ -29,6 +29,9 @@ export interface Project {
   rooms: Array<{ id: string; name: string; people: Person[] }>;
   /** The project's groups, and the host's own groups and tiers. */
   groups: Group[];
+  /** When a service asks: its name, and the settings it was given for this space. */
+  service?: string;
+  settings?: Record<string, string>;
 }
 
 export interface Access extends Person {
@@ -77,7 +80,8 @@ export declare class Weave {
   me(): Promise<Person>;
   /** Who is behind a connection; undefined when it didn't come through Weave. The host's own browser counts as the host. */
   who(from: ConnectionLike): Promise<Player | undefined>;
-  project(): Promise<Project>;
+  /** The project; a service in several spaces names which (id or name). */
+  project(space?: string): Promise<Project>;
   access(did: string, options?: { group?: string }): Promise<Access>;
   /** The project's shows someone has a ticket to (paid on chain), and whether each is on right now: let them in while `open`. */
   tickets(did: string): Promise<Ticket[]>;

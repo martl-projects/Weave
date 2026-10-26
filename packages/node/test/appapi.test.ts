@@ -85,18 +85,19 @@ describe('the app API and SDK', () => {
     const lena = person('Lena');
     await martin.createProject({ name: 'Gameshow' });
     await martin.createGroup('Supporters');
-    await martin.publishApp({ project: 'Gameshow', manifest: { app: 'quizshow', name: 'Quiz', services: [{ id: 'show', port: appPort }] } });
     await lena.joinSpace(await martin.invite('Gameshow'));
     await lena.joinSpace(await martin.invite('Supporters'));
     await martin.goOnline();
     await lena.goOnline();
 
-    const env = await martin.appEnv('Gameshow');
-    expect(env.WEAVE_API).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    // A room of Martin's room service, answered by the app running by itself: Weave gives it the room's token.
+    await martin.addService({ builtin: 'room', spaces: ['Gameshow'] });
+    const hosted = await martin.openRoom({ project: 'Gameshow', name: 'Saturday show', port: appPort });
+    const env = await martin.roomEnv(hosted.id);
+    expect(env).toMatchObject({ WEAVE_API: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/), WEAVE_ROOM: hosted.id });
     expect(sdk.connect({})).toBeUndefined();
     weave = sdk.connect(env);
 
-    const hosted = await martin.hostRoom({ project: 'Gameshow', name: 'Saturday show' });
     const seen = await until(async () => (await lena.rooms('Gameshow'))[0]);
     await lena.joinRoom(seen.id);
     const url = await until(async () => (await lena.rooms('Gameshow'))[0].url);

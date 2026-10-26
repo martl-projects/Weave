@@ -28,7 +28,7 @@ export async function startDaemon(
   await unlockHomeKey(home);
   const node = WeaveNode.open(home.dir);
   // Serve the API right away; joining the DHT can take a while (or never finish when offline).
-  const api = await startApi(node, options.port, { ...(options.onStopRequest ? { stop: options.onStopRequest } : {}) });
+  const api = await startApi(node, options.port, { ...(options.onStopRequest ? { stop: options.onStopRequest } : {}), service: (token) => node.serviceGate(token) });
   const info: DaemonInfo = {
     pid: process.pid,
     port: api.port,
@@ -49,6 +49,8 @@ export async function startDaemon(
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));
   // A company's node serves its user management and admins too (stage 12).
   await node.startServices();
+  // The person's own services, each with its own token for the API.
+  node.runServices({ port: api.port });
 
   // Carry out standing admission rules shortly after new events arrive.
   let timer: ReturnType<typeof setTimeout> | undefined;

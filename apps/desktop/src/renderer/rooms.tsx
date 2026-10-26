@@ -1,24 +1,25 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppLaunchInfo, AppManifest, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, HostedRoomInfo, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { copy } from './posts.tsx';
+import { contractText, ServiceCard } from './services.tsx';
 
 /*
- * Rooms: a host shares the project's app from their computer, players use it
- * through an encrypted tunnel. The ▶ button opens it in its own window; nobody
- * sees an address. Who is in a room and what they say there is never stored.
+ * A project's services, and the rooms the room service offers: someone in the project opens a room, answered by a
+ * handler on their computer (a project's release, a program, or something already running); players use it
+ * through an encrypted tunnel. The ▶ button opens it in its own window; nobody sees an address. Who is in a room
+ * and what they say there is never stored.
  */
 
 const play = (room: RoomInfo) => {
   if (!room.url) return;
   // On a phone the address is the computer's own: the phone app reaches it through the computer.
   if (bridge.phone) return void bridge.phone.openRoom(room.id, room.url).catch((error: Error) => toast(error.message, 'error'));
-  void bridge.openApp(room.url, `${room.app?.name ?? 'App'} · ${room.name}`);
+  void bridge.openApp(room.url, room.name);
 };
 
 function RoomChat({ room }: { room: RoomInfo }) {
@@ -56,6 +57,8 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
+  // "Race, offered by martl · room".
+  const offered = `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy?.name ?? 'a service'}`;
   let main;
   if (room.mine)
     main = room.service?.ready ? (
@@ -64,9 +67,7 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
       </button>
     ) : (
       <span className="waiting">
-        <button disabled>{room.app?.canLaunch ? 'Start the app above first' : 'Start the app first'}</button>
-        {!room.app?.canLaunch && room.app?.startHint && <span className="small"> {room.app.startHint}</span>}{' '}
-        <button onClick={bump}>Check again</button>
+        <button disabled>Waiting for what answers it…</button> <button onClick={bump}>Check again</button>
       </span>
     );
   else if (!room.joined)
@@ -84,19 +85,18 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
       </button>
     ) : (
       <button disabled>
-        {room.connected ? `Waiting for ${room.host.name ?? 'the host'} to start ${room.app?.name ?? 'the app'}…` : `Waiting for ${room.host.name ?? 'the host'}…`}
+        {room.connected ? `Waiting for ${offered}…` : `Connecting to ${offered}…`}
       </button>
     );
   return (
     <article className="room window">
       <div className="title-bar">
-        <div className="title-bar-text">
-          {room.name} · {room.app?.name}
-        </div>
+        <div className="title-bar-text">{room.name}</div>
       </div>
       <div className="window-body">
         <div className="room-head">
-          <span className="live-dot" /> {room.mine ? 'You host this room' : `Hosted by ${room.host.name ?? shortDid(room.host.did)}`}
+          <span className="live-dot" /> Offered by {offered}
+          {room.mine ? ', running here' : ''}
           {who.length > 0 && <span className="tag">🎟 {who.join(' · ')}</span>}
           {room.joined && (
             <span className="room-peers">
@@ -112,136 +112,32 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
           {main}
           <span className="grow" />
           {room.mine ? (
-            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected, and what answers it stops.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
           )}
         </div>
-        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {room.host.name ?? 'the host'}'s computer.</p>}
+        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered}, on the device it runs on.</p>}
         {room.joined && <RoomChat room={room} />}
       </div>
     </article>
   );
 }
 
-/** Asking before Weave runs a program: the exact command and where. */
-function ApproveLaunch({ app, launch, onApprove, onClose }: { app: AppManifest; launch: AppLaunchInfo; onApprove(): void; onClose(): void }) {
-  return (
-    <Modal title={`Start ${app.name}?`} onClose={onClose}>
-      <div className="approve-launch">
-        <Icon name="warning" size={32} />
-        {launch.container?.active ? (
-          <div>
-            <p>
-              Weave will run {app.name} in a container, from the image the project released ({launch.container.image}:{launch.container.tag}):
-            </p>
-            <pre className="launch-command">{launch.command!.join(' ')}</pre>
-            <p className="small">
-              It's sealed off from your computer: it gets only its own ports (on this computer, for the room), the settings you filled in, and none of your files. Weave asks again when a new release
-              brings another image.
-            </p>
-          </div>
-        ) : (
-          <div>
-            <p>Weave will run this program on your computer, as you:</p>
-            <pre className="launch-command">{launch.command!.join(' ')}</pre>
-            <p className="small">
-              in <code>{launch.folder}</code>
-            </p>
-            <p className="small">It comes from the project's app manifest. Only run it if you trust the people who maintain {app.name}. Weave asks again whenever the command or the folder changes.</p>
-          </div>
-        )}
-      </div>
-      <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
-        <button className="default" onClick={onApprove}>
-          Run it
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-const mb = (bytes?: number) => (bytes ? `${bytes < 1e6 ? (bytes / 1e6).toFixed(1) : Math.round(bytes / 1e6)} MB` : '');
-
-/** Installing (or updating) the app from its release: what comes from where, and what then runs. */
-function InstallDialog({ app, launch, onInstall, onClose }: { app: AppManifest; launch: AppLaunchInfo; onInstall(): void; onClose(): void }) {
-  const i = launch.install!;
-  return (
-    <Modal title={`${i.installed ? 'Update' : 'Install'} ${app.name} ${i.version ?? ''}`} onClose={onClose}>
-      <table className="install-facts">
-        <tbody>
-          <tr>
-            <th>From</th>
-            <td>
-              github.com/{i.repo}, release {i.version}
-            </td>
-          </tr>
-          <tr>
-            <th>File</th>
-            <td>
-              {i.asset!.file} {i.asset!.size ? `(${mb(i.asset!.size)})` : ''}
-            </td>
-          </tr>
-          <tr>
-            <th>Checked</th>
-            <td>it must match the fingerprint the project's maintainers published in Weave, or it isn't installed</td>
-          </tr>
-          <tr>
-            <th>Into</th>
-            <td>Weave's apps folder, its own folder for {app.name}</td>
-          </tr>
-          {(i.command ?? launch.command) && (
-            <tr>
-              <th>Then starts with</th>
-              <td>
-                <code>{(i.command ?? launch.command)!.join(' ')}</code>
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      <p className="small">
-        Installing only downloads and unpacks; nothing runs until you start {app.name}. Only install it if you trust the people who maintain it.
-        {i.command ?? launch.command ? ' Installing also approves its start command.' : ''}
-      </p>
-      <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
-        <button className="default" onClick={onInstall}>
-          {i.installed ? 'Update' : 'Install'}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-/** What to paste into an agent harness, so the agent installs the app by hand. */
-const agentPrompt = (project: SpaceInfo, app: AppManifest, launch: AppLaunchInfo) =>
-  [
-    `Please install ${app.name}${launch.install?.version ? ` ${launch.install.version}` : ''} on this computer, for the Weave project "${project.name}".`,
-    launch.install?.repo ? `It lives in the GitHub repository ${launch.install.repo}.` : '',
-    'The project gives these steps:',
-    ...(launch.install?.steps ?? []).map((step, n) => `${n + 1}. ${step}`),
-    `When it works, tell Weave where it is: weave app folder <that folder> -p "${project.name}" (the folder needs the app's weave.app.json).`,
-    'Ask me before running anything that changes more than that folder.',
-  ]
-    .filter(Boolean)
-    .join('\n');
-
 type Release = { tag: string; name: string; published?: string; files: number; prerelease: boolean };
 
-/** Maintainers: point the app at one of its repository's GitHub releases (Weave reads weave.app.json at that tag and fingerprints the files). */
+/** Maintainers: release one of the repository's GitHub releases as an artifact (Weave reads weave.app.json at that tag and fingerprints the files). */
 function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: AppManifest; onClose(): void }) {
   const { data, error } = useApi(() => api<{ repo: string; releases: Release[]; releaseWorkflow?: boolean }>('appReleases', project.id), [project.id]);
   const [busy, setBusy] = useState<string>();
   const use = async (tag: string) => {
     setBusy(tag);
-    const done = await attempt(() => api<AppManifest>('releaseApp', { project: project.id, tag }).then(bump), `${app.name} ${tag} is ready to install from Live`);
+    const done = await attempt(() => api<AppManifest>('releaseApp', { project: project.id, tag }).then(() => (bump(), true)), `${app.name} ${tag} is released: anyone in ${project.name} can start it`);
     setBusy(undefined);
     if (done !== undefined) onClose();
   };
   return (
-    <Modal title={`Use a GitHub release · ${app.name}`} onClose={onClose}>
+    <Modal title={`Release from GitHub · ${app.name}`} onClose={onClose}>
       {error ? (
         <p>{error}</p>
       ) : !data ? (
@@ -261,7 +157,7 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
       ) : (
         <>
           <p className="small">
-            Releases of <b>{data.repo}</b>. Weave reads <code>weave.app.json</code> at the tag you pick and fingerprints each file once; then everyone in {project.name} can install it here.
+            Releases of <b>{data.repo}</b>. Weave reads <code>weave.app.json</code> at the tag you pick and fingerprints each file once; then everyone in {project.name} can start it as a service.
           </p>
           <table className="release-list">
             <tbody>
@@ -274,8 +170,8 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
                     </div>
                   </td>
                   <td>
-                    <button className="default" disabled={!!busy || r.files === 0} title={r.files === 0 ? 'No files to install: GitHub\'s source archives don\'t count' : undefined} onClick={() => use(r.tag)}>
-                      {busy === r.tag ? 'Fingerprinting…' : 'Use this'}
+                    <button className="default" disabled={!!busy || r.files === 0} title={r.files === 0 ? "No files to run: GitHub's source archives don't count" : undefined} onClick={() => use(r.tag)}>
+                      {busy === r.tag ? 'Fingerprinting…' : 'Release this'}
                     </button>
                   </td>
                 </tr>
@@ -291,407 +187,16 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
   );
 }
 
-/** Before any release: say so, and let maintainers pick one from GitHub. */
-function NoReleaseBox({ project, app, launch }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo }) {
-  const [picking, setPicking] = useState(false);
-  const r = launch.release;
-  if (launch.install?.version || !r) return null;
-  return (
-    <div className="install-box">
-      <span className="grow small">
-        {r.canRelease ? (
-          r.repo ? (
-            <>
-              No release of {app.name} for people to install yet. Push a version tag to <b>{r.repo}</b> (its release workflow builds one), then pick it here.
-            </>
-          ) : (
-            <>No release of {app.name} yet: link its GitHub repository in the project's settings, and people can install releases with one click.</>
-          )
-        ) : (
-          <>There's no ready-made download of {app.name} yet{launch.folder ? '' : '; if you have a copy, choose its folder'}.</>
-        )}
-      </span>
-      {r.canRelease && r.repo && <button onClick={() => setPicking(true)}>Use a GitHub release…</button>}
-      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
-    </div>
-  );
-}
-
-/** Getting the app: install or update from its release, or have an agent do it by hand. */
-function InstallBox({ project, app, launch, onPick }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo; onPick(): void }) {
-  const [confirming, setConfirming] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const i = launch.install;
-  // While installing, look every second.
-  useEffect(() => {
-    if (!i?.progress) return;
-    const timer = setInterval(bump, 1000);
-    return () => clearInterval(timer);
-  }, [!!i?.progress]);
-  if (!i) return null;
-  const install = () => {
-    setConfirming(false);
-    void attempt(() => api('installApp', { project: project.id, approve: true }).then(bump));
-  };
-  const agent = i.steps && (
-    <button onClick={() => copy(agentPrompt(project, app, launch), 'Copied: paste it to your agent')} title="Copies instructions for your agent harness">
-      Copy steps for my agent
-    </button>
-  );
-  if (i.progress)
-    return (
-      <div className="install-box">
-        <span className="grow">
-          {i.progress.state === 'downloading' ? `Downloading ${app.name} ${i.version}… ${mb(i.progress.done)}${i.progress.total ? ` of ${mb(i.progress.total)}` : ''}` : `Unpacking ${app.name} ${i.version}…`}
-          {i.progress.total ? <progress max={i.progress.total} value={i.progress.done} /> : null}
-        </span>
-      </div>
-    );
-  const outdated = i.installed && i.version && i.installed !== i.version;
-  const other = launch.release?.canRelease && launch.release.repo && (
-    <a
-      href="#"
-      className="small"
-      onClick={(e) => {
-        e.preventDefault();
-        setPicking(true);
-      }}
-    >
-      Use another release…
-    </a>
-  );
-  return (
-    <>
-      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
-      {i.error && <div className="small error-text">The last install didn't work: {i.error}</div>}
-      {i.otherApp && (
-        <div className="small">
-          {app.name}'s releases download through the GitHub App{' '}
-          <a href={`https://github.com/apps/${i.otherApp}`} target="_blank" rel="noopener noreferrer">
-            {i.otherApp}
-          </a>
-          . If the repository is private, sign in through that app (Keys &amp; devices → Linked accounts → Use your own app).
-        </div>
-      )}
-      {i.asset && (!i.installed || outdated) ? (
-        <div className="install-box">
-          <span className="grow">
-            {outdated ? (
-              <>
-                <b>
-                  {app.name} {i.version}
-                </b>{' '}
-                is out; you have {i.installed}.
-              </>
-            ) : (
-              <>
-                Get{' '}
-                <b>
-                  {app.name} {i.version}
-                </b>{' '}
-                from GitHub ({mb(i.asset.size)}){launch.folder ? ', or keep using your own copy' : ''}.
-              </>
-            )}
-          </span>
-          {agent}
-          <button className="default" onClick={() => setConfirming(true)}>
-            {outdated ? 'Update…' : 'Install…'}
-          </button>
-        </div>
-      ) : i.installed && other ? (
-        <div className="install-box">
-          <span className="grow small">
-            {app.name} {i.installed}, installed by Weave.
-          </span>
-          {other}
-        </div>
-      ) : !i.asset && !launch.folder ? (
-        <div className="install-box">
-          <span className="grow">
-            {i.version ? `There's no ready-made ${app.name} ${i.version} for this computer (${i.platform}).` : `${app.name} has no ready-made download.`}
-            {i.steps ? ' Your agent can install it by hand.' : ''}
-          </span>
-          {agent}
-          <button onClick={onPick}>Choose folder…</button>
-        </div>
-      ) : null}
-      {confirming && <InstallDialog app={app} launch={launch} onInstall={install} onClose={() => setConfirming(false)} />}
-    </>
-  );
-}
-
-/** One setting the app asks hosts for (an API key…): typed here, kept on this computer, never shown again when secret. */
-function SettingRow({ project, setting }: { project: SpaceInfo; setting: NonNullable<AppLaunchInfo['settings']>[number] }) {
-  const [editing, setEditing] = useState(!setting.set);
-  const [value, setValue] = useState('');
-  useEffect(() => setEditing(!setting.set), [setting.set]);
-  const save = (next: string | null) =>
-    attempt(() => api('setAppSetting', { project: project.id, name: setting.name, value: next }).then(() => (setValue(''), bump())), next ? `${setting.label} saved on this computer` : `${setting.label} removed`);
-  return (
-    <div className="app-setting">
-      <label htmlFor={`setting-${setting.name}`}>
-        {setting.label}
-        {setting.optional ? <span className="muted"> (optional)</span> : null}
-      </label>
-      {editing ? (
-        <form
-          className="field-row"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            if (value.trim()) void save(value);
-          }}
-        >
-          <input id={`setting-${setting.name}`} className="grow" type={setting.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={value} placeholder={setting.name} onChange={(e) => setValue(e.target.value)} />
-          <button type="submit" disabled={!value.trim()}>
-            Save
-          </button>
-          {setting.set && (
-            <button type="button" onClick={() => (setValue(''), setEditing(false))}>
-              Cancel
-            </button>
-          )}
-        </form>
-      ) : (
-        <div className="field-row">
-          <span className="grow">✓ Saved on this computer</span>
-          <button onClick={() => setEditing(true)}>Change…</button>
-          <AsyncButton onClick={() => save(null)}>Remove</AsyncButton>
-        </div>
-      )}
-      {setting.hint && <div className="small muted">{setting.hint}</div>}
-    </div>
-  );
-}
-
-/** Settings the app asks for. Values stay on this computer and go to this app alone when Weave starts it. */
-function AppSettings({ project, app, launch }: { project: SpaceInfo; app: AppManifest; launch: AppLaunchInfo }) {
-  if (!launch.settings?.length) return null;
-  return (
-    <div className="app-settings">
-      <div className="small">
-        {app.name} asks for {launch.settings.length === 1 ? 'a setting' : 'settings'}. Whatever you type stays on this computer: Weave hands it to {app.name} when it starts it here, and to nobody else (not the project, the room or your agents).
-      </div>
-      {launch.settings.map((s) => (
-        <SettingRow key={s.name} project={project} setting={s} />
-      ))}
-    </div>
-  );
-}
-
-/** The app on this computer: where it is, start and stop, and what it printed. */
-function AppPanel({ project, app }: { project: SpaceInfo; app: AppManifest }) {
-  const { data: launch } = useApi(() => api<AppLaunchInfo>('appLaunch', project.id), [project.id]);
-  const [asking, setAsking] = useState(false);
-  const [showLog, setShowLog] = useState(false);
-  if (!launch) return null;
-  const pick = async () => {
-    const folder = await bridge.pickFolder(`Where is ${app.name} on this computer? (the folder with its weave.app.json)`);
-    if (folder) await attempt(() => api('setAppFolder', { project: project.id, folder }).then(bump), 'Folder saved');
-  };
-  const start = (approve = false) => attempt(() => api('launchApp', { project: project.id, approve }).then(bump), `${app.name} is starting`);
-  const missing = (launch.settings ?? []).filter((s) => !s.optional && !s.set);
-  if (!launch.command && !launch.install)
-    return launch.hint ? (
-      <p className="small">
-        To host, start {app.name} yourself: {launch.hint}
-      </p>
-    ) : null;
-  return (
-    <fieldset className="app-panel">
-      <legend>{app.name} on this computer</legend>
-      <NoReleaseBox project={project} app={app} launch={launch} />
-      <InstallBox project={project} app={app} launch={launch} onPick={pick} />
-      <AppSettings project={project} app={app} launch={launch} />
-      {!launch.command ? (
-        launch.hint && <p className="small">To host, start {app.name} yourself: {launch.hint}</p>
-      ) : launch.install?.progress ? null : !launch.folder && !launch.container?.active ? (
-        launch.install?.asset ? null : (
-        <div className="field-row">
-          <span className="grow small">To host a room, Weave can start {app.name} for you. Where is it on this computer?</span>
-          <button onClick={pick}>Choose folder…</button>
-        </div>
-        )
-      ) : (
-        <>
-          <div className="field-row">
-            <span className={`status-dot ${launch.running ? 'on' : ''}`} />
-            <span className="grow">
-              {launch.running ? `Running since ${clock(launch.started!)}` : launch.exit ? (launch.exit.stopped ? 'Stopped' : `Exited by itself${launch.exit.code ? ` (code ${launch.exit.code})` : ''}`) : 'Not running'}
-            </span>
-            {launch.running ? (
-              <AsyncButton onClick={() => attempt(() => api('stopApp', project.id).then(bump), 'Stopped')}>Stop app</AsyncButton>
-            ) : (
-              <button
-                className="default"
-                disabled={missing.length > 0}
-                title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined}
-                onClick={() => (launch.approved ? void start() : setAsking(true))}
-              >
-                ▶ Start {app.name}
-              </button>
-            )}
-            {launch.log.length > 0 && <button onClick={() => setShowLog(!showLog)}>{showLog ? 'Hide output' : 'Output'}</button>}
-          </div>
-          {launch.container?.active ? (
-            <div className="small muted">
-              In a container: {launch.container.image}:{launch.container.tag}, sealed off from this computer (Docker)
-            </div>
-          ) : (
-            <div className="small muted">
-              {launch.command.join(' ')} · in {launch.install?.installed ? `${app.name} ${launch.install.installed}, installed by Weave` : launch.folder}{' '}
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  void pick();
-                }}
-              >
-                change
-              </a>
-            </div>
-          )}
-          {launch.container && !launch.container.docker && (
-            <div className="small muted">{app.name} also comes as a container image: with Docker running on this computer, Weave runs it sealed off from your files.</div>
-          )}
-          {showLog && <pre className="app-log sunken">{launch.log.slice(-60).join('\n')}</pre>}
-        </>
-      )}
-      {asking && (
-        <ApproveLaunch
-          app={app}
-          launch={launch}
-          onClose={() => setAsking(false)}
-          onApprove={() => {
-            setAsking(false);
-            void start(true);
-          }}
-        />
-      )}
-    </fieldset>
-  );
-}
-
-function HostDialog({ project, members, meDid, app, groups, shows, forShow, onClose }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; app: AppManifest; groups: ProjectInfo['groups']; shows: ShowInfo[]; forShow?: string; onClose(): void }) {
-  const [name, setName] = useState(shows.find((s) => s.id === forShow)?.name ?? '');
-  const [who, setWho] = useState<'everyone' | 'people' | 'tickets' | 'tiers'>(forShow ? 'tickets' : 'everyone');
-  const everyone = who === 'everyone';
-  const [picked, setPicked] = useState<string[]>([]);
-  const mine = shows.filter((s) => s.mine && !s.cancelled && Date.parse(s.ends) > Date.now());
-  // The show the room is for: one set up already, or a new one ('new') set up with the room.
-  const [show, setShow] = useState(forShow ?? mine[0]?.id ?? 'new');
-  const [tiers, setTiers] = useState<string[]>([]);
-  const payments = usePayments(project);
-  const newShow = useShowForm(project);
-  const tierBoxes = (
-    <>
-      {groups.map((g) => (
-        <div className="field-row indent" key={g.id}>
-          <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
-          <label htmlFor={`who-tier-${g.id}`}>{who === 'tickets' ? 'also ' : ''}members of {g.name}</label>
-        </div>
-      ))}
-    </>
-  );
-  return (
-    <Modal title={`Host a room · ${app.name}`} onClose={onClose}>
-      <form
-        className="form"
-        onSubmit={async (e: FormEvent) => {
-          e.preventDefault();
-          // A new show is set up first; if the room then fails, it's picked, not set up twice.
-          const made = who === 'tickets' && show === 'new' ? await newShow.create(name) : show;
-          if (made === undefined) return;
-          if (made !== show) {
-            setShow(made);
-            // Selling tickets turns the project's payments on: its treasury and split show in Settings.
-            if (!payments.on) payments.turn(true);
-            bump();
-          }
-          const access = who === 'people' ? { invite: picked } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
-          const room = await attempt(() => api<RoomInfo>('hostRoom', { project: project.id, name, ...access }), 'Room is open');
-          if (room) {
-            bump();
-            onClose();
-          }
-        }}
-      >
-        <div className="field-row-stacked">
-          <label htmlFor="room-name">Name</label>
-          <input id="room-name" autoFocus maxLength={60} placeholder="Saturday show" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <p className="small">
-          Shares <b>{app.name}</b> from this computer (port {app.services[0].port}). Only that port; nothing else on your computer.
-        </p>
-        <fieldset>
-          <legend>Who may join</legend>
-          <div className="field-row">
-            <input id="who-all" type="radio" checked={everyone} onChange={() => setWho('everyone')} />
-            <label htmlFor="who-all">Everyone in p/{project.name}</label>
-          </div>
-          <div className="field-row">
-            <input id="who-some" type="radio" checked={who === 'people'} onChange={() => setWho('people')} />
-            <label htmlFor="who-some">Only…</label>
-          </div>
-          {who === 'people' &&
-            members
-              .filter((m) => m.did !== meDid)
-              .map((m) => (
-                <div className="field-row indent" key={m.did}>
-                  <input id={`who-${m.did}`} type="checkbox" checked={picked.includes(m.did)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
-                  <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
-                </div>
-              ))}
-          <div className="field-row">
-            <input id="who-tickets" type="radio" checked={who === 'tickets'} onChange={() => setWho('tickets')} />
-            <label htmlFor="who-tickets">Ticket holders of a show</label>
-          </div>
-          {who === 'tickets' && (
-            <>
-              <div className="field-row indent">
-                <label htmlFor="who-show">Show</label>
-                <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
-                  {mine.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                  <option value="new">A new show…</option>
-                </select>
-              </div>
-              {show === 'new' && <div className="indent">{newShow.fields}</div>}
-              {tierBoxes}
-            </>
-          )}
-          {groups.length > 0 && (
-            <div className="field-row">
-              <input id="who-tiers" type="radio" checked={who === 'tiers'} onChange={() => setWho('tiers')} />
-              <label htmlFor="who-tiers">Members of tiers</label>
-            </div>
-          )}
-          {who === 'tiers' && tierBoxes}
-        </fieldset>
-        <div className="buttons">
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="default" disabled={(who === 'people' && picked.length === 0) || (who === 'tiers' && tiers.length === 0)}>
-            Open room
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
 function PublishApp({ project }: { project: SpaceInfo }) {
   const [text, setText] = useState('');
   return (
     <fieldset>
-      <legend>Publish the project's app</legend>
+      <legend>Describe the project's artifact</legend>
       <p className="small">
-        Paste the app's <code>weave.app.json</code>: the ports a room may share and what host and players open. (Or: <code>weave app publish -p "{project.name}"</code> in the app's folder.)
+        Paste its <code>weave.app.json</code>: what it's called, its web page's port, how it starts and the settings it asks for. Then release it from a GitHub release. (Or:{' '}
+        <code>weave app publish -p "{project.name}"</code> in its folder.)
       </p>
-      <textarea className="wide code" rows={8} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder={'{\n  "app": "my-app",\n  "name": "My App",\n  "services": [{ "id": "web", "port": 3000, "open": { "host": { "path": "/", "label": "Open" }, "joiner": { "path": "/", "label": "Play" } } }]\n}'} />
+      <textarea className="wide code" rows={8} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder={'{\n  "app": "my-app",\n  "name": "My App",\n  "services": [{ "id": "web", "port": 3000 }]\n}'} />
       <div className="buttons">
         <AsyncButton
           className="default"
@@ -705,7 +210,7 @@ function PublishApp({ project }: { project: SpaceInfo }) {
               }
               await api('publishApp', { project: project.id, manifest });
               bump();
-            }, 'App published')
+            }, 'Published: now release it')
           }
         >
           Publish
@@ -715,39 +220,412 @@ function PublishApp({ project }: { project: SpaceInfo }) {
   );
 }
 
-export function RoomsView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+/** Maintainers: the project's artifacts (its releases), and releasing the next one. */
+function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[] }) {
+  const [picking, setPicking] = useState(false);
+  const [describing, setDescribing] = useState(false);
+  if (app === undefined) return null;
+  if (app === null)
+    return describing ? (
+      <PublishApp project={project} />
+    ) : (
+      <p className="small muted">
+        p/{project.name} has no artifact of its own; rooms here can run other projects' artifacts.{' '}
+        <a
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            setDescribing(true);
+          }}
+        >
+          Describe one…
+        </a>
+      </p>
+    );
+  return (
+    <fieldset>
+      <legend>{project.name}'s artifacts</legend>
+      {artifacts.length ? (
+        <p className="small">
+          {artifacts
+            .slice(0, 5)
+            .map((a) => `${a.name} ${a.tag} (${ago(a.time)})`)
+            .join(' · ')}
+        </p>
+      ) : (
+        <p className="small">Nothing released yet: release {app.name} from one of its repository's GitHub releases, and everyone in {project.name} can start it.</p>
+      )}
+      <div className="buttons">
+        <button onClick={() => setPicking(true)}>Release from GitHub…</button>
+      </div>
+      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
+    </fieldset>
+  );
+}
+
+/** Artifacts of every project you're in, this one's first. */
+function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
+  const { data } = useApi(async () => {
+    const projects = await api<SpaceInfo[]>('spaces', 'project');
+    const ordered = [project, ...projects.filter((p) => p.id !== project.id)];
+    const lists = await Promise.all(ordered.map((p) => api<ArtifactInfo[]>('artifacts', p.id).catch(() => [] as ArtifactInfo[])));
+    return lists.flat();
+  }, [project.id]);
+  return data;
+}
+
+/** One setting typed in the start dialog. */
+function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
+  return (
+    <div className="app-setting">
+      <label htmlFor={`setting-${setting.name}`}>
+        {setting.label}
+        {setting.optional ? <span className="muted"> (optional)</span> : null}
+
+      </label>
+      <input id={`setting-${setting.name}`} className="wide" type={setting.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={value} placeholder={setting.name} onChange={(e) => onChange(e.target.value)} />
+      {setting.hint && <div className="small muted">{setting.hint}</div>}
+    </div>
+  );
+}
+
+/**
+ * Opening a room of your room service: its name, and what answers its clients (its handler): an artifact (a release
+ * of this project or another one you're in, fetched and checked), a command in a folder, or something already
+ * running. Running code is shown first and approved here.
+ */
+function OpenRoomDialog({ project, service, away, members, meDid, groups, shows, onClose }: { project: SpaceInfo; service: string; away?: string; members: MemberInfo[]; meDid: string; groups: ProjectInfo['groups']; shows: ShowInfo[]; onClose(): void }) {
+  const artifacts = useArtifacts(project);
+  // Who may join: every participant, picked people, a show's ticket holders (a show of yours, or a new one), tier members.
+  const [who, setWho] = useState<'everyone' | 'people' | 'tickets' | 'tiers'>('everyone');
+  const [people, setPeople] = useState<string[]>([]);
+  const myShows = shows.filter((s) => s.mine && !s.cancelled && Date.parse(s.ends) > Date.now());
+  const [show, setShow] = useState(myShows[0]?.id ?? 'new');
+  const [tiers, setTiers] = useState<string[]>([]);
+  const payments = usePayments(project);
+  const newShow = useShowForm(project);
+  const [kind, setKind] = useState<'artifact' | 'command' | 'address'>('artifact');
+  const [picked, setPicked] = useState<string>();
+  const [name, setName] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [command, setCommand] = useState('');
+  const [folder, setFolder] = useState('');
+  const [port, setPort] = useState('');
+  const [busy, setBusy] = useState(false);
+  const usable = (artifacts ?? []).filter((a) => a.runs && a.room);
+  const chosen = usable.find((a) => a.id === picked) ?? usable[0];
+  useEffect(() => setValues({}), [chosen?.id]);
+  const words = command.match(/"[^"]*"|'[^']*'|\S+/g)?.map((w) => w.replace(/^["']|["']$/g, '')) ?? [];
+  const missing = kind === 'artifact' ? (chosen?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? []) : [];
+  const ready =
+    !!name.trim() &&
+    (kind === 'artifact' ? !!chosen && !missing.length : kind === 'command' ? words.length > 0 && !!folder && !!Number(port) : !!Number(port)) &&
+    !(who === 'people' && !people.length) &&
+    !(who === 'tiers' && !tiers.length);
+  const open = async () => {
+    setBusy(true);
+    // A new show is set up first; if the room then fails, it's picked, not set up twice.
+    const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
+    if (made === undefined) return setBusy(false);
+    if (made !== show) {
+      setShow(made);
+      // Selling tickets turns the project's payments on: its treasury and split show in Settings.
+      if (!payments.on) payments.turn(true);
+    }
+    const access = who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
+    const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
+    const handler = kind === 'artifact' ? { artifact: { project: chosen!.project.id, tag: chosen!.tag }, settings } : kind === 'command' ? { command: words, folder, port: Number(port) } : { port: Number(port) };
+    const room = await attempt(() => api<RoomInfo>('openRoom', { service, project: project.id, name: name.trim(), ...handler, ...access, approve: true }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: it answers once its handler runs`);
+    setBusy(false);
+    if (room) {
+      bump();
+      onClose();
+    }
+  };
+  const radio = (value: typeof kind, label: string) => (
+    <div className="field-row">
+      <input id={`handler-${value}`} type="radio" checked={kind === value} onChange={() => setKind(value)} />
+      <label htmlFor={`handler-${value}`}>{label}</label>
+    </div>
+  );
+  return (
+    <Modal title={`Open a room · p/${project.name}`} onClose={onClose} wide>
+      <div className="form">
+        <div className="field-row-stacked">
+          <label htmlFor="room-name">Name</label>
+          <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <fieldset>
+          <legend>What answers it</legend>
+          {radio('artifact', 'A release of a project (an artifact)')}
+          {kind === 'artifact' &&
+            (!artifacts ? (
+              <p className="small indent">Looking for releases…</p>
+            ) : usable.length === 0 ? (
+              <p className="small indent">No project you're in has released anything with a web page for this computer yet.</p>
+            ) : (
+              usable.map((a) => (
+                <div className="field-row indent" key={a.id}>
+                  <input id={`artifact-${a.id}`} type="radio" checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
+                  <label htmlFor={`artifact-${a.id}`}>
+                    <span>
+                      <b>{a.name}</b> {a.tag}{' '}
+                      <span className="muted small">
+                        · p/{a.project.name} · released {ago(a.time)} by {a.released.name ?? shortDid(a.released.did)}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ))
+            ))}
+          {!away && radio('command', 'A program on this computer')}
+          {kind === 'command' && (
+            <div className="indent form">
+              <input className="wide code" placeholder="node server.js" value={command} onChange={(e) => setCommand(e.target.value)} aria-label="Command" />
+              <div className="field-row">
+                <span className="grow small">{folder || 'Runs in…'}</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const picked = await bridge.pickFolder('Where does it run?');
+                    if (picked) setFolder(picked);
+                  }}
+                >
+                  Choose folder…
+                </button>
+              </div>
+              <input inputMode="numeric" placeholder="Port it listens on (it gets PORT too)" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
+            </div>
+          )}
+          {radio('address', `Something already running ${away ? `on ${away}` : 'on this computer'}`)}
+          {kind === 'address' && (
+            <div className="indent">
+              <input inputMode="numeric" placeholder="Its port, like 3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
+              <p className="small muted">Weave starts nothing: the room's participants reach that port, and nothing else on {away ?? 'your computer'}.</p>
+            </div>
+          )}
+        </fieldset>
+        <fieldset>
+          <legend>Who may join</legend>
+          {(
+            [
+              ['everyone', `Everyone in p/${project.name}`],
+              ['people', 'Only…'],
+              ['tickets', 'Ticket holders of a show'],
+              ...(groups.length ? [['tiers', 'Members of tiers']] : []),
+            ] as Array<[typeof who, string]>
+          ).map(([value, label]) => (
+            <div key={value}>
+              <div className="field-row">
+                <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
+                <label htmlFor={`who-${value}`}>{label}</label>
+              </div>
+              {who === 'people' &&
+                value === 'people' &&
+                members
+                  .filter((m) => m.did !== meDid)
+                  .map((m) => (
+                    <div className="field-row indent" key={m.did}>
+                      <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
+                      <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
+                    </div>
+                  ))}
+              {who === 'tickets' && value === 'tickets' && (
+                <>
+                  <div className="field-row indent">
+                    <label htmlFor="who-show">Show</label>
+                    <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                      {myShows.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                      <option value="new">A new show…</option>
+                    </select>
+                  </div>
+                  {show === 'new' && <div className="indent">{newShow.fields}</div>}
+                </>
+              )}
+              {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
+                groups.map((g) => (
+                  <div className="field-row indent" key={g.id}>
+                    <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                    <label htmlFor={`who-tier-${g.id}`}>
+                      {who === 'tickets' ? 'also ' : ''}members of {g.name}
+                    </label>
+                  </div>
+                ))}
+            </div>
+          ))}
+        </fieldset>
+        {kind === 'artifact' && chosen && chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
+        {kind !== 'address' && (kind === 'command' ? words.length > 0 : !!chosen) && (
+          <div className="approve-launch">
+            <Icon name="warning" size={32} />
+            <div>
+              <p>
+                {kind === 'artifact'
+                  ? chosen!.runs === 'container'
+                    ? `Weave will run ${chosen!.name} ${chosen!.tag} in a container, sealed off from your files:`
+                    : `Weave will fetch ${chosen!.name} ${chosen!.tag}, check it against the fingerprints p/${chosen!.project.name} published, and run it on this computer, as you:`
+                  : 'Weave will run this program on your computer, as you:'}
+              </p>
+              <pre className="launch-command">{(kind === 'artifact' ? (chosen!.command ?? []) : words).join(' ')}</pre>
+              <p className="small">
+                {kind === 'artifact' ? `Only run it if you trust the people who maintain p/${chosen!.project.name}. ` : ''}It has no key: it signs nothing, and only learns from Weave who is in its room. Weave asks again for
+                another release or command.
+              </p>
+            </div>
+          </div>
+        )}
+        <div className="buttons">
+          <button onClick={onClose}>Cancel</button>
+          <button className="default" disabled={!ready || busy} title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined} onClick={() => void open()}>
+            {busy ? 'Opening…' : kind === 'address' ? 'Open room' : 'Run it and open room'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** How a room of your room service is doing, where it isn't answering yet. */
+function HostedStatus({ hosted }: { hosted?: HostedRoomInfo }) {
+  useEffect(() => {
+    if (!hosted?.progress) return;
+    const timer = setInterval(bump, 1000);
+    return () => clearInterval(timer);
+  }, [!!hosted?.progress]);
+  if (!hosted || (!hosted.progress && !hosted.error)) return null;
+  return (
+    <p className="small">
+      {hosted.progress ? (
+        <>
+          {hosted.progress.state === 'downloading' ? 'Fetching its release…' : 'Unpacking…'} {hosted.progress.total ? <progress max={hosted.progress.total} value={hosted.progress.done} /> : null}
+        </>
+      ) : (
+        <span className="error-text">{hosted.error}</span>
+      )}
+    </p>
+  );
+}
+
+/** What a service is there for, in a project. */
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
+
+/** One service in the project: what it's for, and what it offers here (a room service: its rooms). */
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: RoomInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
+  const [opening, setOpening] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const own = service.person.did === meDid;
+  const by = service.person.name ?? shortDid(service.person.did);
+  const its = rooms.filter((r) => r.offeredBy?.did === service.did);
+  return (
+    <fieldset className="project-service">
+      <legend>
+        <Icon name={service.builtin === 'room' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
+      </legend>
+      <p className="small">{purpose(service)}</p>
+      {its.map((room) => (
+        <div key={room.id}>
+          <RoomCard room={room} shows={shows} />
+          <HostedStatus hosted={mine?.rooms?.find((r) => r.id === room.id)} />
+        </div>
+      ))}
+      {service.builtin === 'room' && !its.length && <p className="small muted">No open rooms{own ? '' : ` from ${by}`}.</p>}
+      <div className="buttons">
+        {service.builtin === 'room' && own && mine && <button onClick={() => setOpening(true)}>Open a room…</button>}
+        {service.builtin === 'room' && own && !mine && <span className="small muted">It runs on another of your devices: open rooms there.</span>}
+        {service.builtin !== 'room' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
+        {own && mine && (
+          <AsyncButton
+            onClick={async () =>
+              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its rooms here end.' : ''}`, 'Take it out')) &&
+              attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`)
+            }
+          >
+            Take out of p/{project.name}
+          </AsyncButton>
+        )}
+      </div>
+      {opening && mine && <OpenRoomDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
+      {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
+    </fieldset>
+  );
+}
+
+/** Adding a service to the project: the room service Weave ships (yours, or a new one), or another of your services. */
+function AddProjectService({ project, services, onClose }: { project: SpaceInfo; services: ServiceInfo[]; onClose(): void }) {
+  const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
+  const rooms = services.filter((s) => s.builtin === 'room');
+  const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
+  return (
+    <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
+      <div className="form">
+        {!rooms.length && (
+          <div className="install-box">
+            <span className="grow">
+              <b>Rooms</b>
+              <br />
+              <span className="small">A way to join in with the project's participants: you open rooms here, each answered by a project's release or a program of yours.</span>
+            </span>
+            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'room', spaces: [project.id] }).then(() => (bump(), onClose())), `Rooms are on in p/${project.name}`)}>
+              Add
+            </AsyncButton>
+          </div>
+        )}
+        {away.map((s) => (
+          <div className="install-box" key={s.name}>
+            <span className="grow">
+              <b>{s.name}</b>
+              <br />
+              <span className="small">{s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
+            </span>
+            <AsyncButton onClick={() => add(s)}>Add</AsyncButton>
+          </div>
+        ))}
+        {rooms.length > 0 && !away.length && <p className="small">Your services are all in p/{project.name} already.</p>}
+        <p className="small muted">
+          A service you add reads what's addressed to it here, as in its other spaces, and so could carry things between them: add it only where you'd trust it with that. Your own code becomes a service in{' '}
+          <a href="#/keys">Keys &amp; devices → Services</a>.
+        </p>
+      </div>
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** A project's services: each with what it's for and what it offers here. Rooms are what the room service offers. */
+export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', project.id), [project.id]);
+  const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
   const { data: app } = useApi(() => api<AppManifest | null>('projectApp', project.id), [project.id]);
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
-  // Hosting a room: for everyone (true), or for a show's ticket holders (its id).
-  const [hosting, setHosting] = useState<boolean | string>(false);
+  const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
+  const [adding, setAdding] = useState(false);
+
+  // Room services first, then the rest.
+  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'room') - Number(a.builtin === 'room'));
   return (
     <Page
-      title={<><Icon name="zap" /> Live · p/{project.name}</>}
+      title={<><Icon name="zap" /> Services · p/{project.name}</>}
       actions={
-        app && (
-          <button onClick={() => setHosting(true)}>
-            <Icon name="plus" /> Host room…
-          </button>
-        )
+        <button onClick={() => setAdding(true)}>
+          <Icon name="plus" /> Add a service…
+        </button>
       }
     >
-      {app === null && (info?.maintainer ? <PublishApp project={project} /> : <p className="empty">This project has no app to share yet; its maintainers can publish one.</p>)}
-      {app && (
-        <p className="small">
-          <b>{app.name}</b> runs on the host's computer; players use it through an encrypted tunnel. Who's in a room and what's said there is never stored.
-        </p>
-      )}
-      {app && <AppPanel project={project} app={app} />}
-      {(rooms ?? []).map((room) => (
-        <RoomCard key={room.id} room={room} shows={shows ?? []} />
+      {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add rooms, and everyone here can join in.</p>}
+      {list.map((s) => (
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} />
       ))}
-      {app && rooms?.length === 0 && <p className="empty">No open rooms. Host one to share {app.name}.</p>}
-      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} onHost={app ? (show) => setHosting(show) : undefined} />
-      {hosting !== false && app && (
-        <HostDialog project={project} members={members} meDid={meDid} app={app} groups={info?.groups ?? []} shows={shows ?? []} forShow={typeof hosting === 'string' ? hosting : undefined} onClose={() => setHosting(false)} />
-      )}
+      {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
+      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
+      {adding && <AddProjectService project={project} services={services ?? []} onClose={() => setAdding(false)} />}
     </Page>
   );
 }

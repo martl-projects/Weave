@@ -355,7 +355,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ROOM, checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_ROOM, artifactsOf, type Artifact, parsePages, type RoomPages, checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -394,8 +394,29 @@ export {
   planSync,
   reposOf,
   type RepoAccess,
+  type RepoCollaborators,
+  REPO_ACCESS,
+  MAX_WRITERS,
   type RepoLink,
   type SyncPlan,
 } from './github.ts';
 export { KIND_SESSION, MAX_STACK, pushOnto, reorder, SESSION_ROLES, sessionKey, sessionsOf, takeOff, type SessionRecord, type SessionRole, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
+export {
+  KIND_SERVICE_PROFILE,
+  KIND_SERVICE_REQUEST,
+  KIND_SERVICE_RESULT,
+  KIND_SERVICE_IN,
+  servicesIn,
+  SERVICE_PREFIX,
+  parseContract,
+  profilesOf,
+  requestsOf,
+  serviceName,
+  servicePermissions,
+  serviceReads,
+  type ServiceContract,
+  type ServiceProfile,
+  type ServiceReads,
+  type ServiceRequest,
+} from './services.ts';

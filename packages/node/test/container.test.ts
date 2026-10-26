@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { checkManifest } from '@weave/core';
+import { startApi } from '../src/api.ts';
 import { WeaveNode, type Fetch, closeOpenStores } from '../src/index.ts';
 import { imageDigest, imageLocation } from '../src/registry.ts';
 
@@ -73,7 +74,7 @@ const syncAll = (nodes: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
 
-describe('apps from a container image', { timeout: 60_000 }, () => {
+describe('releases from a container image', { timeout: 60_000 }, () => {
   it('reads start.image: without tag or digest', () => {
     const base = { app: 'gameshow', services: [{ port: 3000 }] };
     expect(checkManifest({ ...base, start: { image: 'ghcr.io/martl/gameshow' } }).manifest?.start?.image).toBe('ghcr.io/martl/gameshow');
@@ -100,25 +101,27 @@ describe('apps from a container image', { timeout: 60_000 }, () => {
     expect(released.install?.assets).toBeUndefined();
     syncAll([martl, lena]);
 
-    // Lena's computer has Docker: the app starts from the container, no copy of it needed.
+    // Lena's computer has Docker: a room of hers runs the release's container, no copy of it needed.
     const dockerDir = tempDir('weave-fake-docker-');
     process.env.FAKE_DOCKER_DIR = dockerDir;
     // On Linux the container shares the host's network (no -p): the stand-in needs to know the app's port.
     process.env.FAKE_DOCKER_PORT = String(port);
-    const before = await lena.appLaunch('Gameshow');
-    expect(before.container).toEqual({ image: 'ghcr.io/martl/gameshow', tag: '1.4', digest: DIGEST, docker: true, active: true });
-    const run = before.command!.slice(2);
-    expect(run.slice(0, 4)).toEqual(['run', '--rm', '--name', expect.stringMatching(/^weave-/)]);
+    const [artifact] = await lena.artifacts('Gameshow');
+    expect(artifact).toMatchObject({ tag: 'v1.4', runs: 'container' });
+    const run = artifact.command!.slice(2);
+    expect(run.slice(0, 4)).toEqual(['run', '--rm', '--name', expect.stringMatching(/^weave-room-/)]);
     expect(run).toEqual(expect.arrayContaining(['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '-e', 'SECRET_KEY', '-e', 'WEAVE_API']));
     expect(run.at(-1)).toBe(`ghcr.io/martl/gameshow@${DIGEST}`);
     if (process.platform !== 'linux') expect(run).toEqual(expect.arrayContaining(['-p', `127.0.0.1:${port}:${port}`]));
     else expect(run).toEqual(expect.arrayContaining(['--network', 'host']));
 
     // Settings by name only: the value never shows in the command.
-    await lena.setAppSetting({ project: 'Gameshow', name: 'SECRET_KEY', value: 's3cret-value' });
-    expect(JSON.stringify((await lena.appLaunch('Gameshow')).command)).not.toContain('s3cret-value');
-    await expect(lena.launchApp({ project: 'Gameshow' })).rejects.toThrow(/approve the command first/);
-    await lena.launchApp({ project: 'Gameshow', approve: true });
+    const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
+    lena.runServices({ port: api.port });
+    await lena.addService({ builtin: 'room', spaces: ['Gameshow'] });
+    await expect(lena.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' } })).rejects.toThrow(/approve it first/);
+    const room = await lena.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' }, approve: true });
+    expect(JSON.stringify((await lena.services())[0].rooms)).not.toContain('s3cret-value');
     const answer = await vi.waitFor(
       async () => {
         const res = await fetch(`http://127.0.0.1:${port}/`);
@@ -130,20 +133,20 @@ describe('apps from a container image', { timeout: 60_000 }, () => {
     expect(answer.env.SECRET_KEY).toBe('s3cret-value');
     expect(answer.env.WEAVE_TOKEN).toBeTruthy();
     expect(answer.env.WEAVE_API).toMatch(process.platform === 'linux' ? /^http:\/\/127\.0\.0\.1:\d+$/ : /^http:\/\/host\.docker\.internal:\d+$/);
-    // A container left from before was cleared first; stopping goes through Docker.
-    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^rm -f weave-/m);
-    await lena.stopApp('Gameshow');
-    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-/m);
-    await vi.waitFor(async () => expect((await lena.appLaunch('Gameshow')).running).toBe(false), { timeout: 10_000 });
+    // A container left from before was cleared first; ending the room stops it through Docker.
+    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^rm -f weave-room-/m);
+    await lena.endRoom(room.id);
+    expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-room-/m);
+    await api.close();
 
-    // Without Docker it starts as before (here: from a checkout).
+    // Without Docker, and without a release file, there's nothing for a room to run.
     process.env.FAKE_DOCKER_DOWN = '1';
     const kofi = person('Kofi', fetchImpl);
     await kofi.joinSpace(await martl.invite('Gameshow'));
     syncAll([martl, kofi]);
-    const without = await kofi.appLaunch('Gameshow');
-    expect(without.container).toMatchObject({ docker: false, active: false });
-    expect(without.command).toEqual(['node', 'server.js']);
+    expect((await kofi.artifacts('Gameshow'))[0].runs).toBeUndefined();
+    await kofi.addService({ builtin: 'room', spaces: ['Gameshow'] });
+    await expect(kofi.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
     for (const node of [martl, lena, kofi]) await node.close();
     expect(existsSync(dockerDir)).toBe(true);
   });
