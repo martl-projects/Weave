@@ -945,7 +945,9 @@ async function main(): Promise<void> {
         throw new Error('the daemon did not come back within 30 seconds (start it with weave daemon to see why)');
       }
       if (args[0]) throw new Error('usage: weave daemon [stop|restart] [--force]');
-      let shutdown = async () => {};
+      // A stop asked for while it's still starting (its API is up first) is kept, and done once it can be.
+      let stopAsked = false;
+      let shutdown = async () => void (stopAsked = true);
       const daemon = await startDaemon(home.dir, { version: VERSION, build: BUILD, startedBy: process.env.WEAVE_DAEMON_STARTED_BY === 'app' ? 'app' : 'cli', onStopRequest: () => void shutdown() });
       const status = await daemon.node.status();
       console.log(`weave daemon for ${status.name ?? status.did}`);
@@ -961,6 +963,7 @@ async function main(): Promise<void> {
       };
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
+      if (stopAsked) void shutdown();
       return new Promise(() => {}); // run until stopped
     }
 

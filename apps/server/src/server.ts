@@ -211,7 +211,9 @@ async function promote(): Promise<void> {
 }
 
 async function run(): Promise<void> {
-  let stopping = async () => {};
+  // A stop asked for while it's still starting (its API is up first) is kept, and done once it can be.
+  let stopAsked = false;
+  let stopping = async () => void (stopAsked = true);
   const daemon = await startDaemon(home.dir, { version: VERSION, build: VERSION === 'dev' ? 'dev' : 'release', startedBy: 'cli', onStopRequest: () => void stopping() });
   const company = await daemon.node.company();
   // Someone's always-on node (weave-server pair / join) has no company, and needs none.
@@ -232,6 +234,7 @@ async function run(): Promise<void> {
   stopping = stop;
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  if (stopAsked) void stop();
   await new Promise(() => {}); // until stopped
 }
 
