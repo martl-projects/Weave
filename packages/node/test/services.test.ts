@@ -112,4 +112,56 @@ describe('services', () => {
       await api.close();
     }
   });
+
+  it('runs on an always-on node: its key made on a computer, handed over sealed, never kept there', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martl.invite('Weave'));
+    sync([martl, lena]);
+    const boxDir = mkdtempSync(join(tmpdir(), 'weave-services-box-'));
+    dirs.push(boxDir);
+    const linked = await martl.linkNode({ request: WeaveNode.nodeRequest(boxDir, 'nas') });
+    const box = await WeaveNode.completeNodeLink(linked.answer, boxDir);
+    nodes.push(box);
+    sync([martl, box]);
+    await box.reconcile();
+
+    // The node can't issue keys itself; the computer adds it for the node.
+    await expect(box.addService({ name: 'files', contract: { reads: 'addressed', writes: [], version: '1.0' } })).rejects.toThrow(/can't issue keys/);
+    await expect(martl.addService({ name: 'files', contract: { reads: 'addressed', writes: [], version: '1.0' }, node: 'elsewhere' })).rejects.toThrow(/no always-on node "elsewhere"[^]*nas/);
+    const files = await martl.addService({ name: 'files', description: 'Your NAS', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Weave'], node: 'nas' });
+    expect(files).toMatchObject({ name: 'files', node: { name: 'nas' }, spaces: [{ name: 'Weave' }] });
+    // Its key isn't kept on the computer, and the handover can only be opened by the node.
+    expect((await martl.whoami()).agents.map((a) => a.name)).not.toContain('files');
+    expect(martl.serviceGate('x')).toBeUndefined();
+
+    // The node takes it over, with a setting changed later.
+    sync([martl, box]);
+    await box.reconcile();
+    expect((await box.services()).map((s) => [s.name, s.did, s.node])).toEqual([['files', files.did, undefined]]);
+    await martl.setService({ name: 'files', settings: { NAS_FOLDER: '/volume1/photos' } });
+    expect((await martl.services())[0].settings).toEqual(['NAS_FOLDER']);
+    sync([martl, box]);
+    await box.reconcile();
+    expect((await box.services())[0].settings).toEqual(['NAS_FOLDER']);
+
+    // It answers from the node, as "martl · files".
+    sync([martl, lena]);
+    const asked = await lena.askService({ space: 'Weave', service: 'martl/files', text: 'my photos?' });
+    sync([lena, box]);
+    const token = readSecretJson<Array<{ name: string; token: string }>>(box.home, join(box.home.dir, 'services.json'))!.find((x) => x.name === 'files')!.token;
+    const answer = await box.serviceGate(token)!.answer({ request: asked.id, text: 'here they are' });
+    expect(answer).toMatchObject({ author: martl.identity.author, signer: files.did, signerName: 'files' });
+    sync([box, lena]);
+    expect((await lena.serviceRequests({ space: 'Weave' }))[0].results.map((r) => r.text)).toEqual(['here they are']);
+
+    // Removed from the computer: its key is revoked, and the node lets it go.
+    await martl.removeService('files');
+    expect(await martl.services()).toEqual([]);
+    sync([martl, box]);
+    await box.reconcile();
+    expect(await box.services()).toEqual([]);
+    expect(box.serviceGate(token)).toBeUndefined();
+  });
 });

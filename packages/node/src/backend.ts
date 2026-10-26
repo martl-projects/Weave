@@ -241,6 +241,8 @@ export interface ServiceInfo {
   settings: string[];
   enabled: boolean;
   running: boolean;
+  /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
+  node?: { did: Did; name: string };
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -1553,7 +1555,7 @@ export interface Backend {
   githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
-  addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[] }): Promise<ServiceInfo>;
+  addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[]; node?: string }): Promise<ServiceInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */

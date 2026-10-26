@@ -196,7 +196,7 @@ github — repositories that follow a group, tier or project (members who give t
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
-                             [--spaces <space,…>] [--run "<command>"] [--text <description>]
+                             [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
   service start|stop <name>  run it or not
@@ -398,6 +398,7 @@ const { values, positionals } = parseArgs({
     run: { type: 'string' },
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
+    node: { type: 'string' },
     repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
@@ -1375,14 +1376,14 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const b = await backend();
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
-        [`${s.name}  ${s.enabled ? (s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`, `  ${s.did}`, ...(s.description ? [`  ${s.description}`] : []), `  ${contractLine(s.contract)}`, ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []), ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : [])].join('\n');
+        [`${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`, `  ${s.did}`, ...(s.description ? [`  ${s.description}`] : []), `  ${contractLine(s.contract)}`, ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []), ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : [])].join('\n');
       const words = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
       const list = (text?: string) => text?.split(',').map((x) => x.trim()).filter(Boolean);
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
         const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-room'] ? { room: true } : {}), version: values['contract-version'] ?? '1.0' };
-        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}) });
-        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);
+        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.node ? { node: values.node } : {}) });
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);
       }
       if (sub === 'list') {
         const all = await b.services();

@@ -582,6 +582,26 @@ interface GitHubLogin {
 }
 
 /** An event as this node can read it, before names are resolved. */
+/** A service handed to an always-on node (the body of a handover, sealed to yourself). */
+interface Handover {
+  id: string;
+  service: string;
+  /** The always-on node's key it's for. */
+  node: Did;
+  /** The service's own key. */
+  did: Did;
+  contract: ServiceContract;
+  description?: string;
+  icon?: string;
+  spaces: string[];
+  command?: string[];
+  enabled?: boolean;
+  settingNames?: string[];
+  /** For the node only: the service's key (when new) and changed settings (null removes one). */
+  box?: Json;
+  removed?: true;
+}
+
 /** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
 interface StoredService {
   name: string;
@@ -632,6 +652,11 @@ const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
 const KIND_KEEP_INDEX = 'weave.keep.index';
 /** Every space of ours (but direct chats) and its keys, in our own space, for our always-on nodes (stage 18). */
 const KIND_NODE_INDEX = 'weave.node.index';
+/**
+ * Sealed to yourself, by one of your computers: a service for one of your always-on nodes. Its configuration in the
+ * clear for your devices; its key and settings in a box only that node opens. Later ones change or remove it.
+ */
+const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
@@ -2972,6 +2997,8 @@ export class WeaveNode implements Backend {
       this.#writeNodeIndex();
     }
     this.#recoverSpaces();
+    // On an always-on node: services handed over by its person's computers.
+    changed += this.#takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -7316,14 +7343,18 @@ export class WeaveNode implements Backend {
     this.replica.write(this.#serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), contract: stored.contract as unknown as Json } });
   }
 
-  async addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[] }): Promise<ServiceInfo> {
-    if (this.#isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers (running it on the always-on node comes later)");
+  async addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[]; node?: string }): Promise<ServiceInfo> {
+    if (this.#isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one"); 
     const name = serviceName(input.name);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.#agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     const contract = parseContract(input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
+    if (input.node) {
+      if (this.#handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
+      return this.#addNodeService(name, contract, input, command);
+    }
     const stored: StoredService = {
       name,
       description: input.description?.trim().slice(0, 1000) ?? '',
@@ -7347,10 +7378,172 @@ export class WeaveNode implements Backend {
   }
 
   async services(): Promise<ServiceInfo[]> {
-    return this.#storedServices().map((s) => this.#serviceInfo(s));
+    const here = this.#storedServices().map((s) => this.#serviceInfo(s));
+    // On a computer: also those it handed to always-on nodes (the node lists them as its own).
+    const away = this.#isLinkedNode ? [] : [...this.#handedOver().values()].map((h) => this.#handoverInfo(h));
+    return [...here, ...away];
+  }
+
+  // Services on always-on nodes: made on a computer, handed over sealed, run there.
+
+  /** Your always-on nodes' keys, by name or key. */
+  #nodeKey(ref: string): { did: Did; name: string } {
+    const nodes = this.replica.authority.grantsOf(this.identity.author).filter((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    const found = nodes.find((g) => g.subject === ref || g.name === ref || g.name === `${NODE_PREFIX}${ref}`);
+    if (!found) throw new Error(`you have no always-on node "${ref}"${nodes.length ? ` (yours: ${nodes.map((g) => g.name!.slice(NODE_PREFIX.length)).join(', ')})` : ''}`);
+    return { did: found.subject, name: found.name!.slice(NODE_PREFIX.length) };
+  }
+
+  /** The latest handover of each service still on a node (removed ones left out), as your devices read them. */
+  #handedOver(): Map<string, Handover> {
+    const latest = new Map<string, Handover>();
+    for (const d of this.#decodeAll().filter((x) => x.private && x.inner.kind === KIND_SERVICE_HANDOVER).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+      const body = d.inner.body as unknown as Handover;
+      if (typeof body?.service !== 'string') continue;
+      if (body.removed) latest.delete(body.service);
+      else latest.set(body.service, { ...body, id: d.id });
+    }
+    return latest;
+  }
+
+  #handoverInfo(h: Handover): ServiceInfo {
+    return {
+      name: h.service,
+      did: h.did,
+      description: h.description ?? '',
+      ...(h.icon ? { icon: h.icon } : {}),
+      contract: h.contract,
+      spaces: h.spaces.flatMap((id) => {
+        const space = this.#spaces.get(id);
+        return space ? [{ id, kind: space.kind, name: this.#spaceName(space) }] : [];
+      }),
+      ...(h.command ? { command: h.command } : {}),
+      settings: h.settingNames ?? [],
+      enabled: h.enabled !== false,
+      running: false,
+      node: { did: h.node, name: this.#nodeKey(h.node).name },
+    };
+  }
+
+  async #addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string }, command?: string[]): Promise<ServiceInfo> {
+    const node = this.#nodeKey(input.node!);
+    const key = createSubKey(this.identity.author);
+    const permissions = servicePermissions(contract);
+    this.replica.write(this.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
+    const description = input.description?.trim().slice(0, 1000) ?? '';
+    const icon = input.icon?.startsWith('wblob:') ? input.icon : undefined;
+    // The profile, signed by the service's own key, before the key leaves this computer for good.
+    this.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), contract: contract as unknown as Json } });
+    const handover: Omit<Handover, 'id'> = {
+      service: name,
+      node: node.did,
+      did: key.did,
+      contract,
+      description,
+      ...(icon ? { icon } : {}),
+      spaces: this.#serviceSpaces(input.spaces ?? []),
+      ...(command?.length ? { command } : {}),
+      enabled: true,
+      settingNames: [],
+      box: boxTo(node.did, { secretKey: b64u.encode(key.keys.secretKey), publicKey: b64u.encode(key.keys.publicKey), settings: {} }) as unknown as Json,
+    };
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: handover as unknown as Json }));
+    return this.#handoverInfo({ ...handover, id: '' });
+  }
+
+  /** A change to a service on a node: a new handover; settings travel as changes, boxed for that node only. */
+  #changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true }): void {
+    const { id: _id, box: _box, command: _command, ...rest } = before;
+    const command = change.command === null ? undefined : (change.command ?? before.command);
+    const names = new Set(before.settingNames ?? []);
+    for (const [key, value] of Object.entries(change.settings ?? {})) {
+      if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
+      if (value === null) names.delete(key);
+      else names.add(key);
+    }
+    const after: Omit<Handover, 'id'> = {
+      ...rest,
+      ...(change.spaces ? { spaces: this.#serviceSpaces(change.spaces) } : {}),
+      ...(command?.length ? { command } : {}),
+      ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
+      ...(change.description !== undefined ? { description: change.description.trim().slice(0, 1000) } : {}),
+      settingNames: [...names].sort(),
+      ...(change.settings && Object.keys(change.settings).length ? { box: boxTo(before.node, { settings: change.settings }) as unknown as Json } : {}),
+      ...(change.removed ? { removed: true as const } : {}),
+    };
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: after as unknown as Json }));
+  }
+
+  /** On an always-on node: take over the services handed to it, change them, or let them go. Each handover once. */
+  #takeHandovers(): number {
+    if (!this.#isLinkedNode) return 0;
+    const appliedFile = joinPath(this.home.dir, 'handovers.json');
+    const applied = new Set<string>(existsSync(appliedFile) ? (JSON.parse(readFileSync(appliedFile, 'utf8')) as string[]) : []);
+    const mine = this.#decodeAll()
+      .filter((d) => d.private && d.inner.kind === KIND_SERVICE_HANDOVER && !applied.has(d.id) && (d.inner.body as { node?: unknown } | null)?.node === this.identity.did)
+      .sort((a, b) => a.event.time.localeCompare(b.event.time));
+    let changed = 0;
+    for (const d of mine) {
+      applied.add(d.id);
+      const h = d.inner.body as unknown as Handover;
+      const opened = h.box ? this.#openHandoverBox(h.box) : undefined;
+      const list = this.#storedServices();
+      const before = list.find((s) => s.name === h.service);
+      if (h.removed) {
+        if (!before) continue;
+        this.#stopService(h.service);
+        this.#agents = this.#agents.filter((a) => a.name !== h.service);
+        rmSync(joinPath(this.home.agents, `${h.service}.json`), { force: true });
+        this.#saveServices(list.filter((s) => s.name !== h.service));
+        changed++;
+        continue;
+      }
+      if (!before) {
+        // New here: its key comes in the box.
+        if (typeof opened?.secretKey !== 'string' || typeof opened.publicKey !== 'string') continue;
+        const key: AgentKey = { author: this.identity.author, did: h.did, keys: { secretKey: b64u.decode(opened.secretKey), publicKey: b64u.decode(opened.publicKey) }, name: h.service, permissions: servicePermissions(h.contract) };
+        saveAgent(this.home, key);
+        this.#agents = [...this.#agents.filter((a) => a.name !== h.service), key];
+      }
+      const settings = { ...(before?.settings ?? {}) };
+      for (const [name, value] of Object.entries((opened?.settings ?? {}) as Record<string, string | null>)) {
+        if (value === null) delete settings[name];
+        else settings[name] = String(value);
+      }
+      const stored: StoredService = {
+        name: h.service,
+        description: h.description ?? '',
+        ...(h.icon ? { icon: h.icon } : {}),
+        contract: h.contract,
+        spaces: h.spaces,
+        ...(h.command?.length ? { command: h.command } : {}),
+        settings,
+        token: before?.token ?? b64u.encode(randomBytes(24)),
+        enabled: h.enabled !== false,
+      };
+      this.#saveServices([...list.filter((s) => s.name !== h.service), stored]);
+      this.#stopService(h.service);
+      this.#startService(stored);
+      changed++;
+    }
+    if (mine.length) writeFileSync(appliedFile, JSON.stringify([...applied]));
+    return changed;
+  }
+
+  #openHandoverBox(box: Json): { secretKey?: unknown; publicKey?: unknown; settings?: unknown } | undefined {
+    try {
+      return openBox(this.identity.keys.secretKey, this.identity.keys.publicKey, box as unknown as Box) as { secretKey?: unknown; publicKey?: unknown; settings?: unknown };
+    } catch {
+      return undefined;
+    }
   }
 
   async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string }): Promise<ServiceInfo> {
+    const away = this.#isLinkedNode ? undefined : this.#handedOver().get(input.name);
+    if (away && !this.#storedServices().some((s) => s.name === input.name)) {
+      this.#changeNodeService(away, input);
+      return this.#handoverInfo(this.#handedOver().get(input.name)!);
+    }
     const before = this.#storedService(input.name);
     const settings = { ...before.settings };
     for (const [key, value] of Object.entries(input.settings ?? {})) {
@@ -7377,6 +7570,13 @@ export class WeaveNode implements Backend {
   }
 
   async removeService(name: string): Promise<void> {
+    const away = this.#isLinkedNode ? undefined : this.#handedOver().get(name);
+    if (away && !this.#storedServices().some((s) => s.name === name)) {
+      // Its key was issued here: revoked here, and the node lets it go.
+      this.replica.write(this.identity, revocation(away.did, this.replica.number(away.did)));
+      this.#changeNodeService(away, { removed: true });
+      return;
+    }
     const stored = this.#storedService(name);
     this.#stopService(name);
     const key = this.#serviceKey(name);
