@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -223,6 +223,60 @@ export interface RepoInfo {
   /** For your own: when it was last brought in step, and what went wrong if it didn't. */
   synced?: string;
   problem?: string;
+}
+
+/** A service this node runs (yours): code under a key of its own, with exactly its contract's rights. */
+export interface ServiceInfo {
+  name: string;
+  /** Its own key: what it signs shows as "you · name". */
+  did: Did;
+  description: string;
+  icon?: string;
+  contract: ServiceContract;
+  /** The spaces it was added to: the only ones it reads and writes in. */
+  spaces: SpaceRef[];
+  /** What runs it on this node, if anything does (else something else uses its token). */
+  command?: string[];
+  /** The names of its settings (the values stay on this node). */
+  settings: string[];
+  enabled: boolean;
+  running: boolean;
+}
+
+/** A service someone runs, as anyone can see it: its public profile. */
+export interface ServiceProfileInfo {
+  did: Did;
+  person: Actor;
+  name: string;
+  description: string;
+  icon?: string;
+  contract: ServiceContract;
+  time: string;
+}
+
+/**
+ * What a running service may do, through its own token on the node that runs it: who it is, what it reads (only
+ * what its contract says, only in its spaces), and signing as itself, only the kinds it may write.
+ */
+export interface ServiceGate {
+  me(): { name: string; did: Did; person: Did; contract: ServiceContract; spaces: SpaceRef[] };
+  /** What it may read, after `since` (an event time), oldest first. */
+  events(since?: string): FeedItem[];
+  watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void>;
+  publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
+  /** Answer a request addressed to it, in the request's space. */
+  answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
+}
+
+/** A request to a service in a space, and what the service answered. */
+export interface ServiceRequestInfo {
+  id: string;
+  to: Actor;
+  from: Actor;
+  text: string;
+  data?: Json;
+  time: string;
+  results: Array<{ id: string; text: string; data?: Json; error?: string; time: string }>;
 }
 
 export interface SpaceRepos {
@@ -1497,6 +1551,21 @@ export interface Backend {
   setGithubApp(app: string | null): Promise<GitHubInfo>;
   /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
   githubRepos(): Promise<string[]>;
+  // services: code you run under keys of their own, with exactly the rights their contracts declare
+  /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
+  addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[] }): Promise<ServiceInfo>;
+  /** The services this node runs. */
+  services(): Promise<ServiceInfo[]>;
+  /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
+  /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
+  removeService(name: string): Promise<void>;
+  /** Services people run, from their public profiles. */
+  serviceProfiles(): Promise<ServiceProfileInfo[]>;
+  /** Ask a service something in a space: a request it reads (it must be in that space). */
+  askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo>;
+  /** Requests to services in a space, with their answers (optionally for one service). */
+  serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
   /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
   githubRepoOwner(repo: string): Promise<'organization' | 'personal'>;
   /** A space's repositories, and whether you gave it your GitHub account. */
@@ -1854,7 +1923,8 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo', 'shareGithub', 'showGithubOnHub',
+  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
+  'addService', 'services', 'setService', 'removeService', 'serviceProfiles', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

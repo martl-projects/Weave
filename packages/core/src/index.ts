@@ -402,3 +402,19 @@ export {
 } from './github.ts';
 export { KIND_SESSION, MAX_STACK, pushOnto, reorder, sessionKey, sessionsOf, takeOff, type SessionRecord, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
+export {
+  KIND_SERVICE_PROFILE,
+  KIND_SERVICE_REQUEST,
+  KIND_SERVICE_RESULT,
+  SERVICE_PREFIX,
+  parseContract,
+  profilesOf,
+  requestsOf,
+  serviceName,
+  servicePermissions,
+  serviceReads,
+  type ServiceContract,
+  type ServiceProfile,
+  type ServiceReads,
+  type ServiceRequest,
+} from './services.ts';

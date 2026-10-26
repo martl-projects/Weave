@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess } from '@weave/core';
+import { formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -34,6 +34,8 @@ import {
   type GitHubInfo,
   type GumroadInfo,
   type SpaceRepos,
+  type SpaceRef,
+  type ServiceInfo,
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
@@ -192,6 +194,14 @@ github — repositories that follow a group, tier or project (members who give t
   github repos               repositories you can link (the app is installed on them and you're admin)
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  service add <name>         run code under a key of its own, with exactly these rights:
+                             --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
+                             [--spaces <space,…>] [--run "<command>"] [--text <description>]
+  service list               the services this computer runs; service profiles: everyone's you know
+  service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
+  service start|stop <name>  run it or not
+  service remove <name>      stop it for good (its key is revoked)
+  service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
                              a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
@@ -381,6 +391,13 @@ const { values, positionals } = parseArgs({
     title: { type: 'string' },
     with: { type: 'string' },
     asset: { type: 'string', multiple: true },
+    reads: { type: 'string' },
+    writes: { type: 'string' },
+    'offers-room': { type: 'boolean', default: false },
+    'contract-version': { type: 'string' },
+    run: { type: 'string' },
+    spaces: { type: 'string' },
+    setting: { type: 'string', multiple: true },
     repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
@@ -494,6 +511,9 @@ function needSpace(): string {
 }
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
+const contractLine = (c: ServiceContract) =>
+  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.room ? '; offers a room' : ''}; contract ${c.version}`;
+
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
   const count = s.limit ? `${s.given} of ${s.limit}` : `${s.given} given`;
@@ -1345,6 +1365,56 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
       }
       throw new Error('usage: weave github [connect|disconnect|app <link>|default|repos|hub [off]|share <space>|unshare <space>]');
+    }
+
+    case 'service': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
+      const line = (s: ServiceInfo) =>
+        [`${s.name}  ${s.enabled ? (s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`, `  ${s.did}`, ...(s.description ? [`  ${s.description}`] : []), `  ${contractLine(s.contract)}`, ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []), ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : [])].join('\n');
+      const words = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+      const list = (text?: string) => text?.split(',').map((x) => x.trim()).filter(Boolean);
+      if (sub === 'add' && ref) {
+        const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
+        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-room'] ? { room: true } : {}), version: values['contract-version'] ?? '1.0' };
+        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}) });
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);
+      }
+      if (sub === 'list') {
+        const all = await b.services();
+        return out(all, () => all.map(line).join('\n\n') || '(no services on this computer)');
+      }
+      if (sub === 'profiles') {
+        const all = await b.serviceProfiles();
+        return out(all, () => all.map((p) => `${p.person.name ?? p.person.did} · ${p.name}  ${p.description}\n  ${p.did}\n  ${contractLine(p.contract)}`).join('\n\n') || '(no services known)');
+      }
+      if (sub === 'set' && ref) {
+        const settings = Object.fromEntries((values.setting ?? []).map((s) => {
+          const at = s.indexOf('=');
+          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it)');
+          return [s.slice(0, at), s.slice(at + 1) || null];
+        }));
+        const s = await b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(Object.keys(settings).length ? { settings } : {}), ...(values.text !== undefined ? { description: values.text } : {}) });
+        return out(s, () => line(s));
+      }
+      if ((sub === 'start' || sub === 'stop') && ref) {
+        const s = await b.setService({ name: ref, enabled: sub === 'start' });
+        return out(s, () => line(s));
+      }
+      if (sub === 'remove' && ref) {
+        await b.removeService(ref);
+        return out({ removed: ref }, () => `removed ${ref}: its key is revoked, nothing it signs counts any more`);
+      }
+      if (sub === 'ask' && ref && args.length > 2) {
+        const r = await b.askService({ space: needSpace(), service: ref, text: args.slice(2).join(' '), as: values.as });
+        return out(r, () => `asked ${r.to.name ?? r.to.did}: ${r.text}\n  ${r.id}`);
+      }
+      if (sub === 'requests') {
+        const all = await b.serviceRequests({ space: needSpace(), ...(ref ? { service: ref } : {}) });
+        return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
+      }
+      throw new Error('usage: weave service add|list|profiles|set|start|stop|remove|ask|requests — see "weave --help"');
     }
 
     case 'repo': {

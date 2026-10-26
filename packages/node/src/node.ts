@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   accessOf,
   accountsOf,
@@ -377,6 +377,17 @@ import {
   parseVersion,
   TEXT_LIMITS,
   tooLong,
+  KIND_SERVICE_PROFILE,
+  KIND_SERVICE_REQUEST,
+  KIND_SERVICE_RESULT,
+  SERVICE_PREFIX,
+  parseContract,
+  profilesOf,
+  requestsOf,
+  serviceName,
+  servicePermissions,
+  serviceReads,
+  type ServiceContract,
 } from '@weave/core';
 import { roomKeyPair, SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
@@ -411,6 +422,10 @@ import {
   type SpaceRepos,
   type MembershipRequestInfo,
   type BadgeInfo,
+  type ServiceGate,
+  type ServiceInfo,
+  type ServiceProfileInfo,
+  type ServiceRequestInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
   type PaymentRequestInfo,
@@ -486,8 +501,8 @@ import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type 
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
-import { createHash, createHmac, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, createHmac, createPublicKey, createVerify, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
+import { cpSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms, portOpen } from './live.ts';
@@ -567,6 +582,20 @@ interface GitHubLogin {
 }
 
 /** An event as this node can read it, before names are resolved. */
+/** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
+interface StoredService {
+  name: string;
+  description: string;
+  icon?: string;
+  contract: ServiceContract;
+  /** Space ids it was added to. */
+  spaces: string[];
+  command?: string[];
+  settings: Record<string, string>;
+  token: string;
+  enabled: boolean;
+}
+
 interface Decoded {
   event: WeaveRecord;
   /** Restated in a carry, not decoded from the event itself (see #expandCarry). */
@@ -896,7 +925,7 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#gumroadFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json')]) readSecretJson(home, file);
+    for (const file of [this.#githubFile, this.#gumroadFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -1208,6 +1237,7 @@ export class WeaveNode implements Backend {
 
   /** Go offline and release the home for other processes. */
   async close(): Promise<void> {
+    this.#stopServiceProcesses();
     this.#follower?.stop();
     this.#appLog?.stop();
     // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
@@ -4385,7 +4415,8 @@ export class WeaveNode implements Backend {
   #agentName(signer: Did, author: Did): string | undefined {
     if (signer === author) return undefined;
     const grant = this.replica.authority.grant(signer);
-    return grant?.role === 'agent' ? grant.name : undefined;
+    // A service shows by its own name ("martl · files"), like any agent.
+    return grant?.role === 'agent' ? grant.name?.replace(SERVICE_PREFIX, '') : undefined;
   }
 
   // ---------------------------------------------------------------- memberships
@@ -7224,6 +7255,314 @@ export class WeaveNode implements Backend {
     if (this.config.standby) return;
     if (this.config.scim) await this.#startScim().catch((error: Error) => console.error(`weave: SCIM couldn't start: ${error.message}`));
     if (this.config.console) await this.#startConsole().catch((error: Error) => console.error(`weave: the admin console couldn't start: ${error.message}`));
+  }
+
+  // ---------------------------------------------------------------- services: code you run under keys of their own
+
+  get #servicesFile(): string {
+    return joinPath(this.home.dir, 'services.json');
+  }
+
+  /** The services this node runs, as kept (sealed, with their settings and tokens). */
+  #storedServices(): StoredService[] {
+    return readSecretJson<StoredService[]>(this.home, this.#servicesFile) ?? [];
+  }
+
+  #saveServices(list: StoredService[]): void {
+    writeSecretJson(this.home, this.#servicesFile, list);
+  }
+
+  #storedService(name: string): StoredService {
+    const found = this.#storedServices().find((s) => s.name === name);
+    if (!found) throw new Error(`this node runs no service "${name}"`);
+    return found;
+  }
+
+  #serviceKey(name: string): AgentKey {
+    const key = this.#agents.find((a) => a.name === name);
+    if (!key) throw new Error(`the key of service "${name}" is missing on this node`);
+    return key;
+  }
+
+  /** The spaces a service may be added to: groups, projects and communities you're in (never direct chats). */
+  #serviceSpaces(refs: string[]): string[] {
+    return [...new Set(refs.map((ref) => {
+      const space = this.#space(ref);
+      if (space.kind === 'direct') throw new Error('services work in groups, projects and communities, not in direct chats');
+      return space.id;
+    }))];
+  }
+
+  #serviceInfo(stored: StoredService): ServiceInfo {
+    return {
+      name: stored.name,
+      did: this.#serviceKey(stored.name).did,
+      description: stored.description,
+      ...(stored.icon ? { icon: stored.icon } : {}),
+      contract: stored.contract,
+      spaces: stored.spaces.flatMap((id) => {
+        const space = this.#spaces.get(id);
+        return space ? [{ id, kind: space.kind, name: this.#spaceName(space) }] : [];
+      }),
+      ...(stored.command ? { command: stored.command } : {}),
+      settings: Object.keys(stored.settings).sort(),
+      enabled: stored.enabled,
+      running: this.#serviceProcs.has(stored.name),
+    };
+  }
+
+  /** The profile everyone sees: signed by the service's own key, public. */
+  #publishServiceProfile(stored: StoredService): void {
+    this.replica.write(this.#serviceKey(stored.name), { kind: KIND_SERVICE_PROFILE, body: { name: stored.name, description: stored.description, ...(stored.icon ? { icon: stored.icon } : {}), contract: stored.contract as unknown as Json } });
+  }
+
+  async addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[] }): Promise<ServiceInfo> {
+    if (this.#isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers (running it on the always-on node comes later)");
+    const name = serviceName(input.name);
+    if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
+    if (this.#agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
+    const contract = parseContract(input.contract);
+    if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
+    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
+    const stored: StoredService = {
+      name,
+      description: input.description?.trim().slice(0, 1000) ?? '',
+      ...(input.icon?.startsWith('wblob:') ? { icon: input.icon } : {}),
+      contract,
+      spaces: this.#serviceSpaces(input.spaces ?? []),
+      ...(command?.length ? { command } : {}),
+      settings: {},
+      token: b64u.encode(randomBytes(24)),
+      enabled: true,
+    };
+    // Its own key, with exactly its contract's rights; named so that everyone knows it's a service.
+    const permissions = servicePermissions(contract);
+    const key = createAndSaveAgent(this.home, this.identity.author, name, permissions);
+    this.replica.write(this.identity, delegation(key.did, 'agent', permissions, `${SERVICE_PREFIX}${name}`));
+    this.#agents.push(key);
+    this.#saveServices([...this.#storedServices(), stored]);
+    this.#publishServiceProfile(stored);
+    this.#startService(stored);
+    return this.#serviceInfo(stored);
+  }
+
+  async services(): Promise<ServiceInfo[]> {
+    return this.#storedServices().map((s) => this.#serviceInfo(s));
+  }
+
+  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string }): Promise<ServiceInfo> {
+    const before = this.#storedService(input.name);
+    const settings = { ...before.settings };
+    for (const [key, value] of Object.entries(input.settings ?? {})) {
+      if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
+      if (value === null) delete settings[key];
+      else settings[key] = String(value);
+    }
+    const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
+    const { command: _command, ...rest } = before;
+    const after: StoredService = {
+      ...rest,
+      ...(input.spaces ? { spaces: this.#serviceSpaces(input.spaces) } : {}),
+      ...(command?.length ? { command } : {}),
+      settings,
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+      ...(input.description !== undefined ? { description: input.description.trim().slice(0, 1000) } : {}),
+    };
+    this.#saveServices(this.#storedServices().map((s) => (s.name === after.name ? after : s)));
+    if (after.description !== before.description) this.#publishServiceProfile(after);
+    // Settings and commands take effect on a fresh start.
+    this.#stopService(after.name);
+    this.#startService(after);
+    return this.#serviceInfo(after);
+  }
+
+  async removeService(name: string): Promise<void> {
+    const stored = this.#storedService(name);
+    this.#stopService(name);
+    const key = this.#serviceKey(name);
+    // Everything it signs from now on counts nowhere.
+    this.replica.write(this.identity, revocation(key.did, this.replica.number(key.did)));
+    this.#agents = this.#agents.filter((a) => a.name !== name);
+    rmSync(joinPath(this.home.agents, `${name}.json`), { force: true });
+    this.#saveServices(this.#storedServices().filter((s) => s.name !== stored.name));
+  }
+
+  /** Whether a key is a service of that person: an agent key they named service:… */
+  #isServiceKey(signer: string, author: Did): boolean {
+    const grant = this.replica.authority.grant(signer as Did);
+    return !!grant && grant.role === 'agent' && grant.author === author && !!grant.name?.startsWith(SERVICE_PREFIX) && grant.revokedAfter === undefined;
+  }
+
+  async serviceProfiles(): Promise<ServiceProfileInfo[]> {
+    const events = this.replica.events((e) => e.kind === KIND_SERVICE_PROFILE);
+    return profilesOf(events, (signer, author) => this.#isServiceKey(signer, author)).map((p) => ({
+      did: p.did,
+      person: this.#actor(p.person, p.person),
+      name: p.name,
+      description: p.description,
+      ...(p.icon ? { icon: p.icon } : {}),
+      contract: p.contract,
+      time: p.time,
+    }));
+  }
+
+  /** A service by its key, or by "person/name" or its name when that's unique among the profiles known here. */
+  async #serviceDid(ref: string): Promise<Did> {
+    const profiles = await this.serviceProfiles();
+    const byKey = profiles.find((p) => p.did === ref);
+    if (byKey) return byKey.did;
+    const [person, name] = ref.includes('/') ? ref.split('/', 2) : [undefined, ref];
+    const matches = profiles.filter((p) => p.name === name && (!person || p.person.name === person || p.person.did === person));
+    if (matches.length === 1) return matches[0].did;
+    throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
+  }
+
+  async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
+    const to = await this.#serviceDid(input.service);
+    const text = input.text?.trim() ?? '';
+    if (!text && input.data === undefined) throw new Error('ask with some text or data');
+    const item = await this.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
+    return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
+  }
+
+  async serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]> {
+    const space = this.#space(input.space);
+    const entries = this.#entries(space);
+    const to = input.service ? await this.#serviceDid(input.service) : undefined;
+    const results = entries.filter((e) => e.kind === KIND_SERVICE_RESULT);
+    return requestsOf(entries, to).map((r) => ({
+      id: r.id,
+      to: this.#actor(this.replica.authority.grant(r.to)?.author ?? r.to, r.to),
+      from: this.#actor(r.from, r.from),
+      text: r.text,
+      ...(r.data !== undefined ? { data: r.data as Json } : {}),
+      time: r.time,
+      // Only the service it was for answers it.
+      results: results
+        .filter((e) => (e.body as { request?: unknown } | null)?.request === r.id && e.event.signer === r.to)
+        .map((e) => {
+          const body = (e.body ?? {}) as Record<string, Json>;
+          return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
+        }),
+    }));
+  }
+
+  /**
+   * What a service sees: in the spaces it was added to, requests addressed to it, and what its contract reads.
+   * Never private data, never other spaces.
+   */
+  #serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
+    if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
+    if (d.inner.kind === KIND_SERVICE_REQUEST) return (d.inner.body as { to?: unknown } | null)?.to === did;
+    return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** The gate a service's token opens on the local API, or undefined for any other token. */
+  serviceGate(token: string): ServiceGate | undefined {
+    const given = Buffer.from(token);
+    const stored = this.#storedServices().find((s) => {
+      const expected = Buffer.from(s.token);
+      return expected.length === given.length && timingSafeEqual(expected, given);
+    });
+    if (!stored || !stored.enabled) return undefined;
+    const name = stored.name;
+    const key = this.#serviceKey(name);
+    const current = () => this.#storedService(name);
+    const inSpace = (ref: string) => {
+      const space = this.#space(ref);
+      if (!current().spaces.includes(space.id)) throw new Error(`service "${name}" wasn't added to ${space.name}`);
+      return space;
+    };
+    return {
+      me: () => ({ name, did: key.did, person: this.identity.author, contract: current().contract, spaces: this.#serviceInfo(current()).spaces }),
+      events: (since) =>
+        this.#decodeAll()
+          .filter((d) => (!since || d.event.time > since) && this.#serviceSees(current(), key.did, d))
+          .sort((a, b) => a.event.time.localeCompare(b.event.time))
+          .map((d) => this.#toItem(d)),
+      watch: async (onItem, signal) => {
+        const unsubscribe = this.replica.onAppend((event) => {
+          const decoded = this.#decode(event);
+          if (decoded && this.#serviceSees(current(), key.did, decoded)) onItem(this.#toItem(decoded));
+        });
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        unsubscribe();
+      },
+      publish: async ({ space, kind, body }) => {
+        const target = inSpace(space);
+        if (kind === KIND_SERVICE_REQUEST) throw new Error('a service answers requests; it doesn\'t send them');
+        return this.publish({ kind, body: body ?? null, space: target.id, as: name });
+      },
+      answer: async ({ request, text, data, error }) => {
+        const found = this.#find(request, [KIND_SERVICE_REQUEST]);
+        if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
+        inSpace(found.space.id);
+        return this.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
+      },
+    };
+  }
+
+  // Running services: one process each, started with the address of the local API and its own token.
+
+  #serviceProcs = new Map<string, { child: ChildProcess; stopping: boolean }>();
+  #serviceRestarts = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>();
+  #serviceApi?: string;
+
+  /** Start the enabled services, now that the local API is up (the daemon calls this). */
+  runServices(api: { port: number }): void {
+    this.#serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
+    for (const stored of this.#storedServices()) this.#startService(stored);
+  }
+
+  #startService(stored: StoredService): void {
+    if (!this.#serviceApi || !stored.enabled || !stored.command?.length || this.#serviceProcs.has(stored.name)) return;
+    const dir = joinPath(this.home.dir, 'services', stored.name);
+    mkdirSync(dir, { recursive: true });
+    const log = createWriteStream(joinPath(dir, 'service.log'), { flags: 'a' });
+    const [command, ...args] = stored.command;
+    const child = spawn(command, args, {
+      cwd: dir,
+      // Its settings and the way in; nothing of the daemon's own environment it doesn't need.
+      env: { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '', HOME: dir, ...stored.settings, WEAVE_API: this.#serviceApi, WEAVE_SERVICE_TOKEN: stored.token, WEAVE_SERVICE: stored.name },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    child.stdout?.pipe(log);
+    child.stderr?.pipe(log);
+    const entry = { child, stopping: false };
+    this.#serviceProcs.set(stored.name, entry);
+    child.on('error', (error) => log.write(`weave: couldn't start ${stored.name}: ${error.message}\n`));
+    child.on('exit', (code) => {
+      log.write(`weave: ${stored.name} exited (${code})\n`);
+      log.end();
+      if (this.#serviceProcs.get(stored.name) === entry) this.#serviceProcs.delete(stored.name);
+      if (entry.stopping) return;
+      // Crashed: start again, waiting longer each time.
+      const restarts = this.#serviceRestarts.get(stored.name) ?? { count: 0 };
+      const wait = [1000, 5000, 30_000, 60_000][Math.min(restarts.count, 3)];
+      restarts.count++;
+      restarts.timer = setTimeout(() => {
+        const now = this.#storedServices().find((s) => s.name === stored.name);
+        if (now) this.#startService(now);
+      }, wait);
+      restarts.timer.unref?.();
+      this.#serviceRestarts.set(stored.name, restarts);
+    });
+  }
+
+  #stopService(name: string): void {
+    const restarts = this.#serviceRestarts.get(name);
+    if (restarts?.timer) clearTimeout(restarts.timer);
+    this.#serviceRestarts.delete(name);
+    const entry = this.#serviceProcs.get(name);
+    if (!entry) return;
+    entry.stopping = true;
+    entry.child.kill();
+    this.#serviceProcs.delete(name);
+  }
+
+  #stopServiceProcesses(): void {
+    for (const name of [...this.#serviceProcs.keys(), ...this.#serviceRestarts.keys()]) this.#stopService(name);
   }
 
   // ---------------------------------------------------------------- the admin console (stage 12)
