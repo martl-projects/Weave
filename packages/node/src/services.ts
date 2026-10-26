@@ -1,4 +1,4 @@
-import { b64u, takesRequests, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { b64u, takesRequests, type Builtin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
 import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
@@ -7,7 +7,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { releaseApproval } from './runtime.ts';
-import { type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -27,6 +27,14 @@ import type { Website } from './website.ts';
 export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
 export const NODE_PREFIX = 'node:';
+
+/** The services Weave ships: what each does, as its contract and in words. */
+const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string }> = {
+  // Reads nothing and writes its websites.
+  website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
+  // Reads what's asked of it and answers: where to download a release's files.
+  github: { contract: { reads: 'addressed', writes: [], offers: [PROTOCOL_ARTIFACT_FETCH], version: '1.0' }, description: 'Releases from GitHub: hands the project’s release files to its participants, with the GitHub sign-in of the node it runs on' },
+};
 
 export class Services {
   readonly h: ServicesHost;
@@ -103,7 +111,7 @@ export class Services {
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
       ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin, ...(stored.builtin === 'website' ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
@@ -223,13 +231,13 @@ export class Services {
 
   /**
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
-   * (`builtin: 'website'`): the node runs it itself, and it gets its contract from Weave.
+   * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'website'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    const builtin = input.builtin === 'website' ? ('website' as const) : undefined;
-    if (builtin && command?.length) throw new Error('the website service runs in Weave: its websites say what they run');
+    const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
+    if (builtin && command?.length) throw new Error(`the ${builtin} service runs in Weave: it runs no command`);
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
     if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
@@ -246,10 +254,10 @@ export class Services {
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
-    const contract = parseContract(builtin ? { reads: 'nothing', writes: [], website: true, version: '1.0' } : manifest ? this.artifactContract(manifest) : input.contract);
+    const contract = parseContract(builtin ? BUILTIN[builtin].contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Websites: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -278,7 +286,8 @@ export class Services {
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
-    if (builtin) this.serveRunning();
+    if (builtin === 'website') this.serveRunning();
+    if (builtin === 'github') this.provide();
     return this.serviceInfo(this.storedService(name));
   }
 
@@ -332,7 +341,7 @@ export class Services {
     };
   }
 
-  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'website'; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
+  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: Builtin; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
     const node = this.nodeKey(input.node!);
     const key = createSubKey(this.h.identity.author);
     const permissions = servicePermissions(contract);
@@ -701,11 +710,97 @@ export class Services {
     };
   }
 
+  // Providers: services that hand out artifacts (artifact.fetch). Weave's GitHub service is one: it runs in the
+  // node and answers with GitHub's download address for a release file, so participants without access to the
+  // repository get it too. Whoever fetches checks the file against what the release's maintainer signed.
+
+  /** How long to wait for a provider's answer (it has to reach the node the provider runs on, and back). */
+  locateWait = 60_000;
+
+  /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
+  async locateArtifact(a: StoredArtifact): Promise<Located | undefined> {
+    if (!this.h.spaces.has(a.project)) return undefined;
+    const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH));
+    if (!provider) return undefined;
+    const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
+    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag} for ${platformKey()}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform: platformKey() } });
+    const until = Date.now() + this.locateWait;
+    for (;;) {
+      const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];
+      if (result?.error) throw new Error(`${by}: ${result.error}`);
+      if (result) {
+        const url = (result.data as { url?: unknown } | undefined)?.url;
+        if (typeof url === 'string' && url.startsWith('https://')) return { url, by };
+        throw new Error(`${by} answered without a download address`);
+      }
+      if (Date.now() > until) throw new Error(`${by} didn't answer in time: is the node it runs on online?`);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+
+  /** Requests the node is answering now, so each is answered once. */
+  #answering = new Set<string>();
+
+  /** Weave's services that answer in the node (the GitHub service): each request addressed to them, once. */
+  provide(): void {
+    for (const stored of this.storedServices().filter((s) => s.builtin === 'github' && s.enabled)) {
+      const did = this.serviceKey(stored.name).did;
+      for (const id of stored.spaces) {
+        const space = this.h.spaces.get(id);
+        if (!space) continue;
+        const entries = this.h.entries(space);
+        const answered = new Set(entries.filter((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did).map((e) => (e.body as { request?: unknown } | null)?.request));
+        for (const r of requestsOf(entries, did)) {
+          if (answered.has(r.id) || this.#answering.has(r.id)) continue;
+          this.#answering.add(r.id);
+          void this.answerFetch(stored, space, r).finally(() => this.#answering.delete(r.id));
+        }
+      }
+    }
+  }
+
+  /** The GitHub service answers artifact.fetch: the release must be its space's, and the file its maintainer fingerprinted. */
+  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; data?: unknown }): Promise<void> {
+    const gate = this.serviceGate(stored.token);
+    if (!gate) return;
+    const data = (r.data && typeof r.data === 'object' ? r.data : {}) as { protocol?: unknown; artifact?: unknown; platform?: unknown };
+    try {
+      if (data.protocol !== PROTOCOL_ARTIFACT_FETCH) throw new Error(`${stored.name} answers ${PROTOCOL_ARTIFACT_FETCH} only`);
+      const artifact = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === data.artifact);
+      if (!artifact) throw new Error(`${this.h.spaceName(space)} has no such release`);
+      const asset = typeof data.platform === 'string' ? artifact.manifest.install?.assets?.[data.platform] : undefined;
+      if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
+      const repo = artifact.manifest.install?.github;
+      if (!repo) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't released on GitHub`);
+      const client = this.h.github();
+      const found = (await client.release(repo, artifact.tag)).assets.find((x) => x.name === asset.file);
+      if (!found) throw new Error(`the release ${artifact.tag} on GitHub has no file ${asset.file}`);
+      const url = await client.downloadUrl(repo, found.id);
+      await gate.answer({ request: r.id, data: { url, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
+    } catch (error) {
+      await gate.answer({ request: r.id, error: (error as Error).message }).catch(() => {});
+    }
+  }
+
+  #providing = false;
+
   serviceApi?: string;
 
   /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
+    // Weave's own providers answer as requests arrive (in a moment, so a burst of events is looked at once).
+    if (!this.#providing) {
+      this.#providing = true;
+      let soon: ReturnType<typeof setTimeout> | undefined;
+      this.h.replica.onAppend(() => {
+        soon ??= setTimeout(() => {
+          soon = undefined;
+          this.provide();
+        }, 50);
+      });
+      this.provide();
+    }
     void this.web.startAppApi().then(() => {
       for (const stored of this.storedServices()) {
         this.startService(stored);

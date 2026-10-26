@@ -244,6 +244,20 @@ export class GitHub {
     return { body: res.body, ...(size > 0 ? { size } : {}) };
   }
 
+  /**
+   * Where a release file can be downloaded for a while without signing in: the signed address GitHub redirects to.
+   * What a provider hands out, so people without access to the repository get the file too.
+   */
+  async downloadUrl(repo: string, asset: number): Promise<string> {
+    const res = await this.#fetch(`${API}/repos/${repo}/releases/assets/${asset}`, {
+      headers: { accept: 'application/octet-stream', ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}), 'x-github-api-version': '2022-11-28' },
+      redirect: 'manual',
+    });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) return location;
+    throw new Error(res.status === 404 ? `GitHub didn't let this node download from ${repo}: does its sign-in have access?` : `GitHub said ${res.status} instead of a download address`);
+  }
+
   /** Give someone access (read, or write where they were picked to write); GitHub sends them an invitation to accept. */
   async invite(repo: string, login: string, permission: 'pull' | 'push' = 'pull'): Promise<void> {
     await this.#call('PUT', `/repos/${repo}/collaborators/${encodeURIComponent(login)}`, { permission });

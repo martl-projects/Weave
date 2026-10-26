@@ -20,8 +20,16 @@ import { isDid, type Did } from './keys.ts';
  *
  * A contract says what the service reads (only requests addressed to it, some
  * kinds, or the whole space), which kinds it writes, whether it serves websites,
- * and its version. It's a promise the runtime keeps: the node that runs the
- * service hands it nothing more.
+ * the protocols it offers, and its version. It's a promise the runtime keeps:
+ * the node that runs the service hands it nothing more.
+ *
+ * Protocols are small agreements on top of requests, named in the contract's
+ * `offers`. The first one:
+ *
+ *   artifact.fetch  request data {protocol: 'artifact.fetch', artifact, platform}: a release of the space it's
+ *                   asked in (the weave.app event's id), for a platform. Result data {url, file, sha256, size?}:
+ *                   where to download that file for a while. Whoever fetches checks the file against the sha256
+ *                   the release's maintainer signed, so it doesn't matter who delivers it.
  */
 export const KIND_SERVICE_PROFILE = 'weave.service.profile';
 export const KIND_SERVICE_REQUEST = 'weave.service.request';
@@ -42,6 +50,14 @@ export function servicesIn(entries: Entry[], isTheirs: (service: Did, author: Di
 /** Service keys are agent keys with this prefix in their name. */
 export const SERVICE_PREFIX = 'service:';
 
+/** The protocol for handing out a release's files (see above). */
+export const PROTOCOL_ARTIFACT_FETCH = 'artifact.fetch';
+
+/** The services Weave ships: websites, and releases from GitHub. */
+export const BUILTINS = ['website', 'github'] as const;
+export type Builtin = (typeof BUILTINS)[number];
+export const isBuiltin = (value: unknown): value is Builtin => BUILTINS.includes(value as Builtin);
+
 /**
  * What a service reads in the spaces it's in: nothing (it takes no requests either: a website, say), requests
  * addressed to it, those plus some kinds, or everything.
@@ -54,6 +70,8 @@ export interface ServiceContract {
   writes: string[];
   /** It serves websites (rooms, on the wire): pages people visit, which Weave tells who is visiting. */
   website?: boolean;
+  /** Protocols it answers requests in, like artifact.fetch. */
+  offers?: string[];
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -67,8 +85,8 @@ export interface ServiceProfile {
   description: string;
   /** A picture (wblob: reference). */
   icon?: string;
-  /** One Weave ships (the website service), rather than someone's own code. */
-  builtin?: 'website';
+  /** One Weave ships (the website or GitHub service), rather than someone's own code. */
+  builtin?: Builtin;
   contract: ServiceContract;
   time: string;
 }
@@ -94,7 +112,9 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   const writes = Array.isArray(c.writes) ? [...new Set(c.writes.filter(isKind))].slice(0, 50) : [];
   const version = typeof c.version === 'string' && /^\d+(\.\d+){0,2}$/.test(c.version) ? c.version : undefined;
   if (!version) return undefined;
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), version };
+  // Offering a protocol means answering requests in it: a service that reads nothing offers none.
+  const offers = reads !== 'nothing' && Array.isArray(c.offers) ? [...new Set(c.offers.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(p) && p.length <= 60))].slice(0, 20) : [];
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), version };
 }
 
 /**
@@ -112,7 +132,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
@@ -142,7 +162,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       name,
       description: typeof body.description === 'string' ? body.description.slice(0, 1000) : '',
       ...(typeof body.icon === 'string' && body.icon.startsWith('wblob:') ? { icon: body.icon } : {}),
-      ...(body.builtin === 'website' ? { builtin: 'website' as const } : {}),
+      ...(isBuiltin(body.builtin) ? { builtin: body.builtin } : {}),
       contract,
       time: e.time,
     });

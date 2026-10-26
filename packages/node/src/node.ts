@@ -376,6 +376,7 @@ import {
   tooLong,
   SERVICE_PREFIX,
   type ServiceContract,
+  type Builtin,
 } from '@weave/core';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
@@ -574,7 +575,7 @@ export interface Handover {
   box?: Json;
   removed?: true;
   /** The room service: its rooms (opened on a computer, run by the node), and what you approved them to run. */
-  builtin?: 'website';
+  builtin?: Builtin;
   hosted?: Record<string, StoredRoom>;
   approved?: string[];
   /** An applet: the release it runs (the node fetches it itself). */
@@ -596,7 +597,7 @@ export interface StoredService {
   /** Settings given per space: space id → name → value (it reads them from its API). */
   spaceSettings?: Record<string, Record<string, string>>;
   /** A service Weave ships, run by the node itself: the room service. */
-  builtin?: 'website';
+  builtin?: Builtin;
   /** The room service's rooms: room id → room, kept across restarts. */
   hosted?: Record<string, StoredRoom>;
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
@@ -897,7 +898,7 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive());
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch);
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
@@ -8746,6 +8747,8 @@ export class WeaveNode implements Backend {
       get isLinkedNode() {
         return n.#isLinkedNode;
       },
+      /** A GitHub client with this node's sign-in (none: public repositories only). */
+      github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
       publish: n.publish.bind(n),
       get releases() {
@@ -8897,6 +8900,15 @@ export class WeaveNode implements Backend {
 
   sayOnWebsite(...args: Parameters<Website['sayOnWebsite']>): ReturnType<Website['sayOnWebsite']> {
     return this.#website.sayOnWebsite(...args);
+  }
+
+  /** How long installing waits for a provider's answer (tests shorten it). */
+  get locateWait(): number {
+    return this.#services.locateWait;
+  }
+
+  set locateWait(ms: number) {
+    this.#services.locateWait = ms;
   }
 
   openWebsite(...args: Parameters<Website['openWebsite']>): ReturnType<Website['openWebsite']> {

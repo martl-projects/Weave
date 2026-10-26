@@ -198,6 +198,8 @@ github — repositories that follow a group, tier or project (members who give t
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
+  service add github --builtin github   the GitHub service Weave ships: hands a project's release files to its participants
+                             with this node's GitHub sign-in (a provider: it offers artifact.fetch)  [--spaces <project,…>]
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -1428,9 +1430,14 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with exactly its contract's rights.${s.node ? ` It went to ${s.node.name}, sealed: the node fetches the release and starts it.` : ' It starts once its release is fetched and checked.'}`);
       }
       if (sub === 'add' && values.builtin) {
-        if (values.builtin !== 'website' && values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin website');
-        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'website', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
-        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`);
+        const builtin = values.builtin === 'room' ? 'website' : values.builtin;
+        if (builtin !== 'website' && builtin !== 'github') throw new Error('Weave ships two services: --builtin website, or --builtin github');
+        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin, ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
+        return out(s, () =>
+          builtin === 'website'
+            ? `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`
+            : `${line(s)}\n\nIt answers as you · ${s.name}: participants of its projects fetch release files through it, with this node's GitHub sign-in (weave github connect for private repositories).`,
+        );
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';

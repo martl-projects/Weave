@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { GumroadLink, OnchainPrice } from '@weave/core';
+import type { Builtin, GumroadLink, OnchainPrice } from '@weave/core';
 import type { AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -238,7 +238,7 @@ export interface ServiceInfo {
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
-  builtin?: 'website';
+  builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
   /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
   artifact?: ServiceArtifactInfo;
@@ -309,7 +309,7 @@ export interface ServiceProfileInfo {
   name: string;
   description: string;
   icon?: string;
-  builtin?: 'website';
+  builtin?: Builtin;
   contract: ServiceContract;
   time: string;
 }
@@ -1573,7 +1573,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'website'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**

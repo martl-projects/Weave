@@ -7,10 +7,19 @@ import { writeJson } from './home.ts';
 import type { Runtime } from './runtime.ts';
 
 /*
- * Releases on this node: fetched from GitHub, refused unless they match the fingerprint their project published,
- * and unpacked, once per release and service (rooms of the same release share it). Whoever needs one asks with a
- * job name; the job says how far it got, or why it failed, until the release is here.
+ * Releases on this node: fetched, refused unless they match the fingerprint their project published, and
+ * unpacked, once per release and service. A release is fetched from a provider in its project (a service that
+ * offers artifact.fetch, like the GitHub service), or else straight from GitHub with this node's sign-in. Who
+ * delivers doesn't matter: the file has to match. Whoever needs one asks with a job name; the job says how far it
+ * got, or why it failed, until the release is here.
  */
+
+/** Where a provider says a release file can be downloaded (artifact.fetch). */
+export interface Located {
+  url: string;
+  /** The provider, for messages. */
+  by: string;
+}
 
 /** A release as a service keeps it: pinned, with its manifest as released. */
 export interface ArtifactRef {
@@ -38,23 +47,58 @@ export class Releases {
   readonly #github: () => GitHub;
   readonly #runtime: Runtime;
   readonly #changed: () => void;
+  readonly #locate: (a: ArtifactRef) => Promise<Located | undefined>;
+  readonly #fetchFile: () => typeof fetch;
 
-  /** `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any. */
-  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void) {
+  /**
+   * `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any;
+   * `locate`: asks a provider in the release's project; `fetchFile`: downloads what a provider points at.
+   */
+  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef) => Promise<Located | undefined>, fetchFile: () => typeof fetch) {
     this.#services = services;
     this.#github = github;
     this.#runtime = runtime;
     this.#changed = changed;
+    this.#locate = locate;
+    this.#fetchFile = fetchFile;
+  }
+
+  /** The release file, from a provider in its project, or straight from GitHub when there's none (or it can't). */
+  async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number }> {
+    let refused: string | undefined;
+    try {
+      const located = await this.#locate(a);
+      if (located) {
+        const res = await this.#fetchFile()(located.url);
+        if (res.ok && res.body) {
+          const size = Number(res.headers.get('content-length'));
+          return { body: res.body, ...(size > 0 ? { size } : {}) };
+        }
+        refused = `${located.by} pointed at a download that answered ${res.status}`;
+      }
+    } catch (error) {
+      refused = (error as Error).message;
+    }
+    const github = a.manifest.install?.github;
+    if (!github) throw new Error(refused ?? `${a.manifest.name} ${a.tag} says nowhere to fetch it from`);
+    try {
+      const client = this.#github();
+      const found = (await client.release(github, a.tag)).assets.find((x) => x.name === asset.file);
+      if (!found) throw new Error(`the release ${a.tag} on GitHub has no file ${asset.file}`);
+      const download = await client.download(github, found.id);
+      return { ...download, ...(download.size ? {} : { size: found.size }) };
+    } catch (error) {
+      throw new Error(refused ? `${refused}; and straight from GitHub: ${(error as Error).message}` : (error as Error).message);
+    }
   }
 
   /** Download a release file into dir/<tag>, refuse it unless it matches the fingerprint published, unpack it: its folder. */
-  async fetch(dir: string, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, job: InstallJob): Promise<string> {
+  async fetch(dir: string, a: ArtifactRef, asset: AppAsset, job: InstallJob): Promise<string> {
     mkdirSync(dir, { recursive: true });
-    const client = this.#github();
-    const found = (await client.release(release.github, release.tag)).assets.find((a) => a.name === release.asset.file);
-    if (!found) throw new Error(`the release ${release.tag} on GitHub has no file ${release.asset.file}`);
-    const download = await client.download(release.github, found.id);
-    const total = release.asset.size ?? download.size ?? found.size;
+    const release = { tag: a.tag, asset };
+    const app = a.manifest;
+    const download = await this.#download(a, asset);
+    const total = release.asset.size ?? download.size;
     job.progress = { state: 'downloading', done: 0, ...(total ? { total } : {}) };
     const file = join(dir, `.download-${release.asset.file}`);
     await saveVerified(download.body, file, release.asset.sha256, (n) => {
@@ -77,13 +121,13 @@ export class Releases {
     if (this.#runtime.runs(a.manifest) === 'container' || existsSync(folder)) return then();
     if (this.jobs.get(job)?.progress) return;
     const asset = a.manifest.install?.assets?.[platformKey()];
-    if (!asset || !a.manifest.install?.github) {
+    if (!asset) {
       this.jobs.set(job, { error: this.#runtime.whyNot(a.manifest) });
       return;
     }
     const progress: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
     this.jobs.set(job, progress);
-    const fetched = (this.#fetching.get(folder) ?? this.fetch(dir, a.manifest, { github: a.manifest.install.github, tag: a.tag, asset }, progress).then(() => undefined)).finally(() => this.#fetching.delete(folder));
+    const fetched = (this.#fetching.get(folder) ?? this.fetch(dir, a, asset, progress).then(() => undefined)).finally(() => this.#fetching.delete(folder));
     this.#fetching.set(folder, fetched);
     const done = fetched.then(
       () => {

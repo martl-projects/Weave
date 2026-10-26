@@ -425,7 +425,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 }
 
 /** What a service is there for, in a project. */
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Hands the project's release files to its participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
@@ -556,6 +556,16 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
             <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Websites are on in p/${project.name}`)}>
               Add
             </AsyncButton>
+          </div>
+        )}
+        {!services.some((s) => s.builtin === 'github') && (
+          <div className="install-box">
+            <span className="grow">
+              <b>Releases from GitHub</b>
+              <br />
+              <span className="small">Hands the project's release files to its participants, with your GitHub sign-in: they can install releases of a private repository without access to it. Each file is checked against what its maintainer released.</span>
+            </span>
+            <AsyncButton onClick={() => attempt(() => api('addService', { builtin: 'github', spaces: [project.id] }).then(() => (bump(), onClose())), `p/${project.name} gets its releases through you`)}>Add</AsyncButton>
           </div>
         )}
         {away.map((s) => (
