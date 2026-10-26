@@ -225,15 +225,18 @@ ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'se
 
 let picker: BrowserWindow | undefined;
 
-/** The address book picker's shortcuts, each opening it on its tab (on macOS ⌘F1…); WEAVE_PICKER_SHORTCUT=off for none. */
-type PickerTab = 'people' | 'projects' | 'posts';
+/**
+ * The address book picker's shortcuts, each opening it on its tab (on macOS ⌘F1…); WEAVE_PICKER_SHORTCUT=off
+ * for none. Posts are a Tab away: Ctrl+F4 closes the document in too many apps to take it.
+ */
+type PickerTab = 'all' | 'people' | 'projects' | 'posts';
 const PICKER_SHORTCUTS: Array<[string, PickerTab]> =
   process.env.WEAVE_PICKER_SHORTCUT === 'off'
     ? []
     : [
-        ['CommandOrControl+F1', 'people'],
-        ['CommandOrControl+F2', 'projects'],
-        ['CommandOrControl+F3', 'posts'],
+        ['CommandOrControl+F1', 'all'],
+        ['CommandOrControl+F2', 'people'],
+        ['CommandOrControl+F3', 'projects'],
       ];
 
 /**
@@ -242,7 +245,7 @@ const PICKER_SHORTCUTS: Array<[string, PickerTab]> =
  * link to the pick where you were typing, so it names exactly that person or
  * post. Losing the focus or Escape puts it away.
  */
-async function showPicker(tab: PickerTab = 'people'): Promise<void> {
+async function showPicker(tab: PickerTab = 'all'): Promise<void> {
   if (picker?.isVisible()) {
     picker.webContents.send('weave:picker-open', tab);
     return void picker.focus();
@@ -274,7 +277,10 @@ async function showPicker(tab: PickerTab = 'people'): Promise<void> {
     maximizable: false,
     fullscreenable: false,
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c111d' : '#f4f5f7',
+    // Transparent, so the panel's rounded corners show what's behind them.
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   picker = box;

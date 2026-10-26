@@ -626,10 +626,12 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-foot { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .panel-pick { width: 100%; }
 /* The address book picker: a bare search bar that grows with its results (the window fits it). */
-html:has(.picker), html:has(.picker) body { overflow: hidden; }
-.picker { display: flex; flex-direction: column; margin: 0; padding: 0; }
-/* One field: the icon, the input and the tabs share its border, in one row. */
-.picker-search { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; margin: 4px; padding: 0 4px; border: 1px solid var(--cl-border, currentColor); border-radius: 4px; }
+/* Its window is transparent, so only the rounded panel shows. */
+:root[data-skin]:has(.picker), :root[data-skin]:has(.picker) body, :root[data-skin]:has(.picker) #root { overflow: hidden; background: transparent; }
+.picker { display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; border-radius: 10px; background: var(--cl-panel, #c0c0c0); color: var(--cl-text, #000); border: 1px solid color-mix(in srgb, var(--cl-line, #808080) 70%, transparent); }
+/* One row: the icon, the input and the tabs. */
+.picker-search { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 2px 6px; }
+.picker:has(.picker-list) .picker-search { border-bottom: 1px solid var(--cl-line, #808080); }
 .picker .picker-search input { flex: 1; min-width: 0; font-size: 14px; padding: 6px 2px; border: none; outline: none; background: transparent; box-shadow: none; color: inherit; }
 .picker-tabs { display: flex; flex: none; gap: 2px; }
 .picker .picker-tabs button { min-width: 0; min-height: 0; margin: 0; padding: 2px 6px; border: none; border-radius: 3px; box-shadow: none; background: transparent; color: inherit; font-size: 11px; opacity: .6; cursor: default; }
@@ -637,7 +639,7 @@ html:has(.picker), html:has(.picker) body { overflow: hidden; }
 .picker-list { max-height: 400px; overflow-y: auto; list-style: none; margin: 0; padding: 0 0 4px; font-family: var(--content-font); }
 .picker-item { display: flex; align-items: center; gap: 6px; padding: 4px; cursor: default; }
 .picker-none { padding: 4px; opacity: .7; font-size: 12px; }
-.picker-item.at { background: var(--cl-accent, var(--accent)); color: #fff; }
+.picker-item.at { background: var(--cl-accent-soft, var(--accent)); }
 .picker-what { display: flex; flex-direction: column; min-width: 0; }
 .picker-what b, .picker-what span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .routine-row { align-items: center; gap: 6px; }

@@ -35,7 +35,7 @@ const TABS: Array<[FoundKind | 'all', string]> = [
   ['posts', 'Posts'],
 ];
 
-/** The tab a shortcut asked for (Ctrl+F1 people, F2 projects, F3 posts), else all. */
+/** The tab a shortcut asked for (Ctrl+F1 all, F2 people, F3 projects), else all. */
 const tabOf = (asked: string | null | undefined): FoundKind | 'all' => TABS.find(([key]) => key === asked)?.[0] ?? 'all';
 
 const PLACEHOLDER: Record<FoundKind | 'all', string> = {
@@ -125,7 +125,7 @@ export function Picker() {
   };
 
   return (
-    <div className="window picker" ref={root} onKeyDown={onKey}>
+    <div className="picker" ref={root} onKeyDown={onKey}>
       <div className="picker-search">
         <Icon name="search" />
         <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder={PLACEHOLDER[tab]} spellCheck={false} />
