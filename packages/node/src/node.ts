@@ -558,6 +558,7 @@ import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchai
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
+import { Forgetting, type ForgettingCore } from './retention.ts';
 import { Holding, type HoldingCore } from './holding.ts';
 import { Repos, type ReposCore } from './repos.ts';
 import { Services, type ServicesCore } from './services.ts';
@@ -673,7 +674,7 @@ const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => 
  * restatement against its author's signature (the envelope signs the salted
  * hash of what it sealed, ih) without the key it was sealed with.
  */
-const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string; wire?: unknown }; inner: { kind: string; body: Json; salt?: string }; outer?: Inner }) => ({
+export const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string; wire?: unknown }; inner: { kind: string; body: Json; salt?: string }; outer?: Inner }) => ({
   id: d.id,
   author: d.event.author,
   signer: d.event.signer,
@@ -919,7 +920,9 @@ export class WeaveNode implements Backend {
       },
       upTo: this.#upTo.bind(this),
       anchor: this.#anchor.bind(this),
-      held: this.#held.bind(this),
+      get held() {
+        return node.#retention.held.bind(node.#retention);
+      },
       epochStarts: this.#epochStarts.bind(this),
       get directs() {
         return node.#directs;
@@ -935,6 +938,30 @@ export class WeaveNode implements Backend {
       invalidateDecoded: this.#invalidateDecoded.bind(this),
     });
     // More concern modules, each over its own narrow core:
+    this.#retention = new Forgetting(this, {
+      space: this.#space.bind(this),
+      state: this.#state.bind(this),
+      get managed() {
+        return node.#managed;
+      },
+      spaceInfo: this.#spaceInfo.bind(this),
+      get spaces() {
+        return node.#spaces;
+      },
+      spacePosts: this.#spacePosts.bind(this),
+      aroundPosts: this.#aroundPosts.bind(this),
+      entries: this.#entries.bind(this),
+      invalidateDecoded: this.#invalidateDecoded.bind(this),
+      decodedIn: this.#decodedIn.bind(this),
+      board: this.#board.bind(this),
+      get companies() {
+        return node.#companies;
+      },
+      epochStarts: this.#epochStarts.bind(this),
+      sealForSelf: this.#sealForSelf.bind(this),
+      expandCarry: this.#expandCarry.bind(this),
+      saveSpace: this.#saveSpace.bind(this),
+    });
     this.#holding = new Holding(this, {
       ensureDirects: this.#ensureDirects.bind(this),
       get directs() {
@@ -959,7 +986,9 @@ export class WeaveNode implements Backend {
       addSpace: this.#addSpace.bind(this),
       spaceName: this.#spaceName.bind(this),
       actor: this.#actor.bind(this),
-      held: this.#held.bind(this),
+      get held() {
+        return node.#retention.held.bind(node.#retention);
+      },
       space: this.#space.bind(this),
       decodedIn: this.#decodedIn.bind(this),
       get swarm() {
@@ -1823,7 +1852,7 @@ export class WeaveNode implements Backend {
           const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
           return d.event.author === this.identity.author && space ? this.#expandCarry(d, space, true) : [];
         }
-        return this.#expandCarry(d, d.space as StoredSpace | undefined).filter((x) => !this.#forgottenCarried().has(x.id));
+        return this.#expandCarry(d, d.space as StoredSpace | undefined).filter((x) => !this.#retention.forgottenCarried().has(x.id));
       });
   }
 
@@ -3187,8 +3216,8 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
-    changed += this.#applyShreds();
-    changed += this.#forget();
+    changed += this.#retention.applyShreds();
+    changed += this.#retention.forget();
     changed += this.#holding.release();
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#managed.unlock(space);
@@ -4609,6 +4638,9 @@ export class WeaveNode implements Backend {
   #companies!: Companies;
   // (further concern modules)
 
+  /** Retention: holds, forgetting by rule, shredding old keys and carrying forward what stays (retention.ts). */
+  #retention!: Forgetting;
+
   /** Who holds what: keepers for friends and spaces, members sharing a big space's content, fetching and letting go of bodies (holding.ts). */
   #holding!: Holding;
 
@@ -4692,20 +4724,26 @@ export class WeaveNode implements Backend {
     return 'over budget';
   };
 
-  // ---------------------------------------------------------------- retention (stage 6.4)
+  // Retention: holds, forgetting by rule, shredding old keys and carrying forward what stays: retention.ts (Forgetting). The node delegates.
 
-  /** Is a legal hold standing on this space? */
-  #held(state: SpaceState): boolean {
-    return !!state.hold && Date.parse(state.hold.until) > this.clock();
+  setHold(...args: Parameters<Forgetting['setHold']>): ReturnType<Forgetting['setHold']> {
+    return this.#retention.setHold(...args);
   }
 
-  async setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
-    if (!mayAct(state, this.identity.author, 'own').ok) throw new Error(`only the owner of ${space.name} puts it on hold`);
-    if (Number.isNaN(Date.parse(input.until))) throw new Error('until is a date, e.g. 2027-12-31');
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HOLD, body: { until: new Date(input.until).toISOString(), reason: input.reason ?? '' } }));
-    return this.#spaceInfo(space);
+  setBoardRule(...args: Parameters<Forgetting['setBoardRule']>): ReturnType<Forgetting['setBoardRule']> {
+    return this.#retention.setBoardRule(...args);
+  }
+
+  shred(...args: Parameters<Forgetting['shred']>): ReturnType<Forgetting['shred']> {
+    return this.#retention.shred(...args);
+  }
+
+  keepPost(...args: Parameters<Forgetting['keepPost']>): ReturnType<Forgetting['keepPost']> {
+    return this.#retention.keepPost(...args);
+  }
+
+  fading(...args: Parameters<Forgetting['fading']>): ReturnType<Forgetting['fading']> {
+    return this.#retention.fading(...args);
   }
 
   // Who holds what: keepers for friends and spaces, members sharing a big space's content, fetching and letting go of bodies: holding.ts (Holding). The node delegates.
@@ -4960,7 +4998,7 @@ export class WeaveNode implements Backend {
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#companies.managedInfo(space, state.managed) } : {}),
-      ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
+      ...(this.#retention.held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
   }
@@ -5102,218 +5140,6 @@ export class WeaveNode implements Backend {
       out.set(post, near);
     }
     return out;
-  }
-
-  /**
-   * Forget what the rules say is due: drop the bodies of those posts and of
-   * what goes with them (edits, chat, upvotes), and remember that, so they
-   * aren't fetched again. Never what we wrote, never in spaces we own.
-   */
-  #forget(): number {
-    const me = this.identity.author;
-    let dropped = 0;
-    for (const space of [...this.#spaces.values()]) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
-      const state = this.#state(space);
-      if (state.founder === me || this.config.archive || this.#held(state)) continue;
-      const due = this.#spacePosts(space).posts.filter((p) => p.lifetime && isDue(p.lifetime, this.clock()) && p.by.did !== me);
-      if (!due.length) continue;
-      const around = this.#aroundPosts(this.#entries(space));
-      for (const post of due) {
-        for (const { id, author } of [{ id: post.id, author: post.by.did as Did }, ...(around.get(post.id)?.ids ?? [])]) {
-          if (author === me) continue;
-          const record = this.replica.record2(id);
-          if (record && record.class === 'content' && !record.missing && isWireItemV2(record.wire)) {
-            this.replica.store.dropBody(record.wire.e.body as string);
-            dropped++;
-          } else if (!this.#forgottenCarried().has(id) && this.#carriedIds(space).has(id)) {
-            // Restated in a carry (7I92Kk20): a carry is never dropped, so its item is forgotten here, and the next shred leaves it behind.
-            this.#forgetCarried(id);
-            dropped++;
-          }
-        }
-      }
-    }
-    if (dropped) this.#invalidateDecoded();
-    return dropped;
-  }
-
-  /** Items of carries this node forgot by rule: kept in the carry (it can't be dropped), never shown. */
-  #forgottenCarriedSet?: Set<string>;
-  #forgottenCarried(): Set<string> {
-    this.#forgottenCarriedSet ??= new Set(readSecretJson<string[]>(this.home, joinPath(this.home.dir, 'forgotten-carried.json')) ?? []);
-    return this.#forgottenCarriedSet;
-  }
-
-  #forgetCarried(id: string): void {
-    this.#forgottenCarried().add(id);
-    writeSecretJson(this.home, joinPath(this.home.dir, 'forgotten-carried.json'), [...this.#forgottenCarried()]);
-  }
-
-  /** The ids carries restate in a space. */
-  #carriedIds(space: StoredSpace): Set<string> {
-    return new Set(this.#decodedIn(space.id).filter((d) => d.carried).map((d) => d.id));
-  }
-
-  async setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]> {
-    const space = this.#space(input.space);
-    if (space.kind !== 'project' && space.kind !== 'community') throw new Error('rules for forgetting are for the boards of projects and communities');
-    const state = this.#state(space);
-    if (!mayAct(state, this.identity.author, 'curate').ok) throw new Error(`only the ${space.kind === 'project' ? 'maintainers' : 'moderators'} of ${space.name} set how long posts stay`);
-    const board = this.#board(space, this.#spacePosts(space).boards, input.board);
-    const valid = (v: number | null | undefined, max: number, what: string) => {
-      if (v === undefined || v === null) return null;
-      if (!Number.isFinite(v) || v <= 0 || v > max) throw new Error(`${what} is a number above 0, at most ${max}`);
-      return v;
-    };
-    const keepDays = valid(input.keepDays, 36_500, 'days to keep');
-    const maxMB = valid(input.maxMB, 1_000_000, 'the size limit in MB');
-    const floor = this.#companies.companyRetention(space)?.minDays;
-    if (floor && keepDays && keepDays < floor) throw new Error(`${space.name} is a company space: it keeps everything at least ${floor} days`);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_BOARD_RULE, body: { board: board.name, keepDays, maxMB } }));
-    return this.boards(space.id);
-  }
-
-  async shred(input: { space: string; before: string; dropOlder?: boolean }): Promise<{ epochs: number[]; carried: number }> {
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('a direct chat has nobody who manages it: there is nothing to shred');
-    const state = this.#state(space);
-    if (!mayAct(state, this.identity.author, 'manage').ok) throw new Error(`only those who manage ${space.name} shred its old keys`);
-    if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: nothing is shredded`);
-    const before = Date.parse(input.before);
-    if (Number.isNaN(before)) throw new Error('before is a date, e.g. 2026-09-01');
-    const floor = this.#companies.companyRetention(space)?.minDays;
-    if (floor && before > this.clock() - floor * DAY_MS)
-      throw new Error(`${space.name} is a company space: it keeps everything at least ${floor} days (shred before ${new Date(this.clock() - floor * DAY_MS).toISOString().slice(0, 10)} at the latest)`);
-    // An epoch ends when the next one begins; the current one can't be shredded.
-    const starts = this.#epochStarts(space);
-    const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
-    const ended = epochs.slice(0, -1).filter((e, i) => (starts.get(epochs[i + 1]) ?? '') !== '' && Date.parse(starts.get(epochs[i + 1])!) <= before);
-    if (!ended.length) throw new Error(`no key of ${space.name} ended before ${input.before.slice(0, 10)}${epochs.length < 2 ? ': it has had one key all along' : ''}`);
-    // A company space's setting is read with the keys alone (see #managedRaw): restated under the current key, or it would go with the old ones.
-    const managed = this.#managed.managedRaw(space).setting;
-    if (managed) {
-      if (space.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} shreds it: it's under a company's key service`);
-      const { by: _by, time: _time, ...setting } = managed;
-      this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: setting as unknown as Json }));
-    }
-    const { carried, dropped } = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SHRED, body: { epochs: ended, dropped } }));
-    return { epochs: ended, carried };
-  }
-
-  /**
-   * Before old keys go: restate under the current key what the space still
-   * keeps from those epochs: its control events and latest state, posts its
-   * rules keep (and their chat), read-limited boards' with their own key.
-   */
-  #carryForward(space: StoredSpace, epochs: Set<number>, dropBefore?: string, skip?: Set<string>): { carried: number; dropped: string[] } {
-    const posts = this.#spacePosts(space).posts;
-    // A company's maximum (stage 11): chat and posts from before it go too, unless they stay for good (pinned, issues, proposals, releases).
-    const forever = new Set(posts.filter((p) => p.lifetime && 'forever' in p.lifetime && p.lifetime.forever !== 'no-rule').map((p) => p.id));
-    const gone = new Set(posts.filter((p) => (p.lifetime && isDue(p.lifetime, this.clock())) || (dropBefore && p.active < dropBefore && !forever.has(p.id))).map((p) => p.id));
-    const around = this.#aroundPosts(this.#entries(space));
-    const goneWith = new Set([...gone].flatMap((id) => (around.get(id)?.ids ?? []).map((x) => x.id)));
-    // What goes on purpose, by our rules and clock: named in the shred, so other nodes don't carry it forward after all.
-    const dropped: string[] = [];
-    const items = this.#decodedIn(space.id).filter((d) => {
-      const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
-      const inEpochs = d.carried || (Number.isSafeInteger(epoch) && epochs.has(epoch as number));
-      if (!inEpochs || d.inner.kind === KIND_CARRY || skip?.has(d.id)) return false;
-      if ((dropBefore && d.inner.kind === KIND_MSG && d.event.time < dropBefore) || gone.has(d.id) || goneWith.has(d.id)) {
-        dropped.push(d.id);
-        return false;
-      }
-      return true;
-    });
-    if (!items.length) return { carried: 0, dropped };
-    const byBoard = new Map<string, Decoded[]>();
-    for (const d of items) byBoard.set(d.board ?? '', [...(byBoard.get(d.board ?? '') ?? []), d]);
-    for (const [board, list] of byBoard) {
-      const inner: Inner = { kind: KIND_CARRY, body: { events: list.map(carriedItem) as unknown as Json } };
-      const keys = board ? space.boards?.[board] : undefined;
-      const latest = keys ? Math.max(...Object.keys(keys).map(Number)) : -1;
-      if (board && latest < 0) continue; // a board we can't read: we hold none of it to carry
-      this.replica.write(this.identity, sealFor(this.#managed.cipher(space), board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
-    }
-    return { carried: items.length, dropped };
-  }
-
-  /** Apply the shreds of those who manage our spaces (each once: a shredded key is gone). */
-  #applyShreds(): number {
-    let applied = 0;
-    for (const space of [...this.#spaces.values()]) {
-      const state = this.#state(space);
-      for (const d of this.#decodedIn(space.id)) {
-        if (d.inner.kind !== KIND_SHRED || d.carried || !mayAct(state, d.event.author, 'manage').ok) continue;
-        const epochs = (d.inner.body as { epochs?: unknown } | null)?.epochs;
-        if (!Array.isArray(epochs)) continue;
-        // A company's minimum keeps recent keys, whoever asks to shred them.
-        const floor = this.#companies.companyRetention(space)?.minDays;
-        const kept = floor ? this.#companies.endedWithin(space, floor) : undefined;
-        const live = epochs.filter((e): e is number => Number.isSafeInteger(e) && !!space.keys[String(e)] && !kept?.has(e));
-        const dropped = (d.inner.body as { dropped?: unknown } | null)?.dropped;
-        if (live.length) {
-          this.#applyShred(space, live, Array.isArray(dropped) ? new Set(dropped.filter((x): x is string => typeof x === 'string')) : undefined);
-          applied++;
-        }
-      }
-    }
-    return applied;
-  }
-
-  /** A shred from someone who manages the space: keep what we wrote, then let those keys go, with the bodies sealed with them. */
-  #applyShred(space: StoredSpace, epochs: number[], dropped?: Set<string>): void {
-    if (this.#held(this.#state(space))) return; // on legal hold: keys stay
-    const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
-    if (!doomed.size) return;
-    // Our own work stays with us: restated in our private space first. Not in a company space: there, the company's retention decides (stage 11).
-    const company = !!this.#managed.managedRaw(space).setting?.company;
-    const mine = company ? [] : this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
-    if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
-    // The shredder's carry restates only what its node held (zLqeyEBC): what we hold of those epochs that no carry under a
-    // key that stays restates, and that the shred didn't drop on purpose, we carry forward ourselves before letting go.
-    // Anyone may: each item is checked by its author's signature. (A shred from before it named what it dropped: as it says.)
-    if (dropped && this.#state(space).members.has(this.identity.author)) {
-      const restated = new Set(
-        this.#decodedIn(space.id)
-          .filter((d) => d.inner.kind === KIND_CARRY && !d.carried && !doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)))
-          .flatMap((d) => this.#expandCarry(d, space).map((x) => x.id)),
-      );
-      this.#carryForward(space, doomed, undefined, new Set([...restated, ...dropped]));
-    }
-    const scope = spaceScope(space);
-    // Bodies are stored once per hash for every space: drop only this space's own. One counts as ours if it opens with this
-    // space's key of that epoch (a copy of another space's body under our scope doesn't), and no event elsewhere points to it.
-    const cipher = this.#managed.cipher(space);
-    const elsewhere = new Set(this.replica.events((r) => r.scope !== scope && isWireItemV2(r.wire)).map((r) => (r.wire as WireItemV2).e.body as string));
-    for (const r of this.replica.events((r) => r.scope === scope && r.class === 'content' && !r.missing)) {
-      if (!doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) || !isWireItemV2(r.wire)) continue;
-      const hash = r.wire.e.body as string;
-      if (elsewhere.has(hash) || !openIn(cipher, r)) continue;
-      this.replica.store.dropBody(hash);
-    }
-    for (const e of doomed) delete space.keys[String(e)];
-    space.shredded = [...new Set([...(space.shredded ?? []), ...doomed])];
-    this.#saveSpace(space);
-  }
-
-  async keepPost(target: string): Promise<PostInfo> {
-    const post = await this.post(target);
-    const space = post.space && this.#spaces.get(post.space.id);
-    if (!space) throw new Error('only posts of projects and communities are forgotten');
-    if (post.by.did !== this.identity.author && !mayAct(this.#state(space), this.identity.author, 'curate').ok) throw new Error('its author keeps a post, or those who manage the space');
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_POST_KEEP, body: { target: post.id } }));
-    return this.post(post.id);
-  }
-
-  async fading(): Promise<PostInfo[]> {
-    const me = this.identity.author;
-    return [...this.#spaces.values()]
-      .filter((s) => s.kind === 'project' || s.kind === 'community')
-      .flatMap((s) => this.#spacePosts(s).posts)
-      .filter((p) => p.by.did === me && p.lifetime && isFading(p.lifetime, this.clock()))
-      .sort((a, b) => ((a.lifetime as { until: string }).until).localeCompare((b.lifetime as { until: string }).until));
   }
 
   /** A project shown as a post: its id is the event that created it. */
@@ -5658,7 +5484,7 @@ export class WeaveNode implements Backend {
     if (d.inner.kind === KIND_SHRED)
       setImmediate(() => {
         try {
-          this.#applyShreds();
+          this.#retention.applyShreds();
         } catch {
           // closed in the meantime: the next start applies it
         }
