@@ -25,10 +25,31 @@ export interface SignInTokens {
 
 const b64url = (b: Buffer) => b.toString('base64url');
 
+/**
+ * A web page: https, or plain http on this computer (tests, the loopback redirect). Anything else, file: and
+ * UNC paths above all, Windows' URL handler would open as a program, so it never reaches a browser.
+ */
+export function isWebAddress(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'https:') return true;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  return parsed.protocol === 'http:' && (host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.endsWith('.localhost'));
+}
+
 async function discover(issuer: string): Promise<{ authorization_endpoint: string; token_endpoint: string }> {
+  if (!isWebAddress(issuer)) throw new Error(`the company's sign-in must be an https address, not ${issuer}`);
   const res = await fetch(`${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`);
   if (!res.ok) throw new Error(`the company's sign-in at ${issuer} can't be reached (${res.status})`);
-  return (await res.json()) as { authorization_endpoint: string; token_endpoint: string };
+  const found = (await res.json()) as { authorization_endpoint?: unknown; token_endpoint?: unknown };
+  for (const endpoint of [found.authorization_endpoint, found.token_endpoint]) {
+    if (typeof endpoint !== 'string' || !isWebAddress(endpoint)) throw new Error(`the company's sign-in at ${issuer} names a sign-in page that isn't an https address`);
+  }
+  return found as { authorization_endpoint: string; token_endpoint: string };
 }
 
 /** The claims of a token, unchecked (the company's node checks them; this is for its expiry and nonce). */
@@ -141,6 +162,7 @@ export async function delegatedToken(config: SignInConfig, refreshToken: string,
 
 /** Open a page in the system browser; BROWSER (as many tools read it) picks another program, or `none` to only print it. */
 export function openInBrowser(url: string): void {
+  if (!isWebAddress(url)) throw new Error(`won't open ${url}: only https addresses open in the browser`);
   const chosen = process.env.BROWSER;
   if (chosen === 'none') return;
   if (chosen) {
