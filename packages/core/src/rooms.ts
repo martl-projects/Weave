@@ -361,19 +361,24 @@ export interface Room {
   show?: string;
   /** Groups (tiers, say) whose members may join; with a show, either a ticket or one of these lets someone in. */
   groups?: string[];
+  /** The service that offers it (its key), when a service announced it rather than its person. */
+  agent?: Did;
   open: boolean;
   time: string;
 }
 
 /** Rooms from announcements, the latest per room by its host counting. */
-export function roomsOf(entries: Array<{ event: { author: Did; time: string }; kind: string; body: Json }>): Room[] {
+export function roomsOf(entries: Array<{ event: { author: Did; signer?: string; time: string }; kind: string; body: Json }>): Room[] {
   const rooms = new Map<string, Room>();
   for (const e of [...entries].filter((x) => x.kind === KIND_ROOM).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
     const b = (e.body && typeof e.body === 'object' ? e.body : {}) as Record<string, unknown>;
     const id = text(b.room, 64);
     if (!id) continue;
     const before = rooms.get(id);
-    if (before && before.host !== e.event.author) continue; // only the host changes a room
+    // Only the host changes a room; a service's room, only that service. A service names itself as `agent`, and
+    // that counts only when its own key signed (a person's devices sign their rooms too, and offer none).
+    const agent = isDid(b.agent) && e.event.signer === b.agent ? b.agent : undefined;
+    if (before && (before.host !== e.event.author || before.agent !== agent)) continue;
     if (b.open === false) {
       if (before) before.open = false;
       continue;
@@ -383,7 +388,7 @@ export function roomsOf(entries: Array<{ event: { author: Did; time: string }; k
     const invite = Array.isArray(b.invite) ? b.invite.filter(isDid) : 'participants';
     const show = text(b.show, 100);
     const groups = Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string' && g.length <= 100).slice(0, 10) : [];
-    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), open: true, time: e.event.time });
+    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), ...(agent ? { agent } : {}), open: true, time: e.event.time });
   }
   return [...rooms.values()];
 }

@@ -56,8 +56,20 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
+  // A room a service offers: "board, offered by martl · board". It ends when the service stops, not from here.
+  const offered = room.offeredBy ? `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy.name ?? 'a service'}` : undefined;
   let main;
-  if (room.mine)
+  if (room.mine && offered)
+    main = room.service?.ready ? (
+      <button className="default play" onClick={() => play(room)}>
+        ▶ {label}
+      </button>
+    ) : (
+      <span className="waiting">
+        <button disabled>Waiting for the service to answer…</button> <button onClick={bump}>Check again</button>
+      </span>
+    );
+  else if (room.mine)
     main = room.service?.ready ? (
       <button className="default play" onClick={() => play(room)}>
         ▶ {label}
@@ -84,19 +96,20 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
       </button>
     ) : (
       <button disabled>
-        {room.connected ? `Waiting for ${room.host.name ?? 'the host'} to start ${room.app?.name ?? 'the app'}…` : `Waiting for ${room.host.name ?? 'the host'}…`}
+        {offered ? (room.connected ? `Waiting for ${offered}…` : `Connecting to ${offered}…`) : room.connected ? `Waiting for ${room.host.name ?? 'the host'} to start ${room.app?.name ?? 'the app'}…` : `Waiting for ${room.host.name ?? 'the host'}…`}
       </button>
     );
   return (
     <article className="room window">
       <div className="title-bar">
         <div className="title-bar-text">
-          {room.name} · {room.app?.name}
+          {room.name}
+          {room.app?.name ? ` · ${room.app.name}` : ''}
         </div>
       </div>
       <div className="window-body">
         <div className="room-head">
-          <span className="live-dot" /> {room.mine ? 'You host this room' : `Hosted by ${room.host.name ?? shortDid(room.host.did)}`}
+          <span className="live-dot" /> {offered ? `Offered by ${offered}${room.mine ? ', running here' : ''}` : room.mine ? 'You host this room' : `Hosted by ${room.host.name ?? shortDid(room.host.did)}`}
           {who.length > 0 && <span className="tag">🎟 {who.join(' · ')}</span>}
           {room.joined && (
             <span className="room-peers">
@@ -111,13 +124,17 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
         <div className="room-actions">
           {main}
           <span className="grow" />
-          {room.mine ? (
+          {offered && room.mine ? (
+            <a className="button-link small" href="#/keys">
+              Stop it in Keys &amp; devices → Services
+            </a>
+          ) : room.mine ? (
             <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
           )}
         </div>
-        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {room.host.name ?? 'the host'}'s computer.</p>}
+        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered ? `${offered}, on the node it runs on` : `${room.host.name ?? 'the host'}'s computer`}.</p>}
         {room.joined && <RoomChat room={room} />}
       </div>
     </article>

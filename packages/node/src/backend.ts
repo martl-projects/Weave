@@ -268,6 +268,8 @@ export interface ServiceGate {
   publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
   /** Answer a request addressed to it, in the request's space. */
   answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
+  /** Its web interface listens on this local port: offer it as a room in each of its projects (its contract must offer a room). */
+  offerRoom(input: { port: number }): Promise<{ rooms: Array<{ id: string; project: SpaceRef }> }>;
 }
 
 /** A request to a service in a space, and what the service answered. */
@@ -1021,7 +1023,9 @@ export interface RoomInfo {
   project: SpaceRef;
   name: string;
   host: Person;
-  /** You host it. */
+  /** A service offers it (its key and name): the room is there while that service runs. */
+  offeredBy?: { did: Did; name?: string };
+  /** You host it (your own room, or your service's on this computer). */
   mine: boolean;
   open: boolean;
   /** You are invited (every participant, or named people). */
