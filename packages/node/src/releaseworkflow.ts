@@ -1,7 +1,7 @@
 /*
  * A GitHub Actions workflow a project can add so that pushing a version tag
  * builds its app for Windows, macOS and Linux and publishes a GitHub release
- * with the builds: hosts then install it from Weave with one click, without
+ * with the builds: rooms then run it from Weave with one click, without
  * Node.js or anything else installed. Builds are single programs made with
  * Bun's --compile (JavaScript and TypeScript apps), packed with the
  * repository's files; macOS builds are made on a Mac and ad-hoc signed.

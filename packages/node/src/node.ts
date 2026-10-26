@@ -290,6 +290,8 @@ import {
   parseManifest,
   startCommand,
   artifactsOf,
+  parsePages,
+  type RoomPages,
   type Artifact,
   type AppAsset,
   type AppImage,
@@ -402,7 +404,7 @@ import {
   type Admission,
   type AgentInfo,
   type AppEnv,
-  type AppLaunchInfo,
+
   type AppPerson,
   type UpdateInfo,
   type Backend,
@@ -542,7 +544,7 @@ import {
   type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
-import { AppProcesses, launchFingerprint } from './applaunch.ts';
+import { launchFingerprint } from './applaunch.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
@@ -607,6 +609,10 @@ interface Handover {
   /** For the node only: the service's key (when new) and changed settings (null removes one). */
   box?: Json;
   removed?: true;
+  /** The room service: its rooms (opened on a computer, run by the node), and what you approved them to run. */
+  builtin?: 'room';
+  hosted?: Record<string, StoredRoom>;
+  approved?: string[];
 }
 
 /** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
@@ -621,10 +627,6 @@ interface StoredService {
   settings: Record<string, string>;
   token: string;
   enabled: boolean;
-  /** Its rooms (it offers one per project it's in): project id → room id, kept across restarts. */
-  rooms?: Record<string, string>;
-  /** Where its process serves its rooms (WEAVE_ROOM_PORT). */
-  roomPort?: number;
   /** Settings given per space: space id → name → value (it reads them from its API). */
   spaceSettings?: Record<string, Record<string, string>>;
   /** A service Weave ships, run by the node itself: the room service. */
@@ -647,6 +649,10 @@ interface StoredRoom {
   settings: Record<string, string>;
   /** Its own token: the handler's way into the app API (for its room only), and the key of X-Weave-Person. */
   token: string;
+  /** Who may join, when not every participant: these people, a show's ticket holders, members of tiers. */
+  access?: { invite?: Did[]; show?: string; groups?: string[] };
+  /** Which page each side opens (an artifact's from its manifest). */
+  pages?: RoomPages;
 }
 
 /** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
@@ -923,9 +929,7 @@ export class WeaveNode implements Backend {
     docker: process.env.WEAVE_DOCKER?.trim().startsWith('[') ? (JSON.parse(process.env.WEAVE_DOCKER) as string[]) : [process.env.WEAVE_DOCKER || 'docker'],
   };
   #githubLogin?: GitHubLogin;
-  /** Apps being installed (or failed to), by project id. */
-  #installs = new Map<string, InstallJob>();
-  #installing = new Map<string, Promise<unknown>>();
+
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
   /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
@@ -942,11 +946,8 @@ export class WeaveNode implements Backend {
     watch: (onItem, signal) => this.watch(onItem, signal),
     roomPort: async (roomId) => this.#roomPort(roomId),
   });
-  /** Apps this node started for the person, by project id. */
-  #apps = new AppProcesses(() => this.#emitLive());
-  /** The app API (see appapi.ts), started when an app first needs it; its tokens, one per project, for this run. */
+  /** The app API (see appapi.ts), started when a room's handler or a service first needs it. */
   #appApi?: Promise<AppApiServer>;
-  #appTokens = new Map<string, string>();
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -995,7 +996,7 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#gumroadFile, this.#appSettingsFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
+    for (const file of [this.#githubFile, this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -1294,8 +1295,7 @@ export class WeaveNode implements Backend {
   }
 
   async goOffline(): Promise<void> {
-    this.#apps.stopAll();
-    this.#appTokens.clear();
+
     // Services still running keep asking it (their WEAVE_API); it closes with them (close stops them first).
     if (!this.#serviceProcs.size && !this.#roomProcs.size) {
       const appApi = this.#appApi;
@@ -3513,7 +3513,7 @@ export class WeaveNode implements Backend {
     return this.#app(this.#project(ref)) ?? null;
   }
 
-  async publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest> {
+  async publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     this.#maintainerState(project);
@@ -3522,14 +3522,7 @@ export class WeaveNode implements Backend {
     const before = this.#app(project)?.install;
     if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
     await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
-    if (input.folder) this.#rememberAppFolder(project.id, input.folder);
     return manifest;
-  }
-
-  /** The command this computer starts a project's app with: its container when there's one and Docker runs, else its release build's when Weave installed one. */
-  #startCommand(project: StoredSpace, app: AppManifest | undefined): string[] | undefined {
-    if (this.#containerOf(app)) return this.#containerCommand(project, app!);
-    return startCommand(app, platformKey(), !!this.#installed(project.id));
   }
 
   // ---------------------------------------------------------------- apps in containers (Weave and Docker)
@@ -3550,20 +3543,6 @@ export class WeaveNode implements Backend {
   #containerOf(app: AppManifest | undefined): AppImage | undefined {
     const image = app?.install?.image;
     return image && app?.start?.image && this.#dockerUp() ? image : undefined;
-  }
-
-  /** The container's name: one per project on this computer. */
-  #containerName(project: StoredSpace): string {
-    return `weave-${project.id.toLowerCase().replace(/[^a-z0-9_.-]/g, '-')}`;
-  }
-
-  /**
-   * How the app's container runs: by its digest, with only the services' ports (on 127.0.0.1; on Linux in the
-   * host's network, so tunnel ports stay as they are), no extra privileges, nothing of the computer mounted, and its
-   * settings and Weave's variables by name only (their values come from the environment, not the command line).
-   */
-  #containerCommand(project: StoredSpace, app: AppManifest): string[] {
-    return this.#dockerRun(this.#containerName(project), app, [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT']);
   }
 
   #dockerRun(container: string, app: AppManifest, names: string[]): string[] {
@@ -3587,31 +3566,6 @@ export class WeaveNode implements Backend {
       ...names.flatMap((n) => ['-e', n]),
       `${image.ref}@${image.digest}`,
     ];
-  }
-
-  async appLaunch(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    const app = this.#app(project);
-    const start = app?.start;
-    const command = this.#startCommand(project, app);
-    const install = this.#installInfo(project, app);
-    const folder = this.config.appFolders[project.id];
-    const run = this.#apps.status(project.id);
-    return {
-      ...(command ? { command } : {}),
-      ...(start?.hint ? { hint: start.hint } : {}),
-      ...(folder ? { folder } : {}),
-      approved: !!command && !!folder && this.config.approvedLaunches[project.id] === launchFingerprint(command, folder),
-      running: this.#apps.running(project.id),
-      ...(run ? { started: run.started, ...(run.exit ? { exit: run.exit } : {}) } : {}),
-      log: run?.log ?? [],
-      ...(app?.env ? { settings: app.env.map((e) => ({ ...e, set: !!this.#appSettings()[project.id]?.[e.name] })) } : {}),
-      ...(app ? { release: this.#releaseInfo(project, app) } : {}),
-      ...(install ? { install } : {}),
-      ...(app?.start?.image && app.install?.image
-        ? { container: { image: app.install.image.ref, tag: app.install.image.tag, digest: app.install.image.digest, docker: this.#dockerUp(), active: !!this.#containerOf(app) } }
-        : {}),
-    };
   }
 
   /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
@@ -3670,92 +3624,18 @@ export class WeaveNode implements Backend {
     return { repo, releases, ...(releaseWorkflow !== undefined ? { releaseWorkflow } : {}) };
   }
 
-  async setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    if (input.folder.trim()) this.#rememberAppFolder(project.id, input.folder.trim());
-    else {
-      const { [project.id]: _gone, ...rest } = this.config.appFolders;
-      this.config = { ...this.config, appFolders: rest };
-      saveConfig(this.home, this.config);
-    }
-    return this.appLaunch(project.id);
-  }
-
-  async launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const command = this.#startCommand(project, app);
-    if (!app || !command) throw new Error(`${project.name}'s app has no start command; start it yourself${app?.start?.hint ? `: ${app.start.hint}` : ''}`);
-    const container = this.#containerOf(app);
-    // A container needs no copy of the app: it runs in Weave's own folder for the project.
-    const folder = container ? this.#appsDir(project.id) : this.config.appFolders[project.id];
-    if (!folder) throw new Error(`choose where ${app.name} is on this computer first (the folder with its weave.app.json)`);
-    if (container) mkdirSync(folder, { recursive: true });
-    else this.#checkAppFolder(project.id, folder);
-    const fingerprint = launchFingerprint(command, folder);
-    if (this.config.approvedLaunches[project.id] !== fingerprint) {
-      if (!input.approve) throw new Error(`approve the command first: Weave would run "${command.join(' ')}" in ${folder}`);
-      this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: fingerprint } };
-      saveConfig(this.home, this.config);
-    }
-    const values = this.#appSettings()[project.id] ?? {};
-    const missing = (app.env ?? []).filter((e) => !e.optional && !values[e.name]);
-    if (missing.length) throw new Error(`${app.name} needs ${missing.map((e) => e.label).join(', ')} first: fill ${missing.length === 1 ? 'it' : 'them'} in under Live (or weave app set ${missing[0].name} -p ${project.name})`);
-    // Only the settings this manifest names, and Weave's own variables last, so a setting can't stand in for them.
-    const settings = Object.fromEntries((app.env ?? []).filter((e) => values[e.name]).map((e) => [e.name, values[e.name]]));
-    const weave = await this.appEnv(project.id);
-    if (!container) {
-      this.#apps.start(project.id, command, folder, { ...settings, ...weave });
-      return this.appLaunch(project.id);
-    }
-    // In a container, Weave's app API is the host's: reached as host.docker.internal (on Linux the host's network is shared).
-    const api = process.platform === 'linux' ? weave.WEAVE_API : weave.WEAVE_API.replace('127.0.0.1', 'host.docker.internal');
-    const [docker, ...first] = this.containerSetup.docker;
-    const name = this.#containerName(project);
-    // One left from before (a crash, a stop that didn't reach Docker) would block the name.
-    spawnSync(docker, [...first, 'rm', '-f', name], { windowsHide: true, timeout: 20_000 });
-    this.#apps.start(project.id, command, folder, { ...settings, ...weave, WEAVE_API: api }, () => void spawnSync(docker, [...first, 'stop', '-t', '5', name], { windowsHide: true, timeout: 20_000 }));
-    return this.appLaunch(project.id);
-  }
-
-  // ---------------------------------------------------------------- app settings
-
-  get #appSettingsFile(): string {
-    return joinPath(this.home.dir, 'app-settings.json');
-  }
-
-  /** Values hosts typed for their apps' settings: project id → variable → value. This computer only. */
-  #appSettings(): Record<string, Record<string, string>> {
-    return readSecretJson<Record<string, Record<string, string>>>(this.home, this.#appSettingsFile) ?? {};
-  }
-
-  async setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const setting = app?.env?.find((e) => e.name === input.name);
-    if (!app || !setting) throw new Error(`${app?.name ?? project.name} doesn't ask for ${input.name}${app?.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
-    const value = typeof input.value === 'string' ? input.value.trim() : '';
-    if (value.length > 4096 || value.includes('\0')) throw new Error(`${setting.label} is too long`);
-    const all = this.#appSettings();
-    const mine = { ...(all[project.id] ?? {}) };
-    if (value) mine[setting.name] = value;
-    else delete mine[setting.name];
-    if (Object.keys(mine).length) all[project.id] = mine;
-    else delete all[project.id];
-    writeSecretJson(this.home, this.#appSettingsFile, all);
-    this.#emitLive();
-    return this.appLaunch(project.id);
-  }
-
   // ---------------------------------------------------------------- app API
 
-  /** What a project's app needs to ask Weave who its players are: Weave passes it when it starts the app; `weave app env` prints it. */
-  async appEnv(ref: string): Promise<AppEnv> {
-    const project = this.#project(ref);
+  /**
+   * What a room's handler needs to ask Weave who its players are: Weave passes it to handlers it starts; for one
+   * that runs by itself (a room on a port), `weave room env` prints it.
+   */
+  async roomEnv(ref: string): Promise<AppEnv> {
+    const { room } = this.#roomById(ref);
+    const hosted = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
+    if (!hosted) throw new Error(`"${room.name}" isn't a room your room service runs here`);
     const api = await this.#startAppApi();
-    let token = this.#appTokens.get(project.id);
-    if (!token) this.#appTokens.set(project.id, (token = b64u.encode(randomBytes(24))));
-    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: token, WEAVE_PROJECT: project.id };
+    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: hosted.token, WEAVE_PROJECT: hosted.project, WEAVE_ROOM: hosted.id };
   }
 
   /** The port of the app API once it runs (services get it as WEAVE_API). */
@@ -3774,8 +3654,6 @@ export class WeaveNode implements Backend {
 
   /** Whose a token is: a project's app (the project id), or a service running here ("service:<name>"). */
   #appScope(token: string): string | undefined {
-    const app = [...this.#appTokens].find(([, t]) => sameToken(t, token))?.[0];
-    if (app) return app;
     const services = this.#storedServices().filter((s) => s.enabled);
     const service = services.find((s) => sameToken(s.token, token));
     if (service) return `service:${service.name}`;
@@ -3883,8 +3761,7 @@ export class WeaveNode implements Backend {
     if (this.#roomService(room)?.protocol !== 'http') return undefined;
     const found = this.#allRooms().find((r) => r.room.id === room.id);
     // A service's room is vouched for with the service's own token, which its process has.
-    const service = room.agent ? this.#localServiceByKey(room.agent) : undefined;
-    const token = room.agent ? (service?.hosted?.[room.id]?.token ?? service?.token) : found && this.#appTokens.get(found.project.id);
+    const token = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id]?.token : undefined;
     if (!found || !token) return undefined;
     const payload = Buffer.from(JSON.stringify({ ...this.#appPerson(found.project, person), room: { id: room.id, name: room.name }, t: Math.floor(this.clock() / 1000) })).toString('base64url');
     return `${payload}.${createHmac('sha256', token).update(payload).digest('base64url')}`;
@@ -3915,78 +3792,7 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  // ---------------------------------------------------------------- installing the app from its release
-
-  /** Where Weave keeps the apps it installed: apps/<project id>/<tag>. */
-  #appsDir(projectId: string): string {
-    return joinPath(this.home.dir, 'apps', projectId);
-  }
-
-  /** The release Weave installed for a project, while the project's app folder still points into it. */
-  #installed(projectId: string): { tag: string; folder: string } | undefined {
-    const record = readJson<{ tag?: string; folder?: string }>(joinPath(this.#appsDir(projectId), 'installed.json'));
-    return record?.tag && record.folder && this.config.appFolders[projectId] === record.folder ? { tag: record.tag, folder: record.folder } : undefined;
-  }
-
-  #installInfo(project: StoredSpace, app: AppManifest | undefined): AppLaunchInfo['install'] {
-    const install = app?.install;
-    const job = this.#installs.get(project.id);
-    if (!install && !job) return undefined;
-    const asset = install?.assets?.[platformKey()];
-    const installed = this.#installed(project.id);
-    return {
-      ...(install?.tag ? { version: install.tag } : {}),
-      ...(install?.github ? { repo: install.github } : {}),
-      ...(asset ? { asset: { file: asset.file, ...(asset.size ? { size: asset.size } : {}) } } : {}),
-      platform: platformKey(),
-      ...(installed ? { installed: installed.tag } : {}),
-      ...(job?.progress ? { progress: { ...job.progress } } : {}),
-      ...(job?.error ? { error: job.error } : {}),
-      ...(install?.steps ? { steps: install.steps } : {}),
-      ...(install?.app && install.app !== this.#githubApp().slug ? { otherApp: install.app } : {}),
-      ...(asset && startCommand(app, platformKey(), true) ? { command: startCommand(app, platformKey(), true) } : {}),
-    };
-  }
-
-  async installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    const install = app?.install;
-    const asset = install?.assets?.[platformKey()];
-    if (!app || !install?.github || !install.tag || !asset) throw new Error(`${project.name} has no release file for this computer (${platformKey()})${install?.steps ? ': install it by hand or with your agent, following its steps' : ''}`);
-    if (install.app && install.app !== this.#githubApp().slug && this.#githubAuth())
-      throw new Error(`${app.name}'s releases go through the GitHub App "${install.app}", and you sign in through "${this.#githubApp().slug}": switch to it in Keys & devices → Linked accounts (https://github.com/apps/${install.app})`);
-    if (this.#installs.get(project.id)?.progress) throw new Error(`${app.name} is being installed already`);
-    if (this.#apps.running(project.id)) throw new Error(`stop ${app.name} first`);
-    const job: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
-    this.#installs.set(project.id, job);
-    const done = this.#installRelease(project, app, { github: install.github, tag: install.tag, asset }, input.approve === true).then(
-      () => this.#installs.delete(project.id),
-      (error: Error) => this.#installs.set(project.id, { error: error.message }),
-    );
-    this.#installing.set(project.id, done.finally(() => this.#emitLive()));
-    return this.appLaunch(project.id);
-  }
-
-  /** Resolves when the install running for a project ends (for tests and the CLI). */
-  async installDone(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    await this.#installing.get(project.id);
-    return this.appLaunch(project.id);
-  }
-
-  async #installRelease(project: StoredSpace, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, approve: boolean): Promise<void> {
-    const job = this.#installs.get(project.id)!;
-    const dir = this.#appsDir(project.id);
-    const root = await this.#fetchRelease(dir, app, release, job);
-    this.#rememberAppFolder(project.id, root);
-    const command = startCommand(app, platformKey(), true);
-    if (approve && command) this.config = { ...this.config, approvedLaunches: { ...this.config.approvedLaunches, [project.id]: launchFingerprint(command, root) } };
-    saveConfig(this.home, this.config);
-    writeJson(joinPath(dir, 'installed.json'), { tag: release.tag, folder: root, file: release.asset.file, sha256: release.asset.sha256, installed: new Date(this.clock()).toISOString() });
-    // Earlier versions Weave installed go.
-    for (const entry of readdirSync(dir)) if (entry !== tagFolder(release.tag) && entry !== 'installed.json' && !entry.startsWith('.')) rmSync(joinPath(dir, entry), { recursive: true, force: true });
-  }
+  // ---------------------------------------------------------------- fetching a release
 
   /** Download a release file into dir/<tag>, refuse it unless it matches the fingerprint published, unpack it: its folder. */
   async #fetchRelease(dir: string, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, job: InstallJob): Promise<string> {
@@ -4085,75 +3891,26 @@ export class WeaveNode implements Backend {
     return manifest;
   }
 
-  async stopApp(ref: string): Promise<AppLaunchInfo> {
-    const project = this.#project(ref);
-    this.#apps.stop(project.id);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return this.appLaunch(project.id);
-  }
-
-  #rememberAppFolder(projectId: string, folder: string): void {
-    const full = resolvePath(folder);
-    this.#checkAppFolder(projectId, full);
-    this.config = { ...this.config, appFolders: { ...this.config.appFolders, [projectId]: full } };
-    saveConfig(this.home, this.config);
-  }
-
-  /** The folder must hold this project's app: its weave.app.json with the same app id. */
-  #checkAppFolder(projectId: string, folder: string): void {
-    const file = joinPath(folder, 'weave.app.json');
-    if (!existsSync(file)) throw new Error(`there's no weave.app.json in ${folder}`);
-    let local: { app?: unknown };
-    try {
-      local = JSON.parse(readFileSync(file, 'utf8')) as { app?: unknown };
-    } catch {
-      throw new Error(`${file} isn't valid JSON`);
-    }
-    const published = this.#app(this.#project(projectId));
-    if (published && local.app !== published.app) throw new Error(`${folder} holds the app "${String(local.app)}", but this project's app is "${published.app}"`);
-  }
-
 
   async rooms(ref?: string): Promise<RoomInfo[]> {
     const only = ref ? this.#project(ref).id : undefined;
-    const rooms = this.#allRooms().filter(({ room, project }) => room.open && (!only || project.id === only));
+    // Rooms come from room services (rooms hosts announced themselves, before them, are left out).
+    const rooms = this.#allRooms().filter(({ room, project }) => room.open && !!room.agent && (!only || project.id === only));
     return Promise.all(rooms.map(({ room, project }) => this.#roomInfo(room, project)));
-  }
-
-  async hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo> {
-    const project = this.#project(input.project);
-    const app = this.#app(project);
-    if (!app) throw new Error(`${project.name} has no app to share yet: a maintainer publishes one with "weave app publish"`);
-    if (!this.#swarm) throw new Error('rooms need your node online: keep the app (or "weave daemon") running');
-    const id = b64u.encode(randomBytes(12));
-    const name = input.name?.trim().slice(0, 60) || `${this.nameOf(this.identity.author) ?? 'Someone'}'s room`;
-    const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : 'participants';
-    const key = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
-    const show = input.show ? this.#showRef(input.show) : undefined;
-    if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} hosts rooms for ${show.name}: they let ticket holders in`);
-    const groups = (input.groups ?? []).map((ref) => {
-      const group = this.#space(ref);
-      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
-      if (!this.#state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
-      return group.id;
-    });
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name, service: app.services[0].id, key, invite, ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}), open: true } }));
-    const room = this.#roomById(id).room;
-    await this.#live.host(room);
-    return this.#roomInfo(room, project);
   }
 
   async endRoom(ref: string): Promise<void> {
     const { room, project } = this.#roomById(ref);
-    if (room.host !== this.identity.author) throw new Error('only the host can end a room');
-    if (room.agent) {
-      // A room of the room service: its handler stops, the room closes.
-      const service = this.#localServiceByKey(room.agent);
-      if (service?.hosted?.[room.id]) return this.#closeHostedRooms(service.name, (r) => r.id !== room.id);
-      throw new Error(`${this.#agentName(room.agent, room.host) ?? 'a service'} offers this room: ${service ? 'it ends when that service stops (weave service stop)' : 'end it on the device it runs on'}`);
+    if (room.host !== this.identity.author || !room.agent) throw new Error('only the person whose room service offers a room ends it');
+    // A room of the room service: its handler stops, the room closes. On an always-on node: handed over as a change.
+    const service = this.#localServiceByKey(room.agent);
+    if (service?.hosted?.[room.id]) return this.#closeHostedRooms(service.name, (r) => r.id !== room.id);
+    const away = this.#isLinkedNode ? undefined : [...this.#handedOver().values()].find((h) => h.did === room.agent);
+    if (away?.hosted?.[room.id]) {
+      const { [room.id]: _gone, ...hosted } = away.hosted;
+      return this.#changeNodeService(away, { hosted });
     }
-    await this.#live.stopHosting(room.id);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, open: false } }));
+    throw new Error(`${this.#agentName(room.agent, room.host) ?? 'a service'} offers "${room.name}": end it on the device it runs on`);
   }
 
   async joinRoom(ref: string): Promise<RoomInfo> {
@@ -4161,13 +3918,7 @@ export class WeaveNode implements Backend {
     if (!room.open) throw new Error('this room has ended');
     if (this.#hostedHere(room)) return this.#roomInfo(room, project);
     if (!this.#mayJoin(room, this.identity.author)) throw new Error(room.show || room.groups ? "this room is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this room");
-    if (room.agent) {
-      await this.#live.join(room, room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'room');
-      return this.#roomInfo(room, project);
-    }
-    const app = this.#app(project);
-    if (!app) throw new Error(`${project.name} has no app`);
-    await this.#live.join(room, app.app);
+    await this.#live.join(room, room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'room');
     return this.#roomInfo(room, project);
   }
 
@@ -4256,64 +4007,23 @@ export class WeaveNode implements Backend {
     return !!member && (!member.until || member.until > new Date(this.clock()).toISOString());
   }
 
-  /** Whether this node hosts a room: its person's own (not a service's), or a room of a service running here. */
+  /** Whether this node hosts a room: one of a room service running here. */
   #hostedHere(room: Room): boolean {
-    if (room.host !== this.identity.author) return false;
-    return room.agent ? !!this.#localServiceByKey(room.agent) : true;
+    return room.host === this.identity.author && !!room.agent && !!this.#localServiceByKey(room.agent)?.hosted?.[room.id];
   }
 
   #localServiceByKey(did: Did): StoredService | undefined {
     return this.#storedServices().find((s) => this.#agents.find((a) => a.name === s.name)?.did === did);
   }
 
+  /** What a room's clients reach on this computer: its handler's port, where the room service runs. */
   #roomService(room: Room) {
-    // A service's room: its own web interface, on the port its process was given.
-    if (room.agent) {
-      const service = this.#localServiceByKey(room.agent);
-      // The room service's rooms: their handler's port. A service with its own page: the port it offered.
-      const port = service?.hosted?.[room.id]?.port ?? service?.roomPort;
-      return port ? { id: 'room', port, protocol: 'http' as const } : undefined;
-    }
-    const found = this.#allRooms().find((r) => r.room.id === room.id);
-    const app = found && this.#app(found.project);
-    return app?.services.find((s) => s.id === room.service) ?? app?.services[0];
+    const port = room.agent ? this.#localServiceByKey(room.agent)?.hosted?.[room.id]?.port : undefined;
+    return port ? { id: 'room', port, protocol: 'http' as const } : undefined;
   }
 
+  /** A room, offered by a room service: hosted where that service runs, joined like any room everywhere else (also on your own computers). */
   async #roomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
-    const me = this.identity.author;
-    if (room.agent) return this.#serviceRoomInfo(room, project);
-    const mine = room.host === me;
-    const app = this.#app(project);
-    const service = app?.services.find((s) => s.id === room.service) ?? app?.services[0];
-    const joined = mine ? this.#live.isHosting(room.id) : this.#live.isJoined(room.id);
-    const connected = this.#live.connected(room.id);
-    const ready = mine ? !!service && (await portOpen(service.port)) : this.#live.appReady(room.id);
-    const side = mine ? service?.open?.host : service?.open?.joiner;
-    const path = side?.path ?? '/';
-    const localPort = this.#live.localPort(room.id);
-    const url = mine ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && ready && app ? `http://${app.app}.weave.localhost:${localPort}${path}` : undefined;
-    return {
-      id: room.id,
-      project: { id: project.id, kind: 'project', name: project.name },
-      name: room.name,
-      host: { did: room.host, name: this.nameOf(room.host) },
-      mine,
-      open: room.open,
-      mayJoin: this.#mayJoin(room, me),
-      ...(room.show ? { show: room.show } : {}),
-      ...(room.groups?.length ? { groups: room.groups.map((id) => ({ id, name: this.#spaces.get(id)?.name })) } : {}),
-      joined,
-      connected,
-      peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      ...(app ? { app: { app: app.app, name: app.name, ...(app.start?.hint ? { startHint: app.start.hint } : {}), ...(app.start?.command || app.start?.release ? { canLaunch: true } : {}) } } : {}),
-      ...(service ? { service: { id: service.id, label: side?.label ?? (mine ? 'Open' : 'Play'), ready } } : {}),
-      ...(url ? { url } : {}),
-      time: room.time,
-    };
-  }
-
-  /** A room a service offers: hosted where that service runs, joined like any room everywhere else (also on your own computers). */
-  async #serviceRoomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
     const me = this.identity.author;
     const here = this.#hostedHere(room);
     const service = here ? this.#roomService(room) : undefined;
@@ -4321,7 +4031,9 @@ export class WeaveNode implements Backend {
     const ready = here ? !!service && (await portOpen(service.port)) : this.#live.appReady(room.id);
     const localPort = this.#live.localPort(room.id);
     const slug = room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'room';
-    const url = here ? (service && ready ? `http://localhost:${service.port}/` : undefined) : localPort && ready ? `http://${slug}.weave.localhost:${localPort}/` : undefined;
+    const side = here ? room.pages?.host : room.pages?.joiner;
+    const path = side?.path ?? '/';
+    const url = here ? (service && ready ? `http://localhost:${service.port}${path}` : undefined) : localPort && ready ? `http://${slug}.weave.localhost:${localPort}${path}` : undefined;
     const name = this.#agentName(room.agent!, room.host);
     return {
       id: room.id,
@@ -4332,10 +4044,12 @@ export class WeaveNode implements Backend {
       mine: here,
       open: room.open,
       mayJoin: this.#mayJoin(room, me),
+      ...(room.show ? { show: room.show } : {}),
+      ...(room.groups?.length ? { groups: room.groups.map((id) => ({ id, name: this.#spaces.get(id)?.name })) } : {}),
       joined,
       connected: this.#live.connected(room.id),
       peers: joined ? this.#live.peers(room.id).map((did) => ({ did, name: this.nameOf(did) })) : [],
-      service: { id: 'room', label: 'Open', ready },
+      service: { id: 'room', label: side?.label ?? (here ? 'Open' : 'Play'), ready },
       ...(url ? { url } : {}),
       time: room.time,
     };
@@ -7516,7 +7230,7 @@ export class WeaveNode implements Backend {
         return space ? [{ id, kind: space.kind, name: this.#spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
       ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.#hostedRoomInfo(stored, r)) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.#hostedRoomInfo(r)) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
       running: stored.builtin ? stored.enabled : this.#serviceProcs.has(stored.name),
@@ -7587,7 +7301,7 @@ export class WeaveNode implements Backend {
    * Open a room: in a project the room service was added to, answered by its handler. Running code (an artifact's
    * release, a command) needs `approve` once per release or command; a handler already running needs nothing.
    */
-  async openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean }): Promise<RoomInfo> {
+  async openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo> {
     const service = this.#roomServiceFor(input.service);
     const project = this.#project(input.project);
     if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
@@ -7595,6 +7309,7 @@ export class WeaveNode implements Backend {
     if (!name) throw new Error('a room has a name');
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     if (input.artifact && command?.length) throw new Error('a room runs an artifact or a command, not both');
+    if (service.away && command?.length) throw new Error(`${service.name} runs on ${this.#nodeKey(service.away.node).name}: a room there runs a project's release, or something already running there, not a program of this computer`);
     let handler: RoomHandler;
     let port: number;
     let approved: string | undefined;
@@ -7626,22 +7341,80 @@ export class WeaveNode implements Backend {
       handler = { address: true };
       if (input.settings && Object.keys(input.settings).length) throw new Error('settings go to a handler Weave starts: this one runs by itself');
     }
-    const taken = this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {})).find((r) => r.port === port);
+    // Who may join: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
+    const invite = input.invite?.length ? input.invite.map((who) => this.resolve(who)) : ('participants' as const);
+    const show = input.show ? this.#showRef(input.show) : undefined;
+    if (show && show.host !== this.identity.author) throw new Error(`only ${this.nameOf(show.host) ?? 'its host'} opens rooms for ${show.name}: they let ticket holders in`);
+    const groups = (input.groups ?? []).map((ref) => {
+      const group = this.#space(ref);
+      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
+      if (!this.#state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
+      return group.id;
+    });
+    // Ports answer on one device: rooms there can't share one.
+    const busy = service.away ? Object.values(service.hosted) : this.#storedServices().flatMap((s) => Object.values(s.hosted ?? {}));
+    const taken = busy.find((r) => r.port === port);
     if (taken) throw new Error(`port ${port} already answers the room "${taken.name}": end it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
-    const room: StoredRoom = { id: b64u.encode(randomBytes(12)), project: project.id, name, handler, port, settings: Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)])), token: b64u.encode(randomBytes(24)) };
-    this.#saveServices(
-      this.#storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room }, ...(approved && !(s.approved ?? []).includes(approved) ? { approved: [...(s.approved ?? []), approved] } : {}) } : s)),
-    );
-    // Announced under the room service's key, so everyone sees whose service offers it.
-    const key = this.#serviceKey(service.name);
-    this.replica.write(key, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, name, service: 'room', key: roomKeyPair(this.#roomSeed(room.id)).publicKey.toString('hex'), invite: 'participants', agent: key.did, open: true } }));
-    const announced = this.#roomById(room.id).room;
-    // Hosting finds the network in the background: the room is announced already.
-    if (this.#swarm) void this.#live.host(announced).catch(() => {});
+    const access = { ...(invite !== 'participants' ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
+    // The pages each side opens: the release's own (its manifest's open), or as given.
+    const web = 'artifact' in handler ? this.#artifactWeb(handler.artifact.manifest) : undefined;
+    const pages = parsePages(web ? web.open : input.pages);
+    const room: StoredRoom = {
+      id: b64u.encode(randomBytes(12)),
+      project: project.id,
+      name,
+      handler,
+      port,
+      settings: Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)])),
+      token: b64u.encode(randomBytes(24)),
+      ...(Object.keys(access).length ? { access } : {}),
+      ...(pages ? { pages } : {}),
+    };
+    const approvals = approved && !service.approved.includes(approved) ? [...service.approved, approved] : service.approved;
+    if (service.away) {
+      // Its key is on the always-on node: the room goes there, sealed to yourself, and the node announces and runs it.
+      this.#changeNodeService(service.away, { hosted: { ...service.hosted, [room.id]: room }, approved: approvals });
+      return {
+        id: room.id,
+        project: { id: project.id, kind: 'project', name: project.name },
+        name,
+        host: { did: this.identity.author, name: this.nameOf(this.identity.author) },
+        offeredBy: { did: service.away.did, name: service.name },
+        mine: false,
+        open: false,
+        mayJoin: true,
+        joined: false,
+        connected: false,
+        peers: [],
+        time: new Date(this.clock()).toISOString(),
+      };
+    }
+    this.#saveServices(this.#storedServices().map((s) => (s.name === service.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room }, approved: approvals } : s)));
+    const announced = this.#announceRoom(service.name, room)!;
     if (this.#serviceApi) await this.#startAppApi();
     this.#startRoom(service.name, room.id);
     this.#emitLive();
     return this.#roomInfo(announced, project);
+  }
+
+  /** A room of the room service, announced under its key (so everyone sees whose service offers it), and hosted here. */
+  #announceRoom(serviceName: string, room: StoredRoom): Room | undefined {
+    const project = this.#spaces.get(room.project);
+    if (!project) return undefined;
+    const key = this.#serviceKey(serviceName);
+    const known = roomsOf(this.#entries(project)).find((r) => r.id === room.id);
+    if (!known?.open) {
+      const roomKey = roomKeyPair(this.#roomSeed(room.id)).publicKey.toString('hex');
+      const a = room.access ?? {};
+      this.replica.write(
+        key,
+        sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: room.id, name: room.name, service: 'room', key: roomKey, invite: a.invite ?? 'participants', ...(a.show ? { show: a.show } : {}), ...(a.groups?.length ? { groups: a.groups } : {}), ...(room.pages ? { pages: room.pages as unknown as Json } : {}), agent: key.did, open: true } }),
+      );
+    }
+    const announced = this.#roomById(room.id).room;
+    // Hosting finds the network in the background: the room is announced already.
+    if (this.#swarm) void this.#live.host(announced).catch(() => {});
+    return announced;
   }
 
   /** A port a room's clients may reach: one a handler listens on, on this computer. */
@@ -7651,17 +7424,21 @@ export class WeaveNode implements Backend {
     return n;
   }
 
-  /** Your room service: the one named, or your only one. */
-  #roomServiceFor(name?: string): StoredService {
-    const all = this.#storedServices().filter((s) => s.builtin === 'room');
+  /** Your room service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
+  #roomServiceFor(name?: string): { name: string; spaces: string[]; approved: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
+    const here = this.#storedServices()
+      .filter((s) => s.builtin === 'room')
+      .map((s) => ({ name: s.name, spaces: s.spaces, approved: s.approved ?? [], hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
+    const away = this.#isLinkedNode ? [] : [...this.#handedOver().values()].filter((h) => h.builtin === 'room').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
+    const all = [...here, ...away];
     const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
-    if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --room)');
+    if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --builtin room)');
     if (!found.enabled) throw new Error(`${found.name} is stopped: start it first`);
     return found;
   }
 
   /** A room the room service runs, as its service lists it: its handler and how it's doing. */
-  #hostedRoomInfo(stored: StoredService, r: StoredRoom): HostedRoomInfo {
+  #hostedRoomInfo(r: StoredRoom, here = true): HostedRoomInfo {
     const project = this.#spaces.get(r.project);
     const job = this.#roomInstalls.get(r.id);
     const h = r.handler;
@@ -7683,7 +7460,7 @@ export class WeaveNode implements Backend {
       port: r.port,
       handler,
       settings: Object.keys(r.settings).sort(),
-      running: 'address' in h ? true : this.#roomProcs.has(r.id),
+      running: here && ('address' in h || this.#roomProcs.has(r.id)),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
       ...(job?.error ? { error: job.error } : {}),
     };
@@ -7843,7 +7620,6 @@ export class WeaveNode implements Backend {
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = input.builtin === 'room' ? ('room' as const) : undefined;
     if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
-    if (builtin && input.node) throw new Error('the room service runs on this computer for now: always-on nodes come next');
     const name = serviceName(input.name ?? builtin);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.#agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
@@ -7852,7 +7628,7 @@ export class WeaveNode implements Backend {
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     if (input.node) {
       if (this.#handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
-      return this.#addNodeService(name, contract, input, command);
+      return this.#addNodeService(name, contract, { ...input, ...(builtin ? { builtin, description: input.description ?? 'Rooms: a way to join in with the project’s participants' } : {}) }, command);
     }
     const stored: StoredService = {
       name,
@@ -7921,6 +7697,7 @@ export class WeaveNode implements Backend {
         return space ? [{ id, kind: space.kind, name: this.#spaceName(space) }] : [];
       }),
       ...(h.command ? { command: h.command } : {}),
+      ...(h.builtin ? { builtin: h.builtin, rooms: Object.values(h.hosted ?? {}).map((r) => this.#hostedRoomInfo(r, false)) } : {}),
       settings: h.settingNames ?? [],
       enabled: h.enabled !== false,
       running: false,
@@ -7928,7 +7705,7 @@ export class WeaveNode implements Backend {
     };
   }
 
-  async #addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string }, command?: string[]): Promise<ServiceInfo> {
+  async #addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'room' }, command?: string[]): Promise<ServiceInfo> {
     const node = this.#nodeKey(input.node!);
     const key = createSubKey(this.identity.author);
     const permissions = servicePermissions(contract);
@@ -7936,7 +7713,7 @@ export class WeaveNode implements Backend {
     const description = input.description?.trim().slice(0, 1000) ?? '';
     const icon = input.icon?.startsWith('wblob:') ? input.icon : undefined;
     // The profile, signed by the service's own key, before the key leaves this computer for good.
-    this.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), contract: contract as unknown as Json } });
+    this.replica.write(key, { kind: KIND_SERVICE_PROFILE, body: { name, description, ...(icon ? { icon } : {}), ...(input.builtin ? { builtin: input.builtin } : {}), contract: contract as unknown as Json } });
     const handover: Omit<Handover, 'id'> = {
       service: name,
       node: node.did,
@@ -7946,6 +7723,7 @@ export class WeaveNode implements Backend {
       ...(icon ? { icon } : {}),
       spaces: this.#serviceSpaces(input.spaces ?? []),
       ...(command?.length ? { command } : {}),
+      ...(input.builtin ? { builtin: input.builtin, hosted: {}, approved: [] } : {}),
       enabled: true,
       settingNames: [],
       box: boxTo(node.did, { secretKey: b64u.encode(key.keys.secretKey), publicKey: b64u.encode(key.keys.publicKey), settings: {} }) as unknown as Json,
@@ -7956,7 +7734,7 @@ export class WeaveNode implements Backend {
   }
 
   /** A change to a service on a node: a new handover; settings travel as changes, boxed for that node only. */
-  #changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true }): void {
+  #changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true; hosted?: Record<string, StoredRoom>; approved?: string[] }): void {
     const { id: _id, box: _box, command: _command, ...rest } = before;
     const command = change.command === null ? undefined : (change.command ?? before.command);
     const names = new Set(before.settingNames ?? []);
@@ -7965,15 +7743,20 @@ export class WeaveNode implements Backend {
       if (value === null) names.delete(key);
       else names.add(key);
     }
+    const spaces = change.spaces ? this.#serviceSpaces(change.spaces) : before.spaces;
+    // The room service's rooms: only in projects it's in, none while it's off.
+    const hosted = before.builtin ? Object.fromEntries(Object.entries(change.hosted ?? before.hosted ?? {}).filter(([, r]) => spaces.includes(r.project) && change.enabled !== false)) : undefined;
     const after: Omit<Handover, 'id'> = {
       ...rest,
-      ...(change.spaces ? { spaces: this.#serviceSpaces(change.spaces) } : {}),
+      spaces,
       ...(command?.length ? { command } : {}),
       ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
       ...(change.description !== undefined ? { description: change.description.trim().slice(0, 1000) } : {}),
       settingNames: [...names].sort(),
       ...(change.settings && Object.keys(change.settings).length ? { box: boxTo(before.node, { settings: change.settings }) as unknown as Json } : {}),
       ...(change.removed ? { removed: true as const } : {}),
+      ...(hosted ? { hosted } : {}),
+      ...(change.approved ? { approved: change.approved } : {}),
     };
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: after as unknown as Json }));
     this.#announceService(before.did, before.spaces, change.removed ? [] : after.spaces);
@@ -7997,7 +7780,7 @@ export class WeaveNode implements Backend {
       if (h.removed) {
         if (!before) continue;
         // Its rooms end first, signed with its key, before the key goes.
-        await this.#endServiceRooms(h.service);
+        await this.#closeHostedRooms(h.service);
         this.#stopService(h.service);
         this.#agents = this.#agents.filter((a) => a.name !== h.service);
         rmSync(joinPath(this.home.agents, `${h.service}.json`), { force: true });
@@ -8024,14 +7807,25 @@ export class WeaveNode implements Backend {
         contract: h.contract,
         spaces: h.spaces,
         ...(h.command?.length ? { command: h.command } : {}),
+        ...(h.builtin ? { builtin: h.builtin, approved: h.approved ?? [] } : {}),
         settings,
         token: before?.token ?? b64u.encode(randomBytes(24)),
         enabled: h.enabled !== false,
       };
-      if (before?.enabled && !stored.enabled) await this.#endServiceRooms(h.service);
-      this.#saveServices([...this.#storedServices().filter((s) => s.name !== h.service), { ...stored, ...(before?.rooms ? { rooms: before.rooms } : {}), ...(before?.roomPort ? { roomPort: before.roomPort } : {}) }]);
-      this.#stopService(h.service);
-      this.#startService(this.#storedService(h.service));
+      // The room service: rooms gone from the handover end here; new ones are announced and run here.
+      const rooms = h.builtin && stored.enabled ? (h.hosted ?? {}) : {};
+      await this.#closeHostedRooms(h.service, (r) => !!rooms[r.id]);
+      this.#saveServices([...this.#storedServices().filter((s) => s.name !== h.service), { ...stored, ...(h.builtin ? { hosted: { ...(this.#storedServices().find((s) => s.name === h.service)?.hosted ?? {}), ...rooms } } : {}) }]);
+      if (h.builtin) {
+        if (this.#serviceApi) await this.#startAppApi();
+        for (const room of Object.values(rooms)) {
+          this.#announceRoom(h.service, room);
+          this.#startRoom(h.service, room.id);
+        }
+      } else {
+        this.#stopService(h.service);
+        this.#startService(this.#storedService(h.service));
+      }
       changed++;
     }
     if (mine.length) writeFileSync(appliedFile, JSON.stringify([...applied]));
@@ -8092,10 +7886,8 @@ export class WeaveNode implements Backend {
     if (after.description !== before.description) this.#publishServiceProfile(after);
     if (!this.#isLinkedNode) this.#announceService(this.#serviceKey(after.name).did, before.spaces, after.spaces);
     // Turned off, its rooms end; out of a project, its rooms there end.
-    if (before.enabled && !after.enabled) {
-      await this.#endServiceRooms(after.name);
-      await this.#closeHostedRooms(after.name);
-    } else await this.#closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
+    if (before.enabled && !after.enabled) await this.#closeHostedRooms(after.name);
+    else await this.#closeHostedRooms(after.name, (room) => after.spaces.includes(room.project));
     if (after.builtin) {
       if (this.#serviceApi) await this.#startAppApi();
       for (const id of Object.keys(this.#storedService(after.name).hosted ?? {})) this.#startRoom(after.name, id);
@@ -8117,7 +7909,6 @@ export class WeaveNode implements Backend {
       return;
     }
     const stored = this.#storedService(name);
-    await this.#endServiceRooms(name);
     await this.#closeHostedRooms(name);
     this.#stopService(name);
     const key = this.#serviceKey(name);
@@ -8248,62 +8039,13 @@ export class WeaveNode implements Backend {
         inSpace(found.space.id);
         return this.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
       },
-      offerRoom: async ({ port }) => {
-        const stored = current();
-        if (!stored.contract.room) throw new Error(`service "${name}" doesn't offer a room in its contract`);
-        this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, roomPort: port } : s)));
-        return { rooms: await this.#openServiceRooms(name) };
-      },
     };
-  }
-
-  /**
-   * A service's rooms: one per project it's in, announced with its own key (the same room id across restarts),
-   * hosted here while it runs. Rooms in projects it left are ended.
-   */
-  async #openServiceRooms(name: string): Promise<Array<{ id: string; project: SpaceRef }>> {
-    const stored = this.#storedService(name);
-    const key = this.#serviceKey(name);
-    const rooms = { ...(stored.rooms ?? {}) };
-    const open: Array<{ id: string; project: SpaceRef }> = [];
-    for (const [projectId, roomId] of Object.entries(rooms)) {
-      if (stored.spaces.includes(projectId)) continue;
-      await this.#closeServiceRoom(key, projectId, roomId);
-      delete rooms[projectId];
-    }
-    for (const projectId of stored.spaces) {
-      const project = this.#spaces.get(projectId);
-      if (project?.kind !== 'project') continue; // rooms live in projects
-      const id = rooms[projectId] ?? b64u.encode(randomBytes(12));
-      rooms[projectId] = id;
-      const known = roomsOf(this.#entries(project)).find((r) => r.id === id);
-      if (!known?.open) {
-        const roomKey = roomKeyPair(this.#roomSeed(id)).publicKey.toString('hex');
-        this.replica.write(key, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: id, name: stored.name, service: 'room', key: roomKey, invite: 'participants', agent: key.did, open: true } }));
-      }
-      const room = roomsOf(this.#entries(project)).find((r) => r.id === id);
-      if (room && this.#swarm) await this.#live.host(room).catch(() => {});
-      open.push({ id, project: { id: project.id, kind: 'project', name: this.#spaceName(project) } });
-    }
-    this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, rooms } : s)));
-    this.#emitLive();
-    return open;
   }
 
   async #closeServiceRoom(key: AgentKey, projectId: string, roomId: string): Promise<void> {
     await this.#live.stopHosting(roomId);
     const project = this.#spaces.get(projectId);
     if (project) this.replica.write(key, sealFor(this.#cipher(project), { kind: KIND_ROOM, body: { room: roomId, agent: key.did, open: false } }));
-  }
-
-  /** A service stopped for good (removed or turned off): its rooms end, for everyone. */
-  async #endServiceRooms(name: string): Promise<void> {
-    const stored = this.#storedServices().find((s) => s.name === name);
-    const key = this.#agents.find((a) => a.name === name);
-    if (!stored?.rooms || !key) return;
-    for (const [projectId, roomId] of Object.entries(stored.rooms)) await this.#closeServiceRoom(key, projectId, roomId);
-    this.#saveServices(this.#storedServices().map((s) => (s.name === name ? { ...s, rooms: {} } : s)));
-    this.#emitLive();
   }
 
   // Running services: one process each, started with the address of the local API and its own token.
@@ -8373,7 +8115,6 @@ export class WeaveNode implements Backend {
   }
 
   #stopService(name: string): void {
-    for (const roomId of Object.values(this.#storedServices().find((s) => s.name === name)?.rooms ?? {})) void this.#live.stopHosting(roomId);
     const restarts = this.#serviceRestarts.get(name);
     if (restarts?.timer) clearTimeout(restarts.timer);
     this.#serviceRestarts.delete(name);

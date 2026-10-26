@@ -44,7 +44,6 @@ import {
   type ProjectInfo,
   type ProjectStatus,
   type ProposalInfo,
-  type AppLaunchInfo,
   type KnockInfo,
   type SpaceInfo,
   type ThreadInfo,
@@ -121,8 +120,7 @@ projects — something being built; participants chat, discuss, vote and work on
   project page <project>                 change the page   [--title <t>] [--subtitle <t>] [--text <markdown> | --file <page.md>]
                                                            [--icon <image>] [--banner <image>] ("" removes one)
                                                            [--status idea|active|paused|shipped|archived] [--public | --private]
-  app folder [path] -p <project>         where this computer's copy of the app is (default: here)
-  app start|stop|status -p <project>     run the manifest's start command (asks you once), stop it, see its output
+
   image <file>                           upload an image; prints its wblob: reference for Markdown: ![alt](wblob:…)
   project invite <project>               print an invite link (maintainers)  [--hours <n>] [--accept]
                                          [--read-board <b,…>] [--write-board <b,…>]: board rights the link gives
@@ -292,14 +290,10 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
                              [--shares makers=7000,treasury=1500,community=1400,foundation=100: your own, in basis points]
                              a changed split counts after 7 days; the Weave Foundation's part is a suggestion, 0 is fine
 
-rooms: share a project's app live with its participants (needs a running daemon):
-  app publish -p <project>   publish the project's app from weave.app.json (maintainers)  [--file <path>]
-  app show -p <project>      the project's app: ports it shares, buttons
-  app install -p <project>   download its release for this computer, check it, unpack it, and use it (asks first)
+artifacts and rooms: a project's releases, and rooms that run them (needs a running daemon):
+  app publish -p <project>   maintainers: publish the project's artifact description from weave.app.json  [--file <path>]
+  app show -p <project>      what it describes: its web page's port, how it starts, its settings
   app check [file]           check a weave.app.json (default: here), every problem at once
-  app set <NAME> -p <p>      fill in a setting the app asks for (an API key…), typed, kept on this computer only
-  app unset <NAME> -p <p>    remove it again
-  app env -p <project>       WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT for an app you start yourself (@weave/sdk reads them)
   app example                an annotated weave.app.json and its rules
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
@@ -308,7 +302,8 @@ rooms: share a project's app live with its participants (needs a running daemon)
   room open <name> -p <p>    a room of your room service, answered by: --artifact <project>[@tag] (a release, fetched and
                              checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
                              [--setting KEY=VALUE] [--service <room service>]; running code asks you to approve it
-  room host <name> -p <p>    (older) open a room sharing the project's app  [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
+                             [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
+  room env <room>            WEAVE_API and the room's token, for what answers it when it runs by itself (@weave/sdk reads them)
   room join <room>           join: prints the address to open
   room leave|end <room>      leave a room, or end the one you host
   room chat <room>           the room's chat (never stored)
@@ -647,26 +642,6 @@ async function sellOnGumroad(b: Backend, t: TierInfo, token: string | undefined)
 /** "5" or "5.50" (in the currency's main unit) → cents. */
 const cents = (value?: string) => (value === undefined ? undefined : Math.round(Number(value.replace(',', '.')) * 100));
 const benefits = (value?: string) => value?.split(',').map((b) => b.trim()).filter(Boolean);
-
-const launchText = (l: AppLaunchInfo) =>
-  [
-    l.command ? `start command: ${l.command.join(' ')}${l.approved ? ' (approved)' : ''}` : `no start command${l.hint ? `; start it yourself: ${l.hint}` : ''}`,
-    `folder: ${l.folder ?? '(not chosen: weave app folder <path> -p <project>)'}`,
-    l.running ? `running since ${new Date(l.started!).toLocaleTimeString()}` : l.exit ? (l.exit.stopped ? 'stopped' : `exited by itself (code ${l.exit.code ?? '-'})`) : 'not running',
-    ...(l.install ? [installText(l.install)] : []),
-    ...(l.settings?.length ? [`settings (kept on this computer):\n${l.settings.map((x) => `  ${x.name.padEnd(22)} ${x.set ? '✓ set' : x.optional ? '– not set (optional)' : '✗ not set: weave app set ' + x.name} · ${x.label}`).join('\n')}`] : []),
-  ].join('\n');
-
-const installText = (i: NonNullable<AppLaunchInfo['install']>) =>
-  [
-    i.version ? `release: ${i.version}${i.repo ? ` from github.com/${i.repo}` : ''}${i.asset ? ` · ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}` : ` · no file for ${i.platform}`}` : '',
-    i.command && !i.installed ? `the installed build starts with: ${i.command.join(' ')}` : '',
-    i.installed ? `installed here: ${i.installed}${i.version && i.installed !== i.version ? ` (update: weave app install)` : ''}` : i.asset ? 'not installed here (weave app install)' : '',
-    i.error ? `last install failed: ${i.error}` : '',
-    i.steps ? `steps for installing by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
 
 /** A line typed without showing it (for secrets), from a terminal only. */
 async function askHidden(question: string): Promise<string> {
@@ -1430,7 +1405,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.space ? ' (per space)' : ''}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
       if (sub === 'add' && values.builtin) {
         if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
@@ -2264,38 +2239,12 @@ ${postLine(p)}`);
       if (sub === 'publish') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
-        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')), folder: dirname(file) });
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
         return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.github ? ` (${app.install.github})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
-      }
-      if (sub === 'folder') {
-        const info = await b.setAppFolder({ project: needProject(), folder: args[1] === undefined ? (process.env.INIT_CWD ?? process.cwd()) : args[1] && resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1]) });
-        return out(info, () => launchText(info));
-      }
-      if (sub === 'install') {
-        const project = needProject();
-        const info = await b.appLaunch(project);
-        const i = info.install;
-        if (!i?.asset) throw new Error(`no release file for this computer${i ? ` (${i.platform})` : ''}${i?.steps ? `; install it by hand:\n${i.steps.map((x, n) => `  ${n + 1}. ${x}`).join('\n')}` : ''}`);
-        const answer = await askLine(`Install ${i.version} from github.com/${i.repo}: ${i.asset.file}${i.asset.size ? ` (${Math.round(i.asset.size / 1e6)} MB)` : ''}, checked against its published SHA-256.${info.command ? `\nIt then starts with: ${info.command.join(' ')}` : ''}\nInstall${info.command ? ' and approve that command' : ''}? [y/N] `);
-        if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not installed');
-        await b.installApp({ project, approve: true });
-        let last = '';
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 500));
-          const now = await b.appLaunch(project);
-          const p = now.install?.progress;
-          if (!p) {
-            if (now.install?.error) throw new Error(now.install.error);
-            return out(now, () => `installed ${now.install?.installed} in ${now.folder}\n${launchText(now)}`);
-          }
-          const line = `${p.state} ${Math.round(p.done / 1e6)}${p.total ? ` of ${Math.round(p.total / 1e6)}` : ''} MB`;
-          if (line !== last) console.error(line);
-          last = line;
-        }
       }
       if (sub === 'check') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1] ?? values.file ?? 'weave.app.json');
@@ -2318,23 +2267,6 @@ ${postLine(p)}`);
         if (checked.problems.length) process.exitCode = 1;
         return;
       }
-      if (sub === 'set' && args[1]) {
-        const project = needProject();
-        const setting = (await b.appLaunch(project)).settings?.find((x) => x.name === args[1]);
-        if (!setting) throw new Error(`the app doesn't ask for ${args[1]}: weave app status -p ${project} lists its settings`);
-        const value = setting.secret ? await askHidden(`${setting.label} (not shown): `) : await askLine(`${setting.label}: `);
-        const info = await b.setAppSetting({ project, name: setting.name, value });
-        return out(info.settings, () => `${setting.label} ${value.trim() ? 'saved on this computer' : 'not changed (empty)'}; ${info.settings?.filter((x) => !x.optional && !x.set).length ? 'still missing: ' + info.settings.filter((x) => !x.optional && !x.set).map((x) => x.name).join(', ') : 'the app has what it needs'}`);
-      }
-      if (sub === 'unset' && args[1]) {
-        const info = await b.setAppSetting({ project: needProject(), name: args[1], value: null });
-        return out(info.settings, () => `${args[1]} removed from this computer`);
-      }
-      if (sub === 'env') {
-        const env = await b.appEnv(needProject());
-        const line = ([k, v]: [string, string]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
-        return out(env, () => [...Object.entries(env).map(line), '# set these where you start the app; they last until Weave restarts'].join('\n'));
-      }
       if (sub === 'example') {
         return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
       }
@@ -2345,23 +2277,9 @@ ${postLine(p)}`);
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
         const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
-        return out(app, () => `${app.name} now installs ${app.install?.tag} from github.com/${app.install?.github}:\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}`);
+        return out(app, () => `${app.name} ${app.install?.tag} is released from github.com/${app.install?.github}: rooms can run it\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}`);
       }
-      if (sub === 'start') {
-        const project = needProject();
-        let info = await b.appLaunch(project);
-        if (info.command && info.folder && !info.approved) {
-          const answer = await askLine(`Weave will run this on your computer:\n  ${info.command.join(' ')}\n  in ${info.folder}\nRun it? [y/N] `);
-          if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not started');
-        }
-        info = await b.launchApp({ project, approve: true });
-        return out(info, () => launchText(info));
-      }
-      if (sub === 'stop' || sub === 'status') {
-        const info = sub === 'stop' ? await b.stopApp(needProject()) : await b.appLaunch(needProject());
-        return out(info, () => `${launchText(info)}${info.log.length ? `\n\n${info.log.slice(-20).join('\n')}` : ''}`);
-      }
-      throw new Error('usage: weave app publish|show|check|set <NAME>|unset <NAME>|env|example|workflow|folder|install|release <tag>|start|stop|status -p <project>');
+      throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
     }
 
     case 'rooms': {
@@ -2382,13 +2300,26 @@ ${postLine(p)}`);
         }));
         const command = values.run ? [...values.run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]) : undefined;
         const r = await approving((approve) =>
-          b.openRoom({ project: needProject(), name: [ref, ...words].join(' '), ...(values.service ? { service: values.service } : {}), ...(artifact ? { artifact } : {}), ...(command ? { command, folder: values.folder ?? process.cwd() } : {}), ...(values.port ? { port: Number(values.port) } : {}), ...(Object.keys(settings).length ? { settings } : {}), approve }),
+          b.openRoom({
+            project: needProject(),
+            name: [ref, ...words].join(' '),
+            ...(values.service ? { service: values.service } : {}),
+            ...(artifact ? { artifact } : {}),
+            ...(command ? { command, folder: values.folder ?? process.cwd() } : {}),
+            ...(values.port ? { port: Number(values.port) } : {}),
+            ...(Object.keys(settings).length ? { settings } : {}),
+            invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean),
+            show: values.show,
+            groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean),
+            approve,
+          }),
         );
         return out(r, () => `${roomLine(r)}\n  it opens for everyone once its handler answers (weave service list shows how it's doing)`);
       }
-      if (sub === 'host' && ref) {
-        const r = await b.hostRoom({ project: needProject(), name: [ref, ...words].join(' '), invite: values.invite?.split(',').map((w) => w.trim()).filter(Boolean), show: values.show, groups: values.tiers?.split(',').map((w) => w.trim()).filter(Boolean) });
-        return out(r, () => `${roomLine(r)}${r.service?.ready ? '' : `\n  start the app first${r.app?.startHint ? `: ${r.app.startHint}` : ''}`}`);
+      if (sub === 'env' && ref) {
+        const env = await b.roomEnv(ref);
+        const line = ([k, v]: [string, string | undefined]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
+        return out(env, () => [...Object.entries(env).map(line), '# set these where you start what answers the room; they last until Weave restarts'].join('\n'));
       }
       if (sub === 'join' && ref) {
         await b.joinRoom(ref);

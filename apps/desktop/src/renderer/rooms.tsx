@@ -3,7 +3,8 @@ import type { AppManifest, ArtifactInfo, HostedRoomInfo, MemberInfo, ProjectInfo
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
-import { ShowsSection } from './shows.tsx';
+import { ShowsSection, useShowForm } from './shows.tsx';
+import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { contractText, ServiceCard } from './services.tsx';
 
@@ -18,7 +19,7 @@ const play = (room: RoomInfo) => {
   if (!room.url) return;
   // On a phone the address is the computer's own: the phone app reaches it through the computer.
   if (bridge.phone) return void bridge.phone.openRoom(room.id, room.url).catch((error: Error) => toast(error.message, 'error'));
-  void bridge.openApp(room.url, `${room.app?.name ?? 'App'} · ${room.name}`);
+  void bridge.openApp(room.url, room.name);
 };
 
 function RoomChat({ room }: { room: RoomInfo }) {
@@ -56,29 +57,17 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
-  // A room a service offers: "Race, offered by martl · room".
-  const offered = room.offeredBy ? `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy.name ?? 'a service'}` : undefined;
+  // "Race, offered by martl · room".
+  const offered = `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy?.name ?? 'a service'}`;
   let main;
-  if (room.mine && offered)
+  if (room.mine)
     main = room.service?.ready ? (
       <button className="default play" onClick={() => play(room)}>
         ▶ {label}
       </button>
     ) : (
       <span className="waiting">
-        <button disabled>Waiting for the service to answer…</button> <button onClick={bump}>Check again</button>
-      </span>
-    );
-  else if (room.mine)
-    main = room.service?.ready ? (
-      <button className="default play" onClick={() => play(room)}>
-        ▶ {label}
-      </button>
-    ) : (
-      <span className="waiting">
-        <button disabled>{room.app?.canLaunch ? 'Start the app above first' : 'Start the app first'}</button>
-        {!room.app?.canLaunch && room.app?.startHint && <span className="small"> {room.app.startHint}</span>}{' '}
-        <button onClick={bump}>Check again</button>
+        <button disabled>Waiting for what answers it…</button> <button onClick={bump}>Check again</button>
       </span>
     );
   else if (!room.joined)
@@ -96,20 +85,18 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
       </button>
     ) : (
       <button disabled>
-        {offered ? (room.connected ? `Waiting for ${offered}…` : `Connecting to ${offered}…`) : room.connected ? `Waiting for ${room.host.name ?? 'the host'} to start ${room.app?.name ?? 'the app'}…` : `Waiting for ${room.host.name ?? 'the host'}…`}
+        {room.connected ? `Waiting for ${offered}…` : `Connecting to ${offered}…`}
       </button>
     );
   return (
     <article className="room window">
       <div className="title-bar">
-        <div className="title-bar-text">
-          {room.name}
-          {room.app?.name ? ` · ${room.app.name}` : ''}
-        </div>
+        <div className="title-bar-text">{room.name}</div>
       </div>
       <div className="window-body">
         <div className="room-head">
-          <span className="live-dot" /> {offered ? `Offered by ${offered}${room.mine ? ', running here' : ''}` : room.mine ? 'You host this room' : `Hosted by ${room.host.name ?? shortDid(room.host.did)}`}
+          <span className="live-dot" /> Offered by {offered}
+          {room.mine ? ', running here' : ''}
           {who.length > 0 && <span className="tag">🎟 {who.join(' · ')}</span>}
           {room.joined && (
             <span className="room-peers">
@@ -125,12 +112,12 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
           {main}
           <span className="grow" />
           {room.mine ? (
-            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected${offered ? ', and what answers it stops' : ''}.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected, and what answers it stops.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
           )}
         </div>
-        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered ? `${offered}, on the node it runs on` : `${room.host.name ?? 'the host'}'s computer`}.</p>}
+        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered}, on the device it runs on.</p>}
         {room.joined && <RoomChat room={room} />}
       </div>
     </article>
@@ -307,8 +294,16 @@ function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['set
  * of this project or another one you're in, fetched and checked), a command in a folder, or something already
  * running. Running code is shown first and approved here.
  */
-function OpenRoomDialog({ project, service, onClose }: { project: SpaceInfo; service: string; onClose(): void }) {
+function OpenRoomDialog({ project, service, away, members, meDid, groups, shows, onClose }: { project: SpaceInfo; service: string; away?: string; members: MemberInfo[]; meDid: string; groups: ProjectInfo['groups']; shows: ShowInfo[]; onClose(): void }) {
   const artifacts = useArtifacts(project);
+  // Who may join: every participant, picked people, a show's ticket holders (a show of yours, or a new one), tier members.
+  const [who, setWho] = useState<'everyone' | 'people' | 'tickets' | 'tiers'>('everyone');
+  const [people, setPeople] = useState<string[]>([]);
+  const myShows = shows.filter((s) => s.mine && !s.cancelled && Date.parse(s.ends) > Date.now());
+  const [show, setShow] = useState(myShows[0]?.id ?? 'new');
+  const [tiers, setTiers] = useState<string[]>([]);
+  const payments = usePayments(project);
+  const newShow = useShowForm(project);
   const [kind, setKind] = useState<'artifact' | 'command' | 'address'>('artifact');
   const [picked, setPicked] = useState<string>();
   const [name, setName] = useState('');
@@ -322,12 +317,25 @@ function OpenRoomDialog({ project, service, onClose }: { project: SpaceInfo; ser
   useEffect(() => setValues({}), [chosen?.id]);
   const words = command.match(/"[^"]*"|'[^']*'|\S+/g)?.map((w) => w.replace(/^["']|["']$/g, '')) ?? [];
   const missing = kind === 'artifact' ? (chosen?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? []) : [];
-  const ready = !!name.trim() && (kind === 'artifact' ? !!chosen && !missing.length : kind === 'command' ? words.length > 0 && !!folder && !!Number(port) : !!Number(port));
+  const ready =
+    !!name.trim() &&
+    (kind === 'artifact' ? !!chosen && !missing.length : kind === 'command' ? words.length > 0 && !!folder && !!Number(port) : !!Number(port)) &&
+    !(who === 'people' && !people.length) &&
+    !(who === 'tiers' && !tiers.length);
   const open = async () => {
     setBusy(true);
+    // A new show is set up first; if the room then fails, it's picked, not set up twice.
+    const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
+    if (made === undefined) return setBusy(false);
+    if (made !== show) {
+      setShow(made);
+      // Selling tickets turns the project's payments on: its treasury and split show in Settings.
+      if (!payments.on) payments.turn(true);
+    }
+    const access = who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
     const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
     const handler = kind === 'artifact' ? { artifact: { project: chosen!.project.id, tag: chosen!.tag }, settings } : kind === 'command' ? { command: words, folder, port: Number(port) } : { port: Number(port) };
-    const room = await attempt(() => api<RoomInfo>('openRoom', { service, project: project.id, name: name.trim(), ...handler, approve: true }), `"${name.trim()}" is open: it answers once its handler runs`);
+    const room = await attempt(() => api<RoomInfo>('openRoom', { service, project: project.id, name: name.trim(), ...handler, ...access, approve: true }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: it answers once its handler runs`);
     setBusy(false);
     if (room) {
       bump();
@@ -370,7 +378,7 @@ function OpenRoomDialog({ project, service, onClose }: { project: SpaceInfo; ser
                 </div>
               ))
             ))}
-          {radio('command', 'A program on this computer')}
+          {!away && radio('command', 'A program on this computer')}
           {kind === 'command' && (
             <div className="indent form">
               <input className="wide code" placeholder="node server.js" value={command} onChange={(e) => setCommand(e.target.value)} aria-label="Command" />
@@ -389,13 +397,66 @@ function OpenRoomDialog({ project, service, onClose }: { project: SpaceInfo; ser
               <input inputMode="numeric" placeholder="Port it listens on (it gets PORT too)" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
             </div>
           )}
-          {radio('address', 'Something already running on this computer')}
+          {radio('address', `Something already running ${away ? `on ${away}` : 'on this computer'}`)}
           {kind === 'address' && (
             <div className="indent">
               <input inputMode="numeric" placeholder="Its port, like 3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
-              <p className="small muted">Weave starts nothing: the room's participants reach that port, and nothing else on your computer.</p>
+              <p className="small muted">Weave starts nothing: the room's participants reach that port, and nothing else on {away ?? 'your computer'}.</p>
             </div>
           )}
+        </fieldset>
+        <fieldset>
+          <legend>Who may join</legend>
+          {(
+            [
+              ['everyone', `Everyone in p/${project.name}`],
+              ['people', 'Only…'],
+              ['tickets', 'Ticket holders of a show'],
+              ...(groups.length ? [['tiers', 'Members of tiers']] : []),
+            ] as Array<[typeof who, string]>
+          ).map(([value, label]) => (
+            <div key={value}>
+              <div className="field-row">
+                <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
+                <label htmlFor={`who-${value}`}>{label}</label>
+              </div>
+              {who === 'people' &&
+                value === 'people' &&
+                members
+                  .filter((m) => m.did !== meDid)
+                  .map((m) => (
+                    <div className="field-row indent" key={m.did}>
+                      <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
+                      <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
+                    </div>
+                  ))}
+              {who === 'tickets' && value === 'tickets' && (
+                <>
+                  <div className="field-row indent">
+                    <label htmlFor="who-show">Show</label>
+                    <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                      {myShows.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                      <option value="new">A new show…</option>
+                    </select>
+                  </div>
+                  {show === 'new' && <div className="indent">{newShow.fields}</div>}
+                </>
+              )}
+              {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
+                groups.map((g) => (
+                  <div className="field-row indent" key={g.id}>
+                    <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                    <label htmlFor={`who-tier-${g.id}`}>
+                      {who === 'tickets' ? 'also ' : ''}members of {g.name}
+                    </label>
+                  </div>
+                ))}
+            </div>
+          ))}
         </fieldset>
         {kind === 'artifact' && chosen && chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
         {kind !== 'address' && (kind === 'command' ? words.length > 0 : !!chosen) && (
@@ -453,7 +514,7 @@ function HostedStatus({ hosted }: { hosted?: HostedRoomInfo }) {
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
 /** One service in the project: what it's for, and what it offers here (a room service: its rooms). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: RoomInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: RoomInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const own = service.person.did === meDid;
@@ -487,7 +548,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid }: { proje
           </AsyncButton>
         )}
       </div>
-      {opening && mine && <OpenRoomDialog project={project} service={mine.name} onClose={() => setOpening(false)} />}
+      {opening && mine && <OpenRoomDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
     </fieldset>
   );
@@ -546,8 +607,7 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
   const [adding, setAdding] = useState(false);
-  // Rooms from before the room service (a host sharing the project's app) still show until they end.
-  const older = (rooms ?? []).filter((r) => !r.offeredBy);
+
   // Room services first, then the rest.
   const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'room') - Number(a.builtin === 'room'));
   return (
@@ -561,16 +621,8 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
     >
       {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add rooms, and everyone here can join in.</p>}
       {list.map((s) => (
-        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} />
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} />
       ))}
-      {older.length > 0 && (
-        <fieldset>
-          <legend>Other rooms</legend>
-          {older.map((room) => (
-            <RoomCard key={room.id} room={room} shows={shows ?? []} />
-          ))}
-        </fieldset>
-      )}
       {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
       <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
       {adding && <AddProjectService project={project} services={services ?? []} onClose={() => setAdding(false)} />}

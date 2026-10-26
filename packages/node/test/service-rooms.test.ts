@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -8,9 +9,8 @@ import { startApi } from '../src/api.ts';
 import { closeOpenStores, loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
 
 /*
- * Rooms offered by services (block 3): a service whose contract offers a room serves its web page on a local port,
- * and its node offers it as a room in each of its projects, under the service's own key. Participants reach it from
- * their own nodes and the service knows who they are (weave.who); nobody else gets in.
+ * A room of the room service, answered by a program it starts (its handler): participants reach it from their own
+ * nodes through the tunnel, and the handler knows who they are (weave.who); nobody else gets in.
  */
 
 const dirs: string[] = [];
@@ -41,7 +41,7 @@ const sync = (all: WeaveNode[]) => {
 };
 
 const getJson = (url: string) =>
-  new Promise<{ service: string; who: { did: string; name?: string } | null }>((resolve, reject) => {
+  new Promise<{ room: string; who: { did: string; name?: string } | null }>((resolve, reject) => {
     const { port, pathname } = new URL(url);
     const req = request({ host: '127.0.0.1', port: Number(port), path: pathname, agent: false }, (res) => {
       let body = '';
@@ -52,8 +52,8 @@ const getJson = (url: string) =>
     req.end();
   });
 
-describe('rooms offered by services', { timeout: 120_000 }, () => {
-  it('offers a room under its own key; participants reach it and are known by name, nobody else gets in', async () => {
+describe('a room answered by a program', { timeout: 120_000 }, () => {
+  it('runs it with its port and its room token; participants reach it and are known by name, nobody else gets in', async () => {
     const martl = person('martl');
     const lena = person('Lena');
     const kofi = person('Kofi');
@@ -64,29 +64,20 @@ describe('rooms offered by services', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({
-        name: 'board',
-        description: 'A shared board',
-        contract: { reads: 'addressed', writes: [], room: true, version: '1.0' },
-        spaces: ['Party'],
-        command: [process.execPath, join(import.meta.dirname, 'helpers', 'room-service.mjs')],
+      await martl.addService({ builtin: 'room', spaces: ['Party'] });
+      const port = await new Promise<number>((resolve) => {
+        const probe = createNetServer().listen(0, '127.0.0.1', () => {
+          const { port } = probe.address() as { port: number };
+          probe.close(() => resolve(port));
+        });
       });
-
-      // The process says where its page is; martl's node offers it in Party, signed by "martl · board".
-      const offered = await vi.waitFor(
-        async () => {
-          const room = (await martl.rooms('Party')).find((r) => r.offeredBy);
-          expect(room?.mine).toBe(true);
-          return room!;
-        },
-        { timeout: 20_000, interval: 300 },
-      );
-      expect(offered).toMatchObject({ name: 'board', host: { name: 'martl' }, offeredBy: { name: 'board' }, open: true });
+      const offered = await martl.openRoom({ project: 'Party', name: 'Board', command: [process.execPath, 'room-service.mjs'], folder: join(import.meta.dirname, 'helpers'), port, approve: true });
+      expect(offered).toMatchObject({ name: 'Board', host: { name: 'martl' }, offeredBy: { name: 'room' }, open: true, mine: true });
 
       // Lena, a participant, joins it and the service knows it's her.
       sync([martl, lena]);
       const seen = (await lena.rooms('Party')).find((r) => r.id === offered.id)!;
-      expect(seen).toMatchObject({ offeredBy: { name: 'board' }, mine: false, mayJoin: true });
+      expect(seen).toMatchObject({ offeredBy: { name: 'room' }, mine: false, mayJoin: true });
       await lena.joinRoom(seen.id);
       const url = await vi.waitFor(
         async () => {
@@ -96,13 +87,13 @@ describe('rooms offered by services', { timeout: 120_000 }, () => {
         },
         { timeout: 30_000, interval: 300 },
       );
-      expect(await getJson(url)).toEqual({ service: 'board', who: { did: lena.identity.author, name: 'Lena' } });
+      expect(await getJson(url)).toEqual({ room: offered.id, who: { did: lena.identity.author, name: 'Lena' } });
 
       // Kofi isn't in Party: he can't even see its rooms.
       await expect(kofi.joinRoom(seen.id)).rejects.toThrow();
 
-      // Turned off: the room ends, for everyone.
-      await martl.setService({ name: 'board', enabled: false });
+      // The room service turned off: its rooms end, for everyone.
+      await martl.setService({ name: 'room', enabled: false });
       sync([martl, lena]);
       expect((await lena.rooms('Party')).find((r) => r.id === seen.id)?.open ?? false).toBe(false);
     } finally {

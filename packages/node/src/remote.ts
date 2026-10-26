@@ -72,7 +72,7 @@ export const PHONE_METHODS: readonly RpcMethod[] = [
   // Issues and proposals
   'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
   // Rooms and project apps (joining; hosting needs the computer)
-  'rooms', 'joinRoom', 'leaveRoom', 'endRoom', 'roomChat', 'sayInRoom', 'projectApp', 'appLaunch', 'appReleases',
+  'rooms', 'joinRoom', 'leaveRoom', 'endRoom', 'roomChat', 'sayInRoom', 'projectApp', 'appReleases',
   // GitHub, to look only
   'github', 'githubRepos', 'spaceRepos',
 ];

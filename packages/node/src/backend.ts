@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -310,8 +310,6 @@ export interface ServiceGate {
   publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
   /** Answer a request addressed to it, in the request's space. */
   answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
-  /** Its web interface listens on this local port: offer it as a room in each of its projects (its contract must offer a room). */
-  offerRoom(input: { port: number }): Promise<{ rooms: Array<{ id: string; project: SpaceRef }> }>;
 }
 
 /** A request to a service in a space, and what the service answered. */
@@ -994,11 +992,12 @@ export interface UpdateInfo {
   newer: boolean;
 }
 
-/** How a project's app reaches the app API on the host's computer (see appapi.ts): set in its environment when Weave starts it. */
+/** How a room's handler reaches the app API on this computer (see appapi.ts): set in its environment when Weave starts it. */
 export interface AppEnv {
   WEAVE_API: string;
   WEAVE_TOKEN: string;
   WEAVE_PROJECT: string;
+  WEAVE_ROOM?: string;
 }
 
 /** A person as the app API shows them to an app. */
@@ -1011,55 +1010,6 @@ export interface AppPerson {
   maintainer: boolean;
 }
 
-/** Starting the project's app on this computer (see the manifest's start.command). */
-export interface AppLaunchInfo {
-  /** The command from the manifest, if it has one. */
-  command?: string[];
-  hint?: string;
-  /** This computer's copy of the app, if chosen. */
-  folder?: string;
-  /** You approved this command for this folder. */
-  approved: boolean;
-  running: boolean;
-  started?: string;
-  /** `stopped`: on request, not by itself. */
-  exit?: { code: number | null; time: string; stopped?: true };
-  /** The app's last lines of output. */
-  log: string[];
-  /** Settings the app asks hosts for (an API key…), and whether this computer has a value; values never leave this computer. */
-  settings?: Array<AppSetting & { set: boolean }>;
-  /** You may point the app at a GitHub release (a maintainer), and the repository its releases come from. */
-  release?: { canRelease: boolean; repo?: string };
-  /**
-   * The release's container image (Weave and Docker): when Docker runs on this computer, Weave starts the app
-   * from it, sealed off from the computer (`active`). Without Docker, `docker` is false and it starts as before.
-   */
-  container?: { image: string; tag: string; digest: string; docker: boolean; active: boolean };
-  /** Getting the app: its release, the file for this computer, and steps for an agent. */
-  install?: {
-    /** The release's tag. */
-    version?: string;
-    /** owner/name on GitHub. */
-    repo?: string;
-    /** The release file for this computer, if there is one. */
-    asset?: { file: string; size?: number };
-    /** This computer, as manifests name platforms (win32-x64…). */
-    platform: string;
-    /** The version Weave installed here (when the app folder is that install). */
-    installed?: string;
-    /** An install going on now. */
-    progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
-    /** Why the last install failed. */
-    error?: string;
-    /** For an agent, installing it by hand. */
-    steps?: string[];
-    /** The GitHub App the release downloads through, when it isn't the one you sign in with. */
-    otherApp?: string;
-    /** What the installed release build starts with on this computer. */
-    command?: string[];
-  };
-}
-
 export interface RoomInfo {
   id: string;
   project: SpaceRef;
@@ -1067,7 +1017,7 @@ export interface RoomInfo {
   host: Person;
   /** A service offers it (its key and name): the room is there while that service runs. */
   offeredBy?: { did: Did; name?: string };
-  /** You host it (your own room, or your service's on this computer). */
+  /** Your room service runs it on this device. */
   mine: boolean;
   open: boolean;
   /** You are invited (every participant, or named people). */
@@ -1081,8 +1031,7 @@ export interface RoomInfo {
   connected: boolean;
   /** Who is in it right now, as far as you can see (only once you're in). */
   peers: Person[];
-  app?: { app: string; name: string; startHint?: string; canLaunch?: boolean };
-  /** The shared service, the label of your ▶ button, and (host) whether the app answers on its port. */
+  /** The label of your ▶ button, and (where it runs) whether what answers it answers on its port. */
   service?: { id: string; label: string; ready: boolean };
   /** What ▶ opens, once there is something to open. */
   url?: string;
@@ -1605,8 +1554,11 @@ export interface Backend {
   addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
-  /** A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or a port already answering. */
-  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean }): Promise<RoomInfo>;
+  /**
+   * A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or
+   * a port already answering. Who joins: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
+   */
+  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
@@ -1791,44 +1743,23 @@ export interface Backend {
   rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo>;
 
   // rooms and shared apps: live, never logged (except the room announcement)
-  /** The app a project shares in its rooms, if a maintainer published one. */
+  /** The project's artifact description (its weave.app.json as last published), if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
-  /** Maintainers: publish (or replace) the project's app manifest (the contents of weave.app.json). */
-  /** Maintainers: publish the app manifest; `folder` (from the CLI) is remembered as this computer's copy of the app. */
-  publishApp(input: { project: string; manifest: unknown; folder?: string; as?: string }): Promise<AppManifest>;
-  /** Starting the app here: its command, your folder, whether you approved it, and whether it runs. */
-  appLaunch(project: string): Promise<AppLaunchInfo>;
-  /**
-   * Install (or update) the project's app from its release on GitHub: the file for this computer is
-   * downloaded, checked against the SHA-256 in the manifest, and unpacked into Weave's apps folder,
-   * which becomes the app's folder. `approve` also approves its start command there. Ask appLaunch for progress.
-   */
-  installApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
-  /** Maintainers: point the app's manifest at a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
+  /** Maintainers: publish (or replace) the project's artifact description (the contents of weave.app.json). */
+  publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
+  /** Maintainers: release an artifact from a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
   appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
-  /** Where this computer's copy of the project's app is (it must hold its weave.app.json); "" forgets it. */
-  setAppFolder(input: { project: string; folder: string }): Promise<AppLaunchInfo>;
-  /** Start the app with the manifest's command in your folder. The first time (and after the command changes), pass approve: true once you've shown the person the command. */
-  launchApp(input: { project: string; approve?: boolean }): Promise<AppLaunchInfo>;
-  stopApp(project: string): Promise<AppLaunchInfo>;
-  /**
-   * Fill in one of the settings the app's manifest asks for (value: null clears it). Kept on this computer only,
-   * in app-settings.json, and handed to this app alone when Weave starts it; never synced, shown or given to agents.
-   */
-  setAppSetting(input: { project: string; name: string; value: string | null }): Promise<AppLaunchInfo>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
    */
   updateCheck(input: { current: string }): Promise<UpdateInfo>;
-  /** The app API's address and this project's token, for an app started by hand (Weave sets them itself when it starts the app). Valid until Weave restarts. */
-  appEnv(project: string): Promise<AppEnv>;
+  /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
+  roomEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
   rooms(project?: string): Promise<RoomInfo[]>;
-  /** Open a room sharing the project's app; `invite` names people, default: every participant. Needs your node online. */
-  hostRoom(input: { project: string; name: string; invite?: string[]; show?: string; groups?: string[] }): Promise<RoomInfo>;
   endRoom(room: string): Promise<void>;
   /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
   joinRoom(room: string): Promise<RoomInfo>;
@@ -1987,7 +1918,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'appLaunch', 'setAppFolder', 'installApp', 'releaseApp', 'appReleases', 'launchApp', 'stopApp', 'setAppSetting', 'appEnv', 'updateCheck', 'rooms', 'hostRoom', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'releaseApp', 'appReleases', 'roomEnv', 'updateCheck', 'rooms', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',

@@ -46,7 +46,7 @@ A job for the release workflow, next to the one that builds files:
 
 ## On the host
 
-- **When the container is used:** When the release has an image and Docker runs on this computer, the Live tab starts the app as a container. No copy of the app and no folder to choose.
+- **When the container is used:** When the release has an image and Docker runs on this computer, a room that runs the release (the room service, "Open a room…") starts it as a container. No copy of the app and no folder to choose.
 - **How Weave runs it:**
 
   ```
@@ -60,7 +60,7 @@ A job for the release workflow, next to the one that builds files:
 - **Settings:** passed by name. Their values reach Docker through its environment, never on the command line.
 - **Approving:** The host approves the exact command once. A new release with another digest asks again.
 - **Stopping:** goes through `docker stop`. A container left from before is removed first.
-- **Without Docker:** The Live tab says the app also comes as a container, and starts it as before.
+- **Without Docker:** A room runs the release's build file for this computer, if it has one; otherwise there is nothing for a room to run here, and Weave says so.
 
 ## Who is who: X-Weave-Person
 

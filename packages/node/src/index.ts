@@ -11,7 +11,6 @@ export type {
   Admission,
   AgentInfo,
   Backend,
-  AppLaunchInfo,
   BoardInfo,
   GranteeInfo,
   InviteOptions,
