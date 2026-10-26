@@ -549,6 +549,7 @@ import {
 import { BlobStore } from './blobstore.ts';
 import { launchFingerprint } from './applaunch.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
+import { Releases, type ArtifactRef as StoredArtifact, type InstallJob } from './artifacts.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
@@ -582,12 +583,6 @@ const SELF_SCOPE = 'self';
 
 
 /** A GitHub sign-in waiting for its code, or why the last one failed. */
-/** An app being installed from its release, or why that failed. */
-interface InstallJob {
-  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
-  error?: string;
-}
-
 interface GitHubLogin {
   code?: DeviceCode;
   error?: string;
@@ -665,15 +660,6 @@ interface StoredRoom {
 
 /** What answers a room's clients: an artifact (a release, fetched and checked), a command in a folder, or something already running. */
 type RoomHandler = { artifact: StoredArtifact } | { command: string[]; folder: string } | { address: true };
-
-interface StoredArtifact {
-  /** The project that released it. */
-  project: string;
-  /** The weave.app event of the release. */
-  id: string;
-  tag: string;
-  manifest: AppManifest;
-}
 
 interface Decoded {
   event: WeaveRecord;
@@ -956,6 +942,8 @@ export class WeaveNode implements Backend {
   });
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker);
+  /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive());
   /** The app API (see appapi.ts), started when a room's handler or a service first needs it. */
   #appApi?: Promise<AppApiServer>;
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -3762,30 +3750,6 @@ export class WeaveNode implements Backend {
   }
 
   // ---------------------------------------------------------------- fetching a release
-
-  /** Download a release file into dir/<tag>, refuse it unless it matches the fingerprint published, unpack it: its folder. */
-  async #fetchRelease(dir: string, app: AppManifest, release: { github: string; tag: string; asset: AppAsset }, job: InstallJob): Promise<string> {
-    mkdirSync(dir, { recursive: true });
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const found = (await client.release(release.github, release.tag)).assets.find((a) => a.name === release.asset.file);
-    if (!found) throw new Error(`the release ${release.tag} on GitHub has no file ${release.asset.file}`);
-    const download = await client.download(release.github, found.id);
-    const total = release.asset.size ?? download.size ?? found.size;
-    job.progress = { state: 'downloading', done: 0, ...(total ? { total } : {}) };
-    const file = joinPath(dir, `.download-${release.asset.file}`);
-    await saveVerified(download.body, file, release.asset.sha256, (n) => {
-      job.progress!.done += n;
-    });
-    job.progress = { state: 'unpacking', done: job.progress.done, ...(total ? { total } : {}) };
-    const target = joinPath(dir, tagFolder(release.tag));
-    rmSync(target, { recursive: true, force: true });
-    const root = unpack(file, target);
-    rmSync(file, { force: true });
-    // The folder holds the project's app: say so the way a checkout would, with its manifest.
-    if (!existsSync(joinPath(root, 'weave.app.json'))) writeJson(joinPath(root, 'weave.app.json'), app);
-    return root;
-  }
 
   async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
@@ -7247,8 +7211,8 @@ export class WeaveNode implements Backend {
   #serviceArtifactInfo(service: string, a: StoredArtifact, here: boolean): ServiceArtifactInfo {
     const from = this.#spaces.get(a.project);
     const latest = from ? artifactsOf(this.#entries(from), this.#state(from).maintainers)[0] : undefined;
-    const job = here ? this.#roomInstalls.get(`service:${service}`) : undefined;
-    const fetched = existsSync(joinPath(this.home.dir, 'services', service, 'artifacts', a.project, tagFolder(a.tag)));
+    const job = here ? this.#releases.jobs.get(`service:${service}`) : undefined;
+    const fetched = this.#releases.has(service, a);
     return {
       project: { id: a.project, ...(from ? { name: this.#spaceName(from) } : {}) },
       tag: a.tag,
@@ -7286,31 +7250,6 @@ export class WeaveNode implements Backend {
       saveAgent(this.home, updated);
       this.#agents = this.#agents.map((a) => (a.name === name ? updated : a));
     }
-  }
-
-  /** Fetch a release for a service (once per release, shared by its rooms), checked against its fingerprints, then go on. */
-  #ensureArtifact(serviceName: string, a: StoredArtifact, job: string, then: () => void): void {
-    const dir = joinPath(this.home.dir, 'services', serviceName, 'artifacts', a.project);
-    const folder = joinPath(dir, tagFolder(a.tag));
-    if (this.#runtime.runs(a.manifest) === 'container' || existsSync(folder)) return then();
-    if (this.#roomInstalls.get(job)?.progress) return;
-    const asset = a.manifest.install?.assets?.[platformKey()];
-    if (!asset || !a.manifest.install?.github) {
-      this.#roomInstalls.set(job, { error: `${a.manifest.name} ${a.tag} has no release file for this computer (${platformKey()})${a.manifest.install?.image ? ", and Docker isn't running here" : ''}` });
-      return;
-    }
-    const progress: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
-    this.#roomInstalls.set(job, progress);
-    const fetched = (this.#fetching.get(folder) ?? this.#fetchRelease(dir, a.manifest, { github: a.manifest.install.github, tag: a.tag, asset }, progress).then(() => undefined)).finally(() => this.#fetching.delete(folder));
-    this.#fetching.set(folder, fetched);
-    const done = fetched.then(
-      () => {
-        this.#roomInstalls.delete(job);
-        then();
-      },
-      (error: Error) => void this.#roomInstalls.set(job, { error: error.message }),
-    );
-    this.#roomInstalling.set(job, done.finally(() => this.#emitLive()));
   }
 
   /** Settings checked against what's allowed: an artifact's own, or any variable-like name for a command. */
@@ -7468,7 +7407,7 @@ export class WeaveNode implements Backend {
   /** A room the room service runs, as its service lists it: its handler and how it's doing. */
   #hostedRoomInfo(r: StoredRoom, here = true): HostedRoomInfo {
     const project = this.#spaces.get(r.project);
-    const job = this.#roomInstalls.get(r.id);
+    const job = this.#releases.jobs.get(r.id);
     const h = r.handler;
     let handler: HostedRoomInfo['handler'];
     if ('artifact' in h) {
@@ -7501,29 +7440,17 @@ export class WeaveNode implements Backend {
     if (!stored?.enabled || !room) return;
     if (!('artifact' in room.handler)) return this.#runRoomHandler(stored, room);
     // Rooms with the same release share its folder: fetched once.
-    this.#ensureArtifact(stored.name, room.handler.artifact, roomId, () => {
+    this.#releases.ensure(stored.name, room.handler.artifact, roomId, () => {
       const now = this.#storedServices().find((s) => s.name === serviceName);
       if (now?.hosted?.[roomId]) this.#runRoomHandler(now, now.hosted[roomId]);
     });
   }
 
-  #roomInstalls = new Map<string, InstallJob>();
-  #roomInstalling = new Map<string, Promise<void>>();
-  #fetching = new Map<string, Promise<void>>();
-
   /** Resolves when fetching a room's release ends (for tests and the CLI). */
   async roomReady(ref: string): Promise<RoomInfo> {
     const { room, project } = this.#roomById(ref);
-    await this.#roomInstalling.get(room.id);
+    await this.#releases.done(room.id);
     return this.#roomInfo(room, project);
-  }
-
-  /** The release folder of a room's artifact, the one Weave fetched. */
-  #artifactFolder(service: string, a: StoredArtifact): string {
-    const dir = joinPath(this.home.dir, 'services', service, 'artifacts', a.project, tagFolder(a.tag));
-    // The release unpacks into one folder, usually: that one.
-    const entries = existsSync(dir) ? readdirSync(dir).filter((e) => !e.startsWith('.')) : [];
-    return entries.length === 1 && statSync(joinPath(dir, entries[0])).isDirectory() ? joinPath(dir, entries[0]) : dir;
   }
 
   /** Start a room's handler: its process gets the room's port, its settings, and the app API for its room only. */
@@ -7535,11 +7462,11 @@ export class WeaveNode implements Backend {
     let cwd: string;
     if ('artifact' in h) {
       const run = this.#runtime.command(container ?? 'weave', h.artifact.manifest);
-      if (!run || !(stored.approved ?? []).includes(releaseApproval(h.artifact))) return void this.#roomInstalls.set(room.id, { error: 'approve what it runs first' });
-      cwd = container ? joinPath(this.home.dir, 'services', stored.name) : this.#artifactFolder(stored.name, h.artifact);
+      if (!run || !(stored.approved ?? []).includes(releaseApproval(h.artifact))) return void this.#releases.jobs.set(room.id, { error: 'approve what it runs first' });
+      cwd = container ? joinPath(this.home.dir, 'services', stored.name) : this.#releases.folder(stored.name, h.artifact);
       command = run;
     } else {
-      if (!(stored.approved ?? []).includes(launchFingerprint(h.command, h.folder))) return void this.#roomInstalls.set(room.id, { error: 'approve its command first' });
+      if (!(stored.approved ?? []).includes(launchFingerprint(h.command, h.folder))) return void this.#releases.jobs.set(room.id, { error: 'approve its command first' });
       cwd = h.folder;
       command = h.command;
     }
@@ -8080,8 +8007,8 @@ export class WeaveNode implements Backend {
     const a = stored.artifact;
     if (!a) return stored.command?.length ? this.#spawnService(stored) : undefined;
     // An applet: only the release you approved, fetched and checked against its fingerprints first.
-    if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.#roomInstalls.set(`service:${stored.name}`, { error: 'approve what it runs first' });
-    this.#ensureArtifact(stored.name, a, `service:${stored.name}`, () => {
+    if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.#releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
+    this.#releases.ensure(stored.name, a, `service:${stored.name}`, () => {
       const now = this.#storedServices().find((s) => s.name === stored.name);
       if (now?.enabled && now.artifact?.id === a.id) this.#spawnService(now);
     });
@@ -8089,7 +8016,7 @@ export class WeaveNode implements Backend {
 
   /** Resolves when fetching an applet's release ends (for tests and the CLI). */
   async serviceReady(name: string): Promise<ServiceInfo> {
-    await this.#roomInstalling.get(`service:${name}`);
+    await this.#releases.done(`service:${name}`);
     return this.#serviceInfo(this.#storedService(name));
   }
 
@@ -8103,8 +8030,8 @@ export class WeaveNode implements Backend {
     let cwd = dir;
     if (a) {
       run = this.#runtime.command(container ?? 'weave', a.manifest);
-      if (!run) return void this.#roomInstalls.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} has nothing to run on this computer (${platformKey()})` });
-      if (!container) cwd = this.#artifactFolder(stored.name, a);
+      if (!run) return void this.#releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} has nothing to run on this computer (${platformKey()})` });
+      if (!container) cwd = this.#releases.folder(stored.name, a);
     }
     if (!run?.length) return;
     const project = stored.spaces.filter((id) => this.#spaces.get(id)?.kind === 'project');
