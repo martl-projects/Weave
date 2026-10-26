@@ -536,7 +536,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <div className="buttons">
         {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
         {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
-        {service.builtin !== 'website' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
+        {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>

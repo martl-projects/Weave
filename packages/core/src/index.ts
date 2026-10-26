@@ -414,6 +414,7 @@ export {
   requestsOf,
   serviceName,
   servicePermissions,
+  takesRequests,
   contractWords,
   serviceReads,
   type ServiceContract,

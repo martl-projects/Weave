@@ -1,4 +1,4 @@
-import { b64u, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { b64u, takesRequests, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
 import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
@@ -234,7 +234,7 @@ export class Services {
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The room service writes rooms and nothing else; it reads only what's addressed to it. An applet: its manifest's contract.
-    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], website: true, version: '1.0' } : (manifest?.service ?? input.contract));
+    const contract = parseContract(builtin ? { reads: 'nothing', writes: [], website: true, version: '1.0' } : (manifest?.service ?? input.contract));
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
     const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Websites: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
@@ -591,6 +591,8 @@ export class Services {
 
   async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === to);
+    if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
     const text = input.text?.trim() ?? '';
     if (!text && input.data === undefined) throw new Error('ask with some text or data');
     const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
@@ -625,7 +627,7 @@ export class Services {
    */
   serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
     if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
-    if (d.inner.kind === KIND_SERVICE_REQUEST) return (d.inner.body as { to?: unknown } | null)?.to === did;
+    if (d.inner.kind === KIND_SERVICE_REQUEST) return takesRequests(stored.contract) && (d.inner.body as { to?: unknown } | null)?.to === did;
     return serviceReads(stored.contract, d.inner.kind);
   }
 
@@ -672,6 +674,7 @@ export class Services {
         return this.h.publish({ kind, body: body ?? null, space: target.id, as: name });
       },
       answer: async ({ request, text, data, error }) => {
+        if (!takesRequests(current().contract)) throw new Error(`service "${name}" takes no requests in its contract`);
         const found = this.h.find(request, [KIND_SERVICE_REQUEST]);
         if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
         inSpace(found.space.id);

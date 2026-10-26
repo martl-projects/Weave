@@ -76,6 +76,18 @@ describe('services', () => {
     expect(martl.serviceGate('not-a-token')).toBeUndefined();
   });
 
+  it('takes no requests when it reads nothing: its key signs its profile alone', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martl.invite('Weave'));
+    const quiet = await martl.addService({ name: 'quiet', contract: { reads: 'nothing', writes: [], version: '1.0' }, spaces: ['Weave'] });
+    expect(martl.replica.authority.grant(quiet.did)?.permissions).toEqual(['weave.service.profile']);
+    sync([martl, lena]);
+    await expect(lena.askService({ space: 'Weave', service: 'martl/quiet', text: 'hi' })).rejects.toThrow(/quiet takes no requests: it reads nothing and takes no requests; writes nothing/);
+    await expect(martl.serviceGate(tokenOf(martl, 'quiet'))!.answer({ request: 'x', text: 'no' })).rejects.toThrow(/takes no requests/);
+  });
+
   it('runs its process with its own token, which opens nothing but the service routes', async () => {
     const martl = person('martl');
     const lena = person('Lena');

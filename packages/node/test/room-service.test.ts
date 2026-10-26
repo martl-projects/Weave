@@ -113,7 +113,9 @@ describe('the room service', { timeout: 60_000 }, () => {
 
     // Lena adds Weave's room service to Party: it writes rooms and nothing else, and says it's the one Weave ships.
     const service = await lena.addService({ builtin: 'website', spaces: ['Party'] });
-    expect(service).toMatchObject({ name: 'website', builtin: 'website', contract: { reads: 'addressed', writes: [], website: true }, websites: [] });
+    expect(service).toMatchObject({ name: 'website', builtin: 'website', contract: { reads: 'nothing', writes: [], website: true }, websites: [] });
+    // It takes no requests: its key may sign its profile and its websites, not even answers.
+    expect(lena.replica.authority.grant(service.did)?.permissions.sort()).toEqual(['weave.room', 'weave.room.*', 'weave.service.profile']);
     expect((await lena.servicesIn('Party')).map((p) => [p.name, p.builtin])).toEqual([['website', 'website']]);
     await expect(lena.addService({ name: 'other', builtin: 'website', command: ['node', 'x.js'] })).rejects.toThrow(/runs in Weave/);
 

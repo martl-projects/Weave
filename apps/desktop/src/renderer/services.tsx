@@ -13,8 +13,9 @@ import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /** A contract in plain words. */
 export function contractText(c: ServiceContract): string {
-  const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
-  const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
+  const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
+  const answers = c.reads === 'nothing' ? '' : ' and its answers';
+  const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
   return `${reads}; ${writes}${c.website ? '; serves websites' : ''} (contract ${c.version})`;
 }
 
@@ -50,7 +51,7 @@ const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\
 function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [reads, setReads] = useState<'addressed' | 'kinds' | 'space'>('addressed');
+  const [reads, setReads] = useState<'nothing' | 'addressed' | 'kinds' | 'space'>('addressed');
   const [readKinds, setReadKinds] = useState('');
   const [writes, setWrites] = useState('');
   const [website, setWebsite] = useState(false);
@@ -81,6 +82,10 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
       </div>
       <fieldset>
         <legend>What it reads</legend>
+        <div className="field-row">
+          <input type="radio" id="svc-reads-nothing" checked={reads === 'nothing'} onChange={() => setReads('nothing')} />
+          <label htmlFor="svc-reads-nothing">Nothing: it takes no requests (a website, say)</label>
+        </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-addressed" checked={reads === 'addressed'} onChange={() => setReads('addressed')} />
           <label htmlFor="svc-reads-addressed">Only what members ask it (the safest)</label>

@@ -194,7 +194,7 @@ github — repositories that follow a group, tier or project (members who give t
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
   service add <name>         run code under a key of its own, with exactly these rights:
-                             --reads addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
+                             --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it opens websites (weave website open)
@@ -525,7 +525,7 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}; contract ${c.version}`;
 
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
@@ -1426,7 +1426,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Open one: weave website open <name> -p <project> --artifact <project>`);
       }
       if (sub === 'add' && ref) {
-        const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
+        const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
         const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), version: values['contract-version'] ?? '1.0' };
         const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.node ? { node: values.node } : {}) });
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);

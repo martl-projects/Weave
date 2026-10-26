@@ -42,12 +42,15 @@ export function servicesIn(entries: Entry[], isTheirs: (service: Did, author: Di
 /** Service keys are agent keys with this prefix in their name. */
 export const SERVICE_PREFIX = 'service:';
 
-/** What a service reads in the spaces it's in: requests addressed to it, those plus some kinds, or everything. */
-export type ServiceReads = 'addressed' | { kinds: string[] } | 'space';
+/**
+ * What a service reads in the spaces it's in: nothing (it takes no requests either: a website, say), requests
+ * addressed to it, those plus some kinds, or everything.
+ */
+export type ServiceReads = 'nothing' | 'addressed' | { kinds: string[] } | 'space';
 
 export interface ServiceContract {
   reads: ServiceReads;
-  /** Kinds it may sign, beyond its profile and its results (which every service may). */
+  /** Kinds it may sign, beyond its profile (and its answers, if it takes requests). */
   writes: string[];
   /** It serves websites (rooms, on the wire): pages people visit, which Weave tells who is visiting. */
   website?: boolean;
@@ -82,7 +85,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
   let reads: ServiceReads | undefined;
-  if (c.reads === 'addressed' || c.reads === 'space') reads = c.reads;
+  if (c.reads === 'nothing' || c.reads === 'addressed' || c.reads === 'space') reads = c.reads;
   else if (c.reads && typeof c.reads === 'object' && Array.isArray((c.reads as { kinds?: unknown }).kinds)) {
     const kinds = ((c.reads as { kinds: unknown[] }).kinds).filter(isKind).slice(0, 50);
     if (kinds.length) reads = { kinds };
@@ -94,21 +97,28 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   return { reads, writes, ...(c.website === true ? { website: true } : {}), version };
 }
 
-/** The kinds a service's key may sign: its profile, its results, and what its contract writes (rooms, if it serves websites). */
+/**
+ * The kinds a service's key may sign: its profile, its answers (only if it takes requests), and what its contract
+ * writes (rooms, if it serves websites). A service that reads nothing and writes nothing signs its profile alone.
+ */
 export const servicePermissions = (contract: ServiceContract): string[] =>
-  [...new Set([KIND_SERVICE_PROFILE, KIND_SERVICE_RESULT, ...contract.writes, ...(contract.website ? ['weave.room', 'weave.room.*'] : [])])];
+  [...new Set([KIND_SERVICE_PROFILE, ...(contract.reads === 'nothing' ? [] : [KIND_SERVICE_RESULT]), ...contract.writes, ...(contract.website ? ['weave.room', 'weave.room.*'] : [])])];
+
+/** Whether a service takes requests (and may answer them). */
+export const takesRequests = (contract: ServiceContract): boolean => contract.reads !== 'nothing';
 
 /** A contract in plain words, as people approve it: "reads only what is asked of it; writes only its answers (contract 1.0)". */
 export function contractWords(c: ServiceContract): string {
-  const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
-  const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
+  const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
+  const answers = c.reads === 'nothing' ? '' : ' and its answers';
+  const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
   return `${reads}; ${writes}${c.website ? '; serves websites' : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
 export function serviceReads(contract: ServiceContract, kind: string): boolean {
   if (contract.reads === 'space') return true;
-  if (contract.reads === 'addressed') return false;
+  if (contract.reads === 'addressed' || contract.reads === 'nothing') return false;
   return contract.reads.kinds.some((k) => k === kind || (k.endsWith('.*') && kind.startsWith(k.slice(0, -1))));
 }
 
