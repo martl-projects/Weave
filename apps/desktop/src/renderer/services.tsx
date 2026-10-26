@@ -122,7 +122,7 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
       <div className="field-row-stacked">
         <label htmlFor="svc-command">How to start it</label>
         <input id="svc-command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="node files-service.js" spellCheck={false} />
-        <span className="small muted">It gets WEAVE_API and its own token (WEAVE_SERVICE_TOKEN), and its settings, as environment variables. Leave it empty if something else uses its token.</span>
+        <span className="small muted">It gets its service API and token (WEAVE_SERVICE_API, WEAVE_SERVICE_TOKEN), Weave’s app API for who is who (WEAVE_API, WEAVE_TOKEN), and its settings, as environment variables. Leave it empty if something else uses its token.</span>
       </div>
       <p className="small">
         <b>Its contract:</b> {contractText(contract)}.

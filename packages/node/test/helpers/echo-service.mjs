@@ -1,5 +1,5 @@
 // A small service for tests: it answers every request addressed to it with "echo: <text>", through its own token.
-const api = process.env.WEAVE_API;
+const api = process.env.WEAVE_SERVICE_API;
 const headers = { authorization: `Bearer ${process.env.WEAVE_SERVICE_TOKEN}`, 'content-type': 'application/json' };
 const answered = new Set();
 

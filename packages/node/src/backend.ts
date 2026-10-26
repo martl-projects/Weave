@@ -233,16 +233,50 @@ export interface ServiceInfo {
   description: string;
   icon?: string;
   contract: ServiceContract;
-  /** The spaces it was added to: the only ones it reads and writes in. */
-  spaces: SpaceRef[];
+  /** The spaces it was added to: the only ones it reads and writes in; with the names of the settings given for each. */
+  spaces: Array<SpaceRef & { settings?: string[] }>;
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
+  /** The artifact it runs, pinned to one release; `latest` when the project released a newer one. */
+  artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
   settings: string[];
   enabled: boolean;
   running: boolean;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
+}
+
+/** The release a service runs, and how far getting it went. */
+export interface ServiceArtifactInfo {
+  project: { id: string; name?: string };
+  tag: string;
+  app: string;
+  name: string;
+  /** A newer release of the project, if there is one. */
+  latest?: string;
+  /** Its files are here, checked against the release's fingerprints. */
+  installed: boolean;
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+  /** The settings it asks for: once (in its environment), or per space. */
+  settings: AppSetting[];
+}
+
+/** A release of a project, as it can be started as a service. */
+export interface ArtifactInfo {
+  id: string;
+  project: SpaceRef;
+  tag: string;
+  app: string;
+  name: string;
+  released: Actor;
+  time: string;
+  /** It has a web page: started as a service, it's offered as a room in its projects. */
+  room: boolean;
+  settings: AppSetting[];
+  /** How it would run on this node: its release file for this platform, or its container (Docker). */
+  runs?: 'release' | 'container';
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -261,7 +295,8 @@ export interface ServiceProfileInfo {
  * what its contract says, only in its spaces), and signing as itself, only the kinds it may write.
  */
 export interface ServiceGate {
-  me(): { name: string; did: Did; person: Did; contract: ServiceContract; spaces: SpaceRef[] };
+  /** Who it is, and its spaces with the settings given for each (its manifest's per-space settings). */
+  me(): { name: string; did: Did; person: Did; contract: ServiceContract; spaces: Array<SpaceRef & { settings: Record<string, string> }> };
   /** What it may read, after `since` (an event time), oldest first. */
   events(since?: string): FeedItem[];
   watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void>;
@@ -1559,11 +1594,14 @@ export interface Backend {
   githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
-  addService(input: { name: string; description?: string; icon?: string; contract: ServiceContract; spaces?: string[]; command?: string[]; node?: string }): Promise<ServiceInfo>;
+  /** A service: a command, or an artifact (a project's release, pinned; needs `approve`), which gives it its contract. */
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  /** A project's releases, newest first: what can be started as a service. */
+  artifacts(project: string): Promise<ArtifactInfo[]>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */
@@ -1932,7 +1970,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

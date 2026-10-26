@@ -63,9 +63,12 @@ class Weave {
     }
   }
 
-  /** The project, its open rooms with the people in them, and its groups. */
-  project() {
-    return this.#get('/v1/project');
+  /**
+   * The project, its open rooms with the people in them, and its groups. A service in several spaces names one
+   * (its id or name), and also gets the settings it was given there.
+   */
+  project(space) {
+    return this.#get(space ? `/v1/project?${new URLSearchParams({ project: String(space) })}` : '/v1/project');
   }
 
   /** What someone is in the project, and which of its groups (or the host's own groups and tiers) they're in; `group` (id or name) asks about one. */

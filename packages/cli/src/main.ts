@@ -197,8 +197,14 @@ github — repositories that follow a group, tier or project (members who give t
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
+  service add [<name>] --artifact <project>[@tag]   run a project's release as a service, pinned to it (the latest
+                             without a tag); it asks you to approve what it runs. Its web page becomes its room.
+                             [--spaces <space,…>] [--setting KEY=VALUE]
+  service artifacts <project>  a project's releases, as they can run as services
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
+                             [--in <space> --setting KEY=VALUE]: a setting for one space only
+                             [--update latest|<tag>]: run another release of its artifact (asks you to approve it)
   service start|stop <name>  run it or not
   service remove <name>      stop it for good (its key is revoked)
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
@@ -399,6 +405,8 @@ const { values, positionals } = parseArgs({
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
+    artifact: { type: 'string' },
+    update: { type: 'string' },
     repo: { type: 'string' },
     from: { type: 'string' },
     accept: { type: 'boolean', default: false },
@@ -1376,9 +1384,48 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const b = await backend();
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
-        [`${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`, `  ${s.did}`, ...(s.description ? [`  ${s.description}`] : []), `  ${contractLine(s.contract)}`, ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []), ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : [])].join('\n');
+        [
+          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.running ? 'running' : s.artifact?.progress ? `fetching ${s.artifact.tag}` : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
+          `  ${s.did}`,
+          ...(s.description ? [`  ${s.description}`] : []),
+          `  ${contractLine(s.contract)}`,
+          ...(s.artifact ? [`  artifact: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}`] : []),
+          ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
+          ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
+          ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
+          ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
+        ].join('\n');
+      // Running a release is running someone's code: shown, then approved here.
+      const approving = async <T,>(run: (approve: boolean) => Promise<T>): Promise<T> => {
+        try {
+          return await run(false);
+        } catch (error) {
+          const message = (error as Error).message;
+          if (!message.startsWith('approve it first:')) throw error;
+          const answer = await askLine(`${message.slice('approve it first: '.length)}.\nRun it? [y/N] `);
+          if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not approved: nothing runs');
+          return run(true);
+        }
+      };
       const words = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
       const list = (text?: string) => text?.split(',').map((x) => x.trim()).filter(Boolean);
+      const settingsOf = () =>
+        Object.fromEntries((values.setting ?? []).map((s) => {
+          const at = s.indexOf('=');
+          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it)');
+          return [s.slice(0, at), s.slice(at + 1) || null];
+        }));
+      if (sub === 'artifacts') {
+        const all = await b.artifacts(ref ?? needSpace());
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.space ? ' (per space)' : ''}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+      }
+      if (sub === 'add' && values.artifact) {
+        const at = values.artifact.lastIndexOf('@');
+        const artifact = at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact };
+        const settings = Object.fromEntries(Object.entries(settingsOf()).filter(([, v]) => v !== null)) as Record<string, string>;
+        const s = await approving((approve) => b.addService({ ...(ref ? { name: ref } : {}), ...(values.text ? { description: values.text } : {}), artifact, approve, spaces: list(values.spaces), ...(Object.keys(settings).length ? { settings } : {}) }));
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}. It starts once its release is fetched and checked${s.contract.room ? '; its web page is then its room in each of its projects' : ''}.`);
+      }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
         const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-room'] ? { room: true } : {}), version: values['contract-version'] ?? '1.0' };
@@ -1394,12 +1441,10 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(all, () => all.map((p) => `${p.person.name ?? p.person.did} · ${p.name}  ${p.description}\n  ${p.did}\n  ${contractLine(p.contract)}`).join('\n\n') || '(no services known)');
       }
       if (sub === 'set' && ref) {
-        const settings = Object.fromEntries((values.setting ?? []).map((s) => {
-          const at = s.indexOf('=');
-          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it)');
-          return [s.slice(0, at), s.slice(at + 1) || null];
-        }));
-        const s = await b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(Object.keys(settings).length ? { settings } : {}), ...(values.text !== undefined ? { description: values.text } : {}) });
+        const settings = settingsOf();
+        const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
+        const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
+        const s = await approving((approve) => b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }));
         return out(s, () => line(s));
       }
       if ((sub === 'start' || sub === 'stop') && ref) {
@@ -1418,7 +1463,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const all = await b.serviceRequests({ space: needSpace(), ...(ref ? { service: ref } : {}) });
         return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
       }
-      throw new Error('usage: weave service add|list|profiles|set|start|stop|remove|ask|requests — see "weave --help"');
+      throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests — see "weave --help"');
     }
 
     case 'repo': {

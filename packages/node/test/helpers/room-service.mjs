@@ -15,7 +15,7 @@ server.listen(0, '127.0.0.1', async () => {
   const headers = { authorization: `Bearer ${process.env.WEAVE_SERVICE_TOKEN}`, 'content-type': 'application/json' };
   // Tell Weave where the page is: it offers it as the service's room.
   for (let tries = 0; tries < 50; tries++) {
-    const res = await fetch(`${process.env.WEAVE_API}/room`, { method: 'POST', headers, body: JSON.stringify({ port }) }).catch(() => undefined);
+    const res = await fetch(`${process.env.WEAVE_SERVICE_API}/room`, { method: 'POST', headers, body: JSON.stringify({ port }) }).catch(() => undefined);
     if (res?.ok) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }

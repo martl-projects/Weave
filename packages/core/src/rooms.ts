@@ -85,6 +85,11 @@ export interface AppSetting {
   optional?: true;
   /** Where to get it, like "platform.deepseek.com → API keys". */
   hint?: string;
+  /**
+   * Asked once for each space the app runs in as a service (which repository belongs to this project, say), not
+   * once for the whole installation. Not in its environment: it reads them per space from Weave.
+   */
+  space?: true;
 }
 
 /** Variables an app may not ask hosts for: they change how programs start or what they load. */
@@ -297,7 +302,7 @@ export function checkManifest(input: unknown): ManifestCheck {
         const label = text(e.label, 60) || name;
         if (!text(e.label, 60)) warnings.push(`${where}: "label" is what hosts see, like "DeepSeek API key"`);
         const hint = text(e.hint, 200);
-        env.push({ name, label, ...(e.secret === true ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}) });
+        env.push({ name, label, ...(e.secret === true ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(e.space === true ? { space: true as const } : {}) });
       }
     }
   }
@@ -337,7 +342,7 @@ export const MANIFEST_RULES = [
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Each host types it in Weave (Live tab, or weave app set), it stays on their computer, and Weave hands it to this app alone when it starts it. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Each host types it in Weave (Live tab, or weave app set), it stays on their computer, and Weave hands it to this app alone when it starts it. Read it from the environment (process.env.DEEPSEEK_API_KEY). A setting with "space": true is asked once per space the app runs in as a service, not once per host: it isn\'t in the environment; read it per space with weave.project().',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
@@ -346,6 +351,39 @@ export const MANIFEST_RULES = [
 /** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */
 export const startCommand = (app: AppManifest | undefined, platform: string, releaseBuild: boolean): string[] | undefined =>
   (releaseBuild ? app?.start?.release?.[platform] : undefined) ?? app?.start?.command;
+
+/**
+ * An artifact: one release a project published (a weave.app with a tag and its files or image, by a maintainer).
+ * Anyone in the project can start it as a service, pinned to exactly this release, in any space of theirs.
+ */
+export interface Artifact {
+  /** The weave.app event that published it. */
+  id: string;
+  tag: string;
+  manifest: AppManifest;
+  /** Who released it (a maintainer), and the key that signed (theirs, or their agent's). */
+  author: Did;
+  signer: string;
+  time: string;
+}
+
+/** A project's artifacts, newest first: each tag once (its latest release), only by maintainers, only with something to start. */
+export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
+  const byTag = new Map<string, Artifact>();
+  for (const e of [...entries].filter((x) => x.kind === KIND_APP).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+    if (!maintainers.has(e.event.author)) continue;
+    let manifest: AppManifest;
+    try {
+      manifest = parseManifest(e.body);
+    } catch {
+      continue;
+    }
+    const tag = manifest.install?.tag;
+    if (!tag || !(manifest.install?.assets || manifest.install?.image)) continue;
+    byTag.set(tag, { id: e.id, tag, manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
+  }
+  return [...byTag.values()].sort((a, b) => b.time.localeCompare(a.time));
+}
 
 export interface Room {
   id: string;
