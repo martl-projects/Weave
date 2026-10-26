@@ -12,6 +12,7 @@ import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, u
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
+import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
 
@@ -947,6 +948,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
         <>
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
+          <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
       )}
       {tab === 'github' && <RepoSettings space={project} />}
@@ -1158,6 +1160,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
       <RepoSettings space={group} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
+      <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
   );
@@ -1250,6 +1253,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
       <RepoSettings space={community} />
       <CommunityRule community={community} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
+      <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
   );

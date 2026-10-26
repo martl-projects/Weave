@@ -51,6 +51,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.org.attest',
   'weave.space.hold',
   'weave.space.agent',
+  'weave.space.visitors',
   'weave.org.escrow',
   'weave.org.escrow.opened',
   // the company itself (stage 10)

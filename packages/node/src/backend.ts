@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { Builtin, GumroadLink, OnchainPrice } from '@weave/core';
+import type { Builtin, GumroadLink, OnchainPrice, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -177,6 +177,8 @@ export interface SpaceInfo extends SpaceRef {
   managed?: { agents: string[]; provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
+  /** What people's agents and services may do here, as those who manage it set it, and the keys they approved (person/name). */
+  visitors?: { agents: VisitorRule; services: VisitorRule; approved: string[] };
 }
 
 export interface GitHubInfo {
@@ -1563,8 +1565,10 @@ export interface Backend {
   /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
   setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo>;
   consoleInfo(): Promise<ConsoleInfo>;
-  /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
+  /** Those who manage a space: approve an agent or service to act there (person/name, or its key), or no longer. */
   approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
+  /** What people's agents and services may do in a space (those who manage it): who counts, and which kinds they may write. */
+  setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
   agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>>;
   /** The owner: a legal hold until a date (nothing shredded or forgotten); a past date lifts it. */
@@ -1975,7 +1979,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',

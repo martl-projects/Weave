@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -144,7 +144,10 @@ projects — something being built; participants chat, discuss, vote and work on
   unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
   hold <space> <until> [reason]          legal hold: nothing shredded or forgotten until then (owner)
   destroy-company-key <space>            shred everything under the company key (owner)
-  approve-agent <space> <person/agent> [off]  let an agent act in a company space (managers)
+  approve-agent <space> <person/name> [off]   let an agent or service act in a space that only lets approved ones (managers)
+  visitors <space>                       what people's agents and services may do there
+  visitors <space> [--agents everyone|approved|nobody] [--agent-kinds <kind,…>] [--services …] [--service-kinds <kind,…>]
+                                         set it (those who manage the space; kinds "" for all their person allows)
   escrow <space> <words> / escrow-open <space> <person> [--for <request>]  leave recovery words with the company / open them (managers)
   company                                your company: settings, mappings, spaces, requests
   company create <name> vault|azure|aws|gcp ... --issuer <url> --audience <id> --admins <sign-in group>   on the company's own node
@@ -416,6 +419,10 @@ const { values, positionals } = parseArgs({
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
     artifact: { type: 'string' },
+    agents: { type: 'string' },
+    services: { type: 'string' },
+    'agent-kinds': { type: 'string' },
+    'service-kinds': { type: 'string' },
     update: { type: 'string' },
     builtin: { type: 'string' },
     folder: { type: 'string' },
@@ -1955,7 +1962,25 @@ ${postLine(p)}`);
       const [space, agent, off] = args;
       if (!space || !agent) throw new Error('usage: weave approve-agent <space> <person/agent> [off]');
       const s = await (await backend()).approveAgent({ space, agent, on: off !== 'off' });
-      return out(s, () => `agents approved in ${s.name}: ${s.managed?.agents.join(', ') || 'none'}`);
+      return out(s, () => `approved in ${s.name}: ${s.visitors?.approved.join(', ') || 'none'}`);
+    }
+
+    case 'visitors': {
+      const [space] = args;
+      if (!space) throw new Error('usage: weave visitors <space> [--agents everyone|approved|nobody] [--agent-kinds …] [--services …] [--service-kinds …]');
+      const b = await backend();
+      const rule = (who: string | undefined, kinds: string | undefined, before: VisitorRule | undefined): VisitorRule | undefined => {
+        if (who === undefined && kinds === undefined) return undefined;
+        const listed = kinds?.split(',').map((k) => k.trim()).filter(Boolean);
+        return { who: (who ?? before?.who ?? 'everyone') as VisitorRule['who'], ...(kinds === undefined ? (before?.kinds ? { kinds: before.kinds } : {}) : listed?.length ? { kinds: listed } : {}) };
+      };
+      let s = (await b.spaces()).find((x) => x.id === space || x.name === space);
+      if (!s) throw new Error(`you aren't in a space "${space}"`);
+      const agents = rule(values.agents, values['agent-kinds'], s.visitors?.agents);
+      const services = rule(values.services, values['service-kinds'], s.visitors?.services);
+      if (agents || services) s = await b.setVisitors({ space, ...(agents ? { agents } : {}), ...(services ? { services } : {}) });
+      const line = (r: VisitorRule | undefined) => (r ? `${r.who === 'everyone' ? "everyone's" : r.who === 'approved' ? 'approved ones only' : 'none'}${r.who !== 'nobody' ? (r.kinds ? `, writing only ${r.kinds.join(', ')}` : ', writing what their person allows') : ''}` : '?');
+      return out(s.visitors, () => `in ${s.name}:\n  agents:   ${line(s.visitors?.agents)}\n  services: ${line(s.visitors?.services)}\n  approved: ${s.visitors?.approved.join(', ') || 'none'}\n  (those who manage it are never held to this${s.managed ? ', except in a company space' : ''})`);
     }
 
     case 'hold': {

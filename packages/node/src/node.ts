@@ -48,6 +48,10 @@ import {
   KIND_ATTEST,
   KIND_HOLD,
   KIND_AGENT_APPROVE,
+  KIND_VISITORS,
+  parseVisitorRule,
+  visitorCounts,
+  type VisitorRule,
   KIND_ESCROW,
   KIND_ESCROW_OPENED,
   KIND_LINK,
@@ -1312,8 +1316,7 @@ export class WeaveNode implements Backend {
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
-    if (space && input.as && this.#state(space).managed && !this.#state(space).approvedAgents?.has(signer.did))
-      throw new Error(`agent "${input.as}" isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${this.nameOf(this.identity.author) ?? this.identity.author}/${input.as})`);
+    if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
     const fields: EventFields = space ? sealFor(this.#cipher(space), inner) : inner;
     const event = this.replica.write(signer, fields);
@@ -1668,29 +1671,61 @@ export class WeaveNode implements Backend {
     });
   }
 
-  /** In managed spaces, what agent keys signed counts only if those who manage the space approved them (stage 9). */
+  /**
+   * What agent and service keys signed counts only as far as the space lets them (visitorCounts): in managed
+   * spaces only approved keys (stage 9); elsewhere as the space's rule for agents and services says.
+   */
   #approvedOnly(decoded: Decoded[]): Decoded[] {
-    const approved = new Map<string, Set<Did>>();
+    const states = new Map<string, SpaceState>();
     const of = (space: StoredSpace) => {
-      let set = approved.get(space.id);
-      if (!set) {
-        set = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id)).approvedAgents ?? new Set();
-        approved.set(space.id, set);
+      let state = states.get(space.id);
+      if (!state) {
+        state = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id));
+        states.set(space.id, state);
       }
-      return set;
+      return state;
     };
     return decoded.filter((d) => {
       const space = d.space as StoredSpace | undefined;
-      if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent') return true;
-      return !this.#managedRaw(space).setting || of(space).has(d.event.signer);
+      const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
+      if (!space || grant?.role !== 'agent') return true;
+      return visitorCounts(of(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managedRaw(space).setting);
     });
   }
 
   /** One new event: does it count, by the space's state as known (see #approvedOnly)? */
   #agentCounts(d: Decoded): boolean {
     const space = d.space as StoredSpace | undefined;
-    if (!space || d.event.signer === d.event.author || this.replica.authority.grant(d.event.signer)?.role !== 'agent' || !this.#managedRaw(space).setting) return true;
-    return !!this.#state(space).approvedAgents?.has(d.event.signer);
+    const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
+    if (!space || grant?.role !== 'agent') return true;
+    return visitorCounts(this.#state(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managedRaw(space).setting);
+  }
+
+  /** Before an agent or service of ours signs in a space: refuse what the space wouldn't count, and say why. */
+  #visitorMay(space: StoredSpace, key: Did, name: string, kind: string): void {
+    const state = this.#state(space);
+    const managed = !!this.#managedRaw(space).setting;
+    const service = name.startsWith(SERVICE_PREFIX) || this.#services.storedServices().some((s) => s.name === name);
+    if (visitorCounts(state, { key, author: this.identity.author, service }, canonicalKind(kind), managed)) return;
+    const what = service ? `service "${name}"` : `agent "${name}"`;
+    const rule = service ? state.visitors?.services : state.visitors?.agents;
+    const ref = `${this.nameOf(this.identity.author) ?? this.identity.author}/${name}`;
+    if (rule?.who === 'nobody') throw new Error(`${space.name} doesn't let ${service ? 'services' : 'agents'} act in it: its maintainers decide that`);
+    if (managed || rule?.who === 'approved') if (!state.approvedAgents?.has(key)) throw new Error(`${what} isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${ref})`);
+    throw new Error(`${space.name} doesn't let ${service ? 'services' : 'agents'} write ${kind} (only ${rule?.kinds?.join(', ')}): its maintainers decide that`);
+  }
+
+  /** What people's agents and services may do in a space (those who manage it). Leaving one out keeps it as it is. */
+  async setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    const state = this.#state(space);
+    if (space.kind === 'direct') throw new Error('a direct chat has no rules for agents');
+    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} decide what agents and services may do there`);
+    const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
+    const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
+    if ((input.agents && !agents) || (input.services && !services)) throw new Error('a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
+    return this.#spaceInfo(space);
   }
 
   // ---------------------------------------------------------------- audit (stage 9.3)
@@ -1765,8 +1800,8 @@ export class WeaveNode implements Backend {
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (!state.managed) throw new Error(`${space.name} isn't a company space: agents act wherever their person lets them`);
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} approve agents there`);
+    if (space.kind === 'direct') throw new Error('a direct chat has no rules for agents');
+    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} approve agents and services there`);
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
     return this.#spaceInfo(space);
   }
@@ -1777,7 +1812,9 @@ export class WeaveNode implements Backend {
     const at = ref.lastIndexOf('/');
     if (at > 0) {
       const person = this.resolve(ref.slice(0, at));
-      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.name === ref.slice(at + 1));
+      // An agent by its name, or a service by its own (its key is named service:<name>).
+      const name = ref.slice(at + 1);
+      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.revokedAfter === undefined && (g.name === name || g.name === `${SERVICE_PREFIX}${name}`));
       if (grant) return grant.subject;
     }
     throw new Error(`no agent "${ref}": name it as person/agent (e.g. Lena/claude) or by its key`);
@@ -1786,7 +1823,15 @@ export class WeaveNode implements Backend {
   async agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>> {
     const key = this.#agents.find((a) => a.name === agent)?.did;
     if (!key) throw new Error(noAgent(agent, this.#agents.map((a) => a.name)));
-    return [...this.#spaces.values()].filter((s) => this.#state(s).managed && !this.#state(s).approvedAgents?.has(key)).map((s) => ({ id: s.id, name: s.name }));
+    // Where its key doesn't count at all (what it may write there is a matter of kinds).
+    return [...this.#spaces.values()]
+      .filter((s) => {
+        const state = this.#state(s);
+        if (state.managed) return !state.approvedAgents?.has(key);
+        const who = state.visitors?.agents?.who ?? 'everyone';
+        return !canManage(state, this.identity.author) && (who === 'nobody' || (who === 'approved' && !state.approvedAgents?.has(key)));
+      })
+      .map((s) => ({ id: s.id, name: s.name }));
   }
 
   /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
@@ -7252,6 +7297,20 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
   }
 
+  /** The space's rules for agents and services as they apply (company spaces: approved only), and who is approved. */
+  #visitorsInfo(space: StoredSpace): NonNullable<SpaceInfo['visitors']> {
+    const state = this.#state(space);
+    const fallback: VisitorRule = { who: state.managed ? 'approved' : 'everyone' };
+    return {
+      agents: state.visitors?.agents ?? fallback,
+      services: state.visitors?.services ?? fallback,
+      approved: [...(state.approvedAgents ?? [])].map((did) => {
+        const grant = this.replica.authority.grant(did);
+        return grant ? `${this.nameOf(grant.author) ?? grant.author}/${(grant.name ?? did.slice(8, 16)).replace(SERVICE_PREFIX, '')}` : did;
+      }),
+    };
+  }
+
   #managedInfo(space: StoredSpace, setting: ManagedSetting): NonNullable<SpaceInfo['managed']> {
     const spec = setting.provider as unknown as ProviderSpec;
     const current = this.#cipher(space).keys[String(currentEpoch(space))] !== undefined;
@@ -7729,6 +7788,7 @@ export class WeaveNode implements Backend {
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
+      ...(space.kind !== 'direct' ? { visitors: this.#visitorsInfo(space) } : {}),
       ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
@@ -8366,8 +8426,9 @@ export class WeaveNode implements Backend {
     this.#ensureDirectFor(event.signer);
     const d = this.#decode(event);
     if (!d || !this.#agentCounts(d)) return;
-    // An approval makes an agent's earlier events count: decode again (rare).
-    if (d.inner.kind === KIND_AGENT_APPROVE) {
+    // An approval, or a space's rule for agents and services, decides what they signed counts, earlier events
+    // too (nothing is deleted: a looser rule shows them again): decode again (rare).
+    if (d.inner.kind === KIND_AGENT_APPROVE || d.inner.kind === KIND_VISITORS) {
       this.#decoded = undefined;
       return;
     }
