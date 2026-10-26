@@ -17,8 +17,8 @@ contextBridge.exposeInMainWorld('weave', {
   pick: (text: string) => ipcRenderer.invoke('weave:pick', text),
   closePicker: () => ipcRenderer.invoke('weave:picker'),
   fitPicker: (height: number) => ipcRenderer.invoke('weave:picker-fit', height),
-  onPickerOpen: (listener: () => void) => {
-    ipcRenderer.on('weave:picker-open', () => listener());
+  onPickerOpen: (listener: (tab: string) => void) => {
+    ipcRenderer.on('weave:picker-open', (_event, tab: string) => listener(tab));
   },
   onPanelSession: (listener: (session: string) => void) => {
     ipcRenderer.on('weave:panel-session', (_event, session: string) => listener(session));

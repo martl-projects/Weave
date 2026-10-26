@@ -490,9 +490,10 @@ around it.
   related items. It follows the active session through Claude Code's status
   line (`weave statusline` receives the session id, tells Weave, and prints
   the item, the agent and today's spend in Claude Code's status bar).
-- **The address book picker.** Ctrl+Alt+W (`WEAVE_PICKER_SHORTCUT` changes
-  it, `off` turns it off), from wherever you're typing: a search over the
-  people, projects and posts this computer knows. Enter pastes a Markdown
+- **The address book picker.** Ctrl+F1 (people), Ctrl+F2 (projects), Ctrl+F3
+  (posts), from wherever you're typing (`WEAVE_PICKER_SHORTCUT=off` turns them
+  off): a search bar over the people, projects and posts this computer knows,
+  growing with what it finds; Tab switches tabs. Enter pastes a Markdown
   link to the pick where you were (on Windows; elsewhere it's left on the
   clipboard). People have addresses for this, like posts:
   `http://weave.localhost:7710/@phil~fP5Q3XPCFjz1`, a name and the first 12

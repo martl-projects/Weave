@@ -40,8 +40,8 @@ interface Bridge {
   closePicker?(): Promise<void>;
   /** In the address book picker: make the window as tall as this (it grows with the results). */
   fitPicker?(height: number): Promise<void>;
-  /** In the address book picker: its shortcut was pressed again, so it starts afresh. */
-  onPickerOpen?(listener: () => void): void;
+  /** In the address book picker: a shortcut was pressed again, so it starts afresh on that tab (people, projects, posts). */
+  onPickerOpen?(listener: (tab: string) => void): void;
   /** In the side panel: show this session (after Ctrl+click). */
   onPanelSession?(listener: (session: string) => void): void;
   /** The desktop app's operating system (darwin, win32, linux); missing in a browser. */

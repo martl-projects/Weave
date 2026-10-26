@@ -35,6 +35,16 @@ const TABS: Array<[FoundKind | 'all', string]> = [
   ['posts', 'Posts'],
 ];
 
+/** The tab a shortcut asked for (Ctrl+F1 people, F2 projects, F3 posts), else all. */
+const tabOf = (asked: string | null | undefined): FoundKind | 'all' => TABS.find(([key]) => key === asked)?.[0] ?? 'all';
+
+const PLACEHOLDER: Record<FoundKind | 'all', string> = {
+  all: 'A person, project, issue or post',
+  people: 'A person',
+  projects: 'A project',
+  posts: 'An issue, idea or post',
+};
+
 const NOTHING: Record<FoundKind | 'all', string> = {
   all: 'Nobody and nothing by that name here.',
   people: 'Nobody by that name here.',
@@ -52,7 +62,7 @@ function iconOf(f: Found): IconName {
 
 export function Picker() {
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<FoundKind | 'all'>('all');
+  const [tab, setTab] = useState(() => tabOf(new URLSearchParams(location.hash.split('?')[1] ?? '').get('tab')));
   const [found, setFound] = useState<Found[]>();
   const [at, setAt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -76,8 +86,9 @@ export function Picker() {
   // The shortcut again, after a pick or Escape: a fresh search.
   useEffect(
     () =>
-      bridge.onPickerOpen?.(() => {
+      bridge.onPickerOpen?.((asked) => {
         setQuery('');
+        setTab(tabOf(asked));
         input.current?.focus();
       }),
     [],
@@ -117,24 +128,14 @@ export function Picker() {
     <div className="window picker" ref={root} onKeyDown={onKey}>
       <div className="picker-search">
         <Icon name="search" />
-        <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="A person, project, issue or post" spellCheck={false} />
-        <menu role="tablist" className="picker-tabs">
+        <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder={PLACEHOLDER[tab]} spellCheck={false} />
+        <span className="picker-tabs" role="tablist">
           {TABS.map(([key, label]) => (
-            <li key={key} role="tab" aria-selected={tab === key}>
-              <a
-                href="#"
-                tabIndex={-1}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={(event) => {
-                  event.preventDefault();
-                  setTab(key);
-                }}
-              >
-                {label}
-              </a>
-            </li>
+            <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} tabIndex={-1} onMouseDown={(event) => event.preventDefault()} onClick={() => setTab(key)}>
+              {label}
+            </button>
           ))}
-        </menu>
+        </span>
       </div>
       {query.trim() && found && (
         <ul className="picker-list" ref={list} role="listbox">

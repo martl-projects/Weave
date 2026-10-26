@@ -225,8 +225,16 @@ ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'se
 
 let picker: BrowserWindow | undefined;
 
-/** The address book picker's shortcut: Ctrl+Alt+W (on macOS ⌘⌥W), or WEAVE_PICKER_SHORTCUT (an Electron accelerator, "off" for none). */
-const PICKER_SHORTCUT = process.env.WEAVE_PICKER_SHORTCUT || 'CommandOrControl+Alt+W';
+/** The address book picker's shortcuts, each opening it on its tab (on macOS ⌘F1…); WEAVE_PICKER_SHORTCUT=off for none. */
+type PickerTab = 'people' | 'projects' | 'posts';
+const PICKER_SHORTCUTS: Array<[string, PickerTab]> =
+  process.env.WEAVE_PICKER_SHORTCUT === 'off'
+    ? []
+    : [
+        ['CommandOrControl+F1', 'people'],
+        ['CommandOrControl+F2', 'projects'],
+        ['CommandOrControl+F3', 'posts'],
+      ];
 
 /**
  * The address book picker: from anywhere (typing in the Claude app, say), the
@@ -234,11 +242,14 @@ const PICKER_SHORTCUT = process.env.WEAVE_PICKER_SHORTCUT || 'CommandOrControl+A
  * link to the pick where you were typing, so it names exactly that person or
  * post. Losing the focus or Escape puts it away.
  */
-async function showPicker(): Promise<void> {
-  if (picker?.isVisible()) return void picker.focus();
+async function showPicker(tab: PickerTab = 'people'): Promise<void> {
+  if (picker?.isVisible()) {
+    picker.webContents.send('weave:picker-open', tab);
+    return void picker.focus();
+  }
   await rememberFront(); // before the picker takes the focus
   if (picker) {
-    picker.webContents.send('weave:picker-open');
+    picker.webContents.send('weave:picker-open', tab);
     const at = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     picker.setPosition(Math.round(at.x + (at.width - picker.getSize()[0]) / 2), Math.round(at.y + at.height / 5));
     picker.show();
@@ -281,7 +292,7 @@ async function showPicker(): Promise<void> {
     box.show();
     box.focus();
   });
-  void box.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/picker' });
+  void box.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: `/picker?tab=${tab}` });
 }
 
 /** A pick: the picker goes away and the link is pasted where you were (or left on the clipboard). */
@@ -340,7 +351,7 @@ function createTray(): void {
     Menu.buildFromTemplate([
       { label: 'Open Weave', click: showWindow },
       { label: 'Mentions panel', click: () => showMentions() },
-      { label: 'Address book…', ...(PICKER_SHORTCUT !== 'off' ? { accelerator: PICKER_SHORTCUT } : {}), click: () => void showPicker() },
+      { label: 'Address book…', ...(PICKER_SHORTCUTS[0] ? { accelerator: PICKER_SHORTCUTS[0][0] } : {}), click: () => void showPicker() },
       { type: 'separator' },
       { label: 'Quit Weave', click: () => app.quit() },
     ]),
@@ -491,9 +502,9 @@ app.whenReady().then(async () => {
     }
   }
   await createWindow();
-  if (PICKER_SHORTCUT !== 'off') {
-    if (globalShortcut.register(PICKER_SHORTCUT, () => void showPicker())) startPasteHelper();
-    else console.error(`weave: ${PICKER_SHORTCUT} is taken by another app, so the address book has no shortcut (set WEAVE_PICKER_SHORTCUT)`);
+  for (const [shortcut, tab] of PICKER_SHORTCUTS) {
+    if (globalShortcut.register(shortcut, () => void showPicker(tab))) startPasteHelper();
+    else console.error(`weave: ${shortcut} is taken by another app, so the address book can't use it`);
   }
 });
 
