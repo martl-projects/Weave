@@ -150,7 +150,9 @@ function ListInCatalog({ space, onClose }: { space: SpaceInfo; onClose(): void }
             <div className="field-row" key={a.id}>
               <input id={`list-${a.id}`} type="radio" checked={picked === a.id} onChange={() => setPicked(a.id)} />
               <label htmlFor={`list-${a.id}`}>
-                <b>{a.name}</b> {a.tag} <span className="muted small">· p/{a.project.name}</span>
+                <span>
+                  <b>{a.name}</b> {a.tag} <span className="muted small">· p/{a.project.name}</span>
+                </span>
               </label>
             </div>
           ))
@@ -160,6 +162,7 @@ function ListInCatalog({ space, onClose }: { space: SpaceInfo; onClose(): void }
           <button onClick={onClose}>Cancel</button>
           <AsyncButton
             className="default"
+            disabled={!chosen}
             onClick={async () => {
               if (!chosen) return;
               const done = await attempt(() => api('listInCatalog', { catalog: space.id, artifact: { project: chosen.project.id, tag: chosen.tag }, summary }), `${chosen.name} is listed`);

@@ -230,7 +230,7 @@ function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app
       <PublishApp project={project} />
     ) : (
       <p className="small muted">
-        p/{project.name} has no artifact of its own; websites here can run other projects' artifacts.{' '}
+        p/{project.name} has released nothing to run yet; other projects' releases install here as services (Add a service).{' '}
         <a
           href="#"
           onClick={(e) => {

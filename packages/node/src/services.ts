@@ -148,7 +148,7 @@ export class Services {
         settings: a.manifest.env ?? [],
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
-        ...(runs ? { runs, command: this.h.runtime.command(`weave-${a.manifest.app}`, a.manifest) } : {}),
+        ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
       };
     });
   }
@@ -764,7 +764,7 @@ export class Services {
       settings: m.env ?? [],
       ...(m.service ? { applet: m.service } : {}),
       packaged: true,
-      ...(runs ? { runs, command: this.h.runtime.command(`weave-${m.app}`, m) } : {}),
+      ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${m.app}`, m) } : {}),
     };
   }
 

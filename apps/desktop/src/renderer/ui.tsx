@@ -332,14 +332,14 @@ export async function attempt<T>(fn: () => Promise<T>, success?: string): Promis
   }
 }
 
-/** A button that disables itself while its async action runs. */
-export function AsyncButton({ onClick, className = '', children, title }: { onClick(): Promise<unknown>; className?: string; children: ReactNode; title?: string }) {
+/** A button that disables itself while its async action runs (and while `disabled`). */
+export function AsyncButton({ onClick, className = '', children, title, disabled = false }: { onClick(): Promise<unknown>; className?: string; children: ReactNode; title?: string; disabled?: boolean }) {
   const [busy, setBusy] = useState(false);
   return (
     <button
       className={className}
       title={title}
-      disabled={busy}
+      disabled={busy || disabled}
       onClick={async () => {
         setBusy(true);
         try {
