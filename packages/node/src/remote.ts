@@ -58,6 +58,9 @@ export interface PairingOffer {
  * GitHub account, and pairing phones. A lost phone can be unpaired; what it
  * can't do, it can't do before that either.
  */
+/** Methods older phone apps still call by their old names: rooms are websites now. */
+const RENAMED: Record<string, RpcMethod> = { rooms: 'websites', joinRoom: 'visitWebsite', leaveRoom: 'leaveWebsite', endRoom: 'closeWebsite', roomChat: 'websiteChat', sayInRoom: 'sayOnWebsite' };
+
 export const PHONE_METHODS: readonly RpcMethod[] = [
   // You and your node
   'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
@@ -72,7 +75,7 @@ export const PHONE_METHODS: readonly RpcMethod[] = [
   // Issues and proposals
   'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
   // Rooms and project apps (joining; hosting needs the computer)
-  'rooms', 'joinRoom', 'leaveRoom', 'endRoom', 'roomChat', 'sayInRoom', 'projectApp', 'appReleases',
+  'websites', 'visitWebsite', 'leaveWebsite', 'closeWebsite', 'websiteChat', 'sayOnWebsite', 'projectApp', 'appReleases',
   // GitHub, to look only
   'github', 'githubRepos', 'spaceRepos',
 ];
@@ -291,7 +294,7 @@ export class RemoteAccess {
     void this.#host.watch((item) => send(socket, { event: item }), stop.signal).catch(() => {});
     onLines(socket, rest, (message) => {
       const id = message.id;
-      const method = message.method as RpcMethod;
+      const method = (RENAMED[String(message.method)] ?? message.method) as RpcMethod;
       if (!PHONE_METHODS.includes(method)) return send(socket, { id, error: `a phone can't do ${String(method)}` });
       // JSON turns undefined arguments into null; turn them back so defaults apply.
       const args = (Array.isArray(message.args) ? message.args : []).map((a) => (a === null ? undefined : a));

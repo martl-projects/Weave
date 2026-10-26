@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, HostedRoomInfo, MemberInfo, ProjectInfo, RoomChatMessage, RoomInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
@@ -15,15 +15,15 @@ import { contractText, ServiceCard } from './services.tsx';
  * and what they say there is never stored.
  */
 
-const play = (room: RoomInfo) => {
+const play = (room: WebsiteInfo) => {
   if (!room.url) return;
   // On a phone the address is the computer's own: the phone app reaches it through the computer.
   if (bridge.phone) return void bridge.phone.openRoom(room.id, room.url).catch((error: Error) => toast(error.message, 'error'));
   void bridge.openApp(room.url, room.name);
 };
 
-function RoomChat({ room }: { room: RoomInfo }) {
-  const { data: messages } = useApi(() => api<RoomChatMessage[]>('roomChat', room.id), [room.id]);
+function RoomChat({ room }: { room: WebsiteInfo }) {
+  const { data: messages } = useApi(() => api<WebsiteChatMessage[]>('websiteChat', room.id), [room.id]);
   const [text, setText] = useState('');
   return (
     <div className="room-chat">
@@ -42,7 +42,7 @@ function RoomChat({ room }: { room: RoomInfo }) {
           const message = text.trim();
           if (!message) return;
           setText('');
-          if ((await attempt(() => api('sayInRoom', { room: room.id, text: message }).then(() => true))) === undefined) setText(message);
+          if ((await attempt(() => api('sayOnWebsite', { room: room.id, text: message }).then(() => true))) === undefined) setText(message);
           bump();
         }}
       >
@@ -53,7 +53,7 @@ function RoomChat({ room }: { room: RoomInfo }) {
   );
 }
 
-function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
+function RoomCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
@@ -72,7 +72,7 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
     );
   else if (!room.joined)
     main = room.mayJoin ? (
-      <AsyncButton className="default" onClick={() => attempt(() => api('joinRoom', room.id).then(bump))}>
+      <AsyncButton className="default" onClick={() => attempt(() => api('visitWebsite', room.id).then(bump))}>
         Join
       </AsyncButton>
     ) : (
@@ -112,9 +112,9 @@ function RoomCard({ room, shows }: { room: RoomInfo; shows: ShowInfo[] }) {
           {main}
           <span className="grow" />
           {room.mine ? (
-            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected, and what answers it stops.`, 'End room')) && attempt(() => api('endRoom', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected, and what answers it stops.`, 'End room')) && attempt(() => api('closeWebsite', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
           ) : (
-            room.joined && <AsyncButton onClick={() => attempt(() => api('leaveRoom', room.id).then(bump))}>Leave</AsyncButton>
+            room.joined && <AsyncButton onClick={() => attempt(() => api('leaveWebsite', room.id).then(bump))}>Leave</AsyncButton>
           )}
         </div>
         {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered}, on the device it runs on.</p>}
@@ -312,7 +312,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
   const [folder, setFolder] = useState('');
   const [port, setPort] = useState('');
   const [busy, setBusy] = useState(false);
-  const usable = (artifacts ?? []).filter((a) => a.runs && a.room);
+  const usable = (artifacts ?? []).filter((a) => a.runs && a.website);
   const chosen = usable.find((a) => a.id === picked) ?? usable[0];
   useEffect(() => setValues({}), [chosen?.id]);
   const words = command.match(/"[^"]*"|'[^']*'|\S+/g)?.map((w) => w.replace(/^["']|["']$/g, '')) ?? [];
@@ -335,7 +335,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
     const access = who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
     const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
     const handler = kind === 'artifact' ? { artifact: { project: chosen!.project.id, tag: chosen!.tag }, settings } : kind === 'command' ? { command: words, folder, port: Number(port) } : { port: Number(port) };
-    const room = await attempt(() => api<RoomInfo>('openRoom', { service, project: project.id, name: name.trim(), ...handler, ...access, approve: true }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: it answers once its handler runs`);
+    const room = await attempt(() => api<WebsiteInfo>('openWebsite', { service, project: project.id, name: name.trim(), ...handler, ...access, approve: true }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: it answers once its handler runs`);
     setBusy(false);
     if (room) {
       bump();
@@ -490,7 +490,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
 }
 
 /** How a room of your room service is doing, where it isn't answering yet. */
-function HostedStatus({ hosted }: { hosted?: HostedRoomInfo }) {
+function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
   useEffect(() => {
     if (!hosted?.progress) return;
     const timer = setInterval(bump, 1000);
@@ -511,10 +511,10 @@ function HostedStatus({ hosted }: { hosted?: HostedRoomInfo }) {
 }
 
 /** What a service is there for, in a project. */
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
 /** One service in the project: what it's for, and what it offers here (a room service: its rooms). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: RoomInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const own = service.person.did === meDid;
@@ -523,20 +523,20 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   return (
     <fieldset className="project-service">
       <legend>
-        <Icon name={service.builtin === 'room' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
+        <Icon name={service.builtin === 'website' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
       </legend>
       <p className="small">{purpose(service)}</p>
       {its.map((room) => (
         <div key={room.id}>
           <RoomCard room={room} shows={shows} />
-          <HostedStatus hosted={mine?.rooms?.find((r) => r.id === room.id)} />
+          <HostedStatus hosted={mine?.websites?.find((r) => r.id === room.id)} />
         </div>
       ))}
-      {service.builtin === 'room' && !its.length && <p className="small muted">No open rooms{own ? '' : ` from ${by}`}.</p>}
+      {service.builtin === 'website' && !its.length && <p className="small muted">No open rooms{own ? '' : ` from ${by}`}.</p>}
       <div className="buttons">
-        {service.builtin === 'room' && own && mine && <button onClick={() => setOpening(true)}>Open a room…</button>}
-        {service.builtin === 'room' && own && !mine && <span className="small muted">It runs on another of your devices: open rooms there.</span>}
-        {service.builtin !== 'room' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
+        {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a room…</button>}
+        {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open rooms there.</span>}
+        {service.builtin !== 'website' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>
@@ -557,7 +557,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
 /** Adding a service to the project: the room service Weave ships (yours, or a new one), or another of your services. */
 function AddProjectService({ project, services, onClose }: { project: SpaceInfo; services: ServiceInfo[]; onClose(): void }) {
   const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
-  const rooms = services.filter((s) => s.builtin === 'room');
+  const rooms = services.filter((s) => s.builtin === 'website');
   const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
   return (
     <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
@@ -569,7 +569,7 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
               <br />
               <span className="small">A way to join in with the project's participants: you open rooms here, each answered by a project's release or a program of yours.</span>
             </span>
-            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'room', spaces: [project.id] }).then(() => (bump(), onClose())), `Rooms are on in p/${project.name}`)}>
+            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Rooms are on in p/${project.name}`)}>
               Add
             </AsyncButton>
           </div>
@@ -579,7 +579,7 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
             <span className="grow">
               <b>{s.name}</b>
               <br />
-              <span className="small">{s.builtin === 'room' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
+              <span className="small">{s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
             </span>
             <AsyncButton onClick={() => add(s)}>Add</AsyncButton>
           </div>
@@ -599,7 +599,7 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
 
 /** A project's services: each with what it's for and what it offers here. Rooms are what the room service offers. */
 export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
-  const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', project.id), [project.id]);
+  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
   const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
   const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
   const { data: app } = useApi(() => api<AppManifest | null>('projectApp', project.id), [project.id]);
@@ -609,7 +609,7 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
   const [adding, setAdding] = useState(false);
 
   // Room services first, then the rest.
-  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'room') - Number(a.builtin === 'room'));
+  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
   return (
     <Page
       title={<><Icon name="zap" /> Services · p/{project.name}</>}

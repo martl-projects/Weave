@@ -36,7 +36,7 @@ import {
   type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
-  type HostedRoomInfo,
+  type HostedWebsiteInfo,
   type IssueInfo,
   type MemberInfo,
   type PostInfo,
@@ -56,7 +56,7 @@ import {
   type SplitInfo,
   type TreasuryInfo,
   type WalletInfo,
-  type RoomInfo,
+  type WebsiteInfo,
   type LinkInfo,
   SqliteStore,
   machinePolicy,
@@ -194,7 +194,7 @@ github — repositories that follow a group, tier or project (members who give t
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
   service add <name>         run code under a key of its own, with exactly these rights:
-                             --reads addressed|space|<kind,…> --writes <kind,…> [--offers-room] [--contract-version 1.0]
+                             --reads addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service add room --builtin room   the room service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it opens rooms (weave room open)
@@ -399,7 +399,7 @@ const { values, positionals } = parseArgs({
     asset: { type: 'string', multiple: true },
     reads: { type: 'string' },
     writes: { type: 'string' },
-    'offers-room': { type: 'boolean', default: false },
+    'offers-website': { type: 'boolean', default: false },
     'contract-version': { type: 'string' },
     run: { type: 'string' },
     spaces: { type: 'string' },
@@ -525,7 +525,7 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.room ? '; offers a room' : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; offers a room' : ''}; contract ${c.version}`;
 
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
@@ -687,7 +687,7 @@ async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
 }
 
 /** How a room of the room service is doing. */
-const hostedLine = (r: HostedRoomInfo): string => {
+const hostedLine = (r: HostedWebsiteInfo): string => {
   const h = r.handler;
   const what = h.kind === 'artifact' ? `${h.artifact.name} ${h.artifact.tag}${h.artifact.latest ? ` (${h.artifact.latest} is out)` : ''}` : h.kind === 'command' ? h.command.join(' ') : `port ${r.port}`;
   const state = r.progress ? `fetching (${Math.round((r.progress.done / (r.progress.total || 1)) * 100)}%)` : r.error ? r.error : r.running ? 'running' : 'starting';
@@ -731,7 +731,7 @@ function readBundle(): Bundle | undefined {
   return file ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
 }
 
-const roomLine = (r: RoomInfo) => {
+const roomLine = (r: WebsiteInfo) => {
   const who = r.mine ? 'you host it' : `hosted by ${r.host.name ?? r.host.did}`;
   const state = r.joined ? (r.connected ? `${r.peers.length} in it` : 'connecting…') : r.mayJoin ? 'join with: weave room join ' + r.id.slice(0, 8) : 'not invited';
   return `${r.id.slice(0, 8)}  ${r.name}  · p/${r.project.name} · ${who} · ${state}${r.url ? `\n          ${r.service?.label ?? 'open'}: ${r.url}` : ''}`;
@@ -1394,7 +1394,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
           `  ${s.did}`,
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
-          ...(s.rooms ?? []).map((r) => `  room "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
+          ...(s.websites ?? []).map((r) => `  website "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
           ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
           ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
           ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
@@ -1411,7 +1411,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.room ? '  (an app: a room runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.website ? '  (an app: a room runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
       if (sub === 'add' && values.artifact) {
         const at = values.artifact.lastIndexOf('@');
@@ -1422,12 +1422,12 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'add' && values.builtin) {
         if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
-        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'room', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
+        const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'website', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
         return out(s, () => `${line(s)}\n\nIt signs rooms as you · ${s.name}. Open one: weave room open <name> -p <project> --artifact <project>`);
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
-        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-room'] ? { room: true } : {}), version: values['contract-version'] ?? '1.0' };
+        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), version: values['contract-version'] ?? '1.0' };
         const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.node ? { node: values.node } : {}) });
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : ' Give it a command with --run, or let a process use its token.'}`);
       }
@@ -2299,7 +2299,7 @@ ${postLine(p)}`);
     }
 
     case 'rooms': {
-      const rooms = await (await backend()).rooms(values.project);
+      const rooms = await (await backend()).websites(values.project);
       return out(rooms, () => rooms.map(roomLine).join('\n') || '(no open rooms)');
     }
 
@@ -2316,7 +2316,7 @@ ${postLine(p)}`);
         }));
         const command = values.run ? [...values.run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]) : undefined;
         const r = await approving((approve) =>
-          b.openRoom({
+          b.openWebsite({
             project: needProject(),
             name: [ref, ...words].join(' '),
             ...(values.service ? { service: values.service } : {}),
@@ -2333,29 +2333,29 @@ ${postLine(p)}`);
         return out(r, () => `${roomLine(r)}\n  it opens for everyone once its handler answers (weave service list shows how it's doing)`);
       }
       if (sub === 'env' && ref) {
-        const env = await b.roomEnv(ref);
+        const env = await b.websiteEnv(ref);
         const line = ([k, v]: [string, string | undefined]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
         return out(env, () => [...Object.entries(env).map(line), '# set these where you start what answers the room; they last until Weave restarts'].join('\n'));
       }
       if (sub === 'join' && ref) {
-        await b.joinRoom(ref);
-        let r: RoomInfo | undefined;
+        await b.visitWebsite(ref);
+        let r: WebsiteInfo | undefined;
         for (let i = 0; i < 100 && !r?.url; i++) {
-          r = (await b.rooms()).find((x) => x.id.startsWith(ref) || x.name.toLowerCase() === ref.toLowerCase());
+          r = (await b.websites()).find((x) => x.id.startsWith(ref) || x.name.toLowerCase() === ref.toLowerCase());
           if (!r?.url) await new Promise((resolve) => setTimeout(resolve, 300));
         }
         return out(r, () => (r?.url ? `joined ${r.name}: open ${r.url}\n(the tunnel stays open until you leave: weave room leave "${r.name}")` : 'joined, but the host is not reachable yet; try "weave rooms" in a moment'));
       }
       if ((sub === 'leave' || sub === 'end') && ref) {
-        await (sub === 'end' ? b.endRoom(ref) : b.leaveRoom(ref));
+        await (sub === 'end' ? b.closeWebsite(ref) : b.leaveWebsite(ref));
         return out({ [sub]: ref }, () => (sub === 'end' ? 'room ended' : 'left the room'));
       }
       if (sub === 'chat' && ref) {
-        const messages = await b.roomChat(ref);
+        const messages = await b.websiteChat(ref);
         return out(messages, () => messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${(m.by.name ?? m.by.did).padEnd(16)}  ${m.text}`).join('\n') || '(quiet; room chats are never stored)');
       }
       if (sub === 'say' && ref && words.length) {
-        await b.sayInRoom({ room: ref, text: words.join(' ') });
+        await b.sayOnWebsite({ room: ref, text: words.join(' ') });
         return out({ said: words.join(' ') }, () => 'said');
       }
       throw new Error('usage: weave room open|join|leave|end|chat|say — see "weave --help"');

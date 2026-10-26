@@ -8,5 +8,5 @@ const weave = new Weave({ api: process.env.WEAVE_API, token: process.env.WEAVE_T
 createServer(async (req, res) => {
   const who = await weave.who(req).catch(() => undefined);
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ room: process.env.WEAVE_ROOM, who: who ? { did: who.did, name: who.name } : null }));
+  res.end(JSON.stringify({ room: process.env.WEAVE_WEBSITE, who: who ? { did: who.did, name: who.name } : null }));
 }).listen(Number(process.env.PORT), '127.0.0.1');

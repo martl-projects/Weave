@@ -64,24 +64,24 @@ describe('a room answered by a program', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({ builtin: 'room', spaces: ['Party'] });
+      await martl.addService({ builtin: 'website', spaces: ['Party'] });
       const port = await new Promise<number>((resolve) => {
         const probe = createNetServer().listen(0, '127.0.0.1', () => {
           const { port } = probe.address() as { port: number };
           probe.close(() => resolve(port));
         });
       });
-      const offered = await martl.openRoom({ project: 'Party', name: 'Board', command: [process.execPath, 'room-service.mjs'], folder: join(import.meta.dirname, 'helpers'), port, approve: true });
-      expect(offered).toMatchObject({ name: 'Board', host: { name: 'martl' }, offeredBy: { name: 'room' }, open: true, mine: true });
+      const offered = await martl.openWebsite({ project: 'Party', name: 'Board', command: [process.execPath, 'room-service.mjs'], folder: join(import.meta.dirname, 'helpers'), port, approve: true });
+      expect(offered).toMatchObject({ name: 'Board', host: { name: 'martl' }, offeredBy: { name: 'website' }, open: true, mine: true });
 
       // Lena, a participant, joins it and the service knows it's her.
       sync([martl, lena]);
-      const seen = (await lena.rooms('Party')).find((r) => r.id === offered.id)!;
-      expect(seen).toMatchObject({ offeredBy: { name: 'room' }, mine: false, mayJoin: true });
-      await lena.joinRoom(seen.id);
+      const seen = (await lena.websites('Party')).find((r) => r.id === offered.id)!;
+      expect(seen).toMatchObject({ offeredBy: { name: 'website' }, mine: false, mayJoin: true });
+      await lena.visitWebsite(seen.id);
       const url = await vi.waitFor(
         async () => {
-          const room = (await lena.rooms('Party')).find((r) => r.id === seen.id)!;
+          const room = (await lena.websites('Party')).find((r) => r.id === seen.id)!;
           expect(room.url).toBeTruthy();
           return room.url!;
         },
@@ -90,12 +90,12 @@ describe('a room answered by a program', { timeout: 120_000 }, () => {
       expect(await getJson(url)).toEqual({ room: offered.id, who: { did: lena.identity.author, name: 'Lena' } });
 
       // Kofi isn't in Party: he can't even see its rooms.
-      await expect(kofi.joinRoom(seen.id)).rejects.toThrow();
+      await expect(kofi.visitWebsite(seen.id)).rejects.toThrow();
 
       // The room service turned off: its rooms end, for everyone.
-      await martl.setService({ name: 'room', enabled: false });
+      await martl.setService({ name: 'website', enabled: false });
       sync([martl, lena]);
-      expect((await lena.rooms('Party')).find((r) => r.id === seen.id)?.open ?? false).toBe(false);
+      expect((await lena.websites('Party')).find((r) => r.id === seen.id)?.open ?? false).toBe(false);
     } finally {
       await api.close();
     }

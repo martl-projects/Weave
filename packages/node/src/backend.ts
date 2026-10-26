@@ -238,8 +238,8 @@ export interface ServiceInfo {
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
-  builtin?: 'room';
-  rooms?: HostedRoomInfo[];
+  builtin?: 'website';
+  websites?: HostedWebsiteInfo[];
   /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
   artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
@@ -266,7 +266,7 @@ export interface ServiceArtifactInfo {
 }
 
 /** A room the room service runs here: what answers its clients (its handler), and how that's doing. */
-export interface HostedRoomInfo {
+export interface HostedWebsiteInfo {
   id: string;
   project: SpaceRef;
   name: string;
@@ -293,8 +293,8 @@ export interface ArtifactInfo {
   name: string;
   released: Actor;
   time: string;
-  /** It has a web page: a room can run it. */
-  room: boolean;
+  /** It has a web page: a website can run it. */
+  website: boolean;
   /** An applet: installed, it becomes a service with exactly this contract. */
   applet?: ServiceContract;
   settings: AppSetting[];
@@ -311,7 +311,7 @@ export interface ServiceProfileInfo {
   name: string;
   description: string;
   icon?: string;
-  builtin?: 'room';
+  builtin?: 'website';
   contract: ServiceContract;
   time: string;
 }
@@ -1016,7 +1016,7 @@ export interface AppEnv {
   WEAVE_API: string;
   WEAVE_TOKEN: string;
   WEAVE_PROJECT: string;
-  WEAVE_ROOM?: string;
+  WEAVE_WEBSITE?: string;
 }
 
 /** A person as the app API shows them to an app. */
@@ -1029,7 +1029,7 @@ export interface AppPerson {
   maintainer: boolean;
 }
 
-export interface RoomInfo {
+export interface WebsiteInfo {
   id: string;
   project: SpaceRef;
   name: string;
@@ -1058,7 +1058,7 @@ export interface RoomInfo {
 }
 
 /** A message in a room's chat: never stored, gone when the room ends. */
-export interface RoomChatMessage {
+export interface WebsiteChatMessage {
   id: string;
   by: Person;
   text: string;
@@ -1571,16 +1571,16 @@ export interface Backend {
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
   /**
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
-   * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'room'`).
+   * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'website'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
    * A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or
    * a port already answering. Who joins: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
    */
-  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo>;
+  openWebsite(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
@@ -1780,15 +1780,15 @@ export interface Backend {
    */
   updateCheck(input: { current: string }): Promise<UpdateInfo>;
   /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
-  roomEnv(room: string): Promise<AppEnv>;
+  websiteEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
-  rooms(project?: string): Promise<RoomInfo[]>;
-  endRoom(room: string): Promise<void>;
-  /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
-  joinRoom(room: string): Promise<RoomInfo>;
-  leaveRoom(room: string): Promise<void>;
-  roomChat(room: string): Promise<RoomChatMessage[]>;
-  sayInRoom(input: { room: string; text: string }): Promise<void>;
+  websites(project?: string): Promise<WebsiteInfo[]>;
+  closeWebsite(room: string): Promise<void>;
+  /** Join a room: connect to the host and open the local tunnel; WebsiteInfo.url is what to open. */
+  visitWebsite(room: string): Promise<WebsiteInfo>;
+  leaveWebsite(room: string): Promise<void>;
+  websiteChat(room: string): Promise<WebsiteChatMessage[]>;
+  sayOnWebsite(input: { room: string; text: string }): Promise<void>;
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
@@ -1933,7 +1933,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'openRoom', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
@@ -1941,7 +1941,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'appReleases', 'roomEnv', 'updateCheck', 'rooms', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'releaseApp', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',

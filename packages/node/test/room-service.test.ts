@@ -42,7 +42,7 @@ const serverCode = (version: string) => `const http = require('node:http');
 http.createServer(async (req, res) => {
   const r = await fetch(process.env.WEAVE_API + '/v1/project', { headers: { authorization: 'Bearer ' + process.env.WEAVE_TOKEN } });
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ version: ${JSON.stringify(version)}, status: r.status, project: await r.json(), room: process.env.WEAVE_ROOM, key: process.env.API_KEY ?? null }));
+  res.end(JSON.stringify({ version: ${JSON.stringify(version)}, status: r.status, project: await r.json(), room: process.env.WEAVE_WEBSITE, key: process.env.API_KEY ?? null }));
 }).listen(Number(process.env.PORT), '127.0.0.1');
 `;
 
@@ -112,71 +112,71 @@ describe('the room service', { timeout: 60_000 }, () => {
     await lena.createProject({ name: 'Party' });
 
     // Lena adds Weave's room service to Party: it writes rooms and nothing else, and says it's the one Weave ships.
-    const service = await lena.addService({ builtin: 'room', spaces: ['Party'] });
-    expect(service).toMatchObject({ name: 'room', builtin: 'room', contract: { reads: 'addressed', writes: [], room: true }, rooms: [] });
-    expect((await lena.servicesIn('Party')).map((p) => [p.name, p.builtin])).toEqual([['room', 'room']]);
-    await expect(lena.addService({ name: 'other', builtin: 'room', command: ['node', 'x.js'] })).rejects.toThrow(/runs in Weave/);
+    const service = await lena.addService({ builtin: 'website', spaces: ['Party'] });
+    expect(service).toMatchObject({ name: 'website', builtin: 'website', contract: { reads: 'addressed', writes: [], website: true }, websites: [] });
+    expect((await lena.servicesIn('Party')).map((p) => [p.name, p.builtin])).toEqual([['website', 'website']]);
+    await expect(lena.addService({ name: 'other', builtin: 'website', command: ['node', 'x.js'] })).rejects.toThrow(/runs in Weave/);
 
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     try {
       lena.runServices({ port: api.port });
 
       // A room with martl's release as its handler: in a project of the service's, approved first.
-      await expect(lena.openRoom({ project: 'Horses', name: 'Race', artifact: { project: 'Horses' }, approve: true })).rejects.toThrow(/room isn't in Horses/);
-      await expect(lena.openRoom({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" from Horse race v1\.0, released in Horses/);
-      const race = await lena.openRoom({ project: 'Party', name: 'Race', artifact: { project: 'Horses' }, settings: { API_KEY: 'k-123' }, approve: true });
-      expect(race).toMatchObject({ name: 'Race', mine: true, offeredBy: { name: 'room' }, open: true });
-      await lena.roomReady(race.id);
+      await expect(lena.openWebsite({ project: 'Horses', name: 'Race', artifact: { project: 'Horses' }, approve: true })).rejects.toThrow(/website isn't in Horses/);
+      await expect(lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" from Horse race v1\.0, released in Horses/);
+      const race = await lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' }, settings: { API_KEY: 'k-123' }, approve: true });
+      expect(race).toMatchObject({ name: 'Race', mine: true, offeredBy: { name: 'website' }, open: true });
+      await lena.websiteReady(race.id);
       // The handler gets its port, its settings, and the app API for its own room.
       const first = await answers(racePort);
       expect(first).toMatchObject({ version: 'v1.0', status: 200, room: race.id, key: 'k-123', project: { name: 'Party' } });
 
       // The release listens on its port: a second room with it waits until the first ends.
-      await expect(lena.openRoom({ project: 'Party', name: 'Race 2', artifact: { project: 'Horses' } })).rejects.toThrow(new RegExp(`port ${racePort} already answers the room "Race"`));
+      await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', artifact: { project: 'Horses' } })).rejects.toThrow(new RegExp(`port ${racePort} already answers the room "Race"`));
 
       // Something already running: Weave starts nothing and asks for no approval.
       const boardPort = await freePort();
       const board = createHttpServer((_, res) => res.end('board')).listen(boardPort, '127.0.0.1');
       try {
-        const opened = await lena.openRoom({ project: 'Party', name: 'Board', port: boardPort });
-        expect(opened).toMatchObject({ name: 'Board', offeredBy: { name: 'room' } });
+        const opened = await lena.openWebsite({ project: 'Party', name: 'Board', port: boardPort });
+        expect(opened).toMatchObject({ name: 'Board', offeredBy: { name: 'website' } });
 
         // A command in a folder: approved first, then started with its port.
         const folder = tempDir('weave-handler-');
         writeFileSync(join(folder, 'server.cjs'), serverCode('own'));
         const quizPort = await freePort();
-        await expect(lena.openRoom({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" in /);
-        const quiz = await lena.openRoom({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort, approve: true });
+        await expect(lena.openWebsite({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" in /);
+        const quiz = await lena.openWebsite({ project: 'Party', name: 'Quiz', command: ['node', 'server.cjs'], folder, port: quizPort, approve: true });
         expect(await answers(quizPort)).toMatchObject({ version: 'own', room: quiz.id, project: { name: 'Party' } });
 
         // Three rooms, one service.
-        const listed = (await lena.services()).find((s) => s.name === 'room')!;
-        expect(listed.rooms!.map((r) => [r.name, r.handler.kind, r.running]).sort()).toEqual([
+        const listed = (await lena.services()).find((s) => s.name === 'website')!;
+        expect(listed.websites!.map((r) => [r.name, r.handler.kind, r.running]).sort()).toEqual([
           ['Board', 'address', true],
           ['Quiz', 'command', true],
           ['Race', 'artifact', true],
         ]);
-        expect((await lena.rooms('Party')).filter((r) => r.offeredBy).map((r) => r.name).sort()).toEqual(['Board', 'Quiz', 'Race']);
+        expect((await lena.websites('Party')).filter((r) => r.offeredBy).map((r) => r.name).sort()).toEqual(['Board', 'Quiz', 'Race']);
 
         // Ending a room stops its handler; opening it again runs the approved release without asking (and without fetching it again).
-        await lena.endRoom(race.id);
-        expect((await lena.rooms('Party')).some((r) => r.id === race.id)).toBe(false);
+        await lena.closeWebsite(race.id);
+        expect((await lena.websites('Party')).some((r) => r.id === race.id)).toBe(false);
         await vi.waitFor(async () => expect(await getJson(racePort).then(() => 'up', () => 'down')).toBe('down'), { timeout: 10_000, interval: 200 });
         const downloads = github.downloads;
-        const again = await lena.openRoom({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } });
-        await lena.roomReady(again.id);
+        const again = await lena.openWebsite({ project: 'Party', name: 'Race', artifact: { project: 'Horses' } });
+        await lena.websiteReady(again.id);
         expect((await answers(racePort)).room).toBe(again.id);
         expect(github.downloads).toBe(downloads);
 
         // The room service leaves Party: all its rooms there end.
-        await lena.setService({ name: 'room', spaces: [] });
-        expect((await lena.rooms('Party')).filter((r) => r.offeredBy)).toEqual([]);
-        expect((await lena.services()).find((s) => s.name === 'room')!.rooms).toEqual([]);
+        await lena.setService({ name: 'website', spaces: [] });
+        expect((await lena.websites('Party')).filter((r) => r.offeredBy)).toEqual([]);
+        expect((await lena.services()).find((s) => s.name === 'website')!.websites).toEqual([]);
       } finally {
         board.close();
       }
     } finally {
-      await lena.removeService('room').catch(() => {});
+      await lena.removeService('website').catch(() => {});
       await api.close();
     }
   });

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo, type RoomInfo } from '@weave/node';
+import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo, type WebsiteInfo } from '@weave/node';
 
 /*
  * The phone app's worker, packed as on the phone and run on real Bare: it
@@ -160,18 +160,18 @@ describe('the phone app worker on Bare', () => {
       await host.createProject({ name: 'Pferderennen' });
       await node.joinSpace(await host.invite('Pferderennen'));
       await host.goOnline();
-      await host.addService({ builtin: 'room', spaces: ['Pferderennen'] });
-      const hosted = await host.openRoom({ project: 'Pferderennen', name: 'Derby', port: (app.address() as AddressInfo).port, pages: { joiner: { path: '/play', label: 'Play' } } });
+      await host.addService({ builtin: 'website', spaces: ['Pferderennen'] });
+      const hosted = await host.openWebsite({ project: 'Pferderennen', name: 'Derby', port: (app.address() as AddressInfo).port, pages: { joiner: { path: '/play', label: 'Play' } } });
 
       const phone = await worker(temp('weave-mobile-phone-'));
       const { link } = await node.pairPhone();
       await patiently(() => phone.ask('pair', { link, phoneName: 'iPhone' }));
-      await vi.waitFor(async () => expect((await patiently(() => phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] }))).length).toBeGreaterThan(0), { timeout: 20_000, interval: 200 });
+      await vi.waitFor(async () => expect((await patiently(() => phone.ask<WebsiteInfo[]>('call', { method: 'websites', args: ['Pferderennen'] }))).length).toBeGreaterThan(0), { timeout: 20_000, interval: 200 });
       await expect(phone.ask('openRoom', { room: hosted.id })).rejects.toThrow(/no address/);
-      await patiently(() => phone.ask('call', { method: 'joinRoom', args: [hosted.id] }));
-      let room: RoomInfo | undefined;
+      await patiently(() => phone.ask('call', { method: 'visitWebsite', args: [hosted.id] }));
+      let room: WebsiteInfo | undefined;
       await vi.waitFor(async () => {
-        room = (await phone.ask<RoomInfo[]>('call', { method: 'rooms', args: ['Pferderennen'] }))[0];
+        room = (await phone.ask<WebsiteInfo[]>('call', { method: 'websites', args: ['Pferderennen'] }))[0];
         expect(room.url).toBeTruthy();
       }, { timeout: 30_000, interval: 200 });
 

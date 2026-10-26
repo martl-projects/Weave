@@ -103,7 +103,7 @@ export class Services {
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
       ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, rooms: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin, websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
@@ -125,7 +125,7 @@ export class Services {
         name: a.manifest.name,
         released: this.h.actor(a.author, a.signer as Did),
         time: a.time,
-        room: !!this.artifactWeb(a.manifest),
+        website: !!this.artifactWeb(a.manifest),
         settings: a.manifest.env ?? [],
           ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-${a.manifest.app}`, a.manifest) } : {}),
@@ -211,12 +211,12 @@ export class Services {
 
   /**
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
-   * (`builtin: 'room'`): the node runs it itself, and it gets its contract from Weave.
+   * (`builtin: 'website'`): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'website'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    const builtin = input.builtin === 'room' ? ('room' as const) : undefined;
+    const builtin = input.builtin === 'website' ? ('website' as const) : undefined;
     if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
@@ -234,7 +234,7 @@ export class Services {
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The room service writes rooms and nothing else; it reads only what's addressed to it. An applet: its manifest's contract.
-    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], room: true, version: '1.0' } : (manifest?.service ?? input.contract));
+    const contract = parseContract(builtin ? { reads: 'addressed', writes: [], website: true, version: '1.0' } : (manifest?.service ?? input.contract));
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
     const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Rooms: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
@@ -310,7 +310,7 @@ export class Services {
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space) }] : [];
       }),
       ...(h.command ? { command: h.command } : {}),
-      ...(h.builtin ? { builtin: h.builtin, rooms: Object.values(h.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r, false)) } : {}),
+      ...(h.builtin ? { builtin: h.builtin, websites: Object.values(h.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r, false)) } : {}),
       ...(h.artifact ? { artifact: this.serviceArtifactInfo(h.service, h.artifact, false) } : {}),
       settings: h.settingNames ?? [],
       enabled: h.enabled !== false,
@@ -319,7 +319,7 @@ export class Services {
     };
   }
 
-  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'room'; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
+  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: 'website'; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
     const node = this.nodeKey(input.node!);
     const key = createSubKey(this.h.identity.author);
     const permissions = servicePermissions(contract);

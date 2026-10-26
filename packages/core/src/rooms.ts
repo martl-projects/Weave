@@ -218,9 +218,9 @@ export function checkManifest(input: unknown): ManifestCheck {
   if (m.service !== undefined) {
     service = parseContract(m.service);
     if (!service) problems.push('"service" is an applet\'s contract: what it reads ("addressed", "space" or {"kinds": [...]}), which kinds it writes, and its "version" (like "1.0")');
-    else if (service.room) {
-      warnings.push('"service": an applet doesn\'t offer rooms (yet); a web page goes in "services" and runs in a room');
-      const { room: _room, ...rest } = service;
+    else if (service.website) {
+      warnings.push('"service": an applet doesn\'t serve websites (yet); a web page goes in "services" and a website runs it');
+      const { website: _website, ...rest } = service;
       service = rest;
     }
   }

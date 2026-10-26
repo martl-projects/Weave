@@ -571,7 +571,7 @@ export interface Handover {
   box?: Json;
   removed?: true;
   /** The room service: its rooms (opened on a computer, run by the node), and what you approved them to run. */
-  builtin?: 'room';
+  builtin?: 'website';
   hosted?: Record<string, StoredRoom>;
   approved?: string[];
   /** An applet: the release it runs (the node fetches it itself). */
@@ -593,7 +593,7 @@ export interface StoredService {
   /** Settings given per space: space id → name → value (it reads them from its API). */
   spaceSettings?: Record<string, Record<string, string>>;
   /** A service Weave ships, run by the node itself: the room service. */
-  builtin?: 'room';
+  builtin?: 'website';
   /** The room service's rooms: room id → room, kept across restarts. */
   hosted?: Record<string, StoredRoom>;
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
@@ -8848,40 +8848,40 @@ export class WeaveNode implements Backend {
     return this.#services.serviceReady(...args);
   }
 
-  roomEnv(...args: Parameters<Website['roomEnv']>): ReturnType<Website['roomEnv']> {
-    return this.#website.roomEnv(...args);
+  websiteEnv(...args: Parameters<Website['websiteEnv']>): ReturnType<Website['websiteEnv']> {
+    return this.#website.websiteEnv(...args);
   }
 
-  rooms(...args: Parameters<Website['rooms']>): ReturnType<Website['rooms']> {
-    return this.#website.rooms(...args);
+  websites(...args: Parameters<Website['websites']>): ReturnType<Website['websites']> {
+    return this.#website.websites(...args);
   }
 
-  endRoom(...args: Parameters<Website['endRoom']>): ReturnType<Website['endRoom']> {
-    return this.#website.endRoom(...args);
+  closeWebsite(...args: Parameters<Website['closeWebsite']>): ReturnType<Website['closeWebsite']> {
+    return this.#website.closeWebsite(...args);
   }
 
-  joinRoom(...args: Parameters<Website['joinRoom']>): ReturnType<Website['joinRoom']> {
-    return this.#website.joinRoom(...args);
+  visitWebsite(...args: Parameters<Website['visitWebsite']>): ReturnType<Website['visitWebsite']> {
+    return this.#website.visitWebsite(...args);
   }
 
-  leaveRoom(...args: Parameters<Website['leaveRoom']>): ReturnType<Website['leaveRoom']> {
-    return this.#website.leaveRoom(...args);
+  leaveWebsite(...args: Parameters<Website['leaveWebsite']>): ReturnType<Website['leaveWebsite']> {
+    return this.#website.leaveWebsite(...args);
   }
 
-  roomChat(...args: Parameters<Website['roomChat']>): ReturnType<Website['roomChat']> {
-    return this.#website.roomChat(...args);
+  websiteChat(...args: Parameters<Website['websiteChat']>): ReturnType<Website['websiteChat']> {
+    return this.#website.websiteChat(...args);
   }
 
-  sayInRoom(...args: Parameters<Website['sayInRoom']>): ReturnType<Website['sayInRoom']> {
-    return this.#website.sayInRoom(...args);
+  sayOnWebsite(...args: Parameters<Website['sayOnWebsite']>): ReturnType<Website['sayOnWebsite']> {
+    return this.#website.sayOnWebsite(...args);
   }
 
-  openRoom(...args: Parameters<Website['openRoom']>): ReturnType<Website['openRoom']> {
-    return this.#website.openRoom(...args);
+  openWebsite(...args: Parameters<Website['openWebsite']>): ReturnType<Website['openWebsite']> {
+    return this.#website.openWebsite(...args);
   }
 
-  roomReady(...args: Parameters<Website['roomReady']>): ReturnType<Website['roomReady']> {
-    return this.#website.roomReady(...args);
+  websiteReady(...args: Parameters<Website['websiteReady']>): ReturnType<Website['websiteReady']> {
+    return this.#website.websiteReady(...args);
   }
 }
 

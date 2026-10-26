@@ -15,7 +15,7 @@ import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 export function contractText(c: ServiceContract): string {
   const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
-  return `${reads}; ${writes}${c.room ? '; offers a room' : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; offers a room' : ''} (contract ${c.version})`;
 }
 
 /** Every kind name, comma or space separated. */
@@ -212,7 +212,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
           <div className="grow">
             <b>{s.name}</b>{' '}
             <span className="small muted">
-              {s.builtin === 'room' ? `Weave's room service · ${s.enabled ? `${s.rooms?.length ?? 0} room${s.rooms?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
+              {s.builtin === 'website' ? `Weave's room service · ${s.enabled ? `${s.websites?.length ?? 0} room${s.websites?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
               {s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : 'no spaces yet'}
             </span>
             {s.description && <div className="small">{s.description}</div>}

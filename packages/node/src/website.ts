@@ -1,6 +1,6 @@
 import { b64u, showOpen, KIND_ROOM, artifactsOf, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
-import { type AppEnv, type AppPerson, type HostedRoomInfo, type RoomChatMessage, type RoomInfo } from './backend.ts';
+import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
 import { platformKey } from './appinstall.ts';
 import { createHash, createHmac } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -40,12 +40,12 @@ export class Website {
    * What a room's handler needs to ask Weave who its players are: Weave passes it to handlers it starts; for one
    * that runs by itself (a room on a port), `weave room env` prints it.
    */
-  async roomEnv(ref: string): Promise<AppEnv> {
+  async websiteEnv(ref: string): Promise<AppEnv> {
     const { room } = this.roomById(ref);
     const hosted = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
     if (!hosted) throw new Error(`"${room.name}" isn't a room your room service runs here`);
     const api = await this.startAppApi();
-    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: hosted.token, WEAVE_PROJECT: hosted.project, WEAVE_ROOM: hosted.id };
+    return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: hosted.token, WEAVE_PROJECT: hosted.project, WEAVE_WEBSITE: hosted.id };
   }
 
   /** The port of the app API once it runs (services get it as WEAVE_API). */
@@ -202,14 +202,14 @@ export class Website {
     return out;
   }
 
-  async rooms(ref?: string): Promise<RoomInfo[]> {
+  async websites(ref?: string): Promise<WebsiteInfo[]> {
     const only = ref ? this.h.project(ref).id : undefined;
     // Rooms come from room services (rooms hosts announced themselves, before them, are left out).
     const rooms = this.allRooms().filter(({ room, project }) => room.open && !!room.agent && (!only || project.id === only));
     return Promise.all(rooms.map(({ room, project }) => this.roomInfo(room, project)));
   }
 
-  async endRoom(ref: string): Promise<void> {
+  async closeWebsite(ref: string): Promise<void> {
     const { room, project } = this.roomById(ref);
     if (room.host !== this.h.identity.author || !room.agent) throw new Error('only the person whose room service offers a room ends it');
     // A room of the room service: its handler stops, the room closes. On an always-on node: handed over as a change.
@@ -223,7 +223,7 @@ export class Website {
     throw new Error(`${this.h.agentName(room.agent, room.host) ?? 'a service'} offers "${room.name}": end it on the device it runs on`);
   }
 
-  async joinRoom(ref: string): Promise<RoomInfo> {
+  async visitWebsite(ref: string): Promise<WebsiteInfo> {
     const { room, project } = this.roomById(ref);
     if (!room.open) throw new Error('this room has ended');
     if (this.hostedHere(room)) return this.roomInfo(room, project);
@@ -232,21 +232,21 @@ export class Website {
     return this.roomInfo(room, project);
   }
 
-  async leaveRoom(ref: string): Promise<void> {
+  async leaveWebsite(ref: string): Promise<void> {
     await this.h.live.leave(this.roomById(ref).room.id);
   }
 
-  async roomChat(ref: string): Promise<RoomChatMessage[]> {
+  async websiteChat(ref: string): Promise<WebsiteChatMessage[]> {
     const { room } = this.roomById(ref);
     return this.h.live.chat(room.id).map((m) => ({ id: m.id, by: { did: m.from, name: this.h.nameOf(m.from) ?? m.name }, text: m.text, time: m.time, mine: m.from === this.h.identity.author }));
   }
 
-  async sayInRoom(input: { room: string; text: string }): Promise<void> {
+  async sayOnWebsite(input: { room: string; text: string }): Promise<void> {
     if (!input.text?.trim()) throw new Error('a message needs text');
     this.h.live.say(this.roomById(input.room).room.id, input.text);
   }
 
-  /** Where a room's app is reached on this computer while we're in the room: the same port its address (RoomInfo.url) has. */
+  /** Where a room's app is reached on this computer while we're in the room: the same port its address (WebsiteInfo.url) has. */
   roomPort(roomId: string): number | undefined {
     const found = this.allRooms().find((r) => r.room.id === roomId && r.room.open);
     if (!found) return undefined;
@@ -314,7 +314,7 @@ export class Website {
   }
 
   /** A room, offered by a room service: hosted where that service runs, joined like any room everywhere else (also on your own computers). */
-  async roomInfo(room: Room, project: StoredSpace): Promise<RoomInfo> {
+  async roomInfo(room: Room, project: StoredSpace): Promise<WebsiteInfo> {
     const me = this.h.identity.author;
     const here = this.hostedHere(room);
     const service = here ? this.roomService(room) : undefined;
@@ -350,7 +350,7 @@ export class Website {
    * Open a room: in a project the room service was added to, answered by its handler. Running code (an artifact's
    * release, a command) needs `approve` once per release or command; a handler already running needs nothing.
    */
-  async openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo> {
+  async openWebsite(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo> {
     const service = this.roomServiceFor(input.service);
     const project = this.h.project(input.project);
     if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
@@ -476,9 +476,9 @@ export class Website {
   /** Your room service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
   roomServiceFor(name?: string): { name: string; spaces: string[]; approved: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
     const here = this.svc.storedServices()
-      .filter((s) => s.builtin === 'room')
+      .filter((s) => s.builtin === 'website')
       .map((s) => ({ name: s.name, spaces: s.spaces, approved: s.approved ?? [], hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
-    const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'room').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
+    const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'website').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
     const all = [...here, ...away];
     const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
     if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --builtin room)');
@@ -487,11 +487,11 @@ export class Website {
   }
 
   /** A room the room service runs, as its service lists it: its handler and how it's doing. */
-  hostedRoomInfo(r: StoredRoom, here = true): HostedRoomInfo {
+  hostedRoomInfo(r: StoredRoom, here = true): HostedWebsiteInfo {
     const project = this.h.spaces.get(r.project);
     const job = this.h.releases.jobs.get(r.id);
     const h = r.handler;
-    let handler: HostedRoomInfo['handler'];
+    let handler: HostedWebsiteInfo['handler'];
     if ('artifact' in h) {
       const from = this.h.spaces.get(h.artifact.project);
       const latest = from ? artifactsOf(this.h.entries(from), this.h.state(from).maintainers)[0] : undefined;
@@ -529,7 +529,7 @@ export class Website {
   }
 
   /** Resolves when fetching a room's release ends (for tests and the CLI). */
-  async roomReady(ref: string): Promise<RoomInfo> {
+  async websiteReady(ref: string): Promise<WebsiteInfo> {
     const { room, project } = this.roomById(ref);
     await this.h.releases.done(room.id);
     return this.roomInfo(room, project);
@@ -552,7 +552,7 @@ export class Website {
       cwd = h.folder;
       command = h.command;
     }
-    const dir = joinPath(this.h.home.dir, 'services', stored.name, 'rooms', room.id);
+    const dir = joinPath(this.h.home.dir, 'services', stored.name, 'websites', room.id);
     const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
     this.h.runtime.start(
       `room:${room.id}`,
@@ -560,7 +560,7 @@ export class Website {
         command,
         cwd,
         // Its settings, its port, and the app API for its room (who is who). Weave's own variables last.
-        env: { HOME: dir, ...room.settings, PORT: String(room.port), WEAVE_API: `http://${host}:${this.appApiPort}`, WEAVE_TOKEN: room.token, WEAVE_PROJECT: room.project, WEAVE_ROOM: room.id },
+        env: { HOME: dir, ...room.settings, PORT: String(room.port), WEAVE_API: `http://${host}:${this.appApiPort}`, WEAVE_TOKEN: room.token, WEAVE_PROJECT: room.project, WEAVE_WEBSITE: room.id },
         ...(container ? { container } : {}),
         log: joinPath(dir, 'room.log'),
         name: 'the handler',

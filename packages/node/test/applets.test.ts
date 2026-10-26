@@ -114,7 +114,7 @@ describe('applets', { timeout: 60_000 }, () => {
 
     // Lena sees an applet: a service that reads only what's asked of it.
     const [artifact] = await lena.artifacts('Bots');
-    expect(artifact).toMatchObject({ tag: 'v1.0', room: false, applet: { reads: 'addressed', writes: [] }, runs: 'release' });
+    expect(artifact).toMatchObject({ tag: 'v1.0', website: false, applet: { reads: 'addressed', writes: [] }, runs: 'release' });
 
     // She installs it in her own group: approved first, with its setting.
     await lena.createGroup('Friends');

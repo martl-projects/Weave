@@ -67,7 +67,7 @@ describe('phones using a node remotely', () => {
     await expect(session.call('revokeKey', { key: 'x' })).rejects.toThrow(/a phone can't do revokeKey/);
     await expect(session.call('pairPhone')).rejects.toThrow(/a phone can't do pairPhone/);
     await expect(session.call('destroyCompanyKey', {})).rejects.toThrow(/a phone can't do destroyCompanyKey/);
-    await expect(session.call('roomEnv', 'x')).rejects.toThrow(/a phone can't do roomEnv/);
+    await expect(session.call('websiteEnv', 'x')).rejects.toThrow(/a phone can't do websiteEnv/);
 
     // A code works once; a stranger's key is turned away at the door.
     await expect(pairWith(dialer, link, HyperDHT.keyPair(), 'Thief')).rejects.toThrow();
@@ -141,9 +141,9 @@ describe('a phone playing in a room its computer joined', () => {
     await computer.joinSpace(await host.invite('Pferderennen'));
     await host.goOnline();
     await computer.goOnline();
-    await host.addService({ builtin: 'room', spaces: ['Pferderennen'] });
-    const room = await host.openRoom({ project: 'Pferderennen', name: 'Derby', port: appPort, pages: { joiner: { path: '/play', label: 'Play' } } });
-    await until(async () => (await computer.rooms('Pferderennen')).length);
+    await host.addService({ builtin: 'website', spaces: ['Pferderennen'] });
+    const room = await host.openWebsite({ project: 'Pferderennen', name: 'Derby', port: appPort, pages: { joiner: { path: '/play', label: 'Play' } } });
+    await until(async () => (await computer.websites('Pferderennen')).length);
 
     const phoneKeys = HyperDHT.keyPair();
     const dialer = dht as unknown as Dialer;
@@ -153,11 +153,11 @@ describe('a phone playing in a room its computer joined', () => {
     expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toBe('');
 
     // Joined (from the phone, as it's allowed to): each connection reaches the host's app, through the computer's tunnel.
-    await session.call('joinRoom', room.id);
-    await until(async () => (await computer.rooms('Pferderennen'))[0].url);
+    await session.call('visitWebsite', room.id);
+    await until(async () => (await computer.websites('Pferderennen'))[0].url);
     expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toMatch(/^HTTP\/1\.1 200[\s\S]*the host's app, at \/play$/);
     // The host sees the computer's person in the room, as ever: the phone is that person.
-    expect((await host.rooms('Pferderennen'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'martl']);
+    expect((await host.websites('Pferderennen'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'martl']);
 
     // A key that isn't paired is turned away; a room that doesn't exist reaches nothing.
     expect(await fetchThrough(openTunnel(dialer, paired, HyperDHT.keyPair(), room.id), '/play')).toBe('');
@@ -165,17 +165,17 @@ describe('a phone playing in a room its computer joined', () => {
 
     // A room the computer hosts itself: the phone reaches its app directly, as the host opens it.
     await computer.createProject({ name: 'Solitaire' });
-    await computer.addService({ builtin: 'room', spaces: ['Solitaire'] });
-    const own = await computer.openRoom({ project: 'Solitaire', name: 'Alone', port: appPort });
+    await computer.addService({ builtin: 'website', spaces: ['Solitaire'] });
+    const own = await computer.openWebsite({ project: 'Solitaire', name: 'Alone', port: appPort });
     expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, own.id), '/')).toMatch(/the host's app, at \/$/);
 
     // Left on the computer: the way in is gone.
-    await session.call('leaveRoom', room.id);
+    await session.call('leaveWebsite', room.id);
     expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, room.id), '/play')).toBe('');
 
     // Unpaired while a tunnel is open: it's cut at once.
-    await session.call('joinRoom', room.id);
-    await until(async () => (await computer.rooms('Pferderennen'))[0].url);
+    await session.call('visitWebsite', room.id);
+    await until(async () => (await computer.websites('Pferderennen'))[0].url);
     const { socket: open } = await openTunnel(dialer, paired, phoneKeys, room.id);
     const cut = new Promise<void>((resolve) => open.on('close', () => resolve()));
     open.on('error', () => {});
@@ -194,7 +194,7 @@ describe('what a phone may call', () => {
       'addAgent', 'updateAgent', 'approveAgent', 'answerPermission', 'requestPermission', 'connectHarness', 'join', 'revokeKey', 'rotateRoot',
       'moveHomeKey', 'keystores', 'destroyCompanyKey', 'escrowRecovery', 'openEscrow', 'manageSpace', 'unlockSpace', 'link', 'signIn', 'companySignIn',
       'backup', 'exportSpace', 'createCompany', 'companyAction', 'enrollLink', 'inviteByEmail', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'consoleOperatorLink',
-      'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'roomEnv', 'openRoom', 'addService',
+      'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'websiteEnv', 'openWebsite', 'addService',
       'setService', 'removeService', 'openInApp', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'linkRepo', 'shareGithub',
       'showGithubOnHub', 'pairPhone', 'phones', 'unpairPhone',
     ];

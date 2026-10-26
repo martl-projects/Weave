@@ -84,11 +84,11 @@ describe('rooms of the room service', () => {
   }
 
   /** A room of the person's room service (added to the project first), answered by the test's web server. */
-  async function openRoom(node: WeaveNode, project: string, input: { name: string; groups?: string[]; show?: string; pages?: RoomPages }) {
-    const mine = (await node.services()).find((s) => s.builtin === 'room');
-    if (!mine) await node.addService({ builtin: 'room', spaces: [project] });
+  async function openWebsite(node: WeaveNode, project: string, input: { name: string; groups?: string[]; show?: string; pages?: RoomPages }) {
+    const mine = (await node.services()).find((s) => s.builtin === 'website');
+    if (!mine) await node.addService({ builtin: 'website', spaces: [project] });
     else await node.setService({ name: mine.name, spaces: [...mine.spaces.map((s) => s.id), project] });
-    return node.openRoom({ project, port: appPort, ...input });
+    return node.openWebsite({ project, port: appPort, ...input });
   }
 
   it('lets the members of a tier into a room meant for them', async () => {
@@ -114,15 +114,15 @@ describe('rooms of the room service', () => {
     await martin.goOnline();
     await lena.goOnline();
     await kofi.goOnline();
-    const hosted = await openRoom(martin, 'Studio', { name: 'Backstage live', groups: [tier.id], pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
+    const hosted = await openWebsite(martin, 'Studio', { name: 'Backstage live', groups: [tier.id], pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
     await sync();
 
-    const forKofi = await until(async () => (await kofi.rooms('Studio')).find((r) => r.id === hosted.id));
+    const forKofi = await until(async () => (await kofi.websites('Studio')).find((r) => r.id === hosted.id));
     expect(forKofi.mayJoin).toBe(false);
-    const forLena = await until(async () => (await lena.rooms('Studio')).find((r) => r.id === hosted.id && r.mayJoin));
-    await lena.joinRoom(forLena.id);
+    const forLena = await until(async () => (await lena.websites('Studio')).find((r) => r.id === hosted.id && r.mayJoin));
+    await lena.visitWebsite(forLena.id);
     await until(async () => {
-      const info = (await lena.rooms('Studio')).find((r) => r.id === hosted.id);
+      const info = (await lena.websites('Studio')).find((r) => r.id === hosted.id);
       return info?.connected && info.url ? info : undefined;
     });
   });
@@ -147,7 +147,7 @@ describe('rooms of the room service', () => {
     await martin.goOnline();
     await lena.goOnline();
     await kofi.goOnline();
-    const hosted = await openRoom(martin, 'Bühne', { name: 'Premiere live', show: show.id, pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
+    const hosted = await openWebsite(martin, 'Bühne', { name: 'Premiere live', show: show.id, pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
     sync();
 
     // Lena buys a ticket; Kofi doesn't.
@@ -157,13 +157,13 @@ describe('rooms of the room service', () => {
     await martin.reconcile();
     sync();
 
-    const forKofi = await until(async () => (await kofi.rooms('Bühne')).find((r) => r.id === hosted.id));
+    const forKofi = await until(async () => (await kofi.websites('Bühne')).find((r) => r.id === hosted.id));
     expect(forKofi.mayJoin).toBe(false);
-    await expect(kofi.joinRoom(hosted.id)).rejects.toThrow(/ticket holders/);
-    const forLena = await until(async () => (await lena.rooms('Bühne')).find((r) => r.id === hosted.id && r.mayJoin));
-    await lena.joinRoom(forLena.id);
+    await expect(kofi.visitWebsite(hosted.id)).rejects.toThrow(/ticket holders/);
+    const forLena = await until(async () => (await lena.websites('Bühne')).find((r) => r.id === hosted.id && r.mayJoin));
+    await lena.visitWebsite(forLena.id);
     const connected = await until(async () => {
-      const info = (await lena.rooms('Bühne')).find((r) => r.id === hosted.id);
+      const info = (await lena.websites('Bühne')).find((r) => r.id === hosted.id);
       return info?.connected && info.url ? info : undefined;
     });
     expect(connected.url).toMatch(/\/watch$/);
@@ -177,26 +177,26 @@ describe('rooms of the room service', () => {
     await martin.goOnline();
     await lena.goOnline();
 
-    const hosted = await openRoom(martin, 'Gameshow', { name: 'Saturday show', pages: { host: { path: '/host', label: 'Open stage' }, joiner: { path: '/play', label: 'Play' } } });
-    expect(hosted).toMatchObject({ mine: true, offeredBy: { name: 'room' }, service: { label: 'Open stage', ready: true }, url: `http://localhost:${appPort}/host` });
+    const hosted = await openWebsite(martin, 'Gameshow', { name: 'Saturday show', pages: { host: { path: '/host', label: 'Open stage' }, joiner: { path: '/play', label: 'Play' } } });
+    expect(hosted).toMatchObject({ mine: true, offeredBy: { name: 'website' }, service: { label: 'Open stage', ready: true }, url: `http://localhost:${appPort}/host` });
 
-    const seen = await until(async () => (await lena.rooms('Gameshow'))[0]);
+    const seen = await until(async () => (await lena.websites('Gameshow'))[0]);
     expect(seen).toMatchObject({ name: 'Saturday show', mayJoin: true, joined: false, service: { label: 'Play' } });
-    await lena.joinRoom(seen.id);
+    await lena.visitWebsite(seen.id);
     const connected = await until(async () => {
-      const info = (await lena.rooms('Gameshow'))[0];
+      const info = (await lena.websites('Gameshow'))[0];
       return info.connected && info.url ? info : undefined;
     });
     expect(connected.url).toMatch(/^http:\/\/saturday-show\.weave\.localhost:\d+\/play$/);
     const localPort = Number(new URL(connected.url!).port);
     expect(await get(localPort, '/play')).toBe(`hello from the host, you asked for /play on saturday-show.weave.localhost:${localPort}`);
-    expect((await martin.rooms('Gameshow'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'Martin']);
+    expect((await martin.websites('Gameshow'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'Martin']);
 
-    await lena.sayInRoom({ room: seen.id, text: 'ready!' });
-    await until(async () => (await martin.roomChat(hosted.id)).length === 1);
-    await martin.sayInRoom({ room: hosted.id, text: 'go' });
-    await until(async () => (await lena.roomChat(seen.id)).length === 2);
-    expect((await lena.roomChat(seen.id)).map((m) => [m.by.name, m.text])).toEqual([
+    await lena.sayOnWebsite({ room: seen.id, text: 'ready!' });
+    await until(async () => (await martin.websiteChat(hosted.id)).length === 1);
+    await martin.sayOnWebsite({ room: hosted.id, text: 'go' });
+    await until(async () => (await lena.websiteChat(seen.id)).length === 2);
+    expect((await lena.websiteChat(seen.id)).map((m) => [m.by.name, m.text])).toEqual([
       ['Lena', 'ready!'],
       ['Martin', 'go'],
     ]);
@@ -207,13 +207,13 @@ describe('rooms of the room service', () => {
     app.closeAllConnections();
     await new Promise<void>((resolve) => app.close(() => resolve()));
     const waiting = await until(async () => {
-      const info = (await lena.rooms('Gameshow'))[0];
+      const info = (await lena.websites('Gameshow'))[0];
       return info.service?.ready === false ? info : undefined;
     });
     expect(waiting).toMatchObject({ connected: true });
     expect(waiting.url).toBeUndefined();
     await new Promise<void>((resolve) => app.listen(appPort, '127.0.0.1', () => resolve()));
-    await until(async () => (await lena.rooms('Gameshow'))[0].url);
+    await until(async () => (await lena.websites('Gameshow'))[0].url);
 
     // Someone who learned the room key but isn't in the project gets nothing through.
     const eve = WeaveNode.init('Eve', mkdtempSync(join(tmpdir(), 'weave-rooms-')));
@@ -231,9 +231,9 @@ describe('rooms of the room service', () => {
     expect(leaked).toBe('');
     await dht.destroy();
 
-    await martin.endRoom(hosted.id);
-    expect(await martin.rooms('Gameshow')).toEqual([]);
-    await until(async () => (await lena.rooms('Gameshow')).length === 0);
+    await martin.closeWebsite(hosted.id);
+    expect(await martin.websites('Gameshow')).toEqual([]);
+    await until(async () => (await lena.websites('Gameshow')).length === 0);
   }, 90_000);
 });
 

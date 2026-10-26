@@ -118,10 +118,10 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     // Settings by name only: the value never shows in the command.
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     lena.runServices({ port: api.port });
-    await lena.addService({ builtin: 'room', spaces: ['Gameshow'] });
-    await expect(lena.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' } })).rejects.toThrow(/approve it first/);
-    const room = await lena.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' }, approve: true });
-    expect(JSON.stringify((await lena.services())[0].rooms)).not.toContain('s3cret-value');
+    await lena.addService({ builtin: 'website', spaces: ['Gameshow'] });
+    await expect(lena.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' } })).rejects.toThrow(/approve it first/);
+    const room = await lena.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, settings: { SECRET_KEY: 's3cret-value' }, approve: true });
+    expect(JSON.stringify((await lena.services())[0].websites)).not.toContain('s3cret-value');
     const answer = await vi.waitFor(
       async () => {
         const res = await fetch(`http://127.0.0.1:${port}/`);
@@ -135,7 +135,7 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     expect(answer.env.WEAVE_API).toMatch(process.platform === 'linux' ? /^http:\/\/127\.0\.0\.1:\d+$/ : /^http:\/\/host\.docker\.internal:\d+$/);
     // A container left from before was cleared first; ending the room stops it through Docker.
     expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^rm -f weave-room-/m);
-    await lena.endRoom(room.id);
+    await lena.closeWebsite(room.id);
     expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-room-/m);
     await api.close();
 
@@ -145,8 +145,8 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     await kofi.joinSpace(await martl.invite('Gameshow'));
     syncAll([martl, kofi]);
     expect((await kofi.artifacts('Gameshow'))[0].runs).toBeUndefined();
-    await kofi.addService({ builtin: 'room', spaces: ['Gameshow'] });
-    await expect(kofi.openRoom({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
+    await kofi.addService({ builtin: 'website', spaces: ['Gameshow'] });
+    await expect(kofi.openWebsite({ project: 'Gameshow', name: 'Show', artifact: { project: 'Gameshow' }, approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
     for (const node of [martl, lena, kofi]) await node.close();
     expect(existsSync(dockerDir)).toBe(true);
   });

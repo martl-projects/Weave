@@ -2,7 +2,7 @@ import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
-import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SpaceInfo, Status } from '@weave/node/client';
+import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
@@ -60,7 +60,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const open = route[1] === space.id;
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
-  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<RoomInfo[]>('rooms', space.id) : Promise.resolve([])), [space.id]);
+  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   return (
@@ -212,7 +212,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 /** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
 function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
-  const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', space.id), [space.id]);
+  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', space.id), [space.id]);
   const base = spaceHref(space);
   const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
     <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>

@@ -19,7 +19,7 @@ import { isDid, type Did } from './keys.ts';
  *                          can ask it), or no longer (on: false); the latest per service counts
  *
  * A contract says what the service reads (only requests addressed to it, some
- * kinds, or the whole space), which kinds it writes, whether it offers a room,
+ * kinds, or the whole space), which kinds it writes, whether it serves websites,
  * and its version. It's a promise the runtime keeps: the node that runs the
  * service hands it nothing more.
  */
@@ -49,8 +49,8 @@ export interface ServiceContract {
   reads: ServiceReads;
   /** Kinds it may sign, beyond its profile and its results (which every service may). */
   writes: string[];
-  /** It offers a room (a web UI). */
-  room?: boolean;
+  /** It serves websites (rooms, on the wire): pages people visit, which Weave tells who is visiting. */
+  website?: boolean;
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -64,8 +64,8 @@ export interface ServiceProfile {
   description: string;
   /** A picture (wblob: reference). */
   icon?: string;
-  /** One Weave ships (the room service), rather than someone's own code. */
-  builtin?: 'room';
+  /** One Weave ships (the website service), rather than someone's own code. */
+  builtin?: 'website';
   contract: ServiceContract;
   time: string;
 }
@@ -91,18 +91,18 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   const writes = Array.isArray(c.writes) ? [...new Set(c.writes.filter(isKind))].slice(0, 50) : [];
   const version = typeof c.version === 'string' && /^\d+(\.\d+){0,2}$/.test(c.version) ? c.version : undefined;
   if (!version) return undefined;
-  return { reads, writes, ...(c.room === true ? { room: true } : {}), version };
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), version };
 }
 
-/** The kinds a service's key may sign: its profile, its results, and what its contract writes (rooms if it offers one). */
+/** The kinds a service's key may sign: its profile, its results, and what its contract writes (rooms, if it serves websites). */
 export const servicePermissions = (contract: ServiceContract): string[] =>
-  [...new Set([KIND_SERVICE_PROFILE, KIND_SERVICE_RESULT, ...contract.writes, ...(contract.room ? ['weave.room', 'weave.room.*'] : [])])];
+  [...new Set([KIND_SERVICE_PROFILE, KIND_SERVICE_RESULT, ...contract.writes, ...(contract.website ? ['weave.room', 'weave.room.*'] : [])])];
 
 /** A contract in plain words, as people approve it: "reads only what is asked of it; writes only its answers (contract 1.0)". */
 export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
-  return `${reads}; ${writes}${c.room ? '; offers rooms' : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
@@ -132,7 +132,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       name,
       description: typeof body.description === 'string' ? body.description.slice(0, 1000) : '',
       ...(typeof body.icon === 'string' && body.icon.startsWith('wblob:') ? { icon: body.icon } : {}),
-      ...(body.builtin === 'room' ? { builtin: 'room' as const } : {}),
+      ...(body.builtin === 'website' ? { builtin: 'website' as const } : {}),
       contract,
       time: e.time,
     });
