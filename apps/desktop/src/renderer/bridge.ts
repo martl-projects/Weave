@@ -38,6 +38,8 @@ interface Bridge {
   pick?(text: string): Promise<'pasted' | 'clipboard'>;
   /** In the address book picker: put it away, pasting nothing. */
   closePicker?(): Promise<void>;
+  /** In the address book picker: make the window as tall as this (it grows with the results). */
+  fitPicker?(height: number): Promise<void>;
   /** In the address book picker: its shortcut was pressed again, so it starts afresh. */
   onPickerOpen?(listener: () => void): void;
   /** In the side panel: show this session (after Ctrl+click). */

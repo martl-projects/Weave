@@ -249,10 +249,12 @@ async function showPicker(): Promise<void> {
   const width = 560;
   const box = new BrowserWindow({
     width,
-    height: 420,
+    height: 44,
+    useContentSize: true,
     x: Math.round(at.x + (at.width - width) / 2),
     y: Math.round(at.y + at.height / 5),
     title: 'Weave · Address book',
+    thickFrame: false,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
@@ -291,6 +293,13 @@ ipcMain.handle('weave:pick', async (_event, text: string): Promise<'pasted' | 'c
 });
 
 ipcMain.handle('weave:picker', () => picker?.hide());
+
+/** The picker is a search bar that grows with its results: its page says how tall it is. */
+ipcMain.handle('weave:picker-fit', (_event, height: number) => {
+  if (!picker || typeof height !== 'number' || !Number.isFinite(height)) return;
+  const [width] = picker.getContentSize();
+  picker.setContentSize(width, Math.max(32, Math.min(Math.round(height), 480)));
+});
 
 /** From the sessions pane: bring a session to the front in the Claude app. */
 ipcMain.handle('weave:show-session', (_event, host: string) => showSession(String(host)));

@@ -9,7 +9,8 @@ import { kindOf } from './overlay.tsx';
  * computer knows, brought up by its shortcut from wherever you're typing. Enter
  * pastes a Markdown link to the pick there, [Phil](http://weave.localhost:7710/@phil~…),
  * which names exactly that person or post however many share the name: Weave's
- * tools take the link wherever they take a person or a post.
+ * tools take the link wherever they take a person or a post. Tab switches
+ * between all, people, projects and posts; Esc or a click elsewhere puts it away.
  */
 
 /** `[label](url)`, with the label's own brackets kept as text. */
@@ -56,6 +57,7 @@ export function Picker() {
   const [at, setAt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let current = true;
@@ -81,6 +83,13 @@ export function Picker() {
     [],
   );
   useEffect(() => list.current?.querySelector('.picker-item.at')?.scrollIntoView({ block: 'nearest' }), [at]);
+  // Just the search bar at first; the window grows with what it finds.
+  useEffect(() => {
+    if (!root.current || !bridge.fitPicker) return;
+    const fit = new ResizeObserver(() => void bridge.fitPicker!(Math.ceil(root.current!.getBoundingClientRect().height)));
+    fit.observe(root.current);
+    return () => fit.disconnect();
+  }, []);
 
   const close = () => void bridge.closePicker?.();
   const pick = (f: Found | undefined) => {
@@ -105,28 +114,20 @@ export function Picker() {
   };
 
   return (
-    <div className="window picker-window" onKeyDown={onKey}>
-      <div className="title-bar mentions-drag">
-        <div className="title-bar-text">Weave · Address book</div>
-        <div className="title-bar-controls">
-          <button aria-label="Close" onClick={close} />
-        </div>
-      </div>
-      <div className="window-body picker-body">
-        <div className="picker-search">
-          <Icon name="search" />
-          <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="A person, project, issue or post" spellCheck={false} />
-        </div>
+    <div className="window picker" ref={root} onKeyDown={onKey}>
+      <div className="picker-search">
+        <Icon name="search" />
+        <input ref={input} autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="A person, project, issue or post" spellCheck={false} />
         <menu role="tablist" className="picker-tabs">
           {TABS.map(([key, label]) => (
             <li key={key} role="tab" aria-selected={tab === key}>
               <a
                 href="#"
                 tabIndex={-1}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.preventDefault();
                   setTab(key);
-                  input.current?.focus();
                 }}
               >
                 {label}
@@ -134,8 +135,10 @@ export function Picker() {
             </li>
           ))}
         </menu>
+      </div>
+      {query.trim() && found && (
         <ul className="picker-list" ref={list} role="listbox">
-          {found?.map((f, i) => (
+          {found.map((f, i) => (
             <li
               key={f.person ? f.person.did : f.post.id}
               className={`picker-item${i === at ? ' at' : ''}`}
@@ -151,12 +154,9 @@ export function Picker() {
               </span>
             </li>
           ))}
-          {found && !found.length && <li className="empty">{NOTHING[tab]}</li>}
+          {!found.length && <li className="picker-none">{NOTHING[tab]}</li>}
         </ul>
-        <div className="panel-foot picker-foot">
-          <span>↑↓ choose · Tab switches tabs · Enter {bridge.platform === 'win32' ? 'pastes a link where you were typing' : 'copies a link to paste'} · Esc closes</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
