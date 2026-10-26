@@ -3577,8 +3577,13 @@ export class WeaveNode implements Backend {
       const ref = app.start.image;
       const tags = [...new Set([release.tag, release.tag.replace(/^v(?=\d)/, '')])];
       const credentials = auth && imageLocation(ref).host === 'ghcr.io' ? { user: auth.login, token: auth.token } : undefined;
-      const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
-      image = { ref, tag: found.tag, digest: found.digest };
+      try {
+        const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
+        image = { ref, tag: found.tag, digest: found.digest };
+      } catch (error) {
+        // With build files, the release doesn't need its image: hosts run the files (the CLI says it's left out).
+        if (!release.assets.length) throw error;
+      }
     }
     // Which file is for which platform: as given, or guessed from the names.
     const chosen = new Map<string, ReleaseAsset>();
