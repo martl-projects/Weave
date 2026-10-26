@@ -12,6 +12,8 @@
  * `fetch` can be replaced, so tests run against a stand-in GitHub.
  */
 
+import { createSign } from 'node:crypto';
+
 const API = 'https://api.github.com';
 
 export type Fetch = typeof fetch;
@@ -285,5 +287,64 @@ export async function checkGistProof(gist: string, login: string, did: string, f
     return Object.values(data.files ?? {}).some((f) => f.content?.includes(did));
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Acting as a GitHub App of the person's own (the GitHub service's credentials): a short JWT signed with the App's
+ * private key, exchanged for an installation token per account the App is installed on. Tokens last an hour and are
+ * renewed before then; nobody has to sign in.
+ */
+export class GitHubAppAuth {
+  readonly #appId: string;
+  readonly #key: string;
+  readonly #fetch: Fetch;
+  readonly #clock: () => number;
+  /** Installation per repository owner, and its current token. */
+  #installations = new Map<string, number>();
+  #tokens = new Map<number, { token: string; expires: number }>();
+
+  constructor(appId: string, privateKey: string, fetchImpl: Fetch = fetch, clock: () => number = Date.now) {
+    if (!/^\d{1,12}$/.test(appId.trim())) throw new Error('a GitHub App ID is a number, like 123456 (on the App\'s settings page)');
+    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privateKey)) throw new Error('a GitHub App private key is the .pem file GitHub gave you (it starts with -----BEGIN RSA PRIVATE KEY-----)');
+    this.#appId = appId.trim();
+    this.#key = privateKey;
+    this.#fetch = fetchImpl;
+    this.#clock = clock;
+  }
+
+  /** The App itself, for ten minutes: what asks GitHub for installation tokens. */
+  jwt(): string {
+    const now = Math.floor(this.#clock() / 1000);
+    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const unsigned = `${part({ alg: 'RS256', typ: 'JWT' })}.${part({ iat: now - 60, exp: now + 540, iss: this.#appId })}`;
+    return `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(this.#key).toString('base64url')}`;
+  }
+
+  async #asApp<T>(method: string, path: string): Promise<T> {
+    const res = await this.#fetch(`${API}${path}`, { method, headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${this.jwt()}`, 'x-github-api-version': '2022-11-28' } });
+    const data = (await res.json().catch(() => ({}))) as T & { message?: string };
+    if (!res.ok) throw new Error(res.status === 404 ? 'not found' : `GitHub said ${res.status} to the App${data.message ? `: ${data.message}` : ''}`);
+    return data;
+  }
+
+  /** A client acting as the App on a repository; undefined when the App isn't installed where it lives. */
+  async clientFor(repo: string): Promise<GitHub | undefined> {
+    const owner = repo.split('/')[0].toLowerCase();
+    let installation = this.#installations.get(owner);
+    if (installation === undefined) {
+      try {
+        installation = (await this.#asApp<{ id: number }>('GET', `/repos/${repo}/installation`)).id;
+      } catch (error) {
+        if ((error as Error).message === 'not found') return undefined;
+        throw error;
+      }
+      this.#installations.set(owner, installation);
+    }
+    const kept = this.#tokens.get(installation);
+    if (kept && kept.expires - this.#clock() > 5 * 60_000) return new GitHub(kept.token, this.#fetch);
+    const { token, expires_at } = await this.#asApp<{ token: string; expires_at: string }>('POST', `/app/installations/${installation}/access_tokens`);
+    this.#tokens.set(installation, { token, expires: Date.parse(expires_at) || this.#clock() + 50 * 60_000 });
+    return new GitHub(token, this.#fetch);
   }
 }

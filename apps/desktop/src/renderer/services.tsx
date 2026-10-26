@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
 import type { ServiceContract } from '@weave/core';
 import { Icon } from './icons.tsx';
@@ -184,10 +184,13 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         <label>In these spaces</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-set-command">How to start it</label>
-        <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
-      </div>
+      {!service.builtin && !service.artifact && (
+        <div className="field-row-stacked">
+          <label htmlFor="svc-set-command">How to start it</label>
+          <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
+        </div>
+      )}
+      {service.builtin === 'github' && <GitHubAppSettings set={service.settings.includes('GITHUB_APP_KEY')} onChange={(change) => setSettings({ ...settings, ...change })} />}
       <fieldset>
         <legend>Settings</legend>
         <p className="small">
@@ -215,6 +218,51 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         </AsyncButton>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * The GitHub service's own GitHub App: its ID and private key. With them it acts as that App where it's installed
+ * (keeping linked repositories' access in step, handing out release files), and nobody has to sign in.
+ */
+function GitHubAppSettings({ set, onChange }: { set: boolean; onChange(change: Record<string, string>): void }) {
+  const [id, setId] = useState('');
+  const [key, setKey] = useState('');
+  const [picked, setPicked] = useState<string>();
+  const file = useRef<HTMLInputElement>(null);
+  const ready = /^\d+$/.test(id.trim()) && /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(key);
+  return (
+    <fieldset>
+      <legend>GitHub App</legend>
+      <p className="small">
+        {set ? 'It acts as your GitHub App. To change it, give the App ID and key again.' : 'Without one, it acts with the GitHub sign-in of the computer it runs on.'} Create the App on github.com (your organization's settings →
+        Developer settings → GitHub Apps) with the permissions Administration: read and write, Contents: read, Metadata: read; install it on the organization; then generate a private key.
+      </p>
+      <div className="field-row">
+        <input value={id} onChange={(e) => setId(e.target.value.replace(/\D/g, ''))} placeholder="App ID, like 123456" inputMode="numeric" aria-label="GitHub App ID" />
+        <button type="button" onClick={() => file.current?.click()}>
+          {picked ?? 'Choose its .pem key…'}
+        </button>
+        <input
+          ref={file}
+          type="file"
+          accept=".pem"
+          hidden
+          onChange={async (e) => {
+            const chosen = e.target.files?.[0];
+            if (!chosen) return;
+            setKey(await chosen.text());
+            setPicked(chosen.name);
+          }}
+        />
+      </div>
+      {!picked && <textarea className="wide code" rows={3} value={key} onChange={(e) => setKey(e.target.value)} placeholder="…or paste the private key (-----BEGIN RSA PRIVATE KEY-----…)" spellCheck={false} aria-label="GitHub App private key" />}
+      <div className="buttons">
+        <button disabled={!ready} onClick={() => (onChange({ GITHUB_APP_ID: id.trim(), GITHUB_APP_KEY: key }), setId(''), setKey(''), setPicked(undefined))}>
+          Use this App
+        </button>
+      </div>
+    </fieldset>
   );
 }
 

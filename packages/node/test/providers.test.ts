@@ -104,7 +104,7 @@ describe('providers', { timeout: 60_000 }, () => {
 
       // martl adds Weave's GitHub service to the project: it offers artifact.fetch, and Lena sees it there.
       const provider = await martl.addService({ builtin: 'github', spaces: ['Bot'] });
-      expect(provider).toMatchObject({ name: 'github', builtin: 'github', contract: { reads: 'addressed', writes: [], offers: ['artifact.fetch'] } });
+      expect(provider).toMatchObject({ name: 'github', builtin: 'github', contract: { reads: 'addressed', writes: ['weave.github.added'], offers: ['artifact.fetch'] } });
       await vi.waitFor(async () => expect((await lena.servicesIn('Bot')).filter((p) => p.contract.offers).map((p) => [p.name, p.builtin, p.contract.offers])).toEqual([['github', 'github', ['artifact.fetch']]]), { timeout: 5_000, interval: 100 });
 
       // Started again, Lena's node asks it, and fetches the file at the address it hands out.

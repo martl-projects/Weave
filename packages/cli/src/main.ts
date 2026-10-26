@@ -203,7 +203,9 @@ github — repositories that follow a group, tier or project (members who give t
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
   service add github --builtin github   the GitHub service Weave ships: hands a project's release files to its participants
-                             with this node's GitHub sign-in (a provider: it offers artifact.fetch)  [--spaces <project,…>]
+                             (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
+                             [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
+                             installed on the organization, so nobody has to sign in (with --node, on an always-on node)
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -1434,8 +1436,9 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const settingsOf = () =>
         Object.fromEntries((values.setting ?? []).map((s) => {
           const at = s.indexOf('=');
-          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it)');
-          return [s.slice(0, at), s.slice(at + 1) || null];
+          if (at < 1) throw new Error('a setting is KEY=VALUE (KEY= removes it; KEY=@file reads it from a file, like a .pem key)');
+          const value = s.slice(at + 1);
+          return [s.slice(0, at), value.startsWith('@') ? readFileSync(value.slice(1), 'utf8') : value || null];
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());

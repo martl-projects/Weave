@@ -1,4 +1,4 @@
-import { b64u, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { b64u, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
 import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
@@ -8,6 +8,7 @@ import { join as joinPath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { releaseApproval } from './runtime.ts';
 import { imageLabels } from './registry.ts';
+import { GitHubAppAuth, type GitHub } from './github.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
@@ -29,13 +30,24 @@ export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
 export const NODE_PREFIX = 'node:';
 
-/** The services Weave ships: what each does, as its contract and in words. */
-const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string }> = {
+/** The services Weave ships: what each does, as its contract and in words, and the settings it takes. */
+const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }> = {
   // Reads nothing and writes its websites.
   website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
-  // Reads what's asked of it and answers: where to download a release's files.
-  github: { contract: { reads: 'addressed', writes: [], offers: [PROTOCOL_ARTIFACT_FETCH], version: '1.0' }, description: 'Releases from GitHub: hands the project’s release files to its participants, with the GitHub sign-in of the node it runs on' },
+  // Reads what's asked of it and answers where to download a release's files; with a GitHub App of the person's own,
+  // it also keeps linked repositories' access in step with their spaces, and records whom it gave access.
+  github: {
+    contract: { reads: 'addressed', writes: [KIND_GITHUB_ADDED], offers: [PROTOCOL_ARTIFACT_FETCH], version: '1.0' },
+    description: 'GitHub: hands the project’s release files to its participants, and keeps linked repositories’ access in step with their spaces',
+    settings: [
+      { name: 'GITHUB_APP_ID', label: 'GitHub App ID', optional: true, hint: 'Your own GitHub App, installed on the organization: it acts without anyone signing in' },
+      { name: 'GITHUB_APP_KEY', label: 'GitHub App private key (.pem)', secret: true, optional: true, hint: 'The App needs Administration (read and write), Contents (read) and Metadata (read)' },
+    ],
+  },
 };
+
+/** What a service Weave ships accepts as settings, as a manifest would say it. */
+const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin].settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
 const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact'>): Json => ({
@@ -224,8 +236,8 @@ export class Services {
     }
   }
 
-  /** Settings checked against what's allowed: an artifact's own, or any variable-like name for a command. */
-  checkSettings(app: AppManifest | undefined, settings: Record<string, string | null>): void {
+  /** Settings checked against what's allowed: an artifact's own (or a builtin's), or any variable-like name for a command. */
+  checkSettings(app: { name: string; env?: AppSetting[] } | undefined, settings: Record<string, string | null>): void {
     for (const key of Object.keys(settings)) {
       if (app) {
         if (!(app.env ?? []).some((e) => e.name === key)) throw new Error(`${app.name} doesn't ask for ${key}${app.env?.length ? ` (it asks for ${app.env.map((e) => e.name).join(', ')})` : ''}`);
@@ -260,7 +272,8 @@ export class Services {
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
     const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
-    this.checkSettings(manifest, settings);
+    this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : undefined), settings);
+    if (builtin === 'github') this.githubAppOf(settings);
     const missing = (manifest?.env ?? []).filter((e) => !e.optional && !settings[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? manifest?.app);
@@ -514,6 +527,7 @@ export class Services {
       if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
       if (input.artifact && !away.artifact) throw new Error(`${away.service} isn't an applet: it runs no release`);
       if (away.artifact) this.checkSettings(away.artifact.manifest, input.settings ?? {});
+      else if (away.builtin) this.checkSettings(builtinSpec(away.builtin), input.settings ?? {});
       const next = input.artifact && away.artifact ? this.nextRelease(away.service, away.artifact, input.artifact.tag, away.approved ?? [], input.approve) : undefined;
       if (next && JSON.stringify(servicePermissions(next.contract)) !== JSON.stringify(servicePermissions(away.contract))) this.grantContract(away.did, away.service, next.contract);
       const { artifact: _wanted, approve: _approve, ...change } = input;
@@ -526,11 +540,12 @@ export class Services {
     if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
     const next = input.artifact && before.artifact ? this.nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;
     const settings = { ...before.settings };
-    this.checkSettings((next?.artifact ?? before.artifact)?.manifest, input.settings ?? {});
+    this.checkSettings((next?.artifact ?? before.artifact)?.manifest ?? (before.builtin ? builtinSpec(before.builtin) : undefined), input.settings ?? {});
     for (const [key, value] of Object.entries(input.settings ?? {})) {
       if (value === null) delete settings[key];
       else settings[key] = String(value);
     }
+    if (before.builtin === 'github') this.githubAppOf(settings);
     const spaces = input.spaces ? this.serviceSpaces(input.spaces) : before.spaces;
     // Per-space settings: only for spaces it's in; a space it leaves takes its settings along.
     const spaceSettings: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(before.spaceSettings ?? {}).filter(([id]) => spaces.includes(id)));
@@ -855,6 +870,44 @@ export class Services {
     }
   }
 
+  /** The GitHub App a GitHub service's settings name (both, or neither); a half-given one is refused. */
+  githubAppOf(settings: Record<string, string>): GitHubAppAuth | undefined {
+    const id = settings.GITHUB_APP_ID;
+    const key = settings.GITHUB_APP_KEY;
+    if (!id && !key) return undefined;
+    if (!id || !key) throw new Error('a GitHub App takes both its ID (GITHUB_APP_ID) and its private key (GITHUB_APP_KEY)');
+    const kept = this.#apps.get(`${id}:${key}`);
+    if (kept) return kept;
+    const app = new GitHubAppAuth(id, key.replace(/\\n/g, '\n'), this.h.githubFetch(), this.h.clock);
+    this.#apps.set(`${id}:${key}`, app);
+    return app;
+  }
+
+  #apps = new Map<string, GitHubAppAuth>();
+
+  /** The GitHub service on this node that acts as its person's own GitHub App, if one does. */
+  githubApp(): { service: StoredService; app: GitHubAppAuth } | undefined {
+    for (const s of this.storedServices().filter((x) => x.builtin === 'github' && x.enabled)) {
+      const app = this.githubAppOf(s.settings);
+      if (app) return { service: s, app };
+    }
+    return undefined;
+  }
+
+  /** Whether a GitHub service with an App of its own runs somewhere else (an always-on node): it keeps access in step then. */
+  githubAppAway(): string | undefined {
+    if (this.h.isLinkedNode) return undefined;
+    const away = [...this.handedOver().values()].find((h) => h.builtin === 'github' && h.enabled !== false && (h.settingNames ?? []).includes('GITHUB_APP_KEY'));
+    return away ? this.nodeKey(away.node).name : undefined;
+  }
+
+  /** GitHub for a repository: as the person's own App when it's installed there, else with this node's sign-in. */
+  async githubFor(repo: string): Promise<GitHub> {
+    const own = this.githubApp();
+    const client = own ? await own.app.clientFor(repo) : undefined;
+    return client ?? this.h.github();
+  }
+
   /** Requests the node is answering now, so each is answered once. */
   #answering = new Set<string>();
 
@@ -889,7 +942,7 @@ export class Services {
       if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
       const repo = artifact.manifest.install?.github;
       if (!repo) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't released on GitHub`);
-      const client = this.h.github();
+      const client = await this.githubFor(repo);
       const found = (await client.release(repo, artifact.tag)).assets.find((x) => x.name === asset.file);
       if (!found) throw new Error(`the release ${artifact.tag} on GitHub has no file ${asset.file}`);
       const url = await client.downloadUrl(repo, found.id);

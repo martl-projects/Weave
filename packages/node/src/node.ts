@@ -3218,12 +3218,17 @@ export class WeaveNode implements Backend {
         if (!boardsOf('project', this.#entries(space), state.maintainers).some((b) => b.name === board)) throw new Error(`${space.name} has no board "${board}"`);
         body.board = board;
       }
-      const match = (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
-      if (!match) throw new Error(`the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
+      // Who manages it: the person's own GitHub App (the GitHub service), where it's installed; else the Weave app,
+      // through their sign-in. With the App on an always-on node, that node finds out (and says so) when it syncs.
+      const own = this.#services.githubApp();
+      const asApp = own ? await own.app.clientFor(repo) : undefined;
+      const away = !asApp && !this.#githubAuth() ? this.#services.githubAppAway() : undefined;
+      const match = asApp || away ? repo : own && !this.#githubAuth() ? undefined : (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
+      if (!match) throw new Error(own ? `your GitHub App isn't installed on ${repo.split('/')[0]}, and the Weave app can't manage ${repo} either: install one of them on that repository on GitHub` : `the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
       body.repo = match;
       if (input.access !== undefined && !REPO_ACCESS.includes(input.access)) throw new Error('access is read, none or write');
       // Members get read access; a person's repositories only have collaborators who can write: linked only, or written to by people picked.
-      const organization = await this.#ownedByOrganization(new GitHub(this.#githubAuth()!.token, this.githubSetup.fetch), match);
+      const organization = away ? true : await this.#ownedByOrganization(asApp ?? new GitHub(this.#githubAuth()!.token, this.githubSetup.fetch), match);
       const access = input.access ?? (organization ? 'read' : undefined);
       if (!access || (access === 'read' && !organization)) throw new Error(personalRepo(match));
       if (access === 'write' && organization) throw new Error(`${match} belongs to an organization: its members get read access (access: read); give write access on GitHub`);
@@ -3305,11 +3310,18 @@ export class WeaveNode implements Backend {
    * Bring the repos this person linked in step with their spaces: invite
    * members who gave their GitHub account, take access away from those Weave
    * added who left (or whose repo was unlinked). Each repo at most every few
-   * minutes unless something changed; without a GitHub sign-in it waits.
+   * minutes unless something changed. The GitHub service does it as the
+   * person's own GitHub App where that's installed (nobody signs in, and on an
+   * always-on node it goes on while their computers are off); elsewhere, or
+   * without one, the person's GitHub sign-in on this device does.
    */
   async #syncGithub(): Promise<number> {
     const auth = this.#githubAuth();
+    const own = this.#services.githubApp();
+    // The person's App runs on an always-on node: that node keeps access in step, not this device.
+    const away = own ? undefined : this.#services.githubAppAway();
     const me = this.identity.author;
+    const mine = new Set<string>(auth ? [auth.login.toLowerCase()] : []);
     // Every repo this person linked, with everyone it should include.
     const wanted = new Map<string, { repo: string; logins: Set<string>; write: boolean }>();
     for (const space of this.#spaces.values()) {
@@ -3320,6 +3332,7 @@ export class WeaveNode implements Backend {
       const links = reposOf(entries, (did) => mayManageSpace(state, did)).filter((r) => r.by === me);
       if (!links.length) continue;
       const accounts = accountsOf(entries);
+      if (accounts.has(me)) mine.add(accounts.get(me)!.toLowerCase());
       for (const link of links) {
         const key = link.repo.toLowerCase();
         const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>(), write: false };
@@ -3342,9 +3355,11 @@ export class WeaveNode implements Backend {
     for (const key of repos) {
       const repo = wanted.get(key)?.repo ?? added.get(key)!.repo;
       const want = wanted.get(key)?.logins ?? new Set<string>();
-      if (auth) want.delete(auth.login.toLowerCase());
+      for (const login of mine) want.delete(login);
       const gave = [...(added.get(key)?.people ?? [])].filter(([, on]) => on).map(([login]) => login);
-      const shape = JSON.stringify([[...want].sort(), gave.sort()]);
+      // What it acts with is part of it: new credentials (an App taken over, a sign-in) are tried at once.
+      const via = own ? `app:${own.service.name}` : away ? `away:${away}` : auth ? `person:${auth.login}` : 'none';
+      const shape = JSON.stringify([[...want].sort(), gave.sort(), via]);
       const last = this.#githubSynced.get(key);
       if (last && last.shape === shape && now - last.at < (last.problem ? 60_000 : 10 * 60_000)) continue;
       // Nobody to give access and nothing given (a repository linked only): nothing to ask GitHub.
@@ -3352,12 +3367,19 @@ export class WeaveNode implements Backend {
         this.#githubSynced.set(key, { at: now, shape });
         continue;
       }
-      if (!auth) {
-        this.#githubSynced.set(key, { at: now, shape, problem: 'not connected to GitHub on this device' });
+      if (away) {
+        this.#githubSynced.set(key, { at: now, shape, problem: `kept in step by the GitHub service on ${away}` });
         continue;
       }
       try {
-        const client = new GitHub(auth.token, this.githubSetup.fetch);
+        // As the person's App where it's installed: its records are signed by the GitHub service's key.
+        const asApp = own ? await own.app.clientFor(repo) : undefined;
+        const client = asApp ?? (auth ? new GitHub(auth.token, this.githubSetup.fetch) : undefined);
+        if (!client) {
+          this.#githubSynced.set(key, { at: now, shape, problem: own ? `your GitHub App isn't installed on ${repo.split('/')[0]}, and this device isn't connected to GitHub` : 'not connected to GitHub on this device' });
+          continue;
+        }
+        const signer = asApp ? this.#services.serviceKey(own!.service.name) : this.identity;
         const plan = planSync(want, await client.access(repo), gave);
         // People picked to write are invited to write; everyone else to read.
         const write = !!wanted.get(key)?.write;
@@ -3367,16 +3389,16 @@ export class WeaveNode implements Backend {
         if (personal) plan.invite = [];
         for (const login of plan.invite) {
           await client.invite(repo, login, write ? 'push' : 'pull');
-          this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
+          this.replica.write(signer, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
           changed++;
         }
         for (const { login, invitation } of plan.remove) {
           await client.remove(repo, login, invitation);
-          this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: false } }));
+          this.replica.write(signer, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: false } }));
           changed++;
         }
         const after = [...gave.filter((l) => !plan.remove.some((r) => r.login === l)), ...plan.invite].sort();
-        this.#githubSynced.set(key, { at: now, shape: personal ? shape : JSON.stringify([[...want].sort(), after]), ...(personal ? { problem: personalRepo(repo) } : {}) });
+        this.#githubSynced.set(key, { at: now, shape: personal ? shape : JSON.stringify([[...want].sort(), after, via]), ...(personal ? { problem: personalRepo(repo) } : {}) });
       } catch (error) {
         this.#githubSynced.set(key, { at: now, shape, problem: (error as Error).message });
       }
@@ -8818,6 +8840,9 @@ export class WeaveNode implements Backend {
       /** A GitHub client with this node's sign-in (none: public repositories only). */
       /** Fetch for container registries (tests put a stand-in there). */
       registryFetch: () => n.containerSetup.fetch,
+      /** Fetch for GitHub (tests put a stand-in there). */
+      githubFetch: () => n.githubSetup.fetch,
+      clock: () => n.clock(),
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
       publish: n.publish.bind(n),
