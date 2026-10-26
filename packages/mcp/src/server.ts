@@ -98,19 +98,19 @@ GitHub repositories that follow a space (repo access for members):
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
 3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back. Only repositories of a GitHub organization can be linked: a personal account's repositories can't give read-only access. If the repository belongs to your person, tell them to move it to an organization (free; the repository's Settings → Transfer on GitHub), install the GitHub App there, and link it again.
 
-A project's artifact, which rooms run with one click (prefer this to asking people to install Node.js or build anything):
+A project's artifact, which websites run with one click (prefer this to asking people to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
 2. Commit, push, tag (v0.1.0) and push the tag. Weave installs from a GitHub release with build files attached: a tag alone isn't a release, and GitHub's automatic source archives don't count. The workflow makes that release from the tag in a few minutes; without such a workflow, someone has to create the release and attach the builds on github.com.
-3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Anyone in a project with the room service then opens rooms that run it, in the project's Services ("Open a room…"), in any project of theirs. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
-Opening a room runs the release on that person's own computer and needs them to approve it; you can't do that for them.
-Settings like an API key: name them in weave.app.json under env ({name, label, secret, optional, hint}); never write a value into the manifest or the repository, and never ask for or handle one yourself: your person types it when they open a room, it stays on their computer, and Weave hands it to that room's process.
+3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Anyone in a project with the website service then opens websites that run it, in the project's Services ("Open a website…"), in any project of theirs. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
+Opening a website runs the release on that person's own computer and needs them to approve it; you can't do that for them.
+Settings like an API key: name them in weave.app.json under env ({name, label, secret, optional, hint}); never write a value into the manifest or the repository, and never ask for or handle one yourself: your person types it when they open a website, it stays on their computer, and Weave hands it to that website's process.
 Who is who in the app: players reach it from 127.0.0.1, so on its own it can't tell them apart (nor the host from a player who types /host). With @weave/sdk the app asks Weave: weave.who(req) gives the person behind a connection (did, name, host, member, maintainer), weave.access(did, {group}) whether they're in one of the project's groups or the host's tiers. Prefer it to name forms and secret host pages; weave_app_manifest has the details.
 
 A project's page is what people see first: a hero card with an icon, a banner, the title and a subtitle, and below it the page itself (Markdown, with images). weave_project shows it; weave_set_project_page changes it (needs weave.project.page, and weave.project.public while the page is public). Images go up with weave_upload_image first, which gives a wblob: reference for icon, banner, or ![](…) in the body. There are no store-style capsules or screenshot fields: put screenshots in the body. See weave_set_project_page for sizes.
 
 Releases: weave_app_releases lists the repository's releases and how many files each has. weave_app_release can wait for a release the workflow is still building. Your person can also pick a release themselves in the project's Services ("Release from GitHub…").
 
-Things only the person does: approving GitHub sign-ins and app installs on github.com, opening rooms that run code on their computer, recovery words and keys. Tell them clearly what to do and why.`;
+Things only the person does: approving GitHub sign-ins and app installs on github.com, opening websites that run code on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
 /**
  * The node as an agent sees it: company spaces it isn't approved in (stage 9)
@@ -857,7 +857,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "Publish a project's app",
       description:
-        "Maintainers: publish (or replace) a project's app manifest from its weave.app.json on this computer: the app's id and name, the ports a room may share, and start.command. Release files set by weave_app_release are kept. Needs the weave.app permission.",
+        "Maintainers: publish (or replace) a project's app manifest from its weave.app.json on this computer: the app's id and name, the ports a website may share, and start.command. Release files set by weave_app_release are kept. Needs the weave.app permission.",
       inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
     },
     run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
@@ -868,7 +868,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "A project app's manifest: rules, example, check",
       description:
-        "weave.app.json describes a project's app: its id and name, the ports a room shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+        "weave.app.json describes a project's app: its id and name, the ports a website shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
       inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
       annotations: { readOnlyHint: true },
     },
@@ -915,7 +915,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "Point a project's app at a GitHub release",
       description:
-        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); rooms then run it (anyone in a project with the room service opens one with it). Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
+        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); websites then run it (anyone in a project with the website service opens one with it). Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
       inputSchema: {
         project: z.string(),
         tag: z.string().describe('The release tag, like v1.4'),

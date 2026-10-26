@@ -88,7 +88,7 @@ A company's own projects and groups are its company spaces.
   status                     node status: peers, groups, projects, communities
   keystore [os|tpm|secure-enclave|yubikey|file]   where this computer keeps the key to your keys (hardware: tpm, secure-enclave, yubikey)
   node pair [name]           on an always-on node (server, NAS, cluster), in an empty home: a request for one of your computers
-  node add <request>         on your computer: answer it (the node keeps your spaces and hosts your rooms; weave revoke node:<name> ends it)
+  node add <request>         on your computer: answer it (the node keeps your spaces and serves your websites; weave revoke node:<name> ends it)
   node join <answer>         on the always-on node: finish with the answer, then run weave daemon
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
   export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
@@ -196,11 +196,11 @@ github — repositories that follow a group, tier or project (members who give t
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
-  service add room --builtin room   the room service Weave ships: a way to join in with a project's participants
-                             [--spaces <project,…>]: where it opens rooms (weave room open)
+  service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
+                             [--spaces <project,…>]: where it opens websites (weave website open)
   service add [<name>] --artifact <project>[@tag]   install an applet: a project's release, as a service with the contract
                              its manifest declares (asks you to approve it)  [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
-  service artifacts <project>  a project's releases: apps (a room runs them) and applets (installed as services)
+  service artifacts <project>  a project's releases: apps (a website runs them) and applets (installed as services)
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
@@ -293,7 +293,7 @@ treasuries: a project's own wallet (a Safe its maintainers own) and how its inco
                              [--shares makers=7000,treasury=1500,community=1400,foundation=100: your own, in basis points]
                              a changed split counts after 7 days; the Weave Foundation's part is a suggestion, 0 is fine
 
-artifacts and rooms: a project's releases, and rooms that run them (needs a running daemon):
+artifacts and websites: a project's releases, and websites that run them (needs a running daemon):
   app publish -p <project>   maintainers: publish the project's artifact description from weave.app.json  [--file <path>]
   app show -p <project>      what it describes: its web page's port, how it starts, its settings
   app check [file]           check a weave.app.json (default: here), every problem at once
@@ -301,16 +301,16 @@ artifacts and rooms: a project's releases, and rooms that run them (needs a runn
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
-  rooms [-p <project>]       open rooms
-  room open <name> -p <p>    a room of your room service, answered by: --artifact <project>[@tag] (a release, fetched and
-                             checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
-                             [--setting KEY=VALUE] [--service <room service>]; running code asks you to approve it
+  websites [-p <project>]    open websites (were: rooms)
+  website open <name> -p <p> a website of your website service, answered by: --artifact <project>[@tag] (a release, fetched
+                             and checked), --run "<command>" --folder <dir> --port <n>, or just --port <n> (already running)
+                             [--setting KEY=VALUE] [--service <website service>]; running code asks you to approve it
                              [--invite a,b: only these people] [--show <show>: only its ticket holders, while it's on] [--tiers <tier>,…: members of these tiers]
-  room env <room>            WEAVE_API and the room's token, for what answers it when it runs by itself (@weave/sdk reads them)
-  room join <room>           join: prints the address to open
-  room leave|end <room>      leave a room, or end the one you host
-  room chat <room>           the room's chat (never stored)
-  room say <room> <text...>  say something in it
+  website env <website>      WEAVE_API and the website's token, for what answers it when it runs by itself (@weave/sdk reads them)
+  website visit <website>    visit: prints the address to open
+  website leave|close <website>   leave a website, or close one of yours
+  website chat <website>     the website's chat (never stored)
+  website say <website> <text...>  say something in it
 
 direct chats with friends (people you follow who follow you back):
   chats                      your chats, most recent first
@@ -525,7 +525,7 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; offers a room' : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}; contract ${c.version}`;
 
 const badgeSeriesLine = (s: BadgeSeriesInfo) => {
   const name = `${s.symbol ? `${s.symbol} ` : ''}${s.name}`;
@@ -686,7 +686,7 @@ async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
   }
 }
 
-/** How a room of the room service is doing. */
+/** How a website of the website service is doing. */
 const hostedLine = (r: HostedWebsiteInfo): string => {
   const h = r.handler;
   const what = h.kind === 'artifact' ? `${h.artifact.name} ${h.artifact.tag}${h.artifact.latest ? ` (${h.artifact.latest} is out)` : ''}` : h.kind === 'command' ? h.command.join(' ') : `port ${r.port}`;
@@ -731,9 +731,9 @@ function readBundle(): Bundle | undefined {
   return file ? (JSON.parse(readFileSync(file, 'utf8')) as Bundle) : undefined;
 }
 
-const roomLine = (r: WebsiteInfo) => {
-  const who = r.mine ? 'you host it' : `hosted by ${r.host.name ?? r.host.did}`;
-  const state = r.joined ? (r.connected ? `${r.peers.length} in it` : 'connecting…') : r.mayJoin ? 'join with: weave room join ' + r.id.slice(0, 8) : 'not invited';
+const websiteLine = (r: WebsiteInfo) => {
+  const who = r.mine ? 'yours, served here' : `${r.host.name ?? r.host.did}'s`;
+  const state = r.joined ? (r.connected ? `${r.peers.length} on it` : 'connecting…') : r.mayJoin ? 'visit with: weave website visit ' + r.id.slice(0, 8) : 'not invited';
   return `${r.id.slice(0, 8)}  ${r.name}  · p/${r.project.name} · ${who} · ${state}${r.url ? `\n          ${r.service?.label ?? 'open'}: ${r.url}` : ''}`;
 };
 
@@ -1030,7 +1030,7 @@ async function main(): Promise<void> {
       if (sub === 'add') {
         if (!value) throw new Error('usage: weave node add <request from the node>');
         const linked = await (await backend()).linkNode({ request: value });
-        return out(linked, () => `Linked the always-on node "${linked.name}". On the node, run:\n  weave node join ${linked.answer}\nIt can keep your spaces and host your rooms, nothing else. Revoke it any time: weave revoke node:${linked.name}`);
+        return out(linked, () => `Linked the always-on node "${linked.name}". On the node, run:\n  weave node join ${linked.answer}\nIt can keep your spaces and serve your websites, nothing else. Revoke it any time: weave revoke node:${linked.name}`);
       }
       if (sub === 'join') {
         if (!value) throw new Error('usage: weave node join <answer from your computer>');
@@ -1411,7 +1411,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.website ? '  (an app: a room runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.website ? '  (an app: a website runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
       if (sub === 'add' && values.artifact) {
         const at = values.artifact.lastIndexOf('@');
@@ -1421,9 +1421,9 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with exactly its contract's rights.${s.node ? ` It went to ${s.node.name}, sealed: the node fetches the release and starts it.` : ' It starts once its release is fetched and checked.'}`);
       }
       if (sub === 'add' && values.builtin) {
-        if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
+        if (values.builtin !== 'website' && values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin website');
         const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin: 'website', ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
-        return out(s, () => `${line(s)}\n\nIt signs rooms as you · ${s.name}. Open one: weave room open <name> -p <project> --artifact <project>`);
+        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Open one: weave website open <name> -p <project> --artifact <project>`);
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
@@ -2298,13 +2298,17 @@ ${postLine(p)}`);
       throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
     }
 
+    // "rooms" and "room": what websites were called before.
+    case 'websites':
     case 'rooms': {
-      const rooms = await (await backend()).websites(values.project);
-      return out(rooms, () => rooms.map(roomLine).join('\n') || '(no open rooms)');
+      const sites = await (await backend()).websites(values.project);
+      return out(sites, () => sites.map(websiteLine).join('\n') || '(no open websites)');
     }
 
+    case 'website':
     case 'room': {
-      const [sub, ref, ...words] = args;
+      const [given, ref, ...words] = args;
+      const sub = given === 'join' ? 'visit' : given === 'end' ? 'close' : given;
       const b = await backend({ needsDaemon: sub !== 'chat' });
       if (sub === 'open' && ref) {
         const at = values.artifact ? values.artifact.lastIndexOf('@') : -1;
@@ -2330,35 +2334,35 @@ ${postLine(p)}`);
             approve,
           }),
         );
-        return out(r, () => `${roomLine(r)}\n  it opens for everyone once its handler answers (weave service list shows how it's doing)`);
+        return out(r, () => `${websiteLine(r)}\n  it opens for everyone once what answers it runs (weave service list shows how it's doing)`);
       }
       if (sub === 'env' && ref) {
         const env = await b.websiteEnv(ref);
         const line = ([k, v]: [string, string | undefined]) => (process.platform === 'win32' ? `$env:${k}='${v}'` : `export ${k}='${v}'`);
-        return out(env, () => [...Object.entries(env).map(line), '# set these where you start what answers the room; they last until Weave restarts'].join('\n'));
+        return out(env, () => [...Object.entries(env).map(line), '# set these where you start what answers the website; they last until Weave restarts'].join('\n'));
       }
-      if (sub === 'join' && ref) {
+      if (sub === 'visit' && ref) {
         await b.visitWebsite(ref);
         let r: WebsiteInfo | undefined;
         for (let i = 0; i < 100 && !r?.url; i++) {
           r = (await b.websites()).find((x) => x.id.startsWith(ref) || x.name.toLowerCase() === ref.toLowerCase());
           if (!r?.url) await new Promise((resolve) => setTimeout(resolve, 300));
         }
-        return out(r, () => (r?.url ? `joined ${r.name}: open ${r.url}\n(the tunnel stays open until you leave: weave room leave "${r.name}")` : 'joined, but the host is not reachable yet; try "weave rooms" in a moment'));
+        return out(r, () => (r?.url ? `visiting ${r.name}: open ${r.url}\n(the tunnel stays open until you leave: weave website leave "${r.name}")` : 'visiting, but it is not reachable yet; try "weave websites" in a moment'));
       }
-      if ((sub === 'leave' || sub === 'end') && ref) {
-        await (sub === 'end' ? b.closeWebsite(ref) : b.leaveWebsite(ref));
-        return out({ [sub]: ref }, () => (sub === 'end' ? 'room ended' : 'left the room'));
+      if ((sub === 'leave' || sub === 'close') && ref) {
+        await (sub === 'close' ? b.closeWebsite(ref) : b.leaveWebsite(ref));
+        return out({ [sub]: ref }, () => (sub === 'close' ? 'website closed' : 'left the website'));
       }
       if (sub === 'chat' && ref) {
         const messages = await b.websiteChat(ref);
-        return out(messages, () => messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${(m.by.name ?? m.by.did).padEnd(16)}  ${m.text}`).join('\n') || '(quiet; room chats are never stored)');
+        return out(messages, () => messages.map((m) => `${new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${(m.by.name ?? m.by.did).padEnd(16)}  ${m.text}`).join('\n') || '(quiet; website chats are never stored)');
       }
       if (sub === 'say' && ref && words.length) {
         await b.sayOnWebsite({ room: ref, text: words.join(' ') });
         return out({ said: words.join(' ') }, () => 'said');
       }
-      throw new Error('usage: weave room open|join|leave|end|chat|say — see "weave --help"');
+      throw new Error('usage: weave website open|env|visit|leave|close|chat|say — see "weave --help"');
     }
 
     case 'chats': {

@@ -200,11 +200,11 @@ function ShowCard({ show, rooms, members, onHost }: { show: ShowInfo; rooms: Web
           <p className="small">
             {room ? (
               <>
-                <Icon name="zap" /> In the room <b>{room.name}</b>
+                <Icon name="zap" /> On the website <b>{room.name}</b>
                 {show.mine ? '.' : show.ticket ? (show.open ? ': join it below.' : ': it lets you in from an hour before the start.') : ': ticket holders get in from an hour before the start.'}
               </>
             ) : show.mine ? (
-              <>No room yet. Open one for it when you're ready: its ticket holders get in from an hour before the start.</>
+              <>No website yet. Open one for it when you're ready: its ticket holders get in from an hour before the start.</>
             ) : (
               <>Its room opens when {person(show.host)} starts it; with a ticket you get in from an hour before the start.</>
             )}

@@ -217,12 +217,12 @@ export class Services {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = input.builtin === 'website' ? ('website' as const) : undefined;
-    if (builtin && command?.length) throw new Error('the room service runs in Weave: its rooms say what they run');
+    if (builtin && command?.length) throw new Error('the website service runs in Weave: its websites say what they run');
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
-    if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the room service: one of them');
+    if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
     const manifest = found?.artifact.manifest;
-    if (manifest && !manifest.service) throw new Error(`${manifest.name} is an app, not an applet: it runs in a room (open one with your room service)`);
+    if (manifest && !manifest.service) throw new Error(`${manifest.name} is an app, not an applet: a website runs it (open one with your website service)`);
     if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${found!.artifact.tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(manifest!.service!)}`);
@@ -237,7 +237,7 @@ export class Services {
     const contract = parseContract(builtin ? { reads: 'addressed', writes: [], website: true, version: '1.0' } : (manifest?.service ?? input.contract));
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Rooms: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? 'Websites: a way to join in with the project’s participants' : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -482,7 +482,7 @@ export class Services {
       return this.handoverInfo(this.handedOver().get(input.name)!);
     }
     const before = this.storedService(input.name);
-    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its rooms say what they run`);
+    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its websites say what they run`);
     if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
     if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
     const next = input.artifact && before.artifact ? this.nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;

@@ -9,7 +9,7 @@ import { Page } from './views.tsx';
 import { contractText, ServiceCard } from './services.tsx';
 
 /*
- * A project's services, and the rooms the room service offers: someone in the project opens a room, answered by a
+ * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
  * handler on their computer (a project's release, a program, or something already running); players use it
  * through an encrypted tunnel. The ▶ button opens it in its own window; nobody sees an address. Who is in a room
  * and what they say there is never stored.
@@ -22,7 +22,7 @@ const play = (room: WebsiteInfo) => {
   void bridge.openApp(room.url, room.name);
 };
 
-function RoomChat({ room }: { room: WebsiteInfo }) {
+function WebsiteChat({ room }: { room: WebsiteInfo }) {
   const { data: messages } = useApi(() => api<WebsiteChatMessage[]>('websiteChat', room.id), [room.id]);
   const [text, setText] = useState('');
   return (
@@ -33,7 +33,7 @@ function RoomChat({ room }: { room: WebsiteInfo }) {
             <time>{clock(m.time)}</time> <b>{m.mine ? 'You' : (m.by.name ?? shortDid(m.by.did))}</b> {m.text}
           </div>
         ))}
-        {messages?.length === 0 && <div className="small muted">Room chat: not stored, gone when the room ends.</div>}
+        {messages?.length === 0 && <div className="small muted">Chat next to the website: not stored, gone when it closes.</div>}
       </div>
       <form
         className="room-say"
@@ -46,18 +46,18 @@ function RoomChat({ room }: { room: WebsiteInfo }) {
           bump();
         }}
       >
-        <input value={text} placeholder="Say something…" onChange={(e) => setText(e.target.value)} disabled={!room.connected} aria-label="Room chat" />
+        <input value={text} placeholder="Say something…" onChange={(e) => setText(e.target.value)} disabled={!room.connected} aria-label="Website chat" />
         <button disabled={!room.connected}>Send</button>
       </form>
     </div>
   );
 }
 
-function RoomCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
+function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
   const label = room.service?.label ?? (room.mine ? 'Open' : 'Play');
-  // "Race, offered by martl · room".
+  // "Race, offered by martl · website".
   const offered = `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy?.name ?? 'a service'}`;
   let main;
   if (room.mine)
@@ -73,10 +73,10 @@ function RoomCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
   else if (!room.joined)
     main = room.mayJoin ? (
       <AsyncButton className="default" onClick={() => attempt(() => api('visitWebsite', room.id).then(bump))}>
-        Join
+        Visit
       </AsyncButton>
     ) : (
-      <span className="small muted">{who.length ? `For ${who.join(' or ')}${show && !show.open ? ', while the show is on' : ''}.` : "You're not invited to this room."}</span>
+      <span className="small muted">{who.length ? `For ${who.join(' or ')}${show && !show.open ? ', while the show is on' : ''}.` : "You're not invited to this website."}</span>
     );
   else
     main = room.url ? (
@@ -112,13 +112,13 @@ function RoomCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
           {main}
           <span className="grow" />
           {room.mine ? (
-            <AsyncButton onClick={async () => (await ask(`End "${room.name}"? Everyone in it is disconnected, and what answers it stops.`, 'End room')) && attempt(() => api('closeWebsite', room.id).then(bump), 'Room ended')}>End room</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(`Close "${room.name}"? Everyone on it is disconnected, and what answers it stops.`, 'Close website')) && attempt(() => api('closeWebsite', room.id).then(bump), 'Website closed')}>Close website</AsyncButton>
           ) : (
             room.joined && <AsyncButton onClick={() => attempt(() => api('leaveWebsite', room.id).then(bump))}>Leave</AsyncButton>
           )}
         </div>
-        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Joining connects you directly to {offered}, on the device it runs on.</p>}
-        {room.joined && <RoomChat room={room} />}
+        {!room.mine && !room.joined && room.mayJoin && <p className="small muted">Visiting connects you directly to {offered}, on the device it runs on.</p>}
+        {room.joined && <WebsiteChat room={room} />}
       </div>
     </article>
   );
@@ -230,7 +230,7 @@ function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app
       <PublishApp project={project} />
     ) : (
       <p className="small muted">
-        p/{project.name} has no artifact of its own; rooms here can run other projects' artifacts.{' '}
+        p/{project.name} has no artifact of its own; websites here can run other projects' artifacts.{' '}
         <a
           href="#"
           onClick={(e) => {
@@ -294,7 +294,7 @@ function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['set
  * of this project or another one you're in, fetched and checked), a command in a folder, or something already
  * running. Running code is shown first and approved here.
  */
-function OpenRoomDialog({ project, service, away, members, meDid, groups, shows, onClose }: { project: SpaceInfo; service: string; away?: string; members: MemberInfo[]; meDid: string; groups: ProjectInfo['groups']; shows: ShowInfo[]; onClose(): void }) {
+function OpenWebsiteDialog({ project, service, away, members, meDid, groups, shows, onClose }: { project: SpaceInfo; service: string; away?: string; members: MemberInfo[]; meDid: string; groups: ProjectInfo['groups']; shows: ShowInfo[]; onClose(): void }) {
   const artifacts = useArtifacts(project);
   // Who may join: every participant, picked people, a show's ticket holders (a show of yours, or a new one), tier members.
   const [who, setWho] = useState<'everyone' | 'people' | 'tickets' | 'tiers'>('everyone');
@@ -324,7 +324,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
     !(who === 'tiers' && !tiers.length);
   const open = async () => {
     setBusy(true);
-    // A new show is set up first; if the room then fails, it's picked, not set up twice.
+    // A new show is set up first; if the website then fails, it's picked, not set up twice.
     const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
     if (made === undefined) return setBusy(false);
     if (made !== show) {
@@ -349,7 +349,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
     </div>
   );
   return (
-    <Modal title={`Open a room · p/${project.name}`} onClose={onClose} wide>
+    <Modal title={`Open a website · p/${project.name}`} onClose={onClose} wide>
       <div className="form">
         <div className="field-row-stacked">
           <label htmlFor="room-name">Name</label>
@@ -401,7 +401,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
           {kind === 'address' && (
             <div className="indent">
               <input inputMode="numeric" placeholder="Its port, like 3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} aria-label="Port" />
-              <p className="small muted">Weave starts nothing: the room's participants reach that port, and nothing else on {away ?? 'your computer'}.</p>
+              <p className="small muted">Weave starts nothing: the website's visitors reach that port, and nothing else on {away ?? 'your computer'}.</p>
             </div>
           )}
         </fieldset>
@@ -481,7 +481,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
         <div className="buttons">
           <button onClick={onClose}>Cancel</button>
           <button className="default" disabled={!ready || busy} title={missing.length ? `Fill in ${missing.map((m) => m.label).join(', ')} first` : undefined} onClick={() => void open()}>
-            {busy ? 'Opening…' : kind === 'address' ? 'Open room' : 'Run it and open room'}
+            {busy ? 'Opening…' : kind === 'address' ? 'Open website' : 'Run it and open website'}
           </button>
         </div>
       </div>
@@ -489,7 +489,7 @@ function OpenRoomDialog({ project, service, away, members, meDid, groups, shows,
   );
 }
 
-/** How a room of your room service is doing, where it isn't answering yet. */
+/** How a website of your website service is doing, where it isn't answering yet. */
 function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
   useEffect(() => {
     if (!hosted?.progress) return;
@@ -513,7 +513,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 /** What a service is there for, in a project. */
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
-/** One service in the project: what it's for, and what it offers here (a room service: its rooms). */
+/** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -528,19 +528,19 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <p className="small">{purpose(service)}</p>
       {its.map((room) => (
         <div key={room.id}>
-          <RoomCard room={room} shows={shows} />
+          <WebsiteCard room={room} shows={shows} />
           <HostedStatus hosted={mine?.websites?.find((r) => r.id === room.id)} />
         </div>
       ))}
-      {service.builtin === 'website' && !its.length && <p className="small muted">No open rooms{own ? '' : ` from ${by}`}.</p>}
+      {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
       <div className="buttons">
-        {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a room…</button>}
-        {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open rooms there.</span>}
+        {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
+        {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
         {service.builtin !== 'website' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>
-              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its rooms here end.' : ''}`, 'Take it out')) &&
+              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
               attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`)
             }
           >
@@ -548,7 +548,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
           </AsyncButton>
         )}
       </div>
-      {opening && mine && <OpenRoomDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
+      {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
     </fieldset>
   );
@@ -565,11 +565,11 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
         {!rooms.length && (
           <div className="install-box">
             <span className="grow">
-              <b>Rooms</b>
+              <b>Websites</b>
               <br />
-              <span className="small">A way to join in with the project's participants: you open rooms here, each answered by a project's release or a program of yours.</span>
+              <span className="small">A way to join in with the project's participants: you open websites here, each answered by a project's release or a program of yours.</span>
             </span>
-            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Rooms are on in p/${project.name}`)}>
+            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Websites are on in p/${project.name}`)}>
               Add
             </AsyncButton>
           </div>
@@ -597,7 +597,7 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
   );
 }
 
-/** A project's services: each with what it's for and what it offers here. Rooms are what the room service offers. */
+/** A project's services: each with what it's for and what it offers here. Websites are what the website service serves. */
 export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
   const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
@@ -619,7 +619,7 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
         </button>
       }
     >
-      {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add rooms, and everyone here can join in.</p>}
+      {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add websites, and everyone here can join in.</p>}
       {list.map((s) => (
         <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} />
       ))}

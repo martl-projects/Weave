@@ -119,7 +119,7 @@ describe('an always-on node', () => {
     await box.goOnline();
     await lena.goOnline();
     await martl.addService({ builtin: 'website', node: 'party-box', spaces: ['Party'] });
-    await expect(martl.openWebsite({ project: 'Party', name: 'Saturday', command: ['node', 'party.js'], folder: '.', port: appPort, approve: true })).rejects.toThrow(/runs on party-box: a room there runs a project's release, or something already running there/);
+    await expect(martl.openWebsite({ project: 'Party', name: 'Saturday', command: ['node', 'party.js'], folder: '.', port: appPort, approve: true })).rejects.toThrow(/runs on party-box: a website there runs a project's release, or something already running there/);
     const hosted = await martl.openWebsite({ project: 'Party', name: 'Saturday', port: appPort });
     expect(hosted).toMatchObject({ open: false, offeredBy: { name: 'website' } });
     expect((await martl.services()).find((s) => s.name === 'website')).toMatchObject({ node: { name: 'party-box' }, websites: [{ name: 'Saturday', port: appPort, handler: { kind: 'address' } }] });

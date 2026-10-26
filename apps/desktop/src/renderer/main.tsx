@@ -10,7 +10,7 @@ import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
-import { ProjectServicesView } from './rooms.tsx';
+import { ProjectServicesView } from './websites.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';

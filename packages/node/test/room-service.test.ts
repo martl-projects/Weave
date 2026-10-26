@@ -132,7 +132,7 @@ describe('the room service', { timeout: 60_000 }, () => {
       expect(first).toMatchObject({ version: 'v1.0', status: 200, room: race.id, key: 'k-123', project: { name: 'Party' } });
 
       // The release listens on its port: a second room with it waits until the first ends.
-      await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', artifact: { project: 'Horses' } })).rejects.toThrow(new RegExp(`port ${racePort} already answers the room "Race"`));
+      await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', artifact: { project: 'Horses' } })).rejects.toThrow(new RegExp(`port ${racePort} already answers the website "Race"`));
 
       // Something already running: Weave starts nothing and asks for no approval.
       const boardPort = await freePort();

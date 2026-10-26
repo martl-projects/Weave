@@ -43,7 +43,7 @@ export class Website {
   async websiteEnv(ref: string): Promise<AppEnv> {
     const { room } = this.roomById(ref);
     const hosted = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
-    if (!hosted) throw new Error(`"${room.name}" isn't a room your room service runs here`);
+    if (!hosted) throw new Error(`"${room.name}" isn't a website your website service runs here`);
     const api = await this.startAppApi();
     return { WEAVE_API: `http://127.0.0.1:${api.port}`, WEAVE_TOKEN: hosted.token, WEAVE_PROJECT: hosted.project, WEAVE_WEBSITE: hosted.id };
   }
@@ -211,7 +211,7 @@ export class Website {
 
   async closeWebsite(ref: string): Promise<void> {
     const { room, project } = this.roomById(ref);
-    if (room.host !== this.h.identity.author || !room.agent) throw new Error('only the person whose room service offers a room ends it');
+    if (room.host !== this.h.identity.author || !room.agent) throw new Error('only the person whose website service offers a website closes it');
     // A room of the room service: its handler stops, the room closes. On an always-on node: handed over as a change.
     const service = this.svc.localServiceByKey(room.agent);
     if (service?.hosted?.[room.id]) return this.closeHostedRooms(service.name, (r) => r.id !== room.id);
@@ -220,14 +220,14 @@ export class Website {
       const { [room.id]: _gone, ...hosted } = away.hosted;
       return this.svc.changeNodeService(away, { hosted });
     }
-    throw new Error(`${this.h.agentName(room.agent, room.host) ?? 'a service'} offers "${room.name}": end it on the device it runs on`);
+    throw new Error(`${this.h.agentName(room.agent, room.host) ?? 'a service'} offers "${room.name}": close it on the device it runs on`);
   }
 
   async visitWebsite(ref: string): Promise<WebsiteInfo> {
     const { room, project } = this.roomById(ref);
-    if (!room.open) throw new Error('this room has ended');
+    if (!room.open) throw new Error('this website is closed');
     if (this.hostedHere(room)) return this.roomInfo(room, project);
-    if (!this.mayJoin(room, this.h.identity.author)) throw new Error(room.show || room.groups ? "this room is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this room");
+    if (!this.mayJoin(room, this.h.identity.author)) throw new Error(room.show || room.groups ? "this website is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this website");
     await this.h.live.join(room, room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'room');
     return this.roomInfo(room, project);
   }
@@ -270,9 +270,9 @@ export class Website {
 
   roomById(ref: string): { room: Room; project: StoredSpace } {
     const matches = this.allRooms().filter(({ room }) => room.id === ref || room.id.startsWith(ref) || room.name.toLowerCase() === ref.toLowerCase());
-    if (matches.length === 0) throw new Error(`no room "${ref}"`);
+    if (matches.length === 0) throw new Error(`no website "${ref}"`);
     const open = matches.filter((m) => m.room.open);
-    if (open.length > 1) throw new Error(`several rooms match "${ref}": use its id`);
+    if (open.length > 1) throw new Error(`several websites match "${ref}": use its id`);
     return open[0] ?? matches[0];
   }
 
@@ -355,10 +355,10 @@ export class Website {
     const project = this.h.project(input.project);
     if (!service.spaces.includes(project.id)) throw new Error(`${service.name} isn't in ${project.name}: add it there first`);
     const name = input.name?.trim().slice(0, 60);
-    if (!name) throw new Error('a room has a name');
+    if (!name) throw new Error('a website has a name');
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
-    if (input.artifact && command?.length) throw new Error('a room runs an artifact or a command, not both');
-    if (service.away && command?.length) throw new Error(`${service.name} runs on ${this.svc.nodeKey(service.away.node).name}: a room there runs a project's release, or something already running there, not a program of this computer`);
+    if (input.artifact && command?.length) throw new Error('a website runs an artifact or a command, not both');
+    if (service.away && command?.length) throw new Error(`${service.name} runs on ${this.svc.nodeKey(service.away.node).name}: a website there runs a project's release, or something already running there, not a program of this computer`);
     let handler: RoomHandler;
     let port: number;
     let approved: string | undefined;
@@ -366,7 +366,7 @@ export class Website {
       const found = this.svc.artifact(input.artifact.project, input.artifact.tag);
       const { id, tag, manifest } = found.artifact;
       const web = this.svc.artifactWeb(manifest);
-      if (!web) throw new Error(`${manifest.name} has no web page (an http service in its weave.app.json): nothing for a room to reach`);
+      if (!web) throw new Error(`${manifest.name} has no web page (an http service in its weave.app.json): nothing for a website to reach`);
       port = web.port;
       // On an always-on node, its own platform decides; here, this computer's.
       if (!service.away && !this.h.runtime.command('weave', manifest)) throw new Error(`${manifest.name} ${tag} has no release file for this computer (${platformKey()})${manifest.install?.image ? ", and Docker isn't running here" : ''}`);
@@ -393,7 +393,7 @@ export class Website {
     // Who may join: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
     const invite = input.invite?.length ? input.invite.map((who) => this.h.resolve(who)) : ('participants' as const);
     const show = input.show ? this.h.showRef(input.show) : undefined;
-    if (show && show.host !== this.h.identity.author) throw new Error(`only ${this.h.nameOf(show.host) ?? 'its host'} opens rooms for ${show.name}: they let ticket holders in`);
+    if (show && show.host !== this.h.identity.author) throw new Error(`only ${this.h.nameOf(show.host) ?? 'its host'} opens websites for ${show.name}: they let ticket holders in`);
     const groups = (input.groups ?? []).map((ref) => {
       const group = this.h.space(ref);
       if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
@@ -403,7 +403,7 @@ export class Website {
     // Ports answer on one device: rooms there can't share one.
     const busy = service.away ? Object.values(service.hosted) : this.svc.storedServices().flatMap((s) => Object.values(s.hosted ?? {}));
     const taken = busy.find((r) => r.port === port);
-    if (taken) throw new Error(`port ${port} already answers the room "${taken.name}": end it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
+    if (taken) throw new Error(`port ${port} already answers the website "${taken.name}": close it first${'artifact' in handler ? ` (${handler.artifact.manifest.name} always listens on ${port})` : ', or use another port'}`);
     const access = { ...(invite !== 'participants' ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
     // The pages each side opens: the release's own (its manifest's open), or as given.
     const web = 'artifact' in handler ? this.svc.artifactWeb(handler.artifact.manifest) : undefined;
@@ -481,7 +481,7 @@ export class Website {
     const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'website').map((h) => ({ name: h.service, spaces: h.spaces, approved: h.approved ?? [], hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
     const all = [...here, ...away];
     const found = name ? all.find((s) => s.name === name) : all.length === 1 ? all[0] : undefined;
-    if (!found) throw new Error(name ? `"${name}" isn't one of your room services` : all.length ? `you have several room services: say which (${all.map((s) => s.name).join(', ')})` : 'add the room service first (weave service add room --builtin room)');
+    if (!found) throw new Error(name ? `"${name}" isn't one of your website services` : all.length ? `you have several website services: say which (${all.map((s) => s.name).join(', ')})` : 'add the website service first (weave service add website --builtin website)');
     if (!found.enabled) throw new Error(`${found.name} is stopped: start it first`);
     return found;
   }
