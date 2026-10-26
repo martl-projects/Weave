@@ -109,7 +109,7 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     const [artifact] = await lena.artifacts('Gameshow');
     expect(artifact).toMatchObject({ tag: 'v1.4', runs: 'container' });
     const run = artifact.command!.slice(2);
-    expect(run.slice(0, 4)).toEqual(['run', '--rm', '--name', expect.stringMatching(/^weave-room-/)]);
+    expect(run.slice(0, 4)).toEqual(['run', '--rm', '--name', 'weave-gameshow']);
     expect(run).toEqual(expect.arrayContaining(['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '-e', 'SECRET_KEY', '-e', 'WEAVE_API']));
     expect(run.at(-1)).toBe(`ghcr.io/martl/gameshow@${DIGEST}`);
     if (process.platform !== 'linux') expect(run).toEqual(expect.arrayContaining(['-p', `127.0.0.1:${port}:${port}`]));

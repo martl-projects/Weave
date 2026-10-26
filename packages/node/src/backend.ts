@@ -240,12 +240,29 @@ export interface ServiceInfo {
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: 'room';
   rooms?: HostedRoomInfo[];
+  /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
+  artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
   settings: string[];
   enabled: boolean;
   running: boolean;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
+}
+
+/** The release an applet runs, and how fetching it went. */
+export interface ServiceArtifactInfo {
+  project: { id: string; name?: string };
+  tag: string;
+  app: string;
+  name: string;
+  latest?: string;
+  /** Its files are here, checked against the release's fingerprints (or it runs as a container). */
+  installed: boolean;
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+  /** The settings it asks for. */
+  settings: AppSetting[];
 }
 
 /** A room the room service runs here: what answers its clients (its handler), and how that's doing. */
@@ -278,6 +295,8 @@ export interface ArtifactInfo {
   time: string;
   /** It has a web page: a room can run it. */
   room: boolean;
+  /** An applet: installed, it becomes a service with exactly this contract. */
+  applet?: ServiceContract;
   settings: AppSetting[];
   /** How it would run on this node: its release file for this platform, or its container (Docker). */
   runs?: 'release' | 'container';
@@ -1550,8 +1569,11 @@ export interface Backend {
   githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
-  /** A service: your code under a key of its own, or one Weave ships (`builtin: 'room'`). */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo>;
+  /**
+   * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
+   * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'room'`).
+   */
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room'; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
@@ -1562,7 +1584,8 @@ export interface Backend {
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
+  /** Change a service; `artifact: {tag}` moves an applet to another release (the latest without a tag), which needs `approve`. */
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */

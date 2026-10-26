@@ -98,6 +98,13 @@ export function parseContract(value: unknown): ServiceContract | undefined {
 export const servicePermissions = (contract: ServiceContract): string[] =>
   [...new Set([KIND_SERVICE_PROFILE, KIND_SERVICE_RESULT, ...contract.writes, ...(contract.room ? ['weave.room', 'weave.room.*'] : [])])];
 
+/** A contract in plain words, as people approve it: "reads only what is asked of it; writes only its answers (contract 1.0)". */
+export function contractWords(c: ServiceContract): string {
+  const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
+  const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
+  return `${reads}; ${writes}${c.room ? '; offers rooms' : ''} (contract ${c.version})`;
+}
+
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
 export function serviceReads(contract: ServiceContract, kind: string): boolean {
   if (contract.reads === 'space') return true;

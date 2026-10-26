@@ -83,6 +83,7 @@ export type {
   ServiceGate,
   ServiceInfo,
   HostedRoomInfo,
+  ServiceArtifactInfo,
   ArtifactInfo,
   ServiceProfileInfo,
   ServiceRequestInfo,

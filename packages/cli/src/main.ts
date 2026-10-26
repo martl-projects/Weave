@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -198,10 +198,13 @@ github — repositories that follow a group, tier or project (members who give t
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
   service add room --builtin room   the room service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it opens rooms (weave room open)
-  service artifacts <project>  a project's releases: what a room can run
+  service add [<name>] --artifact <project>[@tag]   install an applet: a project's release, as a service with the contract
+                             its manifest declares (asks you to approve it)  [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
+  service artifacts <project>  a project's releases: apps (a room runs them) and applets (installed as services)
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
+                             [--update latest|<tag>]: an applet takes another release (asks you to approve it)
   service start|stop <name>  run it or not
   service remove <name>      stop it for good (its key is revoked)
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
@@ -403,6 +406,7 @@ const { values, positionals } = parseArgs({
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
     artifact: { type: 'string' },
+    update: { type: 'string' },
     builtin: { type: 'string' },
     folder: { type: 'string' },
     port: { type: 'string' },
@@ -1391,6 +1395,8 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
           ...(s.rooms ?? []).map((r) => `  room "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
+          ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
+          ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
           ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
           ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
           ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
@@ -1405,7 +1411,14 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.room ? '  (has a web page: offered as a room)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.room ? '  (an app: a room runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+      }
+      if (sub === 'add' && values.artifact) {
+        const at = values.artifact.lastIndexOf('@');
+        const artifact = at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact };
+        const settings = Object.fromEntries(Object.entries(settingsOf()).filter(([, v]) => v !== null)) as Record<string, string>;
+        const s = await approving((approve) => b.addService({ ...(ref ? { name: ref } : {}), ...(values.text ? { description: values.text } : {}), artifact, approve, spaces: list(values.spaces), settings, ...(values.node ? { node: values.node } : {}) }));
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with exactly its contract's rights.${s.node ? ` It went to ${s.node.name}, sealed: the node fetches the release and starts it.` : ' It starts once its release is fetched and checked.'}`);
       }
       if (sub === 'add' && values.builtin) {
         if (values.builtin !== 'room') throw new Error('Weave ships one service so far: --builtin room');
@@ -1429,7 +1442,10 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       if (sub === 'set' && ref) {
         const settings = settingsOf();
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
-        const s = await b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...(values.text !== undefined ? { description: values.text } : {}) });
+        const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
+        const s = await approving((approve) =>
+          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
+        );
         return out(s, () => line(s));
       }
       if ((sub === 'start' || sub === 'stop') && ref) {

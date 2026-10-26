@@ -2,6 +2,7 @@ import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
+import { parseContract, type ServiceContract } from './services.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -66,6 +67,11 @@ export interface AppManifest {
   install?: AppInstall;
   /** Settings each host fills in on their own computer, handed to the app as environment variables when Weave starts it. */
   env?: AppSetting[];
+  /**
+   * An applet: it acts on events in the spaces it's added to, under a key of its own with exactly this contract
+   * (what it reads and writes). Installed, it becomes a service; an app (a web page, in `services`) runs in a room.
+   */
+  service?: ServiceContract;
 }
 
 /**
@@ -192,7 +198,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -207,9 +213,21 @@ export function checkManifest(input: unknown): ManifestCheck {
   const name = text(m.name, 40) || app;
   if (!text(m.name, 40)) warnings.push('"name" is what people see; without it they see the id');
 
+  // An applet: its contract, like {"reads": "addressed", "writes": ["weave.post"], "version": "1.0"}.
+  let service: ServiceContract | undefined;
+  if (m.service !== undefined) {
+    service = parseContract(m.service);
+    if (!service) problems.push('"service" is an applet\'s contract: what it reads ("addressed", "space" or {"kinds": [...]}), which kinds it writes, and its "version" (like "1.0")');
+    else if (service.room) {
+      warnings.push('"service": an applet doesn\'t offer rooms (yet); a web page goes in "services" and runs in a room');
+      const { room: _room, ...rest } = service;
+      service = rest;
+    }
+  }
   let services: AppService[] = [];
-  if (!Array.isArray(m.services) || m.services.length === 0) problems.push('"services" lists at least one port to share, like [{"port": 3000}]');
-  else {
+  if (!Array.isArray(m.services) || m.services.length === 0) {
+    if (m.service === undefined) problems.push('a manifest describes an app (its web page: "services", like [{"port": 3000}]) or an applet (its contract: "service")');
+  } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
       const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -303,7 +321,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}) } };
 }
 
 /** A manifest checked and cleaned, or an error naming everything that's wrong with it. */
@@ -338,6 +356,7 @@ export const MANIFEST_RULES = [
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
+  'service: makes it an applet instead of an app: a program that acts on events in the spaces it\'s added to, under a key of its own. Its contract says what it reads ("addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer).',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",

@@ -217,6 +217,27 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
             </span>
             {s.description && <div className="small">{s.description}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
+            {s.artifact && (
+              <div className="small">
+                Runs {s.artifact.name} {s.artifact.tag}, from p/{s.artifact.project.name ?? s.artifact.project.id}
+                {s.artifact.progress ? ' · fetching…' : ''}
+                {s.artifact.error ? <span className="error-text"> · {s.artifact.error}</span> : null}
+                {s.artifact.latest && (
+                  <>
+                    {' '}
+                    · {s.artifact.latest} is out{' '}
+                    <AsyncButton
+                      onClick={async () =>
+                        (await ask(`Run ${s.artifact!.name} ${s.artifact!.latest} as ${s.name}? It's other code: only take it if you trust p/${s.artifact!.project.name ?? 'its project'}.`, 'Take it')) &&
+                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.latest }, approve: true }).then(bump), `${s.name} takes ${s.artifact!.latest}`)
+                      }
+                    >
+                      Update…
+                    </AsyncButton>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div className="service-actions">
             {!s.builtin && <button onClick={() => setEditing(s)}>Settings…</button>}
