@@ -1,6 +1,6 @@
 {
   "name": "@weave/node",
-  "version": "0.19.4",
+  "version": "0.20.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@weave/core": "*",
-    "@weave/net": "*"
+    "@weave/net": "*",
+    "marked": "^18.1.1"
   }
 }

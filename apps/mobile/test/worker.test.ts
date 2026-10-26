@@ -158,10 +158,10 @@ describe('the phone app worker on Bare', () => {
     saveConfig(resolveHome(hostDir), host.config);
     try {
       await host.createProject({ name: 'Pferderennen' });
-      await host.publishApp({ project: 'Pferderennen', manifest: { app: 'pferderennen', name: 'Pferderennen', services: [{ id: 'race', port: (app.address() as AddressInfo).port, open: { joiner: { path: '/play' } } }] } });
       await node.joinSpace(await host.invite('Pferderennen'));
       await host.goOnline();
-      const hosted = await host.hostRoom({ project: 'Pferderennen', name: 'Derby' });
+      await host.addService({ builtin: 'room', spaces: ['Pferderennen'] });
+      const hosted = await host.openRoom({ project: 'Pferderennen', name: 'Derby', port: (app.address() as AddressInfo).port, pages: { joiner: { path: '/play', label: 'Play' } } });
 
       const phone = await worker(temp('weave-mobile-phone-'));
       const { link } = await node.pairPhone();

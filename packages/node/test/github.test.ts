@@ -23,6 +23,8 @@ class FakeGitHub {
   #tokens = new Map<string, string>();
   #nextId = 1;
   calls: string[] = [];
+  /** The permission each invitation asked for: "repo login" → pull | push. */
+  permissions = new Map<string, string>();
   gists = new Map<string, { owner: string; content: string }>();
 
   /** A repository, owned by an organization unless said otherwise (a person's can't take read-only collaborators). */
@@ -85,8 +87,10 @@ class FakeGitHub {
       if (m[2] === 'invitations' && !m[3]) return json(200, [...repo.invitations].map(([id, login]) => ({ id, invitee: { login } })));
       if (m[2] === 'collaborators' && method === 'PUT') {
         // As GitHub does: a person's repository has no read-only collaborators.
-        if (repo.owner === 'User' && JSON.parse(String(init?.body ?? '{}')).permission === 'pull') return json(422, { message: 'Validation Failed' });
+        const permission = JSON.parse(String(init?.body ?? '{}')).permission;
+        if (repo.owner === 'User' && permission === 'pull') return json(422, { message: 'Validation Failed' });
         repo.invitations.set(this.#nextId++, decodeURIComponent(m[3]));
+        this.permissions.set(`${m[1]} ${decodeURIComponent(m[3])}`, permission);
         return json(201, { id: this.#nextId });
       }
       if (m[2] === 'collaborators' && method === 'DELETE') return json(repo.collaborators.delete(decodeURIComponent(m[3])) ? 204 : 404, undefined);
@@ -245,7 +249,7 @@ describe('GitHub repos that follow a space', () => {
     expect(planSync([], access, ['lena', 'kofi'])).toEqual({ invite: [], remove: [{ login: 'kofi', invitation: 9 }, { login: 'lena' }] });
   });
 
-  it('links only repositories of an organization: a person\'s can\'t give read-only access', async () => {
+  it("links a person's repository only on purpose: nobody gets read-only access there", async () => {
     const github = new FakeGitHub();
     github.addRepo('martl/party-game', [], 'User');
     github.addRepo('martl/old-link', [], 'User');
@@ -255,9 +259,11 @@ describe('GitHub repos that follow a space', () => {
     await nic.joinSpace(await martl.invite('Party'));
     syncAll([martl, nic]);
     await connect(martl);
-    // Linking a person's repository: refused, saying what to do.
-    await expect(martl.linkRepo({ space: 'Party', repo: 'martl/party-game', on: true })).rejects.toThrow(/personal GitHub account[^]*organization[^]*Transfer/);
+    // Linking a person's repository for reading: refused, saying what to do instead.
+    await expect(martl.linkRepo({ space: 'Party', repo: 'martl/party-game', on: true })).rejects.toThrow(/personal GitHub account[^]*access: none[^]*access: write[^]*organization[^]*Transfer/);
+    await expect(martl.linkRepo({ space: 'Party', repo: 'martl/party-game', access: 'read', on: true })).rejects.toThrow(/personal GitHub account/);
     expect((await martl.spaceRepos('Party')).repos).toEqual([]);
+    expect(await martl.githubRepoOwner('martl/party-game')).toBe('personal');
 
     // One linked before Weave checked (as an older Weave wrote it): nobody is invited, and it says why instead of a bare 422.
     await martl.publish({ kind: 'weave.github.repo', body: { repo: 'martl/old-link', on: true }, space: 'Party' });
@@ -273,11 +279,67 @@ describe('GitHub repos that follow a space', () => {
 
     // Moved to an organization, then linked: Nic is invited, read-only.
     github.repos.get('martl/party-game')!.owner = 'Organization';
+    await expect(martl.linkRepo({ space: 'Party', repo: 'martl/party-game', access: 'write', writers: ['Nic'], on: true })).rejects.toThrow(/belongs to an organization/);
     await martl.linkRepo({ space: 'Party', repo: 'martl/party-game', on: true });
     syncAll([martl, nic]);
     await martl.reconcile();
     expect(github.invited('martl/party-game')).toEqual(['nic-gh']);
+    expect(github.permissions.get('martl/party-game nic-gh')).toBe('pull');
     expect((await martl.spaceRepos('Party')).repos.find((r) => r.repo === 'martl/party-game')?.problem).toBeUndefined();
     for (const node of [martl, nic]) await node.close();
+  });
+
+  it("links a person's repository only, or lets people picked one by one write, never through a group", async () => {
+    const github = new FakeGitHub();
+    github.addRepo('martl/derby', [], 'User');
+    const martl = person('martl', github, 'martl');
+    const nic = person('Nic', github, 'nic-gh');
+    const lena = person('Lena', github, 'lena-gh');
+    const all = [martl, nic, lena];
+    // Nic is in the project personally; Lena only through the Friends group.
+    await martl.createGroup('Friends');
+    await lena.joinSpace(await martl.invite('Friends'));
+    syncAll(all);
+    await martl.createProject({ name: 'Derby' });
+    await martl.inviteGroup({ project: 'Derby', group: 'Friends' });
+    await nic.joinSpace(await martl.invite('Derby'));
+    syncAll(all);
+    await connect(martl);
+    for (const node of [nic, lena]) {
+      await connect(node);
+      await node.shareGithub({ space: 'Derby', on: true });
+    }
+    syncAll(all);
+
+    // Linked only: it shows, and nobody is invited.
+    await martl.linkRepo({ space: 'Derby', repo: 'martl/derby', access: 'none', on: true });
+    syncAll(all);
+    await martl.reconcile();
+    expect(github.invited('martl/derby')).toEqual([]);
+    expect((await nic.spaceRepos('Derby')).repos.map((r) => [r.repo, r.access, r.forYou ?? false])).toEqual([['martl/derby', 'none', false]]);
+
+    // Write access: only people in personally can be picked, and only they are invited, to write.
+    expect((await martl.spaceRepos('Derby')).mayWrite?.map((a) => a.name)).toEqual(['Nic']);
+    await expect(martl.linkRepo({ space: 'Derby', repo: 'martl/derby', access: 'write', writers: ['Lena'], on: true })).rejects.toThrow(/Lena can't be picked to write[^]*not through a group or tier/);
+    await expect(martl.linkRepo({ space: 'Derby', repo: 'martl/derby', access: 'write', on: true })).rejects.toThrow(/pick the people who may write/);
+    await martl.linkRepo({ space: 'Derby', repo: 'martl/derby', access: 'write', writers: ['Nic'], on: true });
+    syncAll(all);
+    await martl.reconcile();
+    expect(github.invited('martl/derby')).toEqual(['nic-gh']);
+    expect(github.permissions.get('martl/derby nic-gh')).toBe('push');
+    const [seen] = (await nic.spaceRepos('Derby')).repos;
+    expect(seen).toMatchObject({ access: 'write', writers: [{ name: 'Nic' }], forYou: true });
+    expect((await lena.spaceRepos('Derby')).repos[0].forYou).toBeUndefined();
+    // A write link forged by hand naming Lena still doesn't reach her: she came through a group.
+    await martl.publish({ kind: 'weave.github.repo', body: { repo: 'martl/derby', access: 'write', writers: [nic.identity.author, lena.identity.author], on: true }, space: 'Derby' });
+    await martl.reconcile();
+    expect(github.invited('martl/derby')).toEqual(['nic-gh']);
+
+    // Unticking Nic takes his access back.
+    github.accept('martl/derby', 'nic-gh');
+    await martl.linkRepo({ space: 'Derby', repo: 'martl/derby', access: 'none', on: true });
+    await martl.reconcile();
+    expect(github.collaborators('martl/derby')).toEqual([]);
+    for (const node of all) await node.close();
   });
 });

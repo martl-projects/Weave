@@ -1,8 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
 import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
+import { newSession, openSession, showSession, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -63,12 +64,24 @@ async function connect(): Promise<void> {
   const signal = watching.signal;
   daemon = await ensureDaemon(home, app.getVersion());
   daemon.client
-    .watch((item) => window?.webContents.send('weave:event', item), signal)
+    .watch((item) => {
+      window?.webContents.send('weave:event', item);
+      mentions?.webContents.send('weave:event', item);
+      // An agent pointed to a post: the panel comes up beside the work.
+      if (item.kind === 'weave.mention') showMentions(false);
+    }, signal)
     .catch((error: Error) => console.error('weave: event stream ended:', error.message))
     .finally(() => {
       // The daemon went away (restarted, crashed): find or start it again, and tell the window to refresh.
       if (signal.aborted || quitting) return;
-      setTimeout(() => void connect().then(() => window?.webContents.send('weave:event', null), () => {}), 1000);
+      setTimeout(
+        () =>
+          void connect().then(() => {
+            window?.webContents.send('weave:event', null);
+            mentions?.webContents.send('weave:event', null);
+          }, () => {}),
+        1000,
+      );
     });
 }
 
@@ -123,6 +136,103 @@ function showWindow(): void {
 
 ipcMain.handle('weave:show', () => showWindow());
 
+let mentions: BrowserWindow | undefined;
+
+/**
+ * The Mentions panel: a small window that stays on top beside your work (Claude
+ * Code), with the posts agents point to. It comes up by itself, without taking
+ * the focus, when a new one arrives; closing it only hides it.
+ */
+function showMentions(focus = true): void {
+  if (mentions) {
+    if (focus) mentions.show();
+    else if (!mentions.isVisible()) mentions.showInactive();
+    return;
+  }
+  const area = screen.getPrimaryDisplay().workArea;
+  const panel = new BrowserWindow({
+    width: 380,
+    height: 600,
+    x: area.x + area.width - 380 - 16,
+    y: area.y + 16,
+    minWidth: 300,
+    minHeight: 240,
+    title: 'Weave · Mentions',
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c111d' : '#f4f5f7',
+    webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  mentions = panel;
+  panel.setAlwaysOnTop(true, 'floating');
+  panel.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    panel.hide();
+  });
+  panel.on('closed', () => (mentions = undefined));
+  // Links open in the browser, never inside the panel.
+  panel.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  panel.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file:')) return;
+    event.preventDefault();
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+  });
+  panel.once('ready-to-show', () => (focus ? panel.show() : panel.showInactive()));
+  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
+}
+
+ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' ? mentions?.hide() : showMentions()));
+
+/**
+ * Ctrl+click on a work item: the Claude app comes to the item's latest session
+ * with the item and its starting prompt in the text box (it goes on top of that
+ * session's stack), or to a new session in a folder known for its project
+ * (asked once). The side panel shows that session. Nothing is sent.
+ */
+ipcMain.handle('weave:work-on', async (_event, post: string): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: Delivered; where?: string }> => {
+  if (typeof post !== 'string' || !daemon) throw new Error('not connected to Weave');
+  const client = daemon.client;
+  const target = await client.workTarget({ post });
+  const session = target.session;
+  if (session?.provider === 'claude-code' && session.host) {
+    await client.workOn({ session: { provider: session.provider, id: session.id, host: session.host, ...(session.folder ? { folder: session.folder } : {}) }, post: target.post.id });
+    showMentions(false);
+    mentions?.webContents.send('weave:panel-session', session.id);
+    return { how: 'session', delivered: await openSession(session.host, target.text), where: session.title ?? session.id };
+  }
+  let folder = target.folders[0];
+  if (!folder) {
+    const where = target.post.space ? `${target.post.space.kind} ${target.post.space.name}` : 'this post';
+    const options = { title: `Folder for ${where} (Claude Code works in it)`, properties: ['openDirectory' as const, 'createDirectory' as const] };
+    const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    if (picked.canceled || !picked.filePaths[0]) return { how: 'cancelled' };
+    folder = picked.filePaths[0];
+    if (target.post.space) await client.rememberFolder({ space: target.post.space.id, folder });
+  }
+  // Weave gives the new session its item as soon as the Claude app says which session it is.
+  await client.expectSession({ post: target.post.id, folder });
+  return { how: 'new', delivered: await newSession(folder, target.text), where: folder };
+});
+
+/** From the sessions pane: bring a session to the front in the Claude app. */
+ipcMain.handle('weave:show-session', (_event, host: string) => showSession(String(host)));
+
+/** The panel's links open in the main window: Weave comes to the front there. */
+ipcMain.handle('weave:route', (_event, hash: string) => {
+  if (typeof hash !== 'string' || !hash.startsWith('#/') || hash.length > 2000) return;
+  showWindow();
+  window?.webContents.send('weave:route', hash);
+});
+
 /** The buttons of the app's own title bar. Close hides to the tray like the system's close would. */
 ipcMain.handle('weave:window', (_event, action: string) => {
   if (!window) return;
@@ -151,6 +261,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Open Weave', click: showWindow },
+      { label: 'Mentions panel', click: () => showMentions() },
       { type: 'separator' },
       { label: 'Quit Weave', click: () => app.quit() },
     ]),

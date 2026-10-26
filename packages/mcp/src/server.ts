@@ -2,11 +2,27 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem } from '@weave/node';
+import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
   as?: string;
+  /** The agent session this server serves, when its harness says (see sessionFromEnv). */
+  session?: SessionRef;
+}
+
+/**
+ * The session a harness runs this server in, from what it tells the programs it
+ * starts. Claude Code: CLAUDE_CODE_SESSION_ID (its transcript's id) and
+ * CLAUDE_CODE_HOST_SESSION_ID (the Claude app's own id for it), in the folder it
+ * started this server in. Other harnesses: the session tools take an id instead.
+ */
+export function sessionFromEnv(env: NodeJS.ProcessEnv = process.env, folder = process.cwd()): SessionRef | undefined {
+  const id = env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (!id) return undefined;
+  const host = env.CLAUDE_CODE_HOST_SESSION_ID?.trim();
+  return { provider: 'claude-code', id, ...(host ? { host } : {}), folder };
 }
 
 /** A new event, shortened for an agent to read. */
@@ -75,24 +91,26 @@ export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and thei
 
 Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
+Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
+
 GitHub repositories that follow a space (repo access for members):
 1. weave_github shows the sign-in. If not signed in, call weave_github_connect: it returns a code. Ask your person to open the link and enter the code on github.com (only they can), then check weave_github again.
 2. The GitHub App (named in weave_github) must be installed on the repository: weave_github_repos lists the ones it can manage. If the repository is missing, only your person can add it, on github.com: call weave_open_in_app with what "link-repo", the space and the repository. Weave comes to the front with Link a repository open, the repository chosen and the link to add it on GitHub ("Only select repositories"); they can link it right there.
 3. Or link it yourself with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Members then give the space their GitHub account (weave_share_github, or in the app) and get read access; leaving takes it back. Only repositories of a GitHub organization can be linked: a personal account's repositories can't give read-only access. If the repository belongs to your person, tell them to move it to an organization (free; the repository's Settings → Transfer on GitHub), install the GitHub App there, and link it again.
 
-A project's app, installed by hosts with one click (prefer this to asking hosts to install Node.js or build anything):
+A project's artifact, which rooms run with one click (prefer this to asking people to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
 2. Commit, push, tag (v0.1.0) and push the tag. Weave installs from a GitHub release with build files attached: a tag alone isn't a release, and GitHub's automatic source archives don't count. The workflow makes that release from the tag in a few minutes; without such a workflow, someone has to create the release and attach the builds on github.com.
-3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Hosts then install it from the project's Live tab. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
-Installing and starting the app happen on each host's own computer and need them to confirm; you can't do that for them.
-Settings like an API key: name them in weave.app.json under env ({name, label, secret, optional, hint}); never write a value into the manifest or the repository, and never ask for or handle one yourself: your person types it under Live (or weave app set), it stays on their computer, and Weave hands it to the app when it starts it.
+3. weave_app_release with the tag: Weave reads weave.app.json from the repository at that tag and fingerprints each release file. Anyone in a project with the room service then opens rooms that run it, in the project's Services ("Open a room…"), in any project of theirs. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
+Opening a room runs the release on that person's own computer and needs them to approve it; you can't do that for them.
+Settings like an API key: name them in weave.app.json under env ({name, label, secret, optional, hint}); never write a value into the manifest or the repository, and never ask for or handle one yourself: your person types it when they open a room, it stays on their computer, and Weave hands it to that room's process.
 Who is who in the app: players reach it from 127.0.0.1, so on its own it can't tell them apart (nor the host from a player who types /host). With @weave/sdk the app asks Weave: weave.who(req) gives the person behind a connection (did, name, host, member, maintainer), weave.access(did, {group}) whether they're in one of the project's groups or the host's tiers. Prefer it to name forms and secret host pages; weave_app_manifest has the details.
 
 A project's page is what people see first: a hero card with an icon, a banner, the title and a subtitle, and below it the page itself (Markdown, with images). weave_project shows it; weave_set_project_page changes it (needs weave.project.page, and weave.project.public while the page is public). Images go up with weave_upload_image first, which gives a wblob: reference for icon, banner, or ![](…) in the body. There are no store-style capsules or screenshot fields: put screenshots in the body. See weave_set_project_page for sizes.
 
-Releases: weave_app_releases lists the repository's releases and how many files each has. weave_app_release can wait for a release the workflow is still building. Your person can also pick a release themselves in the project's Live tab ("Use a GitHub release…").
+Releases: weave_app_releases lists the repository's releases and how many files each has. weave_app_release can wait for a release the workflow is still building. Your person can also pick a release themselves in the project's Services ("Release from GitHub…").
 
-Things only the person does: approving GitHub sign-ins and app installs on github.com, installing and starting apps on their computer, recovery words and keys. Tell them clearly what to do and why.`;
+Things only the person does: approving GitHub sign-ins and app installs on github.com, opening rooms that run code on their computer, recovery words and keys. Tell them clearly what to do and why.`;
 
 /**
  * The node as an agent sees it: company spaces it isn't approved in (stage 9)
@@ -172,6 +190,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   backend
     .watch((item: FeedItem) => {
       if (item.signer === mySigner) return; // our own writes are not news
+      if (item.scope === 'live') return; // the app's own signals (rooms, opening, mentions), not events
       const text = textOf(item.body);
       if (!text && !item.kind.startsWith('weave.issue')) return;
       inbox.push({
@@ -329,7 +348,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
 
   server.registerTool(
     'weave_read_post',
-    { title: 'Read a post', description: 'A post with its chat. Id, its first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
+    { title: 'Read a post', description: 'A post with its chat. Its url, id, first 8 characters, or a weave:post: link.', inputSchema: { post: z.string().min(6), limit: z.number().int().min(1).max(200).optional() }, annotations: { readOnlyHint: true } },
     run(async ({ post, limit }: { post: string; limit?: number }) => {
       const p = await backend.post(post);
       const chat = p.space && p.type !== 'project' ? await backend.messages(undefined, { post: p.id, limit: limit ?? 50 }) : [];
@@ -342,19 +361,37 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Submit a post',
       description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
-      inputSchema: { space: z.string().describe('Project or community name or id'), title: z.string().min(1).max(200), text: z.string().optional(), link: z.string().url().optional(), board: z.string().optional() },
+      inputSchema: {
+        space: z.string().describe('Project or community name or id'),
+        title: z.string().min(1).max(200),
+        text: z.string().optional(),
+        link: z.string().url().optional(),
+        board: z.string().optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it (its starting prompt)'),
+      },
     },
-    run(async ({ space, title, text, link, board }: { space: string; title: string; text?: string; link?: string; board?: string }) => backend.submit({ space, board, title, text, link, as })),
+    run(async ({ space, title, text, link, board, prompt }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string }) =>
+      backend.submit({ space, board, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
     'weave_edit_post',
     {
       title: 'Edit a post',
-      description: 'Change the title, text or link of your own post (an empty link removes it). Leave out what stays the same. Everyone sees it marked as edited.',
-      inputSchema: { post: z.string().min(6), title: z.string().min(1).max(200).optional(), text: z.string().optional(), link: z.union([z.string().url(), z.literal('')]).optional() },
+      description:
+        'Change the title, text, link or starting prompt of your own post (an empty link or prompt removes it). Leave out what stays the same. Everyone sees it marked as edited.',
+      inputSchema: {
+        post: z.string().min(6),
+        title: z.string().min(1).max(200).optional(),
+        text: z.string().optional(),
+        link: z.union([z.string().url(), z.literal('')]).optional(),
+        prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it'),
+      },
     },
-    run(async ({ post, title, text, link }: { post: string; title?: string; text?: string; link?: string }) => backend.editPost({ post, title, text, link, as })),
+    run(async ({ post, title, text, link, prompt }: { post: string; title?: string; text?: string; link?: string; prompt?: string }) =>
+      backend.editPost({ post, title, text, link, prompt, as }),
+    ),
   );
 
   server.registerTool(
@@ -586,13 +623,107 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox. Tell them what to do there.",
-      inputSchema: { what: z.enum(['link-repo', 'space', 'inbox']), space: z.string().optional().describe('Group, tier or project name or id'), repo: z.string().optional().describe('For link-repo: owner/name') },
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url). Tell them what to do there.",
+      inputSchema: {
+        what: z.enum(['link-repo', 'space', 'inbox', 'post']),
+        space: z.string().optional().describe('Group, tier or project name or id'),
+        repo: z.string().optional().describe('For link-repo: owner/name'),
+        post: z.string().optional().describe('For post: its id or url'),
+      },
     },
-    run(async ({ what, space, repo }: { what: 'link-repo' | 'space' | 'inbox'; space?: string; repo?: string }) => ({
-      ...(await backend.openInApp({ what, space, repo })),
+    run(async ({ what, space, repo, post }: { what: 'link-repo' | 'space' | 'inbox' | 'post'; space?: string; repo?: string; post?: string }) => ({
+      ...(await backend.openInApp({ what, space, repo, post })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
+  );
+
+  // Post cards in the chat, where the host renders MCP Apps (Claude chat does).
+  server.registerResource('post-cards', POST_CARD_URI, { title: 'Weave post cards', mimeType: MCP_APP_MIME }, async () => ({
+    contents: [{ uri: POST_CARD_URI, mimeType: MCP_APP_MIME, text: POST_CARD_HTML, _meta: { ui: { prefersBorder: false } } }],
+  }));
+
+  // ---------------------------------------------------------------- this session's work items
+
+  const sessionId = z.string().min(4).optional().describe("A session's id, when your harness doesn't tell Weave which session you are");
+  const sessionOf = (id?: string): SessionRef => {
+    if (id) return { id };
+    if (options.session) return options.session;
+    throw new Error("Weave doesn't know which session you are: pass session_id (your harness's session id)");
+  };
+
+  server.registerTool(
+    'weave_session',
+    {
+      title: "This session's work items",
+      description:
+        "Your session's stack of work items: the top one is what you're on now, the ones below wait for it (an item that came in on top of unfinished work). Each has its starting prompt: what to do with it. Your person sees the stack in Weave's side panel.",
+      inputSchema: { session_id: sessionId },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ session_id }: { session_id?: string }) => backend.session(sessionOf(session_id))),
+  );
+
+  server.registerTool(
+    'weave_work_on',
+    {
+      title: 'Work on an item',
+      description:
+        "Put a work item on top of your session's stack: an existing post (url or id), or a new one you create in its project or community (with a starting prompt: what a session should do with it). Whatever you were on waits below and comes back when this one is done (weave_done). Use it when your person gives you a new item, or when you start one.",
+      inputSchema: {
+        post: z.string().min(4).optional().describe('An existing post: url, id or weave:post: link'),
+        create: z
+          .object({
+            space: z.string().describe('Project or community name or id'),
+            board: z.string().optional(),
+            title: z.string().min(1).max(200),
+            text: z.string().optional(),
+            prompt: z.string().max(4000).optional().describe('What a session should do with it'),
+          })
+          .optional()
+          .describe('A new work item, posted in that project or community'),
+        session_id: sessionId,
+      },
+    },
+    run(async ({ post, create, session_id }: { post?: string; create?: { space: string; board?: string; title: string; text?: string; prompt?: string }; session_id?: string }) =>
+      backend.workOn({ session: sessionOf(session_id), post, create, as }),
+    ),
+  );
+
+  server.registerTool(
+    'weave_done',
+    {
+      title: 'Done with an item',
+      description:
+        "Take a work item off your session's stack (the top one if you don't name one); the item below comes back to the top: tell your person what you're back to. close: true also marks an issue done.",
+      inputSchema: { post: z.string().min(4).optional(), close: z.boolean().optional(), session_id: sessionId },
+    },
+    run(async ({ post, close, session_id }: { post?: string; close?: boolean; session_id?: string }) => backend.doneWith({ session: sessionOf(session_id), post, close, as })),
+  );
+
+  server.registerTool(
+    'weave_stack',
+    {
+      title: "Rearrange this session's stack",
+      description: 'Put these posts first, in this order (the first is what you work on now), and take others off with remove. Nothing changes on the posts themselves.',
+      inputSchema: { posts: z.array(z.string().min(4)).optional(), remove: z.array(z.string().min(4)).optional(), session_id: sessionId },
+    },
+    run(async ({ posts, remove, session_id }: { posts?: string[]; remove?: string[]; session_id?: string }) => backend.restack({ session: sessionOf(session_id), posts, remove })),
+  );
+
+  server.registerTool(
+    'weave_show',
+    {
+      title: 'Show posts in the Mentions panel',
+      description:
+        "Show posts to your person in Weave's Mentions panel, a small window beside their work: the posts you just created, updated or want them to look at, as cards they can open in Weave. Nothing is posted or sent; it stays on their computer. Also link the posts in your answer (their url).",
+      inputSchema: {
+        posts: z.array(z.string().min(4)).min(1).max(20).describe('Posts: url, id or weave:post: link'),
+        note: z.string().max(500).optional().describe('A short line on why, e.g. "Updated after our plan"'),
+      },
+      // Where the host can, the result shows as post cards right in the chat.
+      _meta: { ui: { resourceUri: POST_CARD_URI } },
+    },
+    run(async ({ posts, note }: { posts: string[]; note?: string }) => backend.showPosts({ posts, note, as })),
   );
 
   // ---------------------------------------------------------------- project pages
@@ -696,10 +827,19 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Link a repository',
       description:
-        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). Members who give the space their GitHub account get read access. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository, which must belong to a GitHub organization (a personal account's repositories can't give read-only access).",
-      inputSchema: { space: z.string(), repo: z.string().describe('owner/name or its github.com link'), board: z.string().optional().describe('In a project: only the readers of this board'), on: z.boolean().default(true) },
+        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). An organization's repository: members who give the space their GitHub account get read access. A personal account's repository can't give read-only access: link it with access none (just linked, nobody gets anything) or write (writers: people in the space personally, never through a group or tier, picked one by one; ask your person whom), or suggest moving it to an organization. Needs the weave.github.repo permission, a GitHub sign-in and the app installed on the repository.",
+      inputSchema: {
+        space: z.string(),
+        repo: z.string().describe('owner/name or its github.com link'),
+        board: z.string().optional().describe('In a project: only the readers of this board (read access only)'),
+        access: z.enum(['read', 'none', 'write']).optional().describe("read for an organization's repository (the default there); none or write for a personal one"),
+        writers: z.array(z.string()).optional().describe('With access write: the people who may write, by name or did'),
+        on: z.boolean().default(true),
+      },
     },
-    run(async ({ space, repo, board, on }: { space: string; repo: string; board?: string; on: boolean }) => backend.linkRepo({ space, repo, board, on, as })),
+    run(async ({ space, repo, board, access, writers, on }: { space: string; repo: string; board?: string; access?: 'read' | 'none' | 'write'; writers?: string[]; on: boolean }) =>
+      backend.linkRepo({ space, repo, board, access, writers, on, as }),
+    ),
   );
 
   server.registerTool(
@@ -775,7 +915,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "Point a project's app at a GitHub release",
       description:
-        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); hosts then install it from the project's Live tab. Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
+        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); rooms then run it (anyone in a project with the room service opens one with it). Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
       inputSchema: {
         project: z.string(),
         tag: z.string().describe('The release tag, like v1.4'),

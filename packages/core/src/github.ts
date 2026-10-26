@@ -1,5 +1,5 @@
 import type { Entry } from './collab.ts';
-import type { Did } from './keys.ts';
+import { isDid, type Did } from './keys.ts';
 
 /*
  * GitHub repositories that follow a space's membership. An owner links a
@@ -8,8 +8,13 @@ import type { Did } from './keys.ts';
  * account get read access, and lose it again when they leave. The owner's
  * node does the inviting, with the owner's own GitHub sign-in.
  *
- *   weave.github.repo     {repo, board?, on}   sealed in the space, by an owner or maintainer:
- *                         the repo follows this space; its author's node keeps it in step
+ *   weave.github.repo     {repo, board?, access?, writers?, on}
+ *                         sealed in the space, by an owner or maintainer: the repo follows this
+ *                         space; its author's node keeps it in step. access: read (the default:
+ *                         members get read access, an organization's repositories only), none (just
+ *                         linked, nobody gets anything), write (the people named in writers, picked
+ *                         one by one, never through a group: a person's repositories only have
+ *                         collaborators who can write)
  *   weave.github.account  {login, on}          sealed in the space, by a member: "give my
  *                         GitHub account access" (one personal account each, never a team)
  *   weave.github.added    {repo, login, on}    sealed to the owner: who Weave gave access, so it
@@ -28,10 +33,20 @@ export const isRepoName = (value: unknown): value is string => typeof value === 
 /** A GitHub username: letters, digits and single inner hyphens, at most 39. */
 export const isLogin = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(value);
 
+/** What linking a repository gives people: read access for members, nothing, or write access for people picked one by one. */
+export type RepoAccess = 'read' | 'none' | 'write';
+export const REPO_ACCESS: readonly RepoAccess[] = ['read', 'none', 'write'];
+
+/** The most writers one link names. */
+export const MAX_WRITERS = 50;
+
 export interface RepoLink {
   repo: string;
   /** Only people who may read this board of the project. */
   board?: string;
+  access: RepoAccess;
+  /** With write access: the people picked, one by one. */
+  writers?: Did[];
   /** Who linked it: their node invites and removes people. */
   by: Did;
   time: string;
@@ -52,7 +67,10 @@ export function reposOf(entries: Entry[], mayManage: (did: Did) => boolean): Rep
       continue;
     }
     const board = typeof body.board === 'string' && body.board ? body.board.slice(0, 60) : undefined;
-    latest.set(key, { repo: body.repo, ...(board ? { board } : {}), by: entry.event.author, time: entry.event.time });
+    // Links from before access existed give read access.
+    const access: RepoAccess = body.access === 'none' || body.access === 'write' ? body.access : 'read';
+    const writers = access === 'write' && Array.isArray(body.writers) ? [...new Set(body.writers.filter(isDid))].slice(0, MAX_WRITERS) : undefined;
+    latest.set(key, { repo: body.repo, ...(board ? { board } : {}), access, ...(writers ? { writers } : {}), by: entry.event.author, time: entry.event.time });
   }
   return [...latest.values()].filter((l): l is RepoLink => !!l).sort((a, b) => a.repo.localeCompare(b.repo));
 }
@@ -69,7 +87,7 @@ export function accountsOf(entries: Entry[]): Map<Did, string> {
   return out;
 }
 
-export interface RepoAccess {
+export interface RepoCollaborators {
   /** People with access now (lowercase logins). */
   collaborators: Set<string>;
   /** Invited and not accepted yet: login → invitation id. */
@@ -88,7 +106,7 @@ export interface SyncPlan {
  * people who shouldn't have it any more. People added on GitHub by hand stay.
  * `added`: the logins Weave gave access and hasn't taken it back from.
  */
-export function planSync(wanted: Iterable<string>, access: RepoAccess, added: Iterable<string>): SyncPlan {
+export function planSync(wanted: Iterable<string>, access: RepoCollaborators, added: Iterable<string>): SyncPlan {
   const want = new Set([...wanted].map((l) => l.toLowerCase()));
   const gave = new Set([...added].map((l) => l.toLowerCase()));
   // Someone Weave invited who isn't in (or invited) any more declined or left on GitHub: not asked again.

@@ -67,7 +67,7 @@ describe('phones using a node remotely', () => {
     await expect(session.call('revokeKey', { key: 'x' })).rejects.toThrow(/a phone can't do revokeKey/);
     await expect(session.call('pairPhone')).rejects.toThrow(/a phone can't do pairPhone/);
     await expect(session.call('destroyCompanyKey', {})).rejects.toThrow(/a phone can't do destroyCompanyKey/);
-    await expect(session.call('appEnv', {})).rejects.toThrow(/a phone can't do appEnv/);
+    await expect(session.call('roomEnv', 'x')).rejects.toThrow(/a phone can't do roomEnv/);
 
     // A code works once; a stranger's key is turned away at the door.
     await expect(pairWith(dialer, link, HyperDHT.keyPair(), 'Thief')).rejects.toThrow();
@@ -138,11 +138,11 @@ describe('a phone playing in a room its computer joined', () => {
     const host = person('Lena');
     const computer = person('martl');
     await host.createProject({ name: 'Pferderennen' });
-    await host.publishApp({ project: 'Pferderennen', manifest: { app: 'pferderennen', name: 'Pferderennen', services: [{ id: 'race', port: appPort, open: { joiner: { path: '/play' } } }] } });
     await computer.joinSpace(await host.invite('Pferderennen'));
     await host.goOnline();
     await computer.goOnline();
-    const room = await host.hostRoom({ project: 'Pferderennen', name: 'Derby' });
+    await host.addService({ builtin: 'room', spaces: ['Pferderennen'] });
+    const room = await host.openRoom({ project: 'Pferderennen', name: 'Derby', port: appPort, pages: { joiner: { path: '/play', label: 'Play' } } });
     await until(async () => (await computer.rooms('Pferderennen')).length);
 
     const phoneKeys = HyperDHT.keyPair();
@@ -165,8 +165,8 @@ describe('a phone playing in a room its computer joined', () => {
 
     // A room the computer hosts itself: the phone reaches its app directly, as the host opens it.
     await computer.createProject({ name: 'Solitaire' });
-    await computer.publishApp({ project: 'Solitaire', manifest: { app: 'solitaire', name: 'Solitaire', services: [{ id: 'game', port: appPort }] } });
-    const own = await computer.hostRoom({ project: 'Solitaire', name: 'Alone' });
+    await computer.addService({ builtin: 'room', spaces: ['Solitaire'] });
+    const own = await computer.openRoom({ project: 'Solitaire', name: 'Alone', port: appPort });
     expect(await fetchThrough(openTunnel(dialer, paired, phoneKeys, own.id), '/')).toMatch(/the host's app, at \/$/);
 
     // Left on the computer: the way in is gone.
@@ -194,8 +194,8 @@ describe('what a phone may call', () => {
       'addAgent', 'updateAgent', 'approveAgent', 'answerPermission', 'requestPermission', 'connectHarness', 'join', 'revokeKey', 'rotateRoot',
       'moveHomeKey', 'keystores', 'destroyCompanyKey', 'escrowRecovery', 'openEscrow', 'manageSpace', 'unlockSpace', 'link', 'signIn', 'companySignIn',
       'backup', 'exportSpace', 'createCompany', 'companyAction', 'enrollLink', 'inviteByEmail', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'consoleOperatorLink',
-      'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'setAppSetting', 'appEnv', 'hostRoom',
-      'setAppFolder', 'installApp', 'launchApp', 'stopApp', 'openInApp', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'linkRepo', 'shareGithub',
+      'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'roomEnv', 'openRoom', 'addService',
+      'setService', 'removeService', 'openInApp', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'linkRepo', 'shareGithub',
       'showGithubOnHub', 'pairPhone', 'phones', 'unpairPhone',
     ];
     for (const method of computerOnly) expect(PHONE_METHODS).not.toContain(method);

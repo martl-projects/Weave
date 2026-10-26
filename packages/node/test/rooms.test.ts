@@ -8,7 +8,7 @@ import HyperDHT from 'hyperdht';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
-import { b64u, canonicalJson, checksumAddress, sign, utf8, type Json } from '@weave/core';
+import { b64u, canonicalJson, checksumAddress, sign, utf8, type Json, type RoomPages } from '@weave/core';
 import { loadConfig, resolveHome, saveConfig, WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -43,7 +43,7 @@ async function until<T>(get: () => Promise<T> | T, timeoutMs = 30_000): Promise<
 /** GET a path from a local port, answering with the body. */
 const get = (port: number, path: string) =>
   new Promise<string>((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path, headers: { host: `gameshow.weave.localhost:${port}` } }, (res) => {
+    const req = request({ host: '127.0.0.1', port, path, headers: { host: `saturday-show.weave.localhost:${port}` } }, (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
       res.on('end', () => resolve(body));
@@ -52,7 +52,7 @@ const get = (port: number, path: string) =>
     req.end();
   });
 
-describe('rooms and shared apps', () => {
+describe('rooms of the room service', () => {
   let testnet: Testnet;
   let app: Server;
   let appPort: number;
@@ -83,12 +83,19 @@ describe('rooms and shared apps', () => {
     return node;
   }
 
+  /** A room of the person's room service (added to the project first), answered by the test's web server. */
+  async function openRoom(node: WeaveNode, project: string, input: { name: string; groups?: string[]; show?: string; pages?: RoomPages }) {
+    const mine = (await node.services()).find((s) => s.builtin === 'room');
+    if (!mine) await node.addService({ builtin: 'room', spaces: [project] });
+    else await node.setService({ name: mine.name, spaces: [...mine.spaces.map((s) => s.id), project] });
+    return node.openRoom({ project, port: appPort, ...input });
+  }
+
   it('lets the members of a tier into a room meant for them', async () => {
     const martin = person('Martin');
     const lena = person('Lena');
     const kofi = person('Kofi');
     await martin.createProject({ name: 'Studio' });
-    await martin.publishApp({ project: 'Studio', manifest: { app: 'studio', name: 'Studio', services: [{ id: 'stream', port: appPort, open: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } }] } });
     const tier = await martin.createTier({ name: 'Backstage' });
     await martin.inviteGroup({ project: 'Studio', group: tier.id });
     await lena.joinSpace(await martin.invite('Studio'));
@@ -107,7 +114,7 @@ describe('rooms and shared apps', () => {
     await martin.goOnline();
     await lena.goOnline();
     await kofi.goOnline();
-    const hosted = await martin.hostRoom({ project: 'Studio', name: 'Backstage live', groups: [tier.id] });
+    const hosted = await openRoom(martin, 'Studio', { name: 'Backstage live', groups: [tier.id], pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
     await sync();
 
     const forKofi = await until(async () => (await kofi.rooms('Studio')).find((r) => r.id === hosted.id));
@@ -125,7 +132,6 @@ describe('rooms and shared apps', () => {
     const lena = person('Lena');
     const kofi = person('Kofi');
     await martin.createProject({ name: 'Bühne' });
-    await martin.publishApp({ project: 'Bühne', manifest: { app: 'buehne', name: 'Bühne', services: [{ id: 'stream', port: appPort, open: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } }] } });
     await lena.joinSpace(await martin.invite('Bühne'));
     await kofi.joinSpace(await martin.invite('Bühne'));
     const sync = () => {
@@ -141,7 +147,7 @@ describe('rooms and shared apps', () => {
     await martin.goOnline();
     await lena.goOnline();
     await kofi.goOnline();
-    const hosted = await martin.hostRoom({ project: 'Bühne', name: 'Premiere live', show: show.id });
+    const hosted = await openRoom(martin, 'Bühne', { name: 'Premiere live', show: show.id, pages: { host: { path: '/host', label: 'Stage' }, joiner: { path: '/watch', label: 'Watch' } } });
     sync();
 
     // Lena buys a ticket; Kofi doesn't.
@@ -167,16 +173,12 @@ describe('rooms and shared apps', () => {
     const martin = person('Martin');
     const lena = person('Lena');
     await martin.createProject({ name: 'Gameshow' });
-    await martin.publishApp({
-      project: 'Gameshow',
-      manifest: { app: 'gameshow', name: 'BAND AB!', services: [{ id: 'show', port: appPort, open: { host: { path: '/host', label: 'Open stage' }, joiner: { path: '/play', label: 'Play' } } }] },
-    });
     await lena.joinSpace(await martin.invite('Gameshow'));
     await martin.goOnline();
     await lena.goOnline();
 
-    const hosted = await martin.hostRoom({ project: 'Gameshow', name: 'Saturday show' });
-    expect(hosted).toMatchObject({ mine: true, joined: true, service: { label: 'Open stage', ready: true }, url: `http://localhost:${appPort}/host` });
+    const hosted = await openRoom(martin, 'Gameshow', { name: 'Saturday show', pages: { host: { path: '/host', label: 'Open stage' }, joiner: { path: '/play', label: 'Play' } } });
+    expect(hosted).toMatchObject({ mine: true, offeredBy: { name: 'room' }, service: { label: 'Open stage', ready: true }, url: `http://localhost:${appPort}/host` });
 
     const seen = await until(async () => (await lena.rooms('Gameshow'))[0]);
     expect(seen).toMatchObject({ name: 'Saturday show', mayJoin: true, joined: false, service: { label: 'Play' } });
@@ -185,9 +187,9 @@ describe('rooms and shared apps', () => {
       const info = (await lena.rooms('Gameshow'))[0];
       return info.connected && info.url ? info : undefined;
     });
-    expect(connected.url).toMatch(/^http:\/\/gameshow\.weave\.localhost:\d+\/play$/);
+    expect(connected.url).toMatch(/^http:\/\/saturday-show\.weave\.localhost:\d+\/play$/);
     const localPort = Number(new URL(connected.url!).port);
-    expect(await get(localPort, '/play')).toBe(`hello from the host, you asked for /play on gameshow.weave.localhost:${localPort}`);
+    expect(await get(localPort, '/play')).toBe(`hello from the host, you asked for /play on saturday-show.weave.localhost:${localPort}`);
     expect((await martin.rooms('Gameshow'))[0].peers.map((p) => p.name).sort()).toEqual(['Lena', 'Martin']);
 
     await lena.sayInRoom({ room: seen.id, text: 'ready!' });
