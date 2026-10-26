@@ -4,8 +4,6 @@ import { utf8, type Replica } from '@weave/core';
 import type { BlobSource } from './session.ts';
 import { PeerSession2, type SpaceAccess } from './session2.ts';
 
-/** How long to unannounce topics when leaving, before leaving anyway. */
-const LEAVE_POLITELY_MS = 3000;
 
 /** 32-byte DHT topic for a name. Hashed, so the DHT never sees the name itself. */
 export function topicFor(name: string): Buffer {
@@ -83,13 +81,9 @@ export class SwarmNode {
   async destroy(): Promise<void> {
     for (const timer of this.#timers) clearTimeout(timer);
     for (const session of this.sessions) session.close();
-    // Leaving politely unannounces every topic on the DHT, which waits out timeouts when it can't be reached (seconds
-    // on Linux): after a few seconds, leave anyway.
-    const polite = this.swarm.destroy().then(
-      () => false,
-      () => false,
-    );
-    const late = await Promise.race([polite, new Promise<boolean>((resolve) => setTimeout(() => resolve(true), LEAVE_POLITELY_MS).unref())]);
-    if (late) await this.swarm.destroy({ force: true });
+    // Without unannouncing every topic first: that waits out timeouts when the DHT can't be reached (seconds on
+    // Linux), and the announcements expire on their own. Leaving at once also closes every socket for sure, so the
+    // process can exit (cut short, udx kept it waiting at exit).
+    await this.swarm.destroy({ force: true });
   }
 }
