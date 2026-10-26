@@ -90,8 +90,8 @@ describe('applets', { timeout: 60_000 }, () => {
     const applet = checkManifest({ app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: ['weave.post'], version: '1.0' } });
     expect(applet.problems).toEqual([]);
     expect(applet.manifest?.service).toEqual({ reads: 'addressed', writes: ['weave.post'], version: '1.0' });
-    expect(checkManifest({ app: 'bot', name: 'Bot' }).problems.join()).toMatch(/an app \(its web page: "services"[^]*or an applet \(its contract: "service"\)/);
-    expect(checkManifest({ app: 'bot', name: 'Bot', service: { reads: 'nothing' } }).problems.join()).toMatch(/an applet's contract/);
+    expect(checkManifest({ app: 'bot', name: 'Bot' }).problems.join()).toMatch(/says what it does: its web page \("services"[^]*its contract \("service"\), or both/);
+    expect(checkManifest({ app: 'bot', name: 'Bot', service: { reads: 'nothing' } }).problems.join()).toMatch(/a service's contract/);
   });
 
   it("installs another project's applet as your service, with its contract, pinned to its release", async () => {

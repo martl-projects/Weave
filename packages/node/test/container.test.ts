@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { checkManifest } from '@weave/core';
+import { checkManifest, checkServiceLabel, SERVICE_LABEL } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, type Fetch, closeOpenStores } from '../src/index.ts';
 import { imageDigest, imageLocation } from '../src/registry.ts';
@@ -157,5 +158,95 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     const fetchImpl = fakes({}, { privateImage: true });
     await expect(imageDigest('ghcr.io/martl/gameshow', ['v1.4', '1.4'], { fetch: fetchImpl })).rejects.toThrow(/is private[^]*public/);
     await expect(imageDigest('ghcr.io/martl/gameshow', ['v9'], { fetch: fakes({}) })).rejects.toThrow(/no image ghcr.io\/martl\/gameshow tagged v9/);
+  });
+});
+
+/** A registry holding images as they really are: an index, a manifest per platform, a config with labels; each served by its digest. */
+function registry(images: Record<string, { labels?: Record<string, string> }>, options: { tamper?: boolean } = {}): Fetch {
+  const blobs = new Map<string, string>();
+  const put = (body: unknown) => {
+    const text = JSON.stringify(body);
+    const digest = `sha256:${createHash('sha256').update(text).digest('hex')}`;
+    blobs.set(digest, text);
+    return digest;
+  };
+  const tags = new Map<string, string>();
+  for (const [name, image] of Object.entries(images)) {
+    const config = put({ architecture: 'amd64', os: 'linux', config: { Labels: image.labels ?? null } });
+    const amd64 = put({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: config }, layers: [] });
+    const arm64 = put({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: config }, layers: [], annotations: { arch: 'arm64' } });
+    tags.set(name, put({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', manifests: [{ digest: amd64, platform: { os: 'linux', architecture: 'amd64' } }, { digest: arm64, platform: { os: 'linux', architecture: 'arm64' } }] }));
+  }
+  return (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const m = url.pathname.match(/^\/v2\/martl\/quizbot\/(manifests|blobs)\/(.+)$/);
+    if (url.host !== 'ghcr.io' || !m) return new Response('{}', { status: 404 });
+    const digest = m[1] === 'manifests' && !m[2].startsWith('sha256:') ? tags.get(`quizbot:${m[2]}`) : m[2];
+    const body = digest && blobs.get(digest);
+    if (!body) return new Response('{}', { status: 404 });
+    const served = options.tamper && m[1] === 'blobs' ? body.replace('quizbot', 'evilbot') : body;
+    return new Response(served, { status: 200, headers: { 'docker-content-digest': digest } });
+  }) as Fetch;
+}
+
+describe('Weave services: images carrying their manifest', { timeout: 60_000 }, () => {
+  it('releases one by its image, reads its manifest from the image at its digest, and runs it in the sandbox only', async () => {
+    const port = await freePort();
+    const label = { app: 'quizbot', name: 'Quiz bot', services: [{ port }], service: { reads: 'addressed', writes: [], version: '1.0' }, env: [{ name: 'QUIZ_KEY', label: 'Quiz key', secret: true, optional: true }] };
+    const fetchImpl = registry({ 'quizbot:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(label) } }, 'quizbot:plain': {} });
+    const martl = person('martl', fetchImpl);
+    const lena = person('Lena', fetchImpl);
+    await martl.createProject({ name: 'Quiz' });
+    await lena.joinSpace(await martl.invite('Quiz'));
+
+    // The label has to be there, and say what the service is.
+    expect(checkServiceLabel(JSON.stringify({ ...label, start: { command: ['x'] } })).warnings.join()).toMatch(/"start" in the label are ignored/);
+    expect(checkServiceLabel(JSON.stringify({ app: 'quizbot', name: 'Quiz bot' })).problems.join()).toMatch(/says what it does/);
+    await expect(martl.releaseService({ project: 'Quiz', image: 'ghcr.io/martl/quizbot' })).rejects.toThrow(/its name and tag/);
+    await expect(martl.releaseService({ project: 'Quiz', image: 'ghcr.io/martl/quizbot:plain' })).rejects.toThrow(/isn't a Weave service: the image has no "dev.weave.service" label/);
+    // A registry serving something else than the digest says is caught.
+    const mallory = person('Mallory', registry({ 'quizbot:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(label) } } }, { tamper: true }));
+    await mallory.createProject({ name: 'Quiz' });
+    await expect(mallory.releaseService({ project: 'Quiz', image: 'ghcr.io/martl/quizbot:1.0' })).rejects.toThrow(/served something else than sha256:/);
+
+    const released = await martl.releaseService({ project: 'Quiz', image: 'ghcr.io/martl/quizbot:1.0' });
+    expect(released).toMatchObject({ app: 'quizbot', name: 'Quiz bot', service: { reads: 'addressed' }, install: { tag: '1.0', image: { ref: 'ghcr.io/martl/quizbot', tag: '1.0', packaged: true } } });
+    expect(released.install?.image?.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    syncAll([martl, lena]);
+
+    // Lena's computer has Docker: it runs read-only, limited, with a volume of its own, by its digest.
+    const dockerDir = tempDir('weave-fake-docker-');
+    process.env.FAKE_DOCKER_DIR = dockerDir;
+    process.env.FAKE_DOCKER_PORT = String(port);
+    const [artifact] = await lena.artifacts('Quiz');
+    expect(artifact).toMatchObject({ tag: '1.0', packaged: true, runs: 'container', applet: { reads: 'addressed' } });
+    const run = artifact.command!.slice(2);
+    expect(run).toEqual(expect.arrayContaining(['--read-only', '--memory', '512m', '--pids-limit', '256', '-v', 'weave-quizbot:/data', '--cap-drop', 'ALL']));
+    expect(run.at(-1)).toBe(`ghcr.io/martl/quizbot@${released.install!.image!.digest}`);
+
+    const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
+    lena.runServices({ port: api.port });
+    try {
+      await lena.addService({ builtin: 'website', spaces: ['Quiz'] });
+      await expect(lena.addService({ artifact: { project: 'Quiz' }, spaces: ['Quiz'] })).rejects.toThrow(/approve it first: Weave would run "[^"]*--read-only[^"]*" from Quiz bot 1\.0/);
+      const quiz = await lena.addService({ artifact: { project: 'Quiz' }, spaces: ['Quiz'], approve: true });
+      // Its contract, and it serves its web page: both from the image.
+      expect(quiz).toMatchObject({ name: 'quizbot', contract: { reads: 'addressed', website: true } });
+      await vi.waitFor(async () => expect((await lena.websites('Quiz')).map((r) => r.name)).toContain('Quiz bot'), { timeout: 10_000, interval: 200 });
+      // The container answers on its port (the stand-in for Docker serves it).
+      expect(await vi.waitFor(async () => ((await (await fetch(`http://127.0.0.1:${port}/`)).json()) as { image: string }).image, { timeout: 15_000, interval: 200 })).toBe(`ghcr.io/martl/quizbot@${released.install!.image!.digest}`);
+      await lena.removeService('quizbot');
+      expect(readFileSync(join(dockerDir, 'docker.log'), 'utf8')).toMatch(/^stop -t 5 weave-service-quizbot/m);
+    } finally {
+      await api.close();
+    }
+
+    // Without Docker it doesn't run, and says why.
+    process.env.FAKE_DOCKER_DOWN = '1';
+    const kofi = person('Kofi', fetchImpl);
+    await kofi.joinSpace(await martl.invite('Quiz'));
+    syncAll([martl, kofi]);
+    await expect(kofi.addService({ artifact: { project: 'Quiz' }, spaces: ['Quiz'], approve: true })).rejects.toThrow(/Quiz bot is a Weave service: it runs in a container, and Docker isn't running here/);
+    for (const node of [martl, lena, kofi, mallory]) await node.close();
   });
 });

@@ -284,6 +284,9 @@ import {
   openMembershipRequest,
   openRekey,
   parseManifest,
+  checkServiceLabel,
+  IMAGE_REF,
+  SERVICE_LABEL,
   type RoomPages,
   type AppAsset,
   type AppImage,
@@ -488,7 +491,7 @@ import { machinePolicy } from './machine.ts';
 import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
-import { imageDigest, imageLocation } from './registry.ts';
+import { imageDigest, imageLabels, imageLocation } from './registry.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -3611,6 +3614,30 @@ export class WeaveNode implements Backend {
     return manifest;
   }
 
+
+  /**
+   * Release a Weave service: an image (ref:tag) whose config carries its manifest (SERVICE_LABEL). The tag is pinned
+   * to its digest, and the manifest is read from the image at that digest, so what people approve is what runs.
+   */
+  async releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest> {
+    if (input.as) this.#agentMay(input.as, KIND_APP);
+    const project = this.#project(input.project);
+    this.#maintainerState(project);
+    const given = input.image.trim();
+    const colon = given.lastIndexOf(':');
+    const [ref, tag] = colon > given.lastIndexOf('/') ? [given.slice(0, colon), given.slice(colon + 1)] : [given, ''];
+    if (!tag || !IMAGE_REF.test(ref)) throw new Error('which image? its name and tag, like ghcr.io/you/service:1.0 (Weave pins the tag to its digest)');
+    const auth = this.#githubAuth();
+    const options = { fetch: this.containerSetup.fetch, ...(auth && imageLocation(ref).host === 'ghcr.io' ? { credentials: { user: auth.login, token: auth.token } } : {}) };
+    const { digest } = await imageDigest(ref, [tag], options);
+    const checked = checkServiceLabel((await imageLabels(ref, digest, options))[SERVICE_LABEL]);
+    if (!checked.manifest) throw new Error(`${ref}:${tag} isn't a Weave service: ${checked.problems.join('; ')}`);
+    const published = this.#app(project);
+    if (published && published.app !== checked.manifest.app) throw new Error(`${ref}:${tag} is the service "${checked.manifest.app}", but ${project.name}'s app is "${published.app}"`);
+    const manifest = parseManifest({ ...checked.manifest, start: { image: ref }, install: { tag, image: { ref, tag, digest, packaged: true } } });
+    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    return manifest;
+  }
 
   /** The latest app manifest a maintainer published in a project. */
   #app(project: StoredSpace): AppManifest | undefined {

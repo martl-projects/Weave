@@ -11,7 +11,14 @@ import { launchFingerprint } from './applaunch.ts';
  * a container through Docker. It knows how a release runs here (its build for this platform, or its image) and
  * what approving one means. It knows nothing of spaces, keys or contracts: whoever starts something decides what
  * it gets.
+ *
+ * A Weave service (an image carrying its manifest) runs in the standard sandbox only: a container that can't
+ * write its own files or gain privileges, with limits on memory, CPU and processes, and one volume of its own for
+ * what it keeps (/data). Without Docker it doesn't run here (lighter runtimes come later).
  */
+
+/** The standard sandbox's limits for a Weave service. */
+export const SANDBOX = { memory: '512m', cpus: '1', pids: '256', tmp: '64m' };
 
 /** Something to run. */
 export interface Run {
@@ -67,6 +74,10 @@ export class Runtime {
     const image = app.install!.image!;
     const linux = process.platform === 'linux';
     const network = linux ? ['--network', 'host'] : app.services.flatMap((s) => ['-p', `127.0.0.1:${s.port}:${s.port}${s.protocol === 'tcp' ? '/tcp' : ''}`]);
+    // A Weave service: read-only, limited, and what it keeps in a volume of its own.
+    const sandbox = image.packaged
+      ? ['--read-only', '--tmpfs', `/tmp:rw,size=${SANDBOX.tmp}`, '--memory', SANDBOX.memory, '--cpus', SANDBOX.cpus, '--pids-limit', SANDBOX.pids, '-v', `${container}:/data`, '-e', 'WEAVE_DATA=/data']
+      : [];
     return [
       ...this.#docker(),
       'run',
@@ -80,6 +91,7 @@ export class Runtime {
       '--security-opt',
       'no-new-privileges',
       ...(linux ? [] : ['--add-host', 'host.docker.internal:host-gateway']),
+      ...sandbox,
       ...network,
       ...names.flatMap((n) => ['-e', n]),
       `${image.ref}@${image.digest}`,
@@ -90,6 +102,12 @@ export class Runtime {
   runs(app: AppManifest): 'release' | 'container' | undefined {
     if (this.containerOf(app)) return 'container';
     return app.install?.assets?.[platformKey()] && startCommand(app, platformKey(), true) ? 'release' : undefined;
+  }
+
+  /** Why a release doesn't run here, in words. */
+  whyNot(app: AppManifest): string {
+    if (app.install?.image?.packaged) return `${app.name} is a Weave service: it runs in a container, and Docker isn't running here`;
+    return `${[app.name, app.install?.tag].filter(Boolean).join(' ')} has no release file for this computer (${platformKey()})${app.install?.image ? ", and Docker isn't running here" : ''}`;
   }
 
   /** What running a release here runs: its build's command, or its container (by this name). */

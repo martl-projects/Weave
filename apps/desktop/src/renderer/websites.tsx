@@ -502,7 +502,7 @@ function InstallRelease({ project, onDone }: { project: SpaceInfo; onDone(): voi
             <span>
               <b>{a.name}</b> {a.tag}{' '}
               <span className="muted small">
-                · p/{a.project.name} · {a.website ? 'a website' : 'a service'} · released {ago(a.time)} by {a.released.name ?? shortDid(a.released.did)}
+                · p/{a.project.name} · {a.packaged ? 'a Weave service' : a.website ? 'a website' : 'a service'} · released {ago(a.time)} by {a.released.name ?? shortDid(a.released.did)}
               </span>
             </span>
           </label>
@@ -515,7 +515,9 @@ function InstallRelease({ project, onDone }: { project: SpaceInfo; onDone(): voi
             <Icon name="warning" size={32} />
             <div>
               <p>
-                {chosen.runs === 'container'
+                {chosen.packaged
+                  ? `Weave will run ${chosen.name} ${chosen.tag} in its sandbox: a container that can't change its own files or reach yours, with limits on memory and CPU, and a folder of its own for what it keeps:`
+                  : chosen.runs === 'container'
                   ? `Weave will run ${chosen.name} ${chosen.tag} in a container, sealed off from your files:`
                   : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it on this computer, as you:`}
               </p>

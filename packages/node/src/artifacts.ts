@@ -78,7 +78,7 @@ export class Releases {
     if (this.jobs.get(job)?.progress) return;
     const asset = a.manifest.install?.assets?.[platformKey()];
     if (!asset || !a.manifest.install?.github) {
-      this.jobs.set(job, { error: `${a.manifest.name} ${a.tag} has no release file for this computer (${platformKey()})${a.manifest.install?.image ? ", and Docker isn't running here" : ''}` });
+      this.jobs.set(job, { error: this.#runtime.whyNot(a.manifest) });
       return;
     }
     const progress: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };

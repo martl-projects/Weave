@@ -946,6 +946,17 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     }),
   );
 
+  server.registerTool(
+    'weave_service_release',
+    {
+      title: 'Release a Weave service from its image',
+      description:
+        `Maintainers: release a Weave service, an OCI image whose config carries its manifest in the "dev.weave.service" label (JSON: app, name, service contract, services for a web page, env for settings; no start or install). Give the image with its tag, like ghcr.io/you/service:1.0: Weave pins the tag to its digest and reads the manifest from the image at that digest. People in the project then install it as a service; it runs in Weave's sandbox (Docker). Needs the weave.app permission.`,
+      inputSchema: { project: z.string(), image: z.string().describe('The image and its tag, like ghcr.io/you/service:1.0') },
+    },
+    run(async ({ project, image }: { project: string; image: string }) => backend.releaseService({ project, image, as })),
+  );
+
   return {
     server,
     /** Stop listening for new events. */

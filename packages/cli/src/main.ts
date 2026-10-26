@@ -202,6 +202,8 @@ github — repositories that follow a group, tier or project (members who give t
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
   service artifacts <project>  a project's releases: what you can install as a service
+  service release <image:tag> -p <p>   release a Weave service (maintainers): an image with its manifest in its
+                             "dev.weave.service" label; Weave pins the tag to its digest and runs it in its sandbox (Docker)
   service list               the services this computer runs; service profiles: everyone's you know
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
@@ -1411,7 +1413,12 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.applet ? `  (an applet: a service that ${contractWords(a.applet)})` : a.website ? '  (an app: a website runs it)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+      }
+      if (sub === 'release' && ref) {
+        const app = await b.releaseService({ project: needProject(), image: ref });
+        const image = app.install!.image!;
+        return out(app, () => `${app.name} ${image.tag} is released: ${image.ref}@${image.digest}\n  it ${contractWords(app.service ?? { reads: 'nothing', writes: [], version: '1.0' })}${app.services.length ? `, and serves a web page (port ${app.services[0].port})` : ''}\n  install it: weave service add --artifact ${values.project} --spaces <project,…>`);
       }
       if (sub === 'add' && values.artifact) {
         const at = values.artifact.lastIndexOf('@');
