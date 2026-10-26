@@ -7508,7 +7508,7 @@ export class WeaveNode implements Backend {
         time: a.time,
         room: !!this.#artifactWeb(a.manifest),
         settings: a.manifest.env ?? [],
-        ...(runs ? { runs } : {}),
+        ...(runs ? { runs, command: this.#artifactCommand(serviceName(a.manifest.app) ?? a.manifest.app, a.manifest) } : {}),
       };
     });
   }

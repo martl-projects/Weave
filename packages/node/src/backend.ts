@@ -277,6 +277,8 @@ export interface ArtifactInfo {
   settings: AppSetting[];
   /** How it would run on this node: its release file for this platform, or its container (Docker). */
   runs?: 'release' | 'container';
+  /** What starting it here would run (shown before you approve it). */
+  command?: string[];
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
