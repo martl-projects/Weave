@@ -49,6 +49,9 @@ describe('services', () => {
     sync([martl, lena]);
     // Everyone sees its profile, by its own key, run by martl.
     expect((await lena.serviceProfiles()).map((p) => [p.name, p.person.name, p.description])).toEqual([['echo', 'martl', 'Answers what you say']]);
+    // And the members of its space see it there.
+    expect((await lena.servicesIn('Weave')).map((p) => p.name)).toEqual(['echo']);
+    expect(await martl.servicesIn('Secret')).toEqual([]);
 
     // Lena asks it; she also posts, which it doesn't read.
     const asked = await lena.askService({ space: 'Weave', service: 'martl/echo', text: 'hi' });

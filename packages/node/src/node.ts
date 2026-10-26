@@ -380,6 +380,8 @@ import {
   KIND_SERVICE_PROFILE,
   KIND_SERVICE_REQUEST,
   KIND_SERVICE_RESULT,
+  KIND_SERVICE_IN,
+  servicesIn as servicesInSpace,
   SERVICE_PREFIX,
   parseContract,
   profilesOf,
@@ -7320,6 +7322,18 @@ export class WeaveNode implements Backend {
     }))];
   }
 
+  /** Tell the spaces a service joined or left, so their members see it (and can ask it). */
+  #announceService(did: Did, before: string[], after: string[]): void {
+    for (const id of after.filter((s) => !before.includes(s))) if (this.#spaces.has(id)) this.replica.write(this.identity, sealFor(this.#cipher(this.#spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: true } }));
+    for (const id of before.filter((s) => !after.includes(s))) if (this.#spaces.has(id)) this.replica.write(this.identity, sealFor(this.#cipher(this.#spaces.get(id)!), { kind: KIND_SERVICE_IN, body: { service: did, on: false } }));
+  }
+
+  async servicesIn(ref: string): Promise<ServiceProfileInfo[]> {
+    const space = this.#space(ref);
+    const here = new Set(servicesInSpace(this.#entries(space), (service, author) => this.#isServiceKey(service, author)));
+    return (await this.serviceProfiles()).filter((p) => here.has(p.did));
+  }
+
   #serviceInfo(stored: StoredService): ServiceInfo {
     return {
       name: stored.name,
@@ -7373,6 +7387,7 @@ export class WeaveNode implements Backend {
     this.#agents.push(key);
     this.#saveServices([...this.#storedServices(), stored]);
     this.#publishServiceProfile(stored);
+    this.#announceService(key.did, [], stored.spaces);
     this.#startService(stored);
     return this.#serviceInfo(stored);
   }
@@ -7448,6 +7463,7 @@ export class WeaveNode implements Backend {
       box: boxTo(node.did, { secretKey: b64u.encode(key.keys.secretKey), publicKey: b64u.encode(key.keys.publicKey), settings: {} }) as unknown as Json,
     };
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: handover as unknown as Json }));
+    this.#announceService(key.did, [], handover.spaces);
     return this.#handoverInfo({ ...handover, id: '' });
   }
 
@@ -7472,6 +7488,7 @@ export class WeaveNode implements Backend {
       ...(change.removed ? { removed: true as const } : {}),
     };
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SERVICE_HANDOVER, body: after as unknown as Json }));
+    this.#announceService(before.did, before.spaces, change.removed ? [] : after.spaces);
   }
 
   /** On an always-on node: take over the services handed to it, change them, or let them go. Each handover once. */
@@ -7563,6 +7580,7 @@ export class WeaveNode implements Backend {
     };
     this.#saveServices(this.#storedServices().map((s) => (s.name === after.name ? after : s)));
     if (after.description !== before.description) this.#publishServiceProfile(after);
+    if (!this.#isLinkedNode) this.#announceService(this.#serviceKey(after.name).did, before.spaces, after.spaces);
     // Settings and commands take effect on a fresh start.
     this.#stopService(after.name);
     this.#startService(after);
@@ -7580,6 +7598,7 @@ export class WeaveNode implements Backend {
     const stored = this.#storedService(name);
     this.#stopService(name);
     const key = this.#serviceKey(name);
+    this.#announceService(key.did, stored.spaces, []);
     // Everything it signs from now on counts nowhere.
     this.replica.write(this.identity, revocation(key.did, this.replica.number(key.did)));
     this.#agents = this.#agents.filter((a) => a.name !== name);

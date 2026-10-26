@@ -1,0 +1,319 @@
+import { useState } from 'react';
+import type { KeyInfo, ServiceInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
+import type { ServiceContract } from '@weave/core';
+import { Icon } from './icons.tsx';
+import { ago, api, bump, shortDid, useApi } from './lib.ts';
+import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
+
+/*
+ * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
+ * you add them (on this computer or an always-on node), set them up and stop them; in a space, members see the
+ * services there, read what they do, and ask them.
+ */
+
+/** A contract in plain words. */
+export function contractText(c: ServiceContract): string {
+  const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
+  const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
+  return `${reads}; ${writes}${c.room ? '; offers a room' : ''} (contract ${c.version})`;
+}
+
+/** Every kind name, comma or space separated. */
+const kinds = (text: string) => text.split(/[\s,]+/).map((k) => k.trim()).filter(Boolean);
+
+/** The spaces a service may be in: groups, projects and communities, not direct chats. */
+function useServiceSpaces(): SpaceInfo[] {
+  const { data } = useApi(() => api<SpaceInfo[]>('spaces'), []);
+  return (data ?? []).filter((s) => s.kind !== 'direct');
+}
+
+function SpacePicker({ value, onChange }: { value: string[]; onChange(ids: string[]): void }) {
+  const spaces = useServiceSpaces();
+  if (!spaces.length) return <p className="small muted">You're in no group, project or community yet.</p>;
+  return (
+    <div className="sunken service-spaces">
+      {spaces.map((s) => (
+        <div className="field-row" key={s.id}>
+          <input type="checkbox" id={`svc-space-${s.id}`} checked={value.includes(s.id)} onChange={(e) => onChange(e.target.checked ? [...value, s.id] : value.filter((id) => id !== s.id))} />
+          <label htmlFor={`svc-space-${s.id}`}>
+            {s.name} <span className="small muted">{s.kind}</span>
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Split a command line into its parts, keeping quoted ones together. */
+const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+
+function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): void }) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [reads, setReads] = useState<'addressed' | 'kinds' | 'space'>('addressed');
+  const [readKinds, setReadKinds] = useState('');
+  const [writes, setWrites] = useState('');
+  const [room, setRoom] = useState(false);
+  const [spaces, setSpaces] = useState<string[]>([]);
+  const [where, setWhere] = useState('');
+  const [command, setCommand] = useState('');
+  const contract: ServiceContract = { reads: reads === 'kinds' ? { kinds: kinds(readKinds) } : reads, writes: kinds(writes), ...(room ? { room: true } : {}), version: '1.0' };
+  const add = async () => {
+    const done = await attempt(
+      () => api('addService', { name: name.trim(), description, contract, spaces, ...(command.trim() ? { command: commandParts(command) } : {}), ...(where ? { node: where } : {}) }).then(() => (bump(), true)),
+      `${name} is set up${where ? `: its key went to ${where}` : ''}`,
+    );
+    if (done !== undefined) onClose();
+  };
+  return (
+    <Modal title="Add a service" onClose={onClose} wide>
+      <p className="small">
+        A service is code you run under a key of its own. It signs as you · {name || 'its name'}, and only what its contract says: nothing else, never as you. It reads only in the
+        spaces you add it to.
+      </p>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-name">Name</label>
+        <input id="svc-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="files" spellCheck={false} />
+      </div>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-description">What it does</label>
+        <input id="svc-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Your NAS's folders, for the family" />
+      </div>
+      <fieldset>
+        <legend>What it reads</legend>
+        <div className="field-row">
+          <input type="radio" id="svc-reads-addressed" checked={reads === 'addressed'} onChange={() => setReads('addressed')} />
+          <label htmlFor="svc-reads-addressed">Only what members ask it (the safest)</label>
+        </div>
+        <div className="field-row">
+          <input type="radio" id="svc-reads-kinds" checked={reads === 'kinds'} onChange={() => setReads('kinds')} />
+          <label htmlFor="svc-reads-kinds">That, and some kinds:</label>
+          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.github.account" spellCheck={false} />
+        </div>
+        <div className="field-row">
+          <input type="radio" id="svc-reads-space" checked={reads === 'space'} onChange={() => setReads('space')} />
+          <label htmlFor="svc-reads-space">Everything in its spaces</label>
+        </div>
+      </fieldset>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-writes">What it may write, besides its answers</label>
+        <input id="svc-writes" value={writes} onChange={(e) => setWrites(e.target.value)} placeholder="nothing (or kinds like weave.msg)" spellCheck={false} />
+      </div>
+      <div className="field-row">
+        <input type="checkbox" id="svc-room" checked={room} onChange={(e) => setRoom(e.target.checked)} />
+        <label htmlFor="svc-room">It offers a room (a web page members open)</label>
+      </div>
+      <div className="field-row-stacked">
+        <label>In these spaces</label>
+        <SpacePicker value={spaces} onChange={setSpaces} />
+      </div>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-where">Where it runs</label>
+        <select id="svc-where" value={where} onChange={(e) => setWhere(e.target.value)}>
+          <option value="">On this computer</option>
+          {nodes.map((n) => (
+            <option key={n.did} value={n.name!.slice(5)}>
+              On the always-on node {n.name!.slice(5)}
+            </option>
+          ))}
+        </select>
+        {where && <span className="small muted">Its key is made here and sent to {where}, sealed so only that node opens it. It isn't kept on this computer.</span>}
+      </div>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-command">How to start it</label>
+        <input id="svc-command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="node files-service.js" spellCheck={false} />
+        <span className="small muted">It gets WEAVE_API and its own token (WEAVE_SERVICE_TOKEN), and its settings, as environment variables. Leave it empty if something else uses its token.</span>
+      </div>
+      <p className="small">
+        <b>Its contract:</b> {contractText(contract)}.
+      </p>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <AsyncButton className="default" onClick={add}>
+          Add service
+        </AsyncButton>
+      </div>
+    </Modal>
+  );
+}
+
+/** A service's settings: its spaces, how it starts, and secret settings (written here, never shown again). */
+function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onClose(): void }) {
+  const [spaces, setSpaces] = useState(service.spaces.map((s) => s.id));
+  const [description, setDescription] = useState(service.description);
+  const [command, setCommand] = useState(service.command?.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ') ?? '');
+  const [settings, setSettings] = useState<Record<string, string | null>>({});
+  const [key, setKey] = useState('');
+  const [value, setValue] = useState('');
+  const names = [...new Set([...service.settings, ...Object.keys(settings)])].filter((n) => settings[n] !== null).sort();
+  const save = async () => {
+    const done = await attempt(
+      () => api('setService', { name: service.name, spaces, description, command: command.trim() ? commandParts(command) : null, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
+      `${service.name} is set${service.node ? ` (${service.node.name} takes it over)` : ''}`,
+    );
+    if (done !== undefined) onClose();
+  };
+  return (
+    <Modal title={`${service.name}: settings`} onClose={onClose} wide>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-set-description">What it does</label>
+        <input id="svc-set-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <div className="field-row-stacked">
+        <label>In these spaces</label>
+        <SpacePicker value={spaces} onChange={setSpaces} />
+      </div>
+      <div className="field-row-stacked">
+        <label htmlFor="svc-set-command">How to start it</label>
+        <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
+      </div>
+      <fieldset>
+        <legend>Settings</legend>
+        <p className="small">
+          Passed to it as environment variables. Values stay on {service.node ? `${service.node.name}` : 'this computer'}, sealed; they're never shown again, only replaced or removed.
+        </p>
+        {names.map((n) => (
+          <div className="field-row" key={n}>
+            <code className="grow">{n}</code>
+            <span className="small muted">{settings[n] !== undefined ? 'changed' : 'set'}</span>
+            <button onClick={() => setSettings({ ...settings, [n]: null })}>Remove</button>
+          </div>
+        ))}
+        <div className="field-row">
+          <input value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="NAS_FOLDER" spellCheck={false} />
+          <input className="grow" type="password" value={value} onChange={(e) => setValue(e.target.value)} placeholder="value" />
+          <button disabled={!key || !value} onClick={() => (setSettings({ ...settings, [key]: value }), setKey(''), setValue(''))}>
+            Set
+          </button>
+        </div>
+      </fieldset>
+      <div className="buttons">
+        <button onClick={onClose}>Cancel</button>
+        <AsyncButton className="default" onClick={save}>
+          Save
+        </AsyncButton>
+      </div>
+    </Modal>
+  );
+}
+
+/** In Keys & devices: the services you run, here and on your always-on nodes. */
+export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
+  const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<ServiceInfo>();
+  return (
+    <fieldset>
+      <legend>Services</legend>
+      {(services ?? []).map((s) => (
+        <div className="service-row" key={s.name}>
+          <Icon name="gear" />
+          <div className="grow">
+            <b>{s.name}</b>{' '}
+            <span className="small muted">
+              {s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
+              {s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : 'no spaces yet'}
+            </span>
+            {s.description && <div className="small">{s.description}</div>}
+            <div className="small muted">{contractText(s.contract)}</div>
+          </div>
+          <div className="service-actions">
+            <button onClick={() => setEditing(s)}>Settings…</button>
+            <AsyncButton onClick={() => attempt(() => api('setService', { name: s.name, enabled: !s.enabled }).then(bump), s.enabled ? `${s.name} stopped` : `${s.name} started`)}>{s.enabled ? 'Stop' : 'Start'}</AsyncButton>
+            <AsyncButton
+              onClick={async () =>
+                (await ask(`Remove ${s.name}? Its key is revoked: nothing it signs counts any more, and ${s.node ? s.node.name : 'this computer'} stops running it.`, 'Remove')) &&
+                attempt(() => api('removeService', s.name).then(bump), `${s.name} is removed`)
+              }
+            >
+              Remove
+            </AsyncButton>
+          </div>
+        </div>
+      ))}
+      <p className="small">
+        Code you run under a key of its own: a file browser for your NAS, a bot that answers in a group, an integration. It signs as you · its name, only what its contract allows, and
+        reads only in the spaces you add it to. Run it here, or on an always-on node so it's there while your computers are off.
+      </p>
+      <div className="buttons">
+        <button onClick={() => setAdding(true)}>Add a service…</button>
+      </div>
+      {adding && <AddServiceDialog nodes={nodes} onClose={() => setAdding(false)} />}
+      {editing && <ServiceSettingsDialog service={editing} onClose={() => setEditing(undefined)} />}
+    </fieldset>
+  );
+}
+
+/** A service in a space: what it is, what it may do, asking it, and what it answered. */
+function ServiceCard({ space, service, onClose }: { space: SpaceInfo; service: ServiceProfileInfo; onClose(): void }) {
+  const { data: requests, reload } = useApi(() => api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }), [space.id, service.did]);
+  const [text, setText] = useState('');
+  const by = service.person.name ?? shortDid(service.person.did);
+  return (
+    <Modal title={`${by} · ${service.name}`} onClose={onClose} wide>
+      {service.description && <p>{service.description}</p>}
+      <p className="small muted">
+        A service {by} runs, under a key of its own: it {contractText(service.contract)}. What it writes shows as {by} · {service.name}.
+      </p>
+      <div className="field-row">
+        <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask ${service.name}…`} />
+        <AsyncButton
+          className="default"
+          onClick={async () => {
+            const done = await attempt(() => api('askService', { space: space.id, service: service.did, text }));
+            if (done !== undefined) {
+              setText('');
+              reload();
+            }
+          }}
+        >
+          Ask
+        </AsyncButton>
+      </div>
+      <div className="service-requests">
+        {(requests ?? [])
+          .slice(-20)
+          .reverse()
+          .map((r) => (
+            <div className="service-request" key={r.id}>
+              <div className="small">
+                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.text}
+              </div>
+              {r.results.length ? (
+                r.results.map((x) => (
+                  <div className={`small service-answer${x.error ? ' error-text' : ''}`} key={x.id}>
+                    {x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
+                  </div>
+                ))
+              ) : (
+                <div className="small muted service-answer">no answer yet{service.contract.reads === 'addressed' ? '' : ''}</div>
+              )}
+            </div>
+          ))}
+        {requests && !requests.length && <p className="small muted">Nobody asked it anything here yet.</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** In a space's member list: its services, under the people. */
+export function SpaceServices({ space }: { space: SpaceInfo }) {
+  const { data: services } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', space.id).catch(() => []), [space.id]);
+  const [open, setOpen] = useState<ServiceProfileInfo>();
+  if (!services?.length) return null;
+  return (
+    <>
+      <h4>Services — {services.length}</h4>
+      {services.map((s) => (
+        <button className="member service-member" key={s.did} onClick={() => setOpen(s)} title={s.description || `${s.name}, a service ${s.person.name ?? 'someone'} runs`}>
+          <Icon name="gear" />
+          <span className="member-name">
+            {s.name} <span className="small muted">· {s.person.name ?? shortDid(s.person.did)}</span>
+          </span>
+        </button>
+      ))}
+      {open && <ServiceCard space={space} service={open} onClose={() => setOpen(undefined)} />}
+    </>
+  );
+}

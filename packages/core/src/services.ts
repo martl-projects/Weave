@@ -14,6 +14,9 @@ import { isDid, type Did } from './keys.ts';
  *                          sealed in a space, by a member: a request for the service `to` (its key)
  *   weave.service.result   {request, text?, data?, error?}
  *                          sealed in the same space, by the service: its answer to a request
+ *   weave.service.in       {service, on}
+ *                          sealed in a space, by the service's person: it's in this space (members see it and
+ *                          can ask it), or no longer (on: false); the latest per service counts
  *
  * A contract says what the service reads (only requests addressed to it, some
  * kinds, or the whole space), which kinds it writes, whether it offers a room,
@@ -23,6 +26,18 @@ import { isDid, type Did } from './keys.ts';
 export const KIND_SERVICE_PROFILE = 'weave.service.profile';
 export const KIND_SERVICE_REQUEST = 'weave.service.request';
 export const KIND_SERVICE_RESULT = 'weave.service.result';
+export const KIND_SERVICE_IN = 'weave.service.in';
+
+/** The services in a space, by their keys: the latest word of each (`isTheirs` says whether its author runs that service). */
+export function servicesIn(entries: Entry[], isTheirs: (service: Did, author: Did) => boolean): Did[] {
+  const latest = new Map<Did, boolean>();
+  for (const e of [...entries].filter((x) => x.kind === KIND_SERVICE_IN).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+    const body = (e.body && typeof e.body === 'object' && !Array.isArray(e.body) ? e.body : {}) as Record<string, unknown>;
+    if (!isDid(body.service) || !isTheirs(body.service, e.event.author)) continue;
+    latest.set(body.service, body.on !== false);
+  }
+  return [...latest].filter(([, on]) => on).map(([did]) => did);
+}
 
 /** Service keys are agent keys with this prefix in their name. */
 export const SERVICE_PREFIX = 'service:';

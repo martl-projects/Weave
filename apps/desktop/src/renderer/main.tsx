@@ -18,6 +18,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
+import { SpaceServices } from './services.tsx';
 import {
   CommunityAbout,
   GroupSettings,
@@ -201,6 +202,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         {online.map((m) => row(m, true))}
         {offline.length > 0 && <h4>Away — {offline.length}</h4>}
         {offline.map((m) => row(m, false))}
+        <SpaceServices space={space} />
       </div>
     </aside>
   );

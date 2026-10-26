@@ -236,7 +236,7 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
   const [busy, setBusy] = useState<string>();
   const use = async (tag: string) => {
     setBusy(tag);
-    const done = await attempt(() => api<AppManifest>('releaseApp', { project: project.id, tag }).then(bump), `${app.name} ${tag} is ready to install from Live`);
+    const done = await attempt(() => api<AppManifest>('releaseApp', { project: project.id, tag }).then(() => (bump(), true)), `${app.name} ${tag} is ready to install from Live`);
     setBusy(undefined);
     if (done !== undefined) onClose();
   };

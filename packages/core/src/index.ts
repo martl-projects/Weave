@@ -406,6 +406,8 @@ export {
   KIND_SERVICE_PROFILE,
   KIND_SERVICE_REQUEST,
   KIND_SERVICE_RESULT,
+  KIND_SERVICE_IN,
+  servicesIn,
   SERVICE_PREFIX,
   parseContract,
   profilesOf,

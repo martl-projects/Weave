@@ -179,7 +179,7 @@ function OwnAppDialog({ onClose }: { onClose(): void }) {
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          const done = await attempt(() => api<GitHubInfo>('setGithubApp', link).then(bump), 'Your own app is set: connect GitHub through it');
+          const done = await attempt(() => api<GitHubInfo>('setGithubApp', link).then(() => (bump(), true)), 'Your own app is set: connect GitHub through it');
           if (done !== undefined) onClose();
         }}
       >
@@ -433,7 +433,7 @@ function LinkRepoDialog({ space, initialRepo, link, mayWrite, onClose }: { space
         onSubmit={async (e) => {
           e.preventDefault();
           const how = personal ? { access, ...(access === 'write' ? { writers } : {}) } : { board: board || undefined };
-          const done = await attempt(() => api('linkRepo', { space: space.id, repo: chosen, ...how, on: true }).then(bump), link ? `Who can write to ${chosen} changed` : `${chosen} now follows ${space.name}`);
+          const done = await attempt(() => api('linkRepo', { space: space.id, repo: chosen, ...how, on: true }).then(() => (bump(), true)), link ? `Who can write to ${chosen} changed` : `${chosen} now follows ${space.name}`);
           if (done !== undefined) onClose();
         }}
       >
