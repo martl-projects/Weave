@@ -558,6 +558,7 @@ import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchai
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys } from './managed.ts';
+import { Holding, type HoldingCore } from './holding.ts';
 import { Repos, type ReposCore } from './repos.ts';
 import { Services, type ServicesCore } from './services.ts';
 import { Payments, type PaymentsCore } from './payments.ts';
@@ -578,7 +579,7 @@ export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 export const KIND_BOARD_FOLLOW = 'weave.board.follow';
 /** Boards you follow until you say otherwise: the announcement-style ones. */
 export const FOLLOWED_BOARDS = ['releases', 'showcase'];
-const SELF_SCOPE = 'self';
+export const SELF_SCOPE = 'self';
 
 
 
@@ -634,35 +635,14 @@ export interface Decoded {
 const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
 /** Stage 4: how long everyone online holds a pulled space's content, how long what you open stays kept, and how many hold each event by share. */
-const RECENT_HOLD_MS = 14 * 24 * 3600 * 1000;
-/** What you opened (id → when) and the stretches of time you asked members for. */
-interface KeptState {
-  ids: Record<string, string>;
-  ranges: Array<{ space: string; since: string; until: string; at: string }>;
-}
-const KEEP_READ_MS = 30 * 24 * 3600 * 1000;
-const SHARE_HOLDERS = 3;
+export const RECENT_HOLD_MS = 14 * 24 * 3600 * 1000;
 
-/** Stage 5: how many keep each small space, up to which size a space is kept, when a keeper counts as gone, and what we keep for others. */
-const KEEPERS = 3;
-const KEPT_UP_TO = 3;
-const KEEPER_GONE_MS = 14 * 24 * 3600 * 1000;
-const KEEP_QUOTA = 500 * 1024 * 1024;
-const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
-/** Our kept spaces and their keys, in our own space, for recovery. */
-const KIND_KEEP_INDEX = 'weave.keep.index';
 /** Every space of ours (but direct chats) and its keys, in our own space, for our always-on nodes (stage 18). */
-const KIND_NODE_INDEX = 'weave.node.index';
+export const KIND_NODE_INDEX = 'weave.node.index';
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
 export const NODE_PREFIX = 'node:';
-interface KeepState {
-  spaces: Record<string, Did[]>;
-  seen: Record<string, string>;
-  /** Hash of the last keep index written. */
-  index: string;
-}
 
 
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
@@ -707,7 +687,7 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
 });
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
-const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.channel', 'weave.curate', 'weave.theme']);
+export const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -955,6 +935,39 @@ export class WeaveNode implements Backend {
       invalidateDecoded: this.#invalidateDecoded.bind(this),
     });
     // More concern modules, each over its own narrow core:
+    this.#holding = new Holding(this, {
+      ensureDirects: this.#ensureDirects.bind(this),
+      get directs() {
+        return node.#directs;
+      },
+      get spaces() {
+        return node.#spaces;
+      },
+      state: this.#state.bind(this),
+      get managed() {
+        return node.#managed;
+      },
+      friends: this.#friends.bind(this),
+      selfSecret: this.#selfSecret.bind(this),
+      invalidateDecoded: this.#invalidateDecoded.bind(this),
+      keysOnly: this.#keysOnly.bind(this),
+      sealForSelf: this.#sealForSelf.bind(this),
+      selfBodies: this.#selfBodies.bind(this),
+      get isLinkedNode() {
+        return node.#isLinkedNode;
+      },
+      addSpace: this.#addSpace.bind(this),
+      spaceName: this.#spaceName.bind(this),
+      actor: this.#actor.bind(this),
+      held: this.#held.bind(this),
+      space: this.#space.bind(this),
+      decodedIn: this.#decodedIn.bind(this),
+      get swarm() {
+        return node.#swarm;
+      },
+      spacePosts: this.#spacePosts.bind(this),
+      follows: this.#follows.bind(this),
+    });
     this.#repos = new Repos(this, {
       space: this.#space.bind(this),
       state: this.#state.bind(this),
@@ -2219,10 +2232,10 @@ export class WeaveNode implements Backend {
     if (matches.length === 0) throw new Error(`no post found with id ${ref}`);
     if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
     const space = matches[0].space && this.#spaces.get(matches[0].space.id);
-    if (space && this.#pulled(space)) {
+    if (space && this.#holding.pulled(space)) {
       // Opened: kept for 30 days, like anything you read.
-      this.#kept.ids[matches[0].id] = new Date(this.clock()).toISOString();
-      this.#saveKept();
+      this.#holding.kept.ids[matches[0].id] = new Date(this.clock()).toISOString();
+      this.#holding.saveKept();
     }
     return matches[0];
   }
@@ -3176,7 +3189,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
     changed += this.#forget();
-    changed += this.#release();
+    changed += this.#holding.release();
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
@@ -3193,10 +3206,10 @@ export class WeaveNode implements Backend {
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
     // Bookkeeping for keepers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
     if (!this.#isLinkedNode) {
-      this.#writeKeepIndex();
+      this.#holding.writeKeepIndex();
       this.#writeNodeIndex();
     }
-    this.#recoverSpaces();
+    this.#holding.recoverSpaces();
     // On an always-on node: services handed over by its person's computers.
     changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
@@ -4411,7 +4424,7 @@ export class WeaveNode implements Backend {
     const held = (space: SpaceKeys): HeldSpace => ({
       space: spaceScope(space),
       keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
-      ...(this.#spaces.has(space.id) && this.#pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
+      ...(this.#spaces.has(space.id) && this.#holding.pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
     return [
       ...[...this.#spaces.values()].map(held),
@@ -4434,13 +4447,15 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
-    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess };
+    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#holding.wantsBody(space, id), keep: this.#holding.keepAccess };
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)
 
   /** How this node signs in to key services: a token, or the person's SSO token (see #ssoToken). Set by the app or by tests. */
   kmsCredentials?: VaultCredentials;
+  /** Above this many members, a community's or project's content is held by its members between them. */
+  pulledAbove = 12;
   /** For tests and service setups: this computer's device certificate and key (PEM), instead of the managed settings' files. */
   deviceCredentials?: { cert: string; key: string };
   // Company accounts, their sign-in, policy, audit streams, SCIM, the admin console: companies.ts (Companies). The node delegates.
@@ -4594,6 +4609,9 @@ export class WeaveNode implements Backend {
   #companies!: Companies;
   // (further concern modules)
 
+  /** Who holds what: keepers for friends and spaces, members sharing a big space's content, fetching and letting go of bodies (holding.ts). */
+  #holding!: Holding;
+
   /** GitHub repositories that follow a space: sign-in, linking, members' read access (repos.ts). */
   #repos!: Repos;
 
@@ -4690,259 +4708,14 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(space);
   }
 
-  // ---------------------------------------------------------------- keepers (stage 5)
+  // Who holds what: keepers for friends and spaces, members sharing a big space's content, fetching and letting go of bodies: holding.ts (Holding). The node delegates.
 
-  #keepState?: KeepState;
-
-  /** Who keeps which of our spaces, and when we last saw each keeper (sealed at rest). */
-  get #keeping(): KeepState {
-    if (!this.#keepState) {
-      const stored = readSecretJson<KeepState>(this.home, joinPath(this.home.dir, 'keepers.json'));
-      this.#keepState = { spaces: stored?.spaces ?? {}, seen: stored?.seen ?? {}, index: stored?.index ?? '' };
-    }
-    return this.#keepState;
+  keepers(...args: Parameters<Holding['keepers']>): ReturnType<Holding['keepers']> {
+    return this.#holding.keepers(...args);
   }
 
-  #saveKeeping(): void {
-    writeSecretJson(this.home, joinPath(this.home.dir, 'keepers.json'), this.#keeping);
-  }
-
-  /** The spaces keepers keep for us: our own space, direct chats, and groups and projects of 3 people or fewer. */
-  #keptSpaces(): Array<{ scope: string; space?: StoredSpace; peer?: Did }> {
-    this.#ensureDirects();
-    return [
-      { scope: SELF_SCOPE },
-      ...[...this.#directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer })),
-      // A company's spaces are kept by its own archive, never by friends (stage 13).
-      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO && !this.#managed.managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
-    ];
-  }
-
-  /** Which friend is at the other end of a connection: the one whose direct chat it shares. */
-  #friendOn(shared: ReadonlySet<string>): Did | undefined {
-    for (const scope of shared) {
-      if (!scope.startsWith('direct:')) continue;
-      const peer = this.#directs.get(scope.slice('direct:'.length))?.peer;
-      if (peer && this.#friends().includes(peer)) return peer;
-    }
-    return undefined;
-  }
-
-  /** The keepers of a kept space: chosen at random among friends (never the other one of a direct chat), replaced when not seen for 14 days. */
-  #keepersOf(scope: string, peer?: Did): Did[] {
-    const state = this.#keeping;
-    const now = this.clock();
-    const stale = (did: Did) => now - Date.parse(state.seen[did] ?? new Date(now).toISOString()) > KEEPER_GONE_MS;
-    const friends = this.#friends().filter((f) => f !== peer);
-    let keepers = (state.spaces[scope] ?? []).filter((k) => friends.includes(k) && !stale(k));
-    const candidates = friends.filter((f) => !keepers.includes(f) && !stale(f));
-    while (keepers.length < KEEPERS && candidates.length) keepers.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
-    if (JSON.stringify(keepers) !== JSON.stringify(state.spaces[scope] ?? [])) {
-      for (const k of keepers) state.seen[k] ??= new Date(now).toISOString();
-      state.spaces[scope] = keepers;
-      this.#saveKeeping();
-    }
-    return keepers;
-  }
-
-  /** A space's events as keepers get them, by tag. */
-  #keepItems(scope: string): Map<string, WeaveRecord> {
-    const key = keepWrapKey(this.#selfSecret(), scope);
-    return new Map(this.replica.events((r) => r.scope === scope).map((r) => [keepTag(key, r.id), r]));
-  }
-
-  #keepAccess: KeepAccess = {
-    streams: (shared) => {
-      const friend = this.#friendOn(shared);
-      if (!friend) return [];
-      this.#keeping.seen[friend] = new Date(this.clock()).toISOString();
-      return this.#keptSpaces().map(({ scope, peer }) => ({
-        id: keepStreamId(this.#selfSecret(), scope, friend),
-        tags: [...this.#keepItems(scope).keys()],
-        keeper: this.#keepersOf(scope, peer).includes(friend),
-      }));
-    },
-    wrapped: (id, tags) => {
-      const found = this.#streamScope(id);
-      if (!found) return [];
-      const key = keepWrapKey(this.#selfSecret(), found);
-      const items = this.#keepItems(found);
-      return tags.flatMap((tag) => {
-        const record = items.get(tag);
-        return record ? [{ tag, data: wrapForKeeper(key, record.wire as unknown as Json) }] : [];
-      });
-    },
-    take: (id, items) => {
-      const found = this.#streamScope(id);
-      if (!found) return;
-      const key = keepWrapKey(this.#selfSecret(), found);
-      for (const { data } of items) {
-        const wire = unwrapFromKeeper(key, data);
-        if (wire !== undefined) this.replica.ingest(wire);
-      }
-      // What came back may be our keep index: take the spaces it lists.
-      this.#invalidateDecoded();
-      this.#recoverSpaces();
-    },
-    accepts: (shared, id, bytes) => !!this.#friendOn(shared) && this.replica.store.keepBytes() + bytes <= KEEP_QUOTA && this.replica.store.keepBytes(id) + bytes <= KEEP_STREAM_QUOTA,
-  };
-
-  /** The kept space a stream of ours is, whichever friend keeps it. */
-  #streamScope(id: string): string | undefined {
-    const friends = this.#friends();
-    for (const { scope } of this.#keptSpaces()) for (const friend of friends) if (keepStreamId(this.#selfSecret(), scope, friend) === id) return scope;
-    return undefined;
-  }
-
-  /**
-   * Our keep index, in our own space: the kept spaces and their keys, so that
-   * after losing everything, our self stream brings them back. Written when it
-   * changes.
-   */
-  #writeKeepIndex(): number {
-    const spaces = this.#keptSpaces().flatMap(({ space }) => (space && !this.#directs.has(space.id) ? [space] : []));
-    const body = { spaces: spaces.map((s) => ({ ...this.#keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) })) };
-    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
-    if (hash === this.#keeping.index) return 0;
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KEEP_INDEX, body: body as unknown as Json }));
-    this.#keeping.index = hash;
-    this.#saveKeeping();
-    return 1;
-  }
-
-  /** Spaces our latest keep index (and, on an always-on node, node index) lists that this node doesn't have. */
-  #recoverSpaces(): void {
-    const lists = [this.#selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.#isLinkedNode ? [this.#selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
-    for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
-  }
-
-  #adoptSpaces(spaces: StoredSpace[]): void {
-    for (const space of spaces) {
-      if (!space || typeof space.id !== 'string' || this.#spaces.has(space.id)) continue;
-      void this.#addSpace({ ...space, entry: { topics: [this.identity.author], bootstrap: [] } });
-    }
-  }
-
-  async keepers(): Promise<KeepersInfo> {
-    return {
-      spaces: this.#keptSpaces().map(({ scope, space, peer }) => ({
-        space: space ? { id: space.id, kind: space.kind, name: this.#spaceName(space) } : { id: SELF_SCOPE, kind: 'group' as const, name: 'your own space' },
-        keepers: this.#keepersOf(scope, peer).map((k) => this.#actor(k, k)),
-      })),
-      forOthers: this.replica.store.keepBytes(),
-      quota: KEEP_QUOTA,
-    };
-  }
-
-  // ---------------------------------------------------------------- who holds what (stage 4)
-
-  /** Above this many members, a community's or project's content is held by its members between them. */
-  pulledAbove = 12;
-
-  /** Is this space held by its members between them (and not ours: owners hold all of theirs)? */
-  #pulled(space: StoredSpace, state = this.#state(space)): boolean {
-    return (space.kind === 'community' || space.kind === 'project') && state.members.size > this.pulledAbove && state.founder !== this.identity.author && !this.config.archive && !this.#held(state);
-  }
-
-  /** The 3 members who hold an event by share: the lowest H(id ‖ member). Nobody coordinates, everyone computes the same. */
-  #share(id: string, members: Did[]): Did[] {
-    const rank = (did: Did) => createHash('sha256').update(`weave/share/v1:${id}:${did}`).digest('hex');
-    return [...members].sort((a, b) => rank(a).localeCompare(rank(b))).slice(0, SHARE_HOLDERS);
-  }
-
-  #keptState?: KeptState;
-
-  /** What this node keeps because its person opened or asked for it (sealed at rest: it says what they read). */
-  get #kept() {
-    if (!this.#keptState) {
-      const stored = readSecretJson<KeptState>(this.home, joinPath(this.home.dir, 'kept.json'));
-      this.#keptState = { ids: stored?.ids ?? {}, ranges: stored?.ranges ?? [] };
-    }
-    return this.#keptState;
-  }
-
-  #saveKept(): void {
-    const since = new Date(this.clock() - KEEP_READ_MS).toISOString();
-    const kept = this.#kept;
-    for (const [id, at] of Object.entries(kept.ids)) if (at < since) delete kept.ids[id];
-    kept.ranges = kept.ranges.filter((r) => r.at >= since);
-    writeSecretJson(this.home, joinPath(this.home.dir, 'kept.json'), kept);
-  }
-
-  /** Opened or asked for in the last 30 days. */
-  #isKept(space: StoredSpace, id: string, time: string): boolean {
-    const since = new Date(this.clock() - KEEP_READ_MS).toISOString();
-    const kept = this.#kept;
-    if ((kept.ids[id] ?? '') >= since) return true;
-    return kept.ranges.some((r) => r.space === space.id && r.at >= since && time >= r.since && time < r.until);
-  }
-
-  /** In a pulled space: do we keep this event's body? Our share, or something we keep. */
-  #wantsBody(scope: string, id: string): boolean {
-    const space = this.#spaces.get(parseScope(scope)?.id ?? '');
-    if (!space) return true;
-    const state = this.#state(space);
-    if (!this.#pulled(space, state)) return true;
-    return this.#share(id, [...state.members.keys()]).includes(this.identity.author) || (this.#kept.ids[id] ?? '') >= new Date(this.clock() - KEEP_READ_MS).toISOString();
-  }
-
-  async fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }> {
-    const space = this.#space(input.space);
-    const oldest = this.#decodedIn(space.id).reduce((a, d) => (d.event.time < a ? d.event.time : a), new Date(this.clock()).toISOString());
-    const until = input.before ?? oldest;
-    if (Number.isNaN(Date.parse(until))) throw new Error('before is a date, e.g. 2026-09-01');
-    const since = new Date(Date.parse(until) - KEEP_READ_MS).toISOString();
-    this.#kept.ranges.push({ space: space.id, since, until, at: new Date(this.clock()).toISOString() });
-    this.#saveKept();
-    this.#swarm?.fetchRange(spaceScope(space), since, until);
-    return { since, until };
-  }
-
-  /**
-   * In pulled spaces: let go of the bodies we don't hold (see docs/v2-stage4.md):
-   * not recent, not ours, not kept (upvoted, saved, opened, followed board),
-   * not core (pinned, issues, proposals, releases, the page), not our share.
-   * The envelopes stay, and the bodies can be fetched again.
-   */
-  #release(): number {
-    const me = this.identity.author;
-    const recent = new Date(this.clock() - RECENT_HOLD_MS).toISOString();
-    let released = 0;
-    for (const space of [...this.#spaces.values()]) {
-      const state = this.#state(space);
-      if (!this.#pulled(space, state)) continue;
-      const members = [...state.members.keys()];
-      const posts = new Map(this.#spacePosts(space).posts.map((p) => [p.id, p]));
-      const held = (p: PostInfo) =>
-        p.by.did === me ||
-        (!!p.lifetime && 'forever' in p.lifetime && p.lifetime.forever !== 'no-rule') ||
-        p.pinned ||
-        p.active >= recent ||
-        p.myVote === 1 ||
-        !!p.saved ||
-        (space.kind === 'project' && !!p.board && this.#follows(space.id, p.board)) ||
-        this.#isKept(space, p.id, p.time) ||
-        this.#share(p.id, members).includes(me);
-      for (const d of this.#decodedIn(space.id)) {
-        if (d.carried || d.event.author === me || d.event.class !== 'content' || CARRIED_STATE.has(d.inner.kind)) continue;
-        const body = d.inner.body as { post?: unknown; target?: unknown } | null;
-        const anchor = posts.get(d.id) ?? posts.get(String(body?.post ?? body?.target ?? ''));
-        const keep = anchor ? held(anchor) : d.event.time >= recent || this.#isKept(space, d.id, d.event.time);
-        if (keep || this.#share(d.id, members).includes(me)) continue;
-        if (!isWireItemV2(d.event.wire) || d.event.missing) continue;
-        this.replica.store.releaseBody(d.event.wire.e.body as string);
-        released++;
-      }
-    }
-    if (released) this.#invalidateDecoded();
-    return released;
-  }
-
-  /** Roughly who holds a post of a pulled space: an estimate from what every node knows. */
-  #heldBy(p: PostInfo, members: Did[], recent: boolean): NonNullable<PostInfo['heldBy']> {
-    const share = this.#share(p.id, members).filter((d) => d !== p.by.did).length;
-    const upvoters = Math.max(0, p.score);
-    return { about: recent ? members.length : 1 + share + upvoters, author: true, share, upvoters, recent, here: true };
+  fetchOlder(...args: Parameters<Holding['fetchOlder']>): ReturnType<Holding['fetchOlder']> {
+    return this.#holding.fetchOlder(...args);
   }
 
   /** Tell peers which spaces this node holds, right away (a key changed), and join the right meeting points soon. */
@@ -5292,10 +5065,10 @@ export class WeaveNode implements Backend {
         if (proposal) info.proposal = this.#proposalInfo(proposal);
         return info;
       });
-    if (this.#pulled(space, state)) {
+    if (this.#holding.pulled(space, state)) {
       const members = [...state.members.keys()];
       const recent = new Date(this.clock() - RECENT_HOLD_MS).toISOString();
-      for (const p of posts) p.heldBy = this.#heldBy(p, members, p.active >= recent);
+      for (const p of posts) p.heldBy = this.#holding.heldBy(p, members, p.active >= recent);
     }
     // A board over its size: the posts that would go soonest go now.
     for (const [board, rule] of rules) {
