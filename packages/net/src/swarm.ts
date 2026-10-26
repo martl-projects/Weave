@@ -4,6 +4,9 @@ import { utf8, type Replica } from '@weave/core';
 import type { BlobSource } from './session.ts';
 import { PeerSession2, type SpaceAccess } from './session2.ts';
 
+/** How long leaving the DHT may take before we go anyway. */
+const LEAVE_MS = 4000;
+
 
 /** 32-byte DHT topic for a name. Hashed, so the DHT never sees the name itself. */
 export function topicFor(name: string): Buffer {
@@ -82,8 +85,13 @@ export class SwarmNode {
     for (const timer of this.#timers) clearTimeout(timer);
     for (const session of this.sessions) session.close();
     // Without unannouncing every topic first: that waits out timeouts when the DHT can't be reached (seconds on
-    // Linux), and the announcements expire on their own. Leaving at once also closes every socket for sure, so the
-    // process can exit (cut short, udx kept it waiting at exit).
-    await this.swarm.destroy({ force: true });
+    // Linux), and the announcements expire on their own. And not for ever: a server still starting to listen (the
+    // DHT not reached yet, e.g. stopped right after starting without a network) never finishes closing.
+    const left = this.swarm.destroy({ force: true }).then(
+      () => true,
+      () => true,
+    );
+    const done = await Promise.race([left, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), LEAVE_MS).unref())]);
+    if (!done) console.error(`weave: left the DHT without waiting for it (still starting after ${LEAVE_MS / 1000} s)`);
   }
 }
