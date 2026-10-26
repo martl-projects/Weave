@@ -307,6 +307,11 @@ artifacts and websites: a project's releases, and websites that run them (needs 
   app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
+  catalog <space>            the Weave services a space's maintainers list there, to install
+  catalog add <space> --artifact <project>[@tag] [--text <summary>]   list a Weave service (maintainers of the space)
+  catalog remove <space> <app>   take it off
+  service add [<name>] --from <space>/<app>   install a Weave service from a catalog: its manifest is read from its
+                             image, not from the catalog (asks you to approve it)  [--spaces …] [--setting KEY=VALUE]
   websites [-p <project>]    open websites (were: rooms)
   website open <name> -p <p> --port <n>   a website of your website service, reaching what you run on this computer at the
                              port (services serve their own) [--service <website service>]
@@ -1434,6 +1439,14 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const image = app.install!.image!;
         return out(app, () => `${app.name} ${image.tag} is released: ${image.ref}@${image.digest}\n  it ${contractWords(app.service ?? { reads: 'nothing', writes: [], version: '1.0' })}${app.services.length ? `, and serves a web page (port ${app.services[0].port})` : ''}\n  install it: weave service add --artifact ${values.project} --spaces <project,…>`);
       }
+      if (sub === 'add' && values.from) {
+        const slash = values.from.lastIndexOf('/');
+        if (slash < 1) throw new Error('--from is the catalog and the app: <space>/<app>');
+        const from = { catalog: values.from.slice(0, slash), app: values.from.slice(slash + 1) };
+        const settings = Object.fromEntries(Object.entries(settingsOf()).filter(([, v]) => v !== null)) as Record<string, string>;
+        const s = await approving((approve) => b.addService({ ...(ref ? { name: ref } : {}), from, approve, spaces: list(values.spaces), settings, ...(values.node ? { node: values.node } : {}) }));
+        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with exactly its contract's rights. Its image runs in Weave's sandbox.`);
+      }
       if (sub === 'add' && values.artifact) {
         const at = values.artifact.lastIndexOf('@');
         const artifact = at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact };
@@ -2325,6 +2338,37 @@ ${postLine(p)}`);
     }
 
     // "rooms" and "room": what websites were called before.
+    case 'catalog': {
+      const [first, second, third] = args;
+      const b = await backend();
+      if (first === 'add' && second) {
+        if (!values.artifact) throw new Error('which release? --artifact <project>[@tag]');
+        const at = values.artifact.lastIndexOf('@');
+        const artifact = at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact };
+        const e = await b.listInCatalog({ catalog: second, artifact, ...(values.text ? { summary: values.text } : {}) });
+        return out(e, () => `${e.name} ${e.origin.tag} is listed in ${e.catalog.name}: weave service add --from ${second}/${e.app}`);
+      }
+      if (first === 'remove' && second && third) {
+        await b.unlistFromCatalog({ catalog: second, app: third });
+        return out({ removed: third }, () => `${third} is off ${second}`);
+      }
+      if (!first || first === 'add' || first === 'remove') throw new Error('usage: weave catalog <space> | catalog add <space> --artifact <project>[@tag] | catalog remove <space> <app>');
+      const entries = await b.catalog(first);
+      return out(entries, () =>
+        entries
+          .map((e) =>
+            [
+              `${e.name} ${e.image.tag}${e.installed ? `  (runs here as ${e.installed})` : ''}  listed by ${e.by.name ?? e.by.did}`,
+              ...(e.summary ? [`  ${e.summary}`] : []),
+              `  from ${e.origin.project.name ? `p/${e.origin.project.name}` : "a project you aren't in"}, release ${e.origin.tag}`,
+              `  ${e.image.ref}@${e.image.digest.slice(0, 19)}…`,
+              `  install: weave service add --from ${first}/${e.app}`,
+            ].join('\n'),
+          )
+          .join('\n\n') || `(${first} lists nothing yet)`,
+      );
+    }
+
     case 'websites':
     case 'rooms': {
       const sites = await (await backend()).websites(values.project);

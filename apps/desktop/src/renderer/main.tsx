@@ -11,6 +11,7 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
 import { ProjectServicesView } from './websites.tsx';
+import { CatalogView } from './catalog.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -82,6 +83,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
             />
           ))}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
+          <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label="Catalog" on={view === 'catalog'} />
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
@@ -241,7 +243,10 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const invite = () => open({ kind: 'invite', space });
 
   let body: ReactNode;
-  if (space.kind === 'group' && view === 'settings') {
+  if (view === 'catalog') {
+    // Groups: their founder lists; projects and communities: their maintainers and moderators.
+    body = <CatalogView space={space} maintainer={!!info?.maintainer || (space.kind === 'group' && space.founder === me.did)} />;
+  } else if (space.kind === 'group' && view === 'settings') {
     body = <GroupSettings group={space} members={list} meDid={me.did} />;
   } else if (space.kind === 'group') {
     const channel = view === 'c' ? (arg ?? 'general') : 'general';

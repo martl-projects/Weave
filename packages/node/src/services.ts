@@ -1,5 +1,5 @@
-import { b64u, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
-import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type ServiceRequestInfo } from './backend.ts';
+import { b64u, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
 import { timingSafeEqual } from 'node:crypto';
@@ -7,6 +7,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { releaseApproval } from './runtime.ts';
+import { imageLabels } from './registry.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
@@ -244,13 +245,14 @@ export class Services {
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
    * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
     if (builtin && command?.length) throw new Error(`the ${builtin} service runs in Weave: it runs no command`);
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
-    const found = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : undefined;
+    // Or a Weave service listed in a catalog: what it is comes from its image, not from the catalog.
+    const found: { project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } } | undefined = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : input.from ? await this.fromCatalog(input.from) : undefined;
     if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
     const manifest = found?.artifact.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest)) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
@@ -739,6 +741,90 @@ export class Services {
       },
       serve: (input) => this.web.serve(name, input),
     };
+  }
+
+  // Catalogs: spaces whose maintainers list Weave services for their people to install (see core catalog.ts).
+
+  /** What installing a catalog entry would run, read from its image (shown before you approve it). */
+  async catalogArtifact(input: { catalog: string; app: string }): Promise<ArtifactInfo> {
+    const space = this.h.space(input.catalog);
+    const entry = catalogOf(this.h.entries(space), this.h.state(space).maintainers).find((e) => e.app === input.app)!;
+    const { project, artifact } = await this.fromCatalog(input);
+    const m = artifact.manifest;
+    const runs = this.h.runtime.runs(m);
+    return {
+      id: artifact.id,
+      project: { id: project.id, kind: 'project', name: project.name },
+      tag: artifact.tag,
+      app: m.app,
+      name: m.name,
+      released: this.h.actor(entry.by, entry.by),
+      time: entry.time,
+      website: !!this.artifactWeb(m),
+      settings: m.env ?? [],
+      ...(m.service ? { applet: m.service } : {}),
+      packaged: true,
+      ...(runs ? { runs, command: this.h.runtime.command(`weave-${m.app}`, m) } : {}),
+    };
+  }
+
+  /** A catalog's entries, and which of them run here (by their image's digest). */
+  async catalog(ref: string): Promise<CatalogEntryInfo[]> {
+    const space = this.h.space(ref);
+    const here = this.storedServices().filter((s) => s.artifact?.manifest.install?.image);
+    return catalogOf(this.h.entries(space), this.h.state(space).maintainers).map((e) => {
+      const from = this.h.spaces.get(e.origin.project);
+      const installed = here.find((s) => s.artifact!.manifest.install!.image!.digest === e.image.digest);
+      return {
+        id: e.id,
+        catalog: { id: space.id, kind: space.kind, name: this.h.spaceName(space) },
+        app: e.app,
+        name: e.name,
+        summary: e.summary,
+        origin: { project: { id: e.origin.project, ...(from ? { name: this.h.spaceName(from) } : {}) }, release: e.origin.release, tag: e.origin.tag },
+        image: e.image,
+        by: this.h.actor(e.by, e.by),
+        time: e.time,
+        ...(installed ? { installed: installed.name } : {}),
+      };
+    });
+  }
+
+  /** List a Weave service in a catalog (its maintainers): a release of a project you're in, by its image. */
+  async listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo> {
+    const space = this.h.space(input.catalog);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} list things in it`);
+    const { project, artifact } = this.artifact(input.artifact.project, input.artifact.tag);
+    const image = artifact.manifest.install?.image;
+    if (!image?.packaged) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't a Weave service: catalogs list images that carry their manifest (weave service release)`);
+    const body = { app: artifact.manifest.app, name: artifact.manifest.name, ...(input.summary?.trim() ? { summary: input.summary.trim().slice(0, 500) } : {}), origin: { project: project.id, release: artifact.id, tag: artifact.tag }, image: { ref: image.ref, tag: image.tag, digest: image.digest } };
+    await this.h.publish({ kind: KIND_CATALOG_ENTRY, body, space: space.id, as: input.as });
+    return (await this.catalog(space.id)).find((e) => e.app === body.app)!;
+  }
+
+  /** Take an app off a catalog (its maintainers). */
+  async unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void> {
+    const space = this.h.space(input.catalog);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} take things off it`);
+    if (!(await this.catalog(space.id)).some((e) => e.app === input.app)) throw new Error(`${this.h.spaceName(space)} lists no "${input.app}"`);
+    await this.h.publish({ kind: KIND_CATALOG_ENTRY, body: { app: input.app, removed: true }, space: space.id, as: input.as });
+  }
+
+  /**
+   * A catalog entry, as installing it needs it: the manifest read from its image at its digest (the catalog only
+   * points at it), and where it comes from, as the entry says.
+   */
+  async fromCatalog(from: { catalog: string; app: string }): Promise<{ project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } }> {
+    const space = this.h.space(from.catalog);
+    const entry = catalogOf(this.h.entries(space), this.h.state(space).maintainers).find((e) => e.app === from.app);
+    if (!entry) throw new Error(`${this.h.spaceName(space)} lists no "${from.app}"`);
+    const { ref, tag, digest } = entry.image;
+    const checked = checkServiceLabel((await imageLabels(ref, digest, { fetch: this.h.registryFetch() }))[SERVICE_LABEL]);
+    if (!checked.manifest) throw new Error(`${ref}@${digest} isn't a Weave service: ${checked.problems.join('; ')}`);
+    if (checked.manifest.app !== entry.app) throw new Error(`${this.h.spaceName(space)} lists "${entry.app}", but its image is "${checked.manifest.app}"`);
+    const manifest = parseManifest({ ...checked.manifest, start: { image: ref }, install: { tag, image: { ref, tag, digest, packaged: true } } });
+    const project = this.h.spaces.get(entry.origin.project);
+    return { project: { id: entry.origin.project, name: project ? this.h.spaceName(project) : `a project listed in ${this.h.spaceName(space)}` }, artifact: { id: entry.origin.release, tag: entry.origin.tag, manifest } };
   }
 
   // Providers: services that hand out artifacts (artifact.fetch). Weave's GitHub service is one: it runs in the

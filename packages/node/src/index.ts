@@ -85,6 +85,7 @@ export type {
   HostedWebsiteInfo,
   ServiceArtifactInfo,
   ArtifactInfo,
+  CatalogEntryInfo,
   ServiceProfileInfo,
   ServiceOriginInfo,
   ServiceRequestInfo,

@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { Builtin, GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -248,6 +248,24 @@ export interface ServiceInfo {
   running: boolean;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
+}
+
+/** A Weave service a catalog lists: where it comes from, its image (what installing it reads the manifest from), and whether it runs here. */
+export interface CatalogEntryInfo {
+  id: string;
+  /** The space that lists it. */
+  catalog: SpaceRef;
+  app: string;
+  name: string;
+  summary: string;
+  /** The release it comes from, as the entry says (the project's name only if you're in it). */
+  origin: { project: { id: string; name?: string }; release: string; tag: string };
+  image: AppImage;
+  /** The maintainer who listed it. */
+  by: Actor;
+  time: string;
+  /** The service on this node that runs this image, if one does. */
+  installed?: string;
 }
 
 /** The release an applet runs, and how fetching it went. */
@@ -1589,7 +1607,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
@@ -1599,6 +1617,14 @@ export interface Backend {
   openWebsite(input: { service?: string; project: string; name: string; port?: number; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
+  /** A space's catalog: the Weave services its maintainers list there, newest first. */
+  catalog(space: string): Promise<CatalogEntryInfo[]>;
+  /** List a Weave service in a catalog (its maintainers): a release of a project you're in. */
+  listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo>;
+  /** What installing a catalog entry would run, read from its image (shown before approving it); `released` is who listed it. */
+  catalogArtifact(input: { catalog: string; app: string }): Promise<ArtifactInfo>;
+  /** Take an app off a catalog (its maintainers). */
+  unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
   /** Change a service; `artifact: {tag}` moves an applet to another release (the latest without a tag), which needs `approve`. */
   setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
@@ -1951,7 +1977,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

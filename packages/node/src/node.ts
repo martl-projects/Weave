@@ -721,7 +721,7 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
 });
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
-const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.channel', 'weave.curate', 'weave.theme']);
+const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -8755,6 +8755,8 @@ export class WeaveNode implements Backend {
         return n.#isLinkedNode;
       },
       /** A GitHub client with this node's sign-in (none: public repositories only). */
+      /** Fetch for container registries (tests put a stand-in there). */
+      registryFetch: () => n.containerSetup.fetch,
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
       publish: n.publish.bind(n),
@@ -8839,6 +8841,22 @@ export class WeaveNode implements Backend {
 
   artifacts(...args: Parameters<Services['artifacts']>): ReturnType<Services['artifacts']> {
     return this.#services.artifacts(...args);
+  }
+
+  catalog(...args: Parameters<Services['catalog']>): ReturnType<Services['catalog']> {
+    return this.#services.catalog(...args);
+  }
+
+  catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {
+    return this.#services.catalogArtifact(...args);
+  }
+
+  listInCatalog(...args: Parameters<Services['listInCatalog']>): ReturnType<Services['listInCatalog']> {
+    return this.#services.listInCatalog(...args);
+  }
+
+  unlistFromCatalog(...args: Parameters<Services['unlistFromCatalog']>): ReturnType<Services['unlistFromCatalog']> {
+    return this.#services.unlistFromCatalog(...args);
   }
 
   addService(...args: Parameters<Services['addService']>): ReturnType<Services['addService']> {

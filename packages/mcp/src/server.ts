@@ -911,6 +911,18 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_catalog',
+    {
+      title: "A space's catalog",
+      description:
+        "The Weave services a space's maintainers list there, newest first: what each is, where it comes from, its image (by digest), and whether it already runs on your person's node. Installing one runs code on their node, so they do it themselves: in the app (the space's Catalog), or with weave service add --from <space>/<app>, approving what it may do and typing its settings.",
+      inputSchema: { space: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ space }: { space: string }) => backend.catalog(space)),
+  );
+
+  server.registerTool(
     'weave_app_release',
     {
       title: "Point a project's app at a GitHub release",

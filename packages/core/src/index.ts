@@ -428,3 +428,4 @@ export {
   type ServiceReads,
   type ServiceRequest,
 } from './services.ts';
+export { KIND_CATALOG_ENTRY, catalogOf, parseCatalogEntry, type CatalogEntry } from './catalog.ts';
