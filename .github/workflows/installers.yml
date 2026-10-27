@@ -17,7 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    # All three run on self-hosted runners (docs/self-hosted-runners.md); set the
+    # repository variable WINDOWS_RUNNER, MACOS_RUNNER or LINUX_RUNNER to
+    # "windows-latest", "macos-latest" or "ubuntu-latest" to go back to GitHub's.
+    runs-on: ${{ matrix.os == 'windows-latest' && fromJSON(vars.WINDOWS_RUNNER || '["self-hosted","windows-vm"]') || matrix.os == 'macos-latest' && fromJSON(vars.MACOS_RUNNER || '["self-hosted","macos-mini"]') || matrix.os == 'ubuntu-latest' && fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') || matrix.os }}
     env:
       # electron-builder downloads its own Electron for each target.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'

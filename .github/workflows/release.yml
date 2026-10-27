@@ -22,7 +22,7 @@ jobs:
   # Weave Server: the company's node as a folder to run with Node 24 (attached to the release) ...
   server:
     needs: ci
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
@@ -41,6 +41,8 @@ jobs:
           if-no-files-found: error
 
   # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
+  # On GitHub's runner: the self-hosted Linux runner has no Docker, which would
+  # give jobs root there (docs/self-hosted-runners.md).
   server-image:
     needs: ci
     runs-on: ubuntu-latest
@@ -67,7 +69,7 @@ jobs:
 
   release:
     needs: [ci, installers, server]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
     permissions:
       contents: write
     steps:
