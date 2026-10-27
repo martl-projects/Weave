@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { KeyInfo, ServiceInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
+import { useRef, useState } from 'react';
+import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
 import type { ServiceContract } from '@weave/core';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
@@ -13,9 +13,26 @@ import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /** A contract in plain words. */
 export function contractText(c: ServiceContract): string {
-  const reads = c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
-  const writes = c.writes.length ? `writes ${c.writes.join(', ')} and its answers` : 'writes only its answers';
-  return `${reads}; ${writes}${c.room ? '; offers a room' : ''} (contract ${c.version})`;
+  const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
+  const answers = c.reads === 'nothing' ? '' : ' and its answers';
+  const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''} (contract ${c.version})`;
+}
+
+/** Where a service comes from, and whether this computer could check it. */
+export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
+  if (origin.kind === 'weave') return <div className="small muted">Comes with Weave</div>;
+  if (origin.kind === 'unreleased') return <div className="small muted">Its person's own code, not released in a project</div>;
+  const where = `${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, release ${origin.tag}`;
+  if (origin.checked === 'verified')
+    return (
+      <div className="small muted">
+        ✓ From {where}, released by {origin.publisher?.name ?? shortDid(origin.publisher?.did ?? '')}
+        {origin.packaged ? ' · a Weave service' : ''}
+      </div>
+    );
+  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but that project has no such release: don't trust it</div>;
+  return <div className="small muted">From {where} (only its participants can check)</div>;
 }
 
 /** Every kind name, comma or space separated. */
@@ -50,14 +67,14 @@ const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\
 function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [reads, setReads] = useState<'addressed' | 'kinds' | 'space'>('addressed');
+  const [reads, setReads] = useState<'nothing' | 'addressed' | 'kinds' | 'space'>('addressed');
   const [readKinds, setReadKinds] = useState('');
   const [writes, setWrites] = useState('');
-  const [room, setRoom] = useState(false);
+  const [website, setWebsite] = useState(false);
   const [spaces, setSpaces] = useState<string[]>([]);
   const [where, setWhere] = useState('');
   const [command, setCommand] = useState('');
-  const contract: ServiceContract = { reads: reads === 'kinds' ? { kinds: kinds(readKinds) } : reads, writes: kinds(writes), ...(room ? { room: true } : {}), version: '1.0' };
+  const contract: ServiceContract = { reads: reads === 'kinds' ? { kinds: kinds(readKinds) } : reads, writes: kinds(writes), ...(website ? { website: true } : {}), version: '1.0' };
   const add = async () => {
     const done = await attempt(
       () => api('addService', { name: name.trim(), description, contract, spaces, ...(command.trim() ? { command: commandParts(command) } : {}), ...(where ? { node: where } : {}) }).then(() => (bump(), true)),
@@ -82,6 +99,10 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
       <fieldset>
         <legend>What it reads</legend>
         <div className="field-row">
+          <input type="radio" id="svc-reads-nothing" checked={reads === 'nothing'} onChange={() => setReads('nothing')} />
+          <label htmlFor="svc-reads-nothing">Nothing: it takes no requests (a website, say)</label>
+        </div>
+        <div className="field-row">
           <input type="radio" id="svc-reads-addressed" checked={reads === 'addressed'} onChange={() => setReads('addressed')} />
           <label htmlFor="svc-reads-addressed">Only what members ask it (the safest)</label>
         </div>
@@ -100,8 +121,8 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
         <input id="svc-writes" value={writes} onChange={(e) => setWrites(e.target.value)} placeholder="nothing (or kinds like weave.msg)" spellCheck={false} />
       </div>
       <div className="field-row">
-        <input type="checkbox" id="svc-room" checked={room} onChange={(e) => setRoom(e.target.checked)} />
-        <label htmlFor="svc-room">It offers a room (a web page members open)</label>
+        <input type="checkbox" id="svc-website" checked={website} onChange={(e) => setWebsite(e.target.checked)} />
+        <label htmlFor="svc-website">It serves a website (a page members open)</label>
       </div>
       <div className="field-row-stacked">
         <label>In these spaces</label>
@@ -163,10 +184,13 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         <label>In these spaces</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-set-command">How to start it</label>
-        <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
-      </div>
+      {!service.builtin && !service.artifact && (
+        <div className="field-row-stacked">
+          <label htmlFor="svc-set-command">How to start it</label>
+          <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
+        </div>
+      )}
+      {service.builtin === 'github' && <GitHubAppSettings service={service.name} set={service.settings.includes('GITHUB_APP_KEY')} onChange={(change) => setSettings({ ...settings, ...change })} />}
       <fieldset>
         <legend>Settings</legend>
         <p className="small">
@@ -197,6 +221,70 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
   );
 }
 
+/**
+ * The GitHub service's own GitHub App: its ID and private key. With them it acts as that App where it's installed
+ * (keeping linked repositories' access in step, handing out release files), and nobody has to sign in.
+ */
+function GitHubAppSettings({ service, set, onChange }: { service: string; set: boolean; onChange(change: Record<string, string>): void }) {
+  const [org, setOrg] = useState('');
+  const [id, setId] = useState('');
+  const [key, setKey] = useState('');
+  const [picked, setPicked] = useState<string>();
+  const file = useRef<HTMLInputElement>(null);
+  const ready = /^\d+$/.test(id.trim()) && /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(key);
+  return (
+    <fieldset>
+      <legend>GitHub App</legend>
+      <p className="small">
+        {set ? 'It acts as your own GitHub App.' : 'Without one, it acts with the GitHub sign-in of the computer it runs on.'} With an App of your own, nobody has to sign in, and on an always-on node it keeps
+        repositories in step while your computers are off.
+      </p>
+      <div className="field-row">
+        <input value={org} onChange={(e) => setOrg(e.target.value.trim())} placeholder="Organization on GitHub, like acme" aria-label="GitHub organization" />
+        <AsyncButton
+          className="default"
+          onClick={() =>
+            attempt(async () => {
+              const { url } = await api<{ url: string }>('githubAppSetup', { service, ...(org ? { org } : {}) });
+              window.open(url, '_blank', 'noopener');
+            }, 'Confirm the App on GitHub, then install it: Weave takes its ID and key by itself')
+          }
+        >
+          {set ? 'Create a new App…' : 'Create my GitHub App…'}
+        </AsyncButton>
+      </div>
+      <p className="small muted">Opens GitHub with the App filled in (Administration: read and write, Contents and Metadata: read, no webhooks). Without an organization, it's an App of your account.</p>
+      <details>
+        <summary className="small">Or give an App's ID and key by hand</summary>
+        <div className="field-row">
+          <input value={id} onChange={(e) => setId(e.target.value.replace(/\D/g, ''))} placeholder="App ID, like 123456" inputMode="numeric" aria-label="GitHub App ID" />
+          <button type="button" onClick={() => file.current?.click()}>
+            {picked ?? 'Choose its .pem key…'}
+          </button>
+          <input
+            ref={file}
+            type="file"
+            accept=".pem"
+            hidden
+            onChange={async (e) => {
+              const chosen = e.target.files?.[0];
+              if (!chosen) return;
+              setKey(await chosen.text());
+              setPicked(chosen.name);
+            }}
+          />
+        </div>
+        {!picked && <textarea className="wide code" rows={3} value={key} onChange={(e) => setKey(e.target.value)} placeholder="…or paste the private key (-----BEGIN RSA PRIVATE KEY-----…)" spellCheck={false} aria-label="GitHub App private key" />}
+        <div className="buttons">
+          <button disabled={!ready} onClick={() => (onChange({ GITHUB_APP_ID: id.trim(), GITHUB_APP_KEY: key }), setId(''), setKey(''), setPicked(undefined))}>
+            Use this App
+          </button>
+        </div>
+      </details>
+    </fieldset>
+  );
+}
+
 /** In Keys & devices: the services you run, here and on your always-on nodes. */
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
@@ -212,11 +300,33 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
           <div className="grow">
             <b>{s.name}</b>{' '}
             <span className="small muted">
-              {s.builtin === 'room' ? `Weave's room service · ${s.enabled ? `${s.rooms?.length ?? 0} room${s.rooms?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
+              {s.builtin === 'website' ? `Weave's website service · ${s.enabled ? `${s.websites?.length ?? 0} website${s.websites?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
               {s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : 'no spaces yet'}
             </span>
             {s.description && <div className="small">{s.description}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
+            {s.artifact && (
+              <div className="small">
+                Runs {s.artifact.name} {s.artifact.tag}, from p/{s.artifact.project.name ?? s.artifact.project.id}
+                {s.artifact.progress ? ' · fetching…' : ''}
+                {s.artifact.deliveredBy ? ` · delivered by ${s.artifact.deliveredBy}, checked` : ''}
+                {s.artifact.error ? <span className="error-text"> · {s.artifact.error}</span> : null}
+                {s.artifact.latest && (
+                  <>
+                    {' '}
+                    · {s.artifact.latest} is out{' '}
+                    <AsyncButton
+                      onClick={async () =>
+                        (await ask(`Run ${s.artifact!.name} ${s.artifact!.latest} as ${s.name}? It's other code: only take it if you trust p/${s.artifact!.project.name ?? 'its project'}.`, 'Take it')) &&
+                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.latest }, approve: true }).then(bump), `${s.name} takes ${s.artifact!.latest}`)
+                      }
+                    >
+                      Update…
+                    </AsyncButton>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div className="service-actions">
             {!s.builtin && <button onClick={() => setEditing(s)}>Settings…</button>}

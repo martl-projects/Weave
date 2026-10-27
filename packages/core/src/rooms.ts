@@ -2,6 +2,7 @@ import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
+import { parseContract, type ServiceContract } from './services.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -66,6 +67,11 @@ export interface AppManifest {
   install?: AppInstall;
   /** Settings each host fills in on their own computer, handed to the app as environment variables when Weave starts it. */
   env?: AppSetting[];
+  /**
+   * An applet: it acts on events in the spaces it's added to, under a key of its own with exactly this contract
+   * (what it reads and writes). Installed, it becomes a service; an app (a web page, in `services`) runs in a room.
+   */
+  service?: ServiceContract;
 }
 
 /**
@@ -119,7 +125,15 @@ export interface AppImage {
   tag: string;
   /** What runs: sha256:… of the image's manifest (or index). A tag can move; this can't. */
   digest: string;
+  /** A Weave service: the manifest came from inside the image (its SERVICE_LABEL), so the digest pins it too. */
+  packaged?: true;
 }
+
+/**
+ * The Weave service format: an OCI image whose config carries the manifest in this label, as JSON (app, name,
+ * service, services, env; no start or install: the image is what runs). Its digest pins the code and the manifest.
+ */
+export const SERVICE_LABEL = 'dev.weave.service';
 
 /** A container image reference without tag or digest: [registry[:port]/]path, lowercase. */
 export const IMAGE_REF = /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$/;
@@ -160,17 +174,18 @@ export function parseInstall(input: unknown): AppInstall | undefined {
     const imageTag = text(raw.tag, 128);
     const digest = text(raw.digest, 80);
     if (!IMAGE_REF.test(ref) || !IMAGE_TAG.test(imageTag) || !DIGEST.test(digest)) throw new Error('"install.image" needs the image ("ref"), its "tag" and its "digest" (sha256:…): weave app release writes it');
-    image = { ref, tag: imageTag, digest };
+    image = { ref, tag: imageTag, digest, ...(raw.packaged === true ? { packaged: true as const } : {}) };
   }
   const has = Object.keys(assets).length > 0;
   const github = text(i.github, 140);
   const tag = text(i.tag, 100);
-  if ((has || image) && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
+  // A Weave service is its image: it needs no repository to come from (provenance says more, later).
+  if ((has || (image && !image.packaged)) && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
   if ((has || image) && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
   if (!has && !image && !steps.length) return undefined;
   const app = text(i.app, 100);
   return {
-    ...(has || image ? { github, tag } : {}),
+    ...(has || image ? { ...(isRepoName(github) ? { github } : {}), tag } : {}),
     ...(has ? { assets } : {}),
     ...(image ? { image } : {}),
     ...(steps.length ? { steps } : {}),
@@ -192,7 +207,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -207,9 +222,17 @@ export function checkManifest(input: unknown): ManifestCheck {
   const name = text(m.name, 40) || app;
   if (!text(m.name, 40)) warnings.push('"name" is what people see; without it they see the id');
 
+  // A service's contract, like {"reads": "addressed", "writes": ["weave.post"], "version": "1.0"}; "website": true
+  // when it serves one itself (weave.serve). A web page in "services" is served without saying so.
+  let service: ServiceContract | undefined;
+  if (m.service !== undefined) {
+    service = parseContract(m.service);
+    if (!service) problems.push('"service" is a service\'s contract: what it reads ("nothing", "addressed", "space" or {"kinds": [...]}), which kinds it writes, and its "version" (like "1.0")');
+  }
   let services: AppService[] = [];
-  if (!Array.isArray(m.services) || m.services.length === 0) problems.push('"services" lists at least one port to share, like [{"port": 3000}]');
-  else {
+  if (!Array.isArray(m.services) || m.services.length === 0) {
+    if (m.service === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+  } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
       const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -303,7 +326,28 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}) } };
+}
+
+/**
+ * The manifest inside a Weave service's image (its SERVICE_LABEL), checked: what it says it is, reads, writes,
+ * serves and asks for. How it starts is the image's own business, so "start" and "install" don't belong there.
+ */
+export function checkServiceLabel(label: string | undefined): ManifestCheck {
+  if (label === undefined) return { problems: [`the image has no "${SERVICE_LABEL}" label: a Weave service carries its manifest there (LABEL ${SERVICE_LABEL}='{"app": …}' in its Dockerfile)`], warnings: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(label);
+  } catch {
+    return { problems: [`the "${SERVICE_LABEL}" label isn't JSON`], warnings: [] };
+  }
+  const checked = checkManifest(parsed);
+  const given = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+  const extra = ['start', 'install'].filter((key) => given[key] !== undefined).map((key) => `"${key}"`);
+  const warnings = [...checked.warnings.filter((w) => !/no "start"/.test(w)), ...(extra.length ? [`${extra.join(' and ')} in the label are ignored: the image is what runs`] : [])];
+  if (!checked.manifest) return { problems: checked.problems, warnings };
+  const { start: _start, install: _install, ...manifest } = checked.manifest;
+  return { problems: [], warnings, manifest };
 }
 
 /** A manifest checked and cleaned, or an error naming everything that's wrong with it. */
@@ -338,6 +382,8 @@ export const MANIFEST_RULES = [
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
+  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
+  `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",

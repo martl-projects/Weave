@@ -87,8 +87,42 @@ export const KIND_ATTEST = 'weave.org.attest';
 export const KIND_SIGNIN = 'weave.org.signin';
 /** `{until, reason}`: a legal hold by the owner: nothing is shredded or forgotten until then. */
 export const KIND_HOLD = 'weave.space.hold';
-/** `{agent, on}`: in a managed space, an agent key those who manage it approved (or no longer do). */
+/** `{agent, on}`: an agent or service key those who manage a space approved there (or no longer do). */
 export const KIND_AGENT_APPROVE = 'weave.space.agent';
+/**
+ * `{agents?, services?}`: what people's agents and services may do in a space, by those who manage it. Each is
+ * {who: 'everyone' | 'approved' | 'nobody', kinds?: [...]}: whose keys count (approved: those approved with
+ * weave.space.agent) and which kinds they may write (all their person allows, without kinds).
+ */
+export const KIND_VISITORS = 'weave.space.visitors';
+
+/** Whose agents (or services) count in a space, and which kinds they may write there. */
+export interface VisitorRule {
+  who: 'everyone' | 'approved' | 'nobody';
+  kinds?: string[];
+}
+
+/** A rule from untrusted input, or undefined. */
+export function parseVisitorRule(value: unknown): VisitorRule | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (v.who !== 'everyone' && v.who !== 'approved' && v.who !== 'nobody') return undefined;
+  const kinds = Array.isArray(v.kinds) ? [...new Set(v.kinds.filter((k): k is string => typeof k === 'string' && /^[a-z][a-z0-9-]*(\.[a-z0-9*-]+)*$/.test(k) && k.length <= 80))].slice(0, 50) : undefined;
+  return { who: v.who, ...(kinds ? { kinds } : {}) };
+}
+
+/**
+ * Whether what an agent or service key signed counts in a space. Company (managed) spaces count only approved
+ * keys, whoever's they are. Elsewhere the space's rule decides (everyone's, by default), and those who manage the
+ * space are never held to it: their own agents and services act as they allow.
+ */
+export function visitorCounts(state: SpaceState, signer: { key: Did; author: Did; service: boolean }, kind: string, managed: boolean): boolean {
+  if (!managed && canManage(state, signer.author)) return true;
+  const rule = (signer.service ? state.visitors?.services : state.visitors?.agents) ?? { who: managed ? 'approved' : 'everyone' };
+  if (rule.who === 'nobody') return false;
+  if ((rule.who === 'approved' || managed) && !state.approvedAgents?.has(signer.key)) return false;
+  return !rule.kinds || rule.kinds.some((k) => k === kind || (k.endsWith('.*') && kind.startsWith(k.slice(0, -1))));
+}
 /** `{person, wrapped, nonce, ct}`: an employee's recovery words, sealed under a key only the company's key service can unwrap. */
 export const KIND_ESCROW = 'weave.org.escrow';
 /** `{person}`: someone who manages the space opened that person's escrow (for the audit). */
@@ -417,8 +451,10 @@ export interface SpaceState {
   managed?: ManagedSetting;
   /** A legal hold: nothing is shredded or forgotten until `until`. */
   hold?: { until: string; reason: string; by: Did; time: string };
-  /** Agent keys approved to act here (counts in managed spaces). */
+  /** Agent and service keys approved to act here (counts in managed spaces, and where a rule says approved). */
   approvedAgents?: Set<Did>;
+  /** What people's agents and services may do here, as those who manage the space set it (see KIND_VISITORS). */
+  visitors?: { agents?: VisitorRule; services?: VisitorRule; by: Did; time: string };
   /** Keys cut off by a removal, demotion, leave or handover: what they sign numbered past `seq` counts from `time` on, whatever date it claims. */
   cutoffs?: Cutoff[];
 }
@@ -676,6 +712,13 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
           state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), by: author, time: at };
         break;
       }
+      case KIND_VISITORS:
+        if (canManage(state, author)) {
+          const agents = parseVisitorRule(body.agents);
+          const services = parseVisitorRule(body.services);
+          state.visitors = { ...(agents ? { agents } : {}), ...(services ? { services } : {}), by: author, time: at };
+        }
+        break;
       case KIND_AGENT_APPROVE:
         if (canManage(state, author) && isDid(body.agent)) {
           state.approvedAgents ??= new Set();

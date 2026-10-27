@@ -9,6 +9,12 @@ export interface LinkServer {
   close(): Promise<void>;
 }
 
+/** Setting up a GitHub App from this computer's pages (see Services.githubAppSetup): what only the browser reaches. */
+export interface GitHubAppFlow {
+  manifest(state: string): { action: string; manifest: string; org?: string; service: string };
+  created(input: { code: string; state: string }): Promise<{ name: string; install: string; service: string }>;
+}
+
 /**
  * Post addresses on this computer: http://weave.localhost:7710/<project~id/board/post/title>
  * shows that post, read-only, so a link an agent writes in Claude Code (or anywhere)
@@ -18,15 +24,20 @@ export interface LinkServer {
  * Only for this computer: it listens on 127.0.0.1 and answers only to the name
  * weave.localhost (a web page can't reach it by DNS rebinding, and other sites
  * can't read its responses). Nothing on it changes anything but where the app
- * looks. A strict Content-Security-Policy keeps whatever a post contains from
- * running scripts or loading anything from elsewhere.
+ * looks, with one exception that needs a secret: setting up the person's own
+ * GitHub App, started in Weave, which GitHub sends back here with the setup's
+ * random state (unguessable, used once, an hour at most). A strict
+ * Content-Security-Policy keeps whatever a post contains from running scripts
+ * or loading anything from elsewhere.
  *
- *   GET  /<address>        the post and its chat
- *   POST /open/<address>   bring the Weave app to the post (same-origin forms only)
+ *   GET  /<address>              the post and its chat
+ *   POST /open/<address>         bring the Weave app to the post (same-origin forms only)
+ *   GET  /github/new-app?state   the App's description, sent to GitHub with one click
+ *   GET  /github/app-created?code&state   GitHub's way back: the App's ID and key go to the GitHub service
  */
-export async function startLinks(backend: Backend, port = LINK_PORT): Promise<LinkServer> {
+export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?: GitHubAppFlow): Promise<LinkServer> {
   const server: Server = createServer((req, res) => {
-    handle(backend, req, res).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
+    handle(backend, req, res, githubApp).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -45,11 +56,34 @@ export async function startLinks(backend: Backend, port = LINK_PORT): Promise<Li
   };
 }
 
-async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse, githubApp?: GitHubAppFlow): Promise<void> {
   const host = req.headers.host ?? '';
   if (host.split(':')[0] !== LINK_HOST) return page(res, 403, 'Weave', '<p class="note">Open Weave links as http://weave.localhost:…</p>');
   const url = new URL(req.url ?? '/', `http://${host}`);
   const path = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+
+  if (req.method === 'GET' && githubApp && (path === 'github/new-app' || path === 'github/app-created')) {
+    const state = url.searchParams.get('state') ?? '';
+    try {
+      if (path === 'github/new-app') {
+        const { action, manifest, org, service } = githubApp.manifest(state);
+        // No scripts here: one button sends GitHub the App's description (and only GitHub may receive it).
+        return page(
+          res,
+          200,
+          'Your GitHub App',
+          `<h1>Your own GitHub App</h1><p>Weave's GitHub service (${escape(service)}) will act as an App of yours${org ? ` in <b>${escape(org)}</b>` : ''}: it keeps your linked repositories' access in step with your spaces and hands their release files to participants, without anyone signing in.</p><p class="note">It asks for Administration (read and write), Contents (read) and Metadata (read), and no webhooks. You confirm it on GitHub, then install it on the repositories it should manage.</p><form method="post" action="${escape(action)}"><input type="hidden" name="manifest" value="${escape(manifest)}"><button>Continue on GitHub</button></form>`,
+          'https://github.com',
+        );
+      }
+      const created = await githubApp.created({ code: url.searchParams.get('code') ?? '', state });
+      // Next and last: installing it, on GitHub.
+      res.writeHead(303, { location: created.install, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+      return void res.end();
+    } catch (error) {
+      return page(res, 400, 'Your GitHub App', `<h1>Your own GitHub App</h1><p class="note">${escape((error as Error).message)}</p>`);
+    }
+  }
 
   if (req.method === 'POST' && path.startsWith('open/')) {
     // A form on one of these pages, nothing else: browsers send Origin with every POST.
@@ -135,10 +169,11 @@ blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); 
 .msg { border-top: 1px solid var(--line); padding: 8px 0; }
 .msg p { margin: 4px 0; }`;
 
-function page(res: ServerResponse, status: number, title: string, body: string): void {
+/** A page; `formsTo` lets its forms go to that one other site (GitHub, for setting up an App). */
+function page(res: ServerResponse, status: number, title: string, body: string, formsTo?: string): void {
   res.writeHead(status, {
     'content-type': 'text/html; charset=utf-8',
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'${formsTo ? ` ${formsTo}` : ''}; base-uri 'none'; frame-ancestors 'none'`,
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
     'cache-control': 'no-store',

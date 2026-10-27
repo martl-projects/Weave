@@ -2,7 +2,7 @@ import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
-import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, RoomInfo, SessionInfo, SpaceInfo, Status } from '@weave/node/client';
+import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { NotificationSettings, startNotifications } from './notify.tsx';
@@ -10,7 +10,8 @@ import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
-import { ProjectServicesView } from './rooms.tsx';
+import { ProjectServicesView } from './websites.tsx';
+import { CatalogView } from './catalog.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
@@ -61,7 +62,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const open = route[1] === space.id;
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
-  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<RoomInfo[]>('rooms', space.id) : Promise.resolve([])), [space.id]);
+  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   return (
@@ -83,6 +84,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
             />
           ))}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
+          <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label="Catalog" on={view === 'catalog'} />
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
@@ -214,7 +216,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 /** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
 function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
-  const { data: rooms } = useApi(() => api<RoomInfo[]>('rooms', space.id), [space.id]);
+  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', space.id), [space.id]);
   const base = spaceHref(space);
   const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
     <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
@@ -243,7 +245,10 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const invite = () => open({ kind: 'invite', space });
 
   let body: ReactNode;
-  if (space.kind === 'group' && view === 'settings') {
+  if (view === 'catalog') {
+    // Groups: their founder lists; projects and communities: their maintainers and moderators.
+    body = <CatalogView space={space} maintainer={!!info?.maintainer || (space.kind === 'group' && space.founder === me.did)} />;
+  } else if (space.kind === 'group' && view === 'settings') {
     body = <GroupSettings group={space} members={list} meDid={me.did} />;
   } else if (space.kind === 'group') {
     const channel = view === 'c' ? (arg ?? 'general') : 'general';

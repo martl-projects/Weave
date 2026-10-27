@@ -91,16 +91,16 @@ describe('the app API and SDK', () => {
     await lena.goOnline();
 
     // A room of Martin's room service, answered by the app running by itself: Weave gives it the room's token.
-    await martin.addService({ builtin: 'room', spaces: ['Gameshow'] });
-    const hosted = await martin.openRoom({ project: 'Gameshow', name: 'Saturday show', port: appPort });
-    const env = await martin.roomEnv(hosted.id);
-    expect(env).toMatchObject({ WEAVE_API: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/), WEAVE_ROOM: hosted.id });
+    await martin.addService({ builtin: 'website', spaces: ['Gameshow'] });
+    const hosted = await martin.openWebsite({ project: 'Gameshow', name: 'Saturday show', port: appPort });
+    const env = await martin.websiteEnv(hosted.id);
+    expect(env).toMatchObject({ WEAVE_API: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/), WEAVE_WEBSITE: hosted.id });
     expect(sdk.connect({})).toBeUndefined();
     weave = sdk.connect(env);
 
-    const seen = await until(async () => (await lena.rooms('Gameshow'))[0]);
-    await lena.joinRoom(seen.id);
-    const url = await until(async () => (await lena.rooms('Gameshow'))[0].url);
+    const seen = await until(async () => (await lena.websites('Gameshow'))[0]);
+    await lena.visitWebsite(seen.id);
+    const url = await until(async () => (await lena.websites('Gameshow'))[0].url);
 
     // Lena, through the room: the app learns it's her, not just "127.0.0.1".
     expect(await getJson(Number(new URL(url).port), '/play')).toEqual({

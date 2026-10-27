@@ -29,6 +29,7 @@ const MAX_BODY = 4 * 1024 * 1024;
  *   GET  /v1/service/watch                   server-sent events: what it may read, as it arrives
  *   POST /v1/service/publish {space, kind, body}
  *   POST /v1/service/answer  {request, text?, data?, error?}
+ *   POST /v1/service/website {space, port, name?, pages?}  serve a website (its contract says website)
  */
 export async function startApi(backend: Backend, port = 0, hooks: Hooks = {}): Promise<ApiServer> {
   const token = randomBytes(24).toString('base64url');
@@ -106,6 +107,11 @@ async function serve(gate: ServiceGate, req: IncomingMessage, res: ServerRespons
     const body = (await readBody(req)) as { request?: string; text?: string; data?: unknown; error?: string };
     if (typeof body.request !== 'string') return send(res, 400, { error: 'answer takes the request it answers' });
     return send(res, 200, { result: await gate.answer({ request: body.request, ...(body.text !== undefined ? { text: body.text } : {}), ...(body.data !== undefined ? { data: body.data as never } : {}), ...(body.error !== undefined ? { error: body.error } : {}) }) });
+  }
+  if (route === 'POST /v1/service/website') {
+    const body = (await readBody(req)) as { space?: string; port?: number; name?: string; pages?: unknown };
+    if (typeof body.space !== 'string' || typeof body.port !== 'number') return send(res, 400, { error: 'a website takes the space and the port it answers on' });
+    return send(res, 200, { result: await gate.serve({ space: body.space, port: body.port, ...(typeof body.name === 'string' ? { name: body.name } : {}), ...(body.pages ? { pages: body.pages as never } : {}) }) });
   }
   if (route === 'GET /v1/service/watch') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

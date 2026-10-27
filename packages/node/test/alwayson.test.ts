@@ -118,19 +118,18 @@ describe('an always-on node', () => {
     // martl's room service runs on the box: the room is opened on the computer and handed over, sealed.
     await box.goOnline();
     await lena.goOnline();
-    await martl.addService({ builtin: 'room', node: 'party-box', spaces: ['Party'] });
-    await expect(martl.openRoom({ project: 'Party', name: 'Saturday', command: ['node', 'party.js'], folder: '.', port: appPort, approve: true })).rejects.toThrow(/runs on party-box: a room there runs a project's release, or something already running there/);
-    const hosted = await martl.openRoom({ project: 'Party', name: 'Saturday', port: appPort });
-    expect(hosted).toMatchObject({ open: false, offeredBy: { name: 'room' } });
-    expect((await martl.services()).find((s) => s.name === 'room')).toMatchObject({ node: { name: 'party-box' }, rooms: [{ name: 'Saturday', port: appPort, handler: { kind: 'address' } }] });
+    await martl.addService({ builtin: 'website', node: 'party-box', spaces: ['Party'] });
+    const hosted = await martl.openWebsite({ project: 'Party', name: 'Saturday', port: appPort });
+    expect(hosted).toMatchObject({ open: false, offeredBy: { name: 'website' } });
+    expect((await martl.services()).find((s) => s.name === 'website')).toMatchObject({ node: { name: 'party-box' }, websites: [{ name: 'Saturday', port: appPort, handler: { kind: 'address' } }] });
     // martl's computer is off; the box takes the room, announces it under the service's key, and Lena plays.
     sync(martl, box);
     await box.reconcile();
     sync(box, lena);
-    const seen = await until(async () => (await lena.rooms('Party')).find((r) => r.id === hosted.id));
-    expect(seen).toMatchObject({ host: { did: martl.identity.author, name: 'martl' }, offeredBy: { name: 'room' } });
-    await lena.joinRoom(seen.id);
-    const url = await until(async () => (await lena.rooms('Party')).find((r) => r.id === hosted.id)?.url);
+    const seen = await until(async () => (await lena.websites('Party')).find((r) => r.id === hosted.id));
+    expect(seen).toMatchObject({ host: { did: martl.identity.author, name: 'martl' }, offeredBy: { name: 'website' } });
+    await lena.visitWebsite(seen.id);
+    const url = await until(async () => (await lena.websites('Party')).find((r) => r.id === hosted.id)?.url);
     expect(await getText(Number(new URL(url).port))).toBe('the party app');
 
     // Revoked from martl's computer: everyone sees its key end.

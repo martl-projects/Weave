@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { GumroadLink, OnchainPrice } from '@weave/core';
-import type { AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { Builtin, GumroadLink, OnchainPrice, VisitorRule } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -177,6 +177,8 @@ export interface SpaceInfo extends SpaceRef {
   managed?: { agents: string[]; provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
+  /** What people's agents and services may do here, as those who manage it set it, and the keys they approved (person/name). */
+  visitors?: { agents: VisitorRule; services: VisitorRule; approved: string[] };
 }
 
 export interface GitHubInfo {
@@ -238,8 +240,10 @@ export interface ServiceInfo {
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
-  builtin?: 'room';
-  rooms?: HostedRoomInfo[];
+  builtin?: Builtin;
+  websites?: HostedWebsiteInfo[];
+  /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
+  artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
   settings: string[];
   enabled: boolean;
@@ -248,21 +252,54 @@ export interface ServiceInfo {
   node?: { did: Did; name: string };
 }
 
+/** A Weave service a catalog lists: where it comes from, its image (what installing it reads the manifest from), and whether it runs here. */
+export interface CatalogEntryInfo {
+  id: string;
+  /** The space that lists it. */
+  catalog: SpaceRef;
+  app: string;
+  name: string;
+  summary: string;
+  /** The release it comes from, as the entry says (the project's name only if you're in it). */
+  origin: { project: { id: string; name?: string }; release: string; tag: string };
+  image: AppImage;
+  /** The maintainer who listed it. */
+  by: Actor;
+  time: string;
+  /** The service on this node that runs this image, if one does. */
+  installed?: string;
+}
+
+/** The release an applet runs, and how fetching it went. */
+export interface ServiceArtifactInfo {
+  project: { id: string; name?: string };
+  tag: string;
+  app: string;
+  name: string;
+  latest?: string;
+  /** Its files are here, checked against the release's fingerprints (or it runs as a container). */
+  installed: boolean;
+  /** Who delivered its files here: a provider in its project, or GitHub itself. */
+  deliveredBy?: string;
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+  /** The settings it asks for. */
+  settings: AppSetting[];
+}
+
 /** A room the room service runs here: what answers its clients (its handler), and how that's doing. */
-export interface HostedRoomInfo {
+export interface HostedWebsiteInfo {
   id: string;
   project: SpaceRef;
   name: string;
-  /** Where the handler listens on this computer. */
+  /** Where what answers it listens on this computer. */
   port: number;
-  handler:
-    | { kind: 'artifact'; artifact: { project: { id: string; name?: string }; tag: string; app: string; name: string; latest?: string }; command: string[] }
-    | { kind: 'command'; command: string[]; folder: string }
-    | { kind: 'address' };
-  /** The names of the handler's settings (the values stay here). */
-  settings: string[];
+  /** What answers it: a service of this device (it serves it), or something you run yourself at the port. */
+  handler: { kind: 'service'; service: string } | { kind: 'address' };
+  /** Something its host should know (what changed in Weave 0.21). */
+  note?: string;
   running: boolean;
-  /** Fetching its release, or why it doesn't run. */
+  /** Fetching the serving service's release, or why it doesn't run. */
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
 }
@@ -276,9 +313,13 @@ export interface ArtifactInfo {
   name: string;
   released: Actor;
   time: string;
-  /** It has a web page: a room can run it. */
-  room: boolean;
+  /** It has a web page: a website can run it. */
+  website: boolean;
+  /** An applet: installed, it becomes a service with exactly this contract. */
+  applet?: ServiceContract;
   settings: AppSetting[];
+  /** A Weave service: an image carrying its manifest, run in the sandbox only. */
+  packaged?: true;
   /** How it would run on this node: its release file for this platform, or its container (Docker). */
   runs?: 'release' | 'container';
   /** What starting it here would run (shown before you approve it). */
@@ -292,10 +333,22 @@ export interface ServiceProfileInfo {
   name: string;
   description: string;
   icon?: string;
-  builtin?: 'room';
+  builtin?: Builtin;
   contract: ServiceContract;
+  /** Where it comes from, as far as this node can tell. */
+  origin: ServiceOriginInfo;
   time: string;
 }
+
+/**
+ * Where a service comes from: Weave itself; a project's release (checked here when the project is known here: the
+ * release is there, by a maintainer, running what the profile says; unknown otherwise); or code its person runs
+ * without releasing it.
+ */
+export type ServiceOriginInfo =
+  | { kind: 'weave' }
+  | { kind: 'release'; project: { id: string; name?: string }; tag: string; release: string; checked: 'verified' | 'unmatched' | 'unknown'; publisher?: Actor; packaged?: true }
+  | { kind: 'unreleased' };
 
 /**
  * What a running service may do, through its own token on the node that runs it: who it is, what it reads (only
@@ -310,6 +363,8 @@ export interface ServiceGate {
   publish(input: { space: string; kind: string; body?: Json }): Promise<FeedItem>;
   /** Answer a request addressed to it, in the request's space. */
   answer(input: { request: string; text?: string; data?: Json; error?: string }): Promise<FeedItem>;
+  /** Serve a website (its contract says `website`): its process listens on `port`, and the project's website service makes it reachable. */
+  serve(input: { space: string; port: number; name?: string; pages?: RoomPages }): Promise<WebsiteInfo>;
 }
 
 /** A request to a service in a space, and what the service answered. */
@@ -1005,7 +1060,7 @@ export interface AppEnv {
   WEAVE_API: string;
   WEAVE_TOKEN: string;
   WEAVE_PROJECT: string;
-  WEAVE_ROOM?: string;
+  WEAVE_WEBSITE?: string;
 }
 
 /** A person as the app API shows them to an app. */
@@ -1018,7 +1073,7 @@ export interface AppPerson {
   maintainer: boolean;
 }
 
-export interface RoomInfo {
+export interface WebsiteInfo {
   id: string;
   project: SpaceRef;
   name: string;
@@ -1047,7 +1102,7 @@ export interface RoomInfo {
 }
 
 /** A message in a room's chat: never stored, gone when the room ends. */
-export interface RoomChatMessage {
+export interface WebsiteChatMessage {
   id: string;
   by: Person;
   text: string;
@@ -1518,8 +1573,10 @@ export interface Backend {
   /** On the company's node: serve the admin console (a web app for the company's admins), or stop. Gives a one-time operator link. */
   setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo>;
   consoleInfo(): Promise<ConsoleInfo>;
-  /** Those who manage a company space: approve an agent to act there (person/agent name, or its key), or no longer. */
+  /** Those who manage a space: approve an agent or service to act there (person/name, or its key), or no longer. */
   approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo>;
+  /** What people's agents and services may do in a space (those who manage it): who counts, and which kinds they may write. */
+  setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo>;
   /** Company spaces this agent of yours may not see (not approved there). The MCP server keeps them out of its answers. */
   agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>>;
   /** The owner: a legal hold until a date (nothing shredded or forgotten); a past date lifts it. */
@@ -1558,19 +1615,33 @@ export interface Backend {
   githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
-  /** A service: your code under a key of its own, or one Weave ships (`builtin: 'room'`). */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: 'room' }): Promise<ServiceInfo>;
+  /**
+   * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
+   * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
+   */
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
-   * A room of your room service in one of its projects, answered by an artifact, a command (both need `approve`), or
-   * a port already answering. Who joins: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
+   * A website of your website service in one of its projects, reaching what already answers `port` on this device
+   * (services announce their own). Who visits: every participant, or `invite`d people, a `show`'s ticket holders, members of `groups` (tiers).
    */
-  openRoom(input: { service?: string; project: string; name: string; artifact?: { project: string; tag?: string }; command?: string[]; folder?: string; port?: number; settings?: Record<string, string>; approve?: boolean; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<RoomInfo>;
+  openWebsite(input: { service?: string; project: string; name: string; port?: number; invite?: string[]; show?: string; groups?: string[]; pages?: RoomPages }): Promise<WebsiteInfo>;
   /** The services this node runs. */
   services(): Promise<ServiceInfo[]>;
+  /** A space's catalog: the Weave services its maintainers list there, newest first. */
+  catalog(space: string): Promise<CatalogEntryInfo[]>;
+  /** List a Weave service in a catalog (its maintainers): a release of a project you're in. */
+  listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo>;
+  /** What installing a catalog entry would run, read from its image (shown before approving it); `released` is who listed it. */
+  catalogArtifact(input: { catalog: string; app: string }): Promise<ArtifactInfo>;
+  /** Start setting up your own GitHub App for a GitHub service (GitHub's App-manifest flow): the page to open in the browser. */
+  githubAppSetup(input: { service?: string; org?: string }): Promise<{ url: string }>;
+  /** Take an app off a catalog (its maintainers). */
+  unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string }): Promise<ServiceInfo>;
+  /** Change a service; `artifact: {tag}` moves an applet to another release (the latest without a tag), which needs `approve`. */
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */
@@ -1769,6 +1840,8 @@ export interface Backend {
   publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: release an artifact from a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  /** Release a Weave service (maintainers): an image, ref:tag, with its manifest in its "dev.weave.service" label; pinned to its digest. */
+  releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
   appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
   /**
@@ -1777,15 +1850,15 @@ export interface Backend {
    */
   updateCheck(input: { current: string }): Promise<UpdateInfo>;
   /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
-  roomEnv(room: string): Promise<AppEnv>;
+  websiteEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
-  rooms(project?: string): Promise<RoomInfo[]>;
-  endRoom(room: string): Promise<void>;
-  /** Join a room: connect to the host and open the local tunnel; RoomInfo.url is what to open. */
-  joinRoom(room: string): Promise<RoomInfo>;
-  leaveRoom(room: string): Promise<void>;
-  roomChat(room: string): Promise<RoomChatMessage[]>;
-  sayInRoom(input: { room: string; text: string }): Promise<void>;
+  websites(project?: string): Promise<WebsiteInfo[]>;
+  closeWebsite(room: string): Promise<void>;
+  /** Join a room: connect to the host and open the local tunnel; WebsiteInfo.url is what to open. */
+  visitWebsite(room: string): Promise<WebsiteInfo>;
+  leaveWebsite(room: string): Promise<void>;
+  websiteChat(room: string): Promise<WebsiteChatMessage[]>;
+  sayOnWebsite(input: { room: string; text: string }): Promise<void>;
 
   // memberships: tiers offered by creators, Patreon-style; they buy access, never votes
   /** Offer a tier: a group whose members get its chat and every project it's invited into. */
@@ -1928,9 +2001,9 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'openRoom', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
@@ -1938,7 +2011,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'setSessionRole', 'workers', 'assign',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'appReleases', 'roomEnv', 'updateCheck', 'rooms', 'endRoom', 'joinRoom', 'leaveRoom', 'roomChat', 'sayInRoom',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { parseOrigin } from '@weave/core';
 import { readSecretJson } from '../src/vault.ts';
 
 /*
@@ -51,6 +52,11 @@ describe('services', () => {
     expect((await lena.serviceProfiles()).map((p) => [p.name, p.person.name, p.description])).toEqual([['echo', 'martl', 'Answers what you say']]);
     // And the members of its space see it there.
     expect((await lena.servicesIn('Weave')).map((p) => p.name)).toEqual(['echo']);
+    // Code martl runs without releasing it: its profile says so.
+    expect((await lena.servicesIn('Weave'))[0].origin).toEqual({ kind: 'unreleased' });
+    // An origin is ids only, and only a well-formed one counts.
+    expect(parseOrigin({ project: 'p1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' })).toEqual({ project: 'p1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' });
+    expect(parseOrigin({ project: 'p 1', release: 'r1', tag: 'v1', fingerprint: 'abcdefgh12' })).toBeUndefined();
     expect(await martl.servicesIn('Secret')).toEqual([]);
 
     // Lena asks it; she also posts, which it doesn't read.
@@ -74,6 +80,18 @@ describe('services', () => {
     expect(gate.events().map((i) => i.body)).not.toContainEqual(expect.objectContaining({ text: 'from elsewhere' }));
     // And nobody else's token opens it.
     expect(martl.serviceGate('not-a-token')).toBeUndefined();
+  });
+
+  it('takes no requests when it reads nothing: its key signs its profile alone', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Weave' });
+    await lena.joinSpace(await martl.invite('Weave'));
+    const quiet = await martl.addService({ name: 'quiet', contract: { reads: 'nothing', writes: [], version: '1.0' }, spaces: ['Weave'] });
+    expect(martl.replica.authority.grant(quiet.did)?.permissions).toEqual(['weave.service.profile']);
+    sync([martl, lena]);
+    await expect(lena.askService({ space: 'Weave', service: 'martl/quiet', text: 'hi' })).rejects.toThrow(/quiet takes no requests: it reads nothing and takes no requests; writes nothing/);
+    await expect(martl.serviceGate(tokenOf(martl, 'quiet'))!.answer({ request: 'x', text: 'no' })).rejects.toThrow(/takes no requests/);
   });
 
   it('runs its process with its own token, which opens nothing but the service routes', async () => {

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { MemberInfo, RoomInfo, SafeProposalInfo, ShowInfo, SpaceInfo, TicketInfo, WalletInfo } from '@weave/node/client';
+import type { MemberInfo, WebsiteInfo, SafeProposalInfo, ShowInfo, SpaceInfo, TicketInfo, WalletInfo } from '@weave/node/client';
 import { formatUnits, isHexAddress, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
 import { Icon } from './icons.tsx';
 import { api, bump, shortDid, useApi } from './lib.ts';
@@ -175,7 +175,7 @@ function HostTools({ show, members }: { show: ShowInfo; members: MemberInfo[] })
   );
 }
 
-function ShowCard({ show, rooms, members, onHost }: { show: ShowInfo; rooms: RoomInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
+function ShowCard({ show, rooms, members, onHost }: { show: ShowInfo; rooms: WebsiteInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
   const { label, tag } = stage(show);
   const over = show.cancelled || Date.parse(show.ends) < Date.now();
   const room = rooms.find((r) => r.show === show.id);
@@ -200,11 +200,11 @@ function ShowCard({ show, rooms, members, onHost }: { show: ShowInfo; rooms: Roo
           <p className="small">
             {room ? (
               <>
-                <Icon name="zap" /> In the room <b>{room.name}</b>
+                <Icon name="zap" /> On the website <b>{room.name}</b>
                 {show.mine ? '.' : show.ticket ? (show.open ? ': join it below.' : ': it lets you in from an hour before the start.') : ': ticket holders get in from an hour before the start.'}
               </>
             ) : show.mine ? (
-              <>No room yet. Open one for it when you're ready: its ticket holders get in from an hour before the start.</>
+              <>No website yet. Open one for it when you're ready: its ticket holders get in from an hour before the start.</>
             ) : (
               <>Its room opens when {person(show.host)} starts it; with a ticket you get in from an hour before the start.</>
             )}
@@ -330,7 +330,7 @@ export function useShowForm(project: SpaceInfo) {
  * pay out. It opens by itself only while a show of yours is on. Shows are set
  * up with their room, in Host room.
  */
-export function ShowsSection({ rooms, shows, members, onHost }: { rooms: RoomInfo[]; shows: ShowInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
+export function ShowsSection({ rooms, shows, members, onHost }: { rooms: WebsiteInfo[]; shows: ShowInfo[]; members: MemberInfo[]; onHost?(show: string): void }) {
   const [opened, setOpened] = useState<boolean>();
   if (!shows.length) return null;
   // Hosts keep shows that are over in sight (they still pay out); everyone else sees what's coming.

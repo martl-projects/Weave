@@ -433,14 +433,26 @@ function preferredPort(appId: string): number {
   return 41_000 + (createHash('sha256').update(appId).digest().readUInt16BE(0) % 7000);
 }
 
-function listenNear(server: Server, port: number, tries = 20): Promise<number> {
+/**
+ * Listen on `port`, or the next free one after it: the port it really got. Each attempt's listeners go with it: a
+ * failed attempt's "listening" callback left behind would fire on a later success and answer the taken port,
+ * sending visitors to whatever else listens there.
+ */
+export function listenNear(server: Server, port: number, tries = 20): Promise<number> {
   return new Promise((resolve, reject) => {
     const attempt = (p: number, left: number) => {
-      server.once('error', (error: NodeJS.ErrnoException) => {
+      const listening = () => {
+        server.off('error', failed);
+        resolve((server.address() as AddressInfo).port);
+      };
+      const failed = (error: NodeJS.ErrnoException) => {
+        server.off('listening', listening);
         if (error.code === 'EADDRINUSE' && left > 0) attempt(p + 1, left - 1);
         else reject(error);
-      });
-      server.listen(p, '127.0.0.1', () => resolve(p));
+      };
+      server.once('listening', listening);
+      server.once('error', failed);
+      server.listen(p, '127.0.0.1');
     };
     attempt(port, tries);
   });

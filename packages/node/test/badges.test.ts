@@ -28,11 +28,11 @@ function person(name: string) {
 const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
 
 /** What an app answering a room in the project gets from Weave: the app API and its room's token. */
-async function roomEnv(node: WeaveNode, project: string, port: number) {
-  const mine = (await node.services()).find((s) => s.builtin === 'room');
-  if (!mine) await node.addService({ builtin: 'room', spaces: [project] });
+async function websiteEnv(node: WeaveNode, project: string, port: number) {
+  const mine = (await node.services()).find((s) => s.builtin === 'website');
+  if (!mine) await node.addService({ builtin: 'website', spaces: [project] });
   else await node.setService({ name: mine.name, spaces: [...mine.spaces.map((s) => s.id), project] });
-  return node.roomEnv((await node.openRoom({ project, name: 'App', port })).id);
+  return node.websiteEnv((await node.openWebsite({ project, name: 'App', port })).id);
 }
 
 /** Martin maintains Weave and has started a limited series; Lena and Ada know him. */
@@ -170,7 +170,7 @@ describe('badges', () => {
     expect((await ada.badges()).map((b) => [b.series.name, b.series.project])).toEqual([['Weave Founder', { id: weave.id, name: 'Weave', checked: false }]]);
     expect((await ada.badgeSeries()).every((s) => s.project?.checked === false)).toBe(true);
     // And the project's app never sees it.
-    expect(await sdk.connect(await roomEnv(martin, 'Weave', 4101))!.badges(ada.identity.author)).toEqual([]);
+    expect(await sdk.connect(await websiteEnv(martin, 'Weave', 4101))!.badges(ada.identity.author)).toEqual([]);
 
     // Made a maintainer, Lena's series counts; once she isn't, it doesn't any more.
     await martin.setMaintainer({ project: 'Weave', who: 'Lena', on: true });
@@ -200,7 +200,7 @@ describe('badges', () => {
     await martin.createBadgeSeries({ project: 'Gameshow', name: 'Quizmaster', symbol: '🎤' });
     await martin.giveBadge({ series: 'Quizmaster', who: 'Lena', ref: 'post:abc' });
     await martin.giveBadge({ series: series.id, who: 'Lena' });
-    const weave = sdk.connect(await roomEnv(martin, 'Gameshow', 4100))!;
+    const weave = sdk.connect(await websiteEnv(martin, 'Gameshow', 4100))!;
     // Only Gameshow's badges: an app reads about its own project.
     expect(await weave.badges(lena.identity.author)).toEqual([
       expect.objectContaining({ series: expect.objectContaining({ name: 'Quizmaster', symbol: '🎤' }), n: 1, ref: 'post:abc', issuer: { did: martin.identity.author, name: 'Martin' } }),
