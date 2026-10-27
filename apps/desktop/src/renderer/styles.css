@@ -632,7 +632,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-session.focused { border-left-color: var(--cl-accent, var(--accent)); }
 .panel-session-pick { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .panel-session-pick b { font-size: 13px; }
-.panel-foot { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .panel-pick { width: 100%; }
 .routine-row { align-items: center; gap: 6px; }
 .sessions { display: flex; flex-direction: column; gap: 10px; font-family: var(--content-font); }
