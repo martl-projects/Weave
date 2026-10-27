@@ -121,6 +121,10 @@ function writeShims(bin: string, exe: string, windows: boolean): void {
 
 // --- signing
 const env = process.env;
+// The workflow sets these from secrets that may not exist, as empty strings: electron-builder would
+// take an empty CSC_LINK for a certificate path (the current folder) and fail.
+for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_INSTALLER_LINK', 'CSC_INSTALLER_KEY_PASSWORD', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER'])
+  if (!env[name]) delete env[name];
 const azure = env.AZURE_SIGN_ACCOUNT
   ? {
       type: 'azure' as const,
