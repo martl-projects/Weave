@@ -212,6 +212,9 @@ import {
   type StackItem,
   postTargetOf,
   postUrl,
+  personKeyOf,
+  personTargetOf,
+  personUrl,
   shortPrefixes,
   type PostTarget,
   type KeyFacts,
@@ -447,6 +450,8 @@ import {
   type PostInfo,
   type PostsQuery,
   type Profile,
+  type Found,
+  type FoundKind,
   type ProfileInput,
   type ProjectInfo,
   type ProjectPage,
@@ -2209,8 +2214,16 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox', 'post'].includes(input.what)) throw new Error('what is link-repo, space, inbox or post');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
+    if (!['link-repo', 'space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is link-repo, space, inbox, post or person');
+    if (input.what === 'person') {
+      if (!input.who) throw new Error('say who');
+      const did = this.resolve(input.who);
+      const name = this.nameOf(did);
+      const open: AppOpen = { what: 'person', person: { did, ...(name ? { name } : {}) } };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     if (input.what === 'post') {
       if (!input.post) throw new Error('say which post');
       const post = await this.post(input.post);
@@ -3527,9 +3540,11 @@ export class WeaveNode implements Backend {
     const graph = this.#graph();
     const me = this.identity.author;
     const mine = graph.get(me);
+    const name = this.nameOf(did);
     return {
       did,
-      name: this.nameOf(did),
+      name,
+      url: personUrl(name, did),
       theme: this.themeOf(did),
       me: did === me,
       following: mine?.following.has(did) ?? false,
@@ -3560,11 +3575,47 @@ export class WeaveNode implements Backend {
   async directory(query?: string): Promise<Profile[]> {
     const authors = new Set([...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
     authors.delete(this.identity.author);
+    const key = query && personTargetOf(query);
     const q = query?.trim().toLowerCase();
     const profiles = [...authors].map((did) => this.#profile(did));
     return profiles
-      .filter((p) => !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q)))
+      .filter((p) => (key ? personKeyOf(p.did).startsWith(key) : !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q))))
       .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
+  }
+
+  async find(query: string, limit = 30, only?: FoundKind): Promise<Found[]> {
+    const q = query.trim().toLowerCase();
+    // How well a name matches: whole name, its start, a word's start, anywhere (lower is better).
+    const rank = (text: string | undefined): number => {
+      const t = (text ?? '').toLowerCase();
+      if (!q) return 3; // after the people you follow
+      if (t === q) return 0;
+      if (t.startsWith(q)) return 1;
+      if (new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u').test(t)) return 2;
+      return t.includes(q) ? 3 : -1;
+    };
+    const key = personTargetOf(query) ?? (q.length >= 4 ? query.trim() : undefined);
+    const found: Array<{ item: Found; rank: number; order: number; time: string }> = [];
+    for (const person of only && only !== 'people' ? [] : await this.directory()) {
+      // Without a query, the people you'd most likely mean: friends, then those you follow.
+      const r = !q ? (person.following && person.followsMe ? 0 : person.following ? 1 : 2) : key && personKeyOf(person.did).startsWith(key) ? 1 : rank(person.name);
+      if (r >= 0) found.push({ item: { person }, rank: r, order: 0, time: '' });
+    }
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'project' || (only && only !== 'projects')) continue;
+      const post = this.#projectPost(space);
+      const r = post ? rank(post.title) : -1;
+      if (post && r >= 0) found.push({ item: { post }, rank: r, order: 1, time: post.active ?? post.time });
+    }
+    for (const post of only && only !== 'posts' ? [] : this.#allPosts()) {
+      if (post.type === 'project') continue;
+      const r = rank(post.title);
+      if (r >= 0) found.push({ item: { post }, rank: r, order: 2, time: post.active ?? post.time });
+    }
+    return found
+      .sort((a, b) => a.rank - b.rank || a.order - b.order || b.time.localeCompare(a.time) || (a.item.person?.name ?? '').localeCompare(b.item.person?.name ?? ''))
+      .slice(0, Math.max(1, Math.min(limit, 100)))
+      .map((f) => f.item);
   }
 
   async contactLink(): Promise<string> {
@@ -5648,14 +5699,23 @@ export class WeaveNode implements Backend {
     return isDid(to) ? this.#actor(to, to) : null;
   }
 
-  /** A did:key, or the name of someone whose profile this node has seen. */
+  /** A did:key, a person's address (personUrl), or the name of someone whose profile this node has seen or who is in your address book. */
   resolve(who: string): Did {
     if (isDid(who)) return who;
+    const key = personTargetOf(who);
+    if (key) {
+      const known = new Set([this.identity.author, ...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
+      const found = [...known].filter((did) => personKeyOf(did).startsWith(key));
+      if (found.length === 0) throw new Error(`nobody with that address (${key}) is known here yet`);
+      if (found.length > 1) throw new Error(`several people start with ${key} — use their did:key`);
+      return found[0];
+    }
     const matches = new Set<Did>();
     for (const event of this.replica.events((e) => e.kind === KIND_PROFILE)) {
       const name = (event.body as { name?: unknown } | null)?.name;
       if (typeof name === 'string' && name.toLowerCase() === who.toLowerCase()) matches.add(event.author);
     }
+    for (const [did, name] of this.#contacts()) if (name?.toLowerCase() === who.toLowerCase()) matches.add(did);
     if (matches.size === 0) throw new Error(`nobody named "${who}" is known yet — use their did:key`);
     if (matches.size > 1) throw new Error(`several people are named "${who}" — use their did:key`);
     return [...matches][0];

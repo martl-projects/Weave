@@ -1,9 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
 import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
-import { newSession, openSession, showSession, type Delivered } from './claudeapp.ts';
+import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -227,6 +227,113 @@ ipcMain.handle('weave:work-on', async (_event, post: string, choice?: { session?
   return { how: 'new', delivered: await newSession(folder, target.text), where: folder };
 });
 
+let picker: BrowserWindow | undefined;
+
+/**
+ * The address book picker's shortcuts, each opening it on its tab (on macOS ⌘F1…); WEAVE_PICKER_SHORTCUT=off
+ * for none. Posts are a Tab away: Ctrl+F4 closes the document in too many apps to take it.
+ */
+type PickerTab = 'all' | 'people' | 'projects' | 'posts';
+const PICKER_SHORTCUTS: Array<[string, PickerTab]> =
+  process.env.WEAVE_PICKER_SHORTCUT === 'off'
+    ? []
+    : [
+        ['CommandOrControl+F1', 'all'],
+        ['CommandOrControl+F2', 'people'],
+        ['CommandOrControl+F3', 'projects'],
+      ];
+
+/**
+ * The address book picker: from anywhere (typing in the Claude app, say), the
+ * shortcut brings up a search over people, projects and posts. Enter pastes a
+ * link to the pick where you were typing, so it names exactly that person or
+ * post. Losing the focus or Escape puts it away.
+ */
+/** Puts the "Pasted" / "Copied to clipboard" note away; a new search cancels it. */
+let pickerNote: ReturnType<typeof setTimeout> | undefined;
+
+async function showPicker(tab: PickerTab = 'all'): Promise<void> {
+  clearTimeout(pickerNote);
+  if (picker?.isVisible()) {
+    picker.webContents.send('weave:picker-open', tab);
+    return void picker.focus();
+  }
+  await rememberFront(); // before the picker takes the focus
+  if (picker) {
+    picker.webContents.send('weave:picker-open', tab);
+    const at = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    picker.setPosition(Math.round(at.x + (at.width - picker.getSize()[0]) / 2), Math.round(at.y + at.height / 5));
+    picker.show();
+    picker.focus();
+    return;
+  }
+  const at = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const width = 560;
+  const box = new BrowserWindow({
+    width,
+    height: 44,
+    useContentSize: true,
+    x: Math.round(at.x + (at.width - width) / 2),
+    y: Math.round(at.y + at.height / 5),
+    title: 'Weave · Address book',
+    thickFrame: false,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    // Transparent, so the panel's rounded corners show what's behind them.
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  picker = box;
+  box.setAlwaysOnTop(true, 'floating');
+  box.on('blur', () => box.hide());
+  box.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    box.hide();
+  });
+  box.on('closed', () => (picker = undefined));
+  box.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  box.webContents.on('will-navigate', (event, url) => url.startsWith('file:') || event.preventDefault());
+  box.once('ready-to-show', () => {
+    box.show();
+    box.focus();
+  });
+  void box.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: `/picker?tab=${tab}` });
+}
+
+/** A pick: the picker goes away and the link is pasted where you were (or left on the clipboard). */
+ipcMain.handle('weave:pick', async (_event, text: string): Promise<'pasted' | 'clipboard'> => {
+  if (typeof text !== 'string' || !text || text.length > 4000) throw new Error('nothing to paste');
+  picker?.hide();
+  if (process.platform === 'darwin') app.hide(); // the app you were in comes back to the front
+  const delivered = await pasteBack(text);
+  // A moment's note where the bar was, without taking the focus back.
+  if (picker) {
+    picker.webContents.send('weave:picker-done', delivered);
+    picker.showInactive();
+    clearTimeout(pickerNote);
+    pickerNote = setTimeout(() => picker?.hide(), 1400);
+  }
+  return delivered;
+});
+
+ipcMain.handle('weave:picker', () => picker?.hide());
+
+/** The picker is a search bar that grows with its results: its page says how tall it is. */
+ipcMain.handle('weave:picker-fit', (_event, height: number) => {
+  if (!picker || typeof height !== 'number' || !Number.isFinite(height)) return;
+  const [width] = picker.getContentSize();
+  picker.setContentSize(width, Math.max(32, Math.min(Math.round(height), 480)));
+});
+
 /** From the sessions pane: bring a session to the front in the Claude app. */
 ipcMain.handle('weave:show-session', (_event, host: string) => showSession(String(host)));
 
@@ -266,6 +373,7 @@ function createTray(): void {
     Menu.buildFromTemplate([
       { label: 'Open Weave', click: showWindow },
       { label: 'Mentions panel', click: () => showMentions() },
+      { label: 'Address book…', ...(PICKER_SHORTCUTS[0] ? { accelerator: PICKER_SHORTCUTS[0][0] } : {}), click: () => void showPicker() },
       { type: 'separator' },
       { label: 'Quit Weave', click: () => app.quit() },
     ]),
@@ -416,6 +524,10 @@ app.whenReady().then(async () => {
     }
   }
   await createWindow();
+  for (const [shortcut, tab] of PICKER_SHORTCUTS) {
+    if (globalShortcut.register(shortcut, () => void showPicker(tab))) startPasteHelper();
+    else console.error(`weave: ${shortcut} is taken by another app, so the address book can't use it`);
+  }
 });
 
 app.on('window-all-closed', () => app.quit());
@@ -429,6 +541,7 @@ app.on('before-quit', () => {
 let daemonStopped = false;
 app.on('will-quit', (event) => {
   quitting = true;
+  globalShortcut.unregisterAll();
   watching.abort();
   if (daemonStopped || !daemon?.child || daemon.child.exitCode !== null) return;
   event.preventDefault();

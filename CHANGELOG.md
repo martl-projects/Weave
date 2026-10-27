@@ -2,6 +2,51 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.21.1 · 2026-10-27
+
+- Package the Mac app without bin links, and keep CI artifacts two days
+- Address book: say where the link went, for a moment
+- Address book: keep the page still when moving through the results
+- Address book: a rounded panel on a transparent window; Ctrl+F1 for everything
+- Address book on Ctrl+F1/F2/F3, with its tabs inside the search field
+- A tighter address book: a bare search bar that grows with its results
+- Tabs in the address book: all, people, projects, posts
+- Plan v2 stage 18: reputation (trust, vouches, gates)
+- Sign the installers when the repository has the credentials
+- Open only web addresses in the browser and for company sign-in
+- Address book picker and person links
+
+## v0.21.0 · 2026-10-27
+
+- Give the docker stand-in its port through a wrapper, so the container tests pass on Linux
+- Serve lens views through the node API: on the desktop, the phone and the web preview
+- Let the Kanban starter add cards in its sandboxed frame, and frame lenses in dev-web
+- Add client services: boards shown through a project's own WebAssembly lens
+- Add starters for WebAssembly services, and weave service new
+- Release WebAssembly services, and install them without Docker
+- Serve WebAssembly websites with Weave holding the players' connections
+- Run Weave services as WebAssembly components inside Weave
+- Run CI, installers and releases on self-hosted runners
+- Answer the local port a website really got, not a taken one
+- Set up the GitHub service's own GitHub App in one go
+- Let the GitHub service act as a GitHub App of the person's own
+- Let spaces decide what people's agents and services may do in them
+- Fix what clicking through the Catalog page turned up
+- Add catalogs: spaces list Weave services for their people to install
+- Release build files when the image can't be pinned, and add real checks
+- Bring websites from Weave 0.20 along, and read registries on this computer
+- Say where every service comes from, and check it where possible
+- Add providers and artifact.fetch, with the GitHub service as the first
+- Add the Weave service format: OCI images carrying their manifest
+- Let the website service only serve: services announce their web pages
+- A service that reads nothing takes no requests, and its key signs its profile alone
+- Say website, not room: CLI, app, messages and the agents' instructions
+- Rooms are websites in the API: openWebsite, websites, visitWebsite, WebsiteInfo…
+- Split services and websites out of node.ts
+- Extract fetching releases: download, check against the fingerprint, unpack, once per release
+- Extract the runtime: starting, supervising and stopping processes and containers, in one place
+- Applets: install another project's release as a service, with the contract its manifest declares
+
 ## v0.20.0 · 2026-10-26
 
 - Remove the project-app path: rooms come only from the room service

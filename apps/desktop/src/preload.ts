@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld('weave', {
   route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
   workOn: (post: string, choice?: unknown) => ipcRenderer.invoke('weave:work-on', post, choice),
   showSession: (host: string) => ipcRenderer.invoke('weave:show-session', host),
+  pick: (text: string) => ipcRenderer.invoke('weave:pick', text),
+  closePicker: () => ipcRenderer.invoke('weave:picker'),
+  fitPicker: (height: number) => ipcRenderer.invoke('weave:picker-fit', height),
+  onPickerDone: (listener: (delivered: 'pasted' | 'clipboard') => void) => {
+    ipcRenderer.on('weave:picker-done', (_event, delivered: 'pasted' | 'clipboard') => listener(delivered));
+  },
+  onPickerOpen: (listener: (tab: string) => void) => {
+    ipcRenderer.on('weave:picker-open', (_event, tab: string) => listener(tab));
+  },
   onPanelSession: (listener: (session: string) => void) => {
     ipcRenderer.on('weave:panel-session', (_event, session: string) => listener(session));
   },

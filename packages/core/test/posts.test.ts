@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardsOf, createIdentity, eventId, messagesOf, postPath, postRefsIn, postsOf, postTargetOf, postUrl, rank, Replica, savesOf, scoresOf, shortPrefixes, slugOf, type Did, type Entry, type Json, type SigningIdentity } from '../src/index.ts';
+import { boardsOf, createIdentity, eventId, messagesOf, personKeyOf, personPath, personTargetOf, personUrl, postPath, postRefsIn, postsOf, postTargetOf, postUrl, rank, Replica, savesOf, scoresOf, shortPrefixes, slugOf, type Did, type Entry, type Json, type SigningIdentity } from '../src/index.ts';
 
 function setup() {
   const replica = new Replica();
@@ -151,5 +151,29 @@ describe('post addresses', () => {
     const text = `I've updated [Links](${url}) and opened weave~NqgQ/issues/zz9k. Also weave:post:abcdefgh and again ${url}.`;
     expect(postRefsIn(text)).toEqual([url, 'weave~NqgQ/issues/zz9k', 'abcdefgh']);
     expect(postRefsIn('nothing here')).toEqual([]);
+  });
+});
+
+describe('person addresses', () => {
+  const did = 'did:key:z6MkfP5Q3XPCFjz199XozoFRNu2rsCmA7aHoQeU8eYQM3Zzj';
+
+  it('names a person by name and the start of their key', () => {
+    expect(personKeyOf(did)).toBe('fP5Q3XPCFjz199XozoFRNu2rsCmA7aHoQeU8eYQM3Zzj');
+    expect(personPath('Phil', did)).toBe('@phil~fP5Q3XPCFjz1');
+    expect(personUrl('Lena Müller', did)).toBe('http://weave.localhost:7710/@lena-muller~fP5Q3XPCFjz1');
+    expect(personPath(undefined, did)).toBe('@~fP5Q3XPCFjz1');
+  });
+
+  it('reads them back as a web address, text or Markdown link, and nothing else', () => {
+    expect(personTargetOf('http://weave.localhost:7710/@phil~fP5Q3XPCFjz1')).toBe('fP5Q3XPCFjz1');
+    expect(personTargetOf(' @someone-else~fP5Q3XPCFjz1 ')).toBe('fP5Q3XPCFjz1');
+    expect(personTargetOf('[Phil](http://weave.localhost:9999/@phil~fP5Q3XPCFjz1)')).toBe('fP5Q3XPCFjz1');
+    expect(personTargetOf('Phil')).toBeUndefined();
+    expect(personTargetOf('@phil~fP5Q')).toBeUndefined(); // too short to tell people apart
+    expect(personTargetOf('http://example.com/@phil~fP5Q3XPCFjz1')).toBeUndefined();
+    expect(personTargetOf('ask @phil~fP5Q3XPCFjz1 about it')).toBeUndefined();
+    // A person's address is no post's, and a public post's is no person's.
+    expect(postTargetOf('http://weave.localhost:7710/@phil~fP5Q3XPCFjz1')).toBeUndefined();
+    expect(personTargetOf('http://weave.localhost:7710/@martl/-nt5_W/a-title')).toBeUndefined();
   });
 });

@@ -291,6 +291,7 @@ export function startAppOpens(): void {
     void bridge.show();
     // A post (Open in Weave on its page): PublicPost takes it to where it lives.
     if (open.what === 'post' && open.post) return navigate(`#/post/${open.post.id}`);
+    if (open.what === 'person' && open.person) return navigate(`#/space/${open.person.did}`);
     if (open.what === 'inbox' || !open.space) return navigate('#/inbox');
     if (open.what === 'link-repo') {
       wantedLink = { space: open.space.id, ...(open.repo ? { repo: open.repo } : {}) };

@@ -20,6 +20,42 @@ function person(name: string) {
 /** Copy every event `from` has into `to`, as replication would. */
 const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
 
+describe('the address book picker', () => {
+  it('finds people, projects and posts by name, and tells two Phils apart', async () => {
+    const martin = person('Martin');
+    const phil = person('Phil');
+    const otherPhil = person('Phil');
+    await martin.addContact(await phil.contactLink());
+    await martin.addContact(await otherPhil.contactLink());
+    await martin.createProject({ name: 'Philosophy club' });
+    const issue = await martin.submit({ space: 'Philosophy club', board: 'issues', title: 'Ask Phil about the web UI' });
+    await martin.submit({ space: 'Philosophy club', board: 'ideas', title: 'Nothing to see' });
+
+    const found = await martin.find('phil');
+    expect(found.map((f) => f.person?.name ?? f.post?.title)).toEqual(['Phil', 'Phil', 'Philosophy club', 'Ask Phil about the web UI']);
+    expect(found[2].post).toMatchObject({ type: 'project' });
+    expect(found[3].post).toMatchObject({ id: issue.id, type: 'issue' });
+
+    // Each Phil's url names that Phil and nobody else, where the name can't.
+    const [a, b] = found.map((f) => f.person!).slice(0, 2);
+    expect(a.url).not.toBe(b.url);
+    expect(martin.resolve(`[Phil](${a.url})`)).toBe(a.did);
+    expect(martin.resolve(b.url)).toBe(b.did);
+    expect(() => martin.resolve('Phil')).toThrow(/several people/);
+    expect((await martin.find(b.url)).map((f) => f.person?.did)).toEqual([b.did]);
+    expect((await martin.directory(a.url)).map((p) => p.did)).toEqual([a.did]);
+
+    // Without a query: the people you follow, then your projects and recent posts.
+    expect((await martin.find('')).map((f) => f.person?.name ?? f.post?.title).slice(0, 3)).toEqual(['Phil', 'Phil', 'Philosophy club']);
+    expect(await martin.find('zzz')).toEqual([]);
+
+    // One kind at a time, for the picker's tabs.
+    expect((await martin.find('phil', 30, 'people')).map((f) => f.person?.name)).toEqual(['Phil', 'Phil']);
+    expect((await martin.find('phil', 30, 'projects')).map((f) => f.post?.title)).toEqual(['Philosophy club']);
+    expect((await martin.find('', 30, 'posts')).map((f) => f.post?.title).sort()).toEqual(['Ask Phil about the web UI', 'Nothing to see']);
+  });
+});
+
 describe('contact links', () => {
   it('adds someone by their link, even from a chat message, and finds them by name', async () => {
     const martin = person('Martin');

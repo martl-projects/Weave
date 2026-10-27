@@ -1,8 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
+import { browserSignIn, isWebAddress, openInBrowser } from '../src/signin.ts';
 import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
@@ -40,6 +43,31 @@ async function browser(url: string): Promise<void> {
     next = new URL(to, next).toString();
   }
 }
+
+describe('what may open in the browser', () => {
+  it('only web pages: https, or http on this computer', () => {
+    for (const ok of ['https://login.example.com/authorize?x=1', 'http://127.0.0.1:5000/callback', 'http://localhost:3000', 'http://[::1]:80/', 'http://weave.localhost:7710/x']) expect(isWebAddress(ok)).toBe(true);
+    for (const bad of ['file:///C:/Windows/System32/calc.exe', 'file://attacker/share/x.exe', '\\\\attacker\\share\\x.exe', 'http://login.example.com', 'javascript:alert(1)', 'ms-settings:', 'C:\\x.exe', 'not a url']) expect(isWebAddress(bad)).toBe(false);
+  });
+
+  it("refuses to hand anything else to the system's URL handler", () => {
+    expect(() => openInBrowser('file://attacker/share/x.exe')).toThrow(/only https/);
+  });
+
+  it("doesn't follow a company sign-in whose discovery names a file or share as its sign-in page", async () => {
+    const evil = createServer((_req, res) => res.end(JSON.stringify({ authorization_endpoint: 'file://attacker/share/x.exe', token_endpoint: 'https://attacker.example/token' })));
+    await new Promise<void>((resolve) => evil.listen(0, '127.0.0.1', resolve));
+    try {
+      const opened: string[] = [];
+      const issuer = `http://127.0.0.1:${(evil.address() as AddressInfo).port}`;
+      await expect(browserSignIn({ issuer, clientId: 'weave-app' }, (url) => void opened.push(url))).rejects.toThrow(/isn't an https address/);
+      await expect(browserSignIn({ issuer: 'file://attacker/share', clientId: 'weave-app' }, (url) => void opened.push(url))).rejects.toThrow(/must be an https address/);
+      expect(opened).toEqual([]);
+    } finally {
+      evil.close();
+    }
+  });
+});
 
 describe('signing in with a company account', { timeout: 120_000 }, () => {
   it('enrolls through the browser, and stays signed in by itself: tokens renew, the company keeps vouching', async () => {

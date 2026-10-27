@@ -926,10 +926,12 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox' | 'post';
+  what: 'link-repo' | 'space' | 'inbox' | 'post' | 'person';
   space?: SpaceRef;
   /** For post: the post to show. */
   post?: { id: string; title: string };
+  /** For person: whose hub to show. */
+  person?: { did: Did; name?: string };
   /** For link-repo: the repository to have chosen (owner/name). */
   repo?: string;
 }
@@ -1177,6 +1179,11 @@ export interface Person {
 export interface Profile {
   did: Did;
   name?: string;
+  /**
+   * Their web address, like a post's: http://weave.localhost:7710/@phil~fP5Q3XPCFjz1.
+   * Wherever Weave takes a person, it takes this too, so it names them exactly.
+   */
+  url: string;
   theme: Theme;
   me: boolean;
   /** I follow them. */
@@ -1198,6 +1205,12 @@ export interface Profile {
   /** Their other identities, where both sides say so. */
   links: LinkInfo[];
 }
+
+/** What the address book picker found: a person, or a post (projects and issues are posts too). */
+export type Found = { person: Profile; post?: undefined } | { post: PostInfo; person?: undefined };
+
+/** The picker's tabs: people, projects, or the other posts (issues, ideas, proposals). */
+export type FoundKind = 'people' | 'projects' | 'posts';
 
 /** Where the company's node streams its audit (stage 12), without secrets. */
 export interface AuditStreamInfo {
@@ -1720,7 +1733,7 @@ export interface Backend {
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
   showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
   /** The Mentions panel: posts agents pointed to on this computer, newest first. */
@@ -1845,6 +1858,8 @@ export interface Backend {
   setProfile(input: ProfileInput): Promise<Profile>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
   directory(query?: string): Promise<Profile[]>;
+  /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url; `only` keeps one kind. */
+  find(query: string, limit?: number, only?: FoundKind): Promise<Found[]>;
   /** Your contact link: your address, to send to people however you like. Holds no keys. */
   contactLink(): Promise<string>;
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
@@ -2039,7 +2054,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
+  'setEdge', 'social', 'profile', 'setProfile', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'setSessionRole', 'workers', 'assign',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',

@@ -66,6 +66,8 @@ export type {
   PostInfo,
   PostsQuery,
   Profile,
+  Found,
+  FoundKind,
   ProfileInput,
   ProjectInfo,
   ProjectPage,

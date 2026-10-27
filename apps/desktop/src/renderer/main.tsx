@@ -14,6 +14,7 @@ import { ProjectServicesView } from './websites.tsx';
 import { CatalogView } from './catalog.tsx';
 import { LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
+import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -710,6 +711,8 @@ function App() {
         <NotConnected home={state.home} onRetry={refresh} />
       ) : location.hash.startsWith('#/overlay') ? (
         <MentionsPanel />
+      ) : location.hash.startsWith('#/picker') ? (
+        <Picker />
       ) : (
         <>
           <Shell />
