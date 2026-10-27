@@ -2,6 +2,20 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.21.1 · 2026-10-27
+
+- Package the Mac app without bin links, and keep CI artifacts two days
+- Address book: say where the link went, for a moment
+- Address book: keep the page still when moving through the results
+- Address book: a rounded panel on a transparent window; Ctrl+F1 for everything
+- Address book on Ctrl+F1/F2/F3, with its tabs inside the search field
+- A tighter address book: a bare search bar that grows with its results
+- Tabs in the address book: all, people, projects, posts
+- Plan v2 stage 18: reputation (trust, vouches, gates)
+- Sign the installers when the repository has the credentials
+- Open only web addresses in the browser and for company sign-in
+- Address book picker and person links
+
 ## v0.21.0 · 2026-10-27
 
 - Give the docker stand-in its port through a wrapper, so the container tests pass on Linux
