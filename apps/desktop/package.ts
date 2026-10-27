@@ -65,6 +65,9 @@ const dependencies = Object.fromEntries([...NATIVE, ...BESIDE].map((name) => [na
 writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon', private: true, type: 'module', dependencies }, null, 2));
 execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
+// The starters for WebAssembly services, and their WIT (weave service new finds them next to the daemon).
+cpSync(join(root, 'packages', 'sdk', 'starters'), 'pack/daemon/starters', { recursive: true });
+cpSync(join(root, 'packages', 'sdk', 'wit'), 'pack/daemon/wit', { recursive: true });
 // The admin console a company's node serves (packages/node/src/console.ts looks for it next to the daemon).
 execFileSync(process.execPath, [join(root, 'apps', 'console', 'build.ts')], { stdio: 'inherit' });
 cpSync(join(root, 'apps', 'console', 'dist'), 'pack/daemon/console', { recursive: true });

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
 import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, type RepoAccess, type ServiceContract, type VisitorRule } from '@weave/core';
@@ -197,6 +198,8 @@ github — repositories that follow a group, tier or project (members who give t
   github repos               repositories you can link (the app is installed on them and you're admin)
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  service new <folder> [--website] [--rust]   start a WebAssembly service of your own from a starter: a bot (JavaScript, or
+                             Rust), or a website (a buzzer quiz in JavaScript); Weave runs it itself, nothing to install
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
@@ -439,6 +442,8 @@ const { values, positionals } = parseArgs({
     repo: { type: 'string' },
     from: { type: 'string' },
     wasm: { type: 'string' },
+    website: { type: 'boolean', default: false },
+    rust: { type: 'boolean', default: false },
     site: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
@@ -721,6 +726,35 @@ async function approving<T>(run: (approve: boolean) => Promise<T>): Promise<T> {
     if (!/^y(es)?$/i.test(answer.trim())) throw new Error('not approved: nothing runs');
     return run(true);
   }
+}
+
+/** Weave's starters for WebAssembly services: next to the packaged daemon, or in the SDK of a source checkout. */
+const STARTERS = [join(dirname(fileURLToPath(import.meta.url)), 'starters'), join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'sdk', 'starters')].find((dir) => existsSync(dir));
+const SERVICE_WIT = STARTERS && join(STARTERS, '..', 'wit', 'service.wit');
+
+/**
+ * A new WebAssembly service from a starter, in its own folder: a bot (JavaScript or Rust) or a website (a game, in
+ * JavaScript), with Weave's WIT next to it. Nothing is overwritten.
+ */
+function newService(folder: string, kind: { website: boolean; rust: boolean }): { folder: string; starter: string; next: string[] } {
+  if (!STARTERS || !SERVICE_WIT || !existsSync(SERVICE_WIT)) throw new Error("this copy of Weave has no starters: get one from Weave's repository (packages/sdk/starters)");
+  if (kind.website && kind.rust) throw new Error('the website starter is in JavaScript for now: start from it, or from the Rust service starter');
+  const starter = kind.website ? 'js-website' : kind.rust ? 'rust-service' : 'js-service';
+  const into = resolvePath(process.env.INIT_CWD ?? process.cwd(), folder);
+  if (existsSync(into) && readdirSync(into).length) throw new Error(`${into} isn't empty: pick a new folder`);
+  const name = basename(into).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'my-service';
+  cpSync(join(STARTERS, starter), into, { recursive: true, filter: (from) => !/[\\/](node_modules|target)([\\/]|$)/.test(from) });
+  mkdirSync(join(into, 'wit'), { recursive: true });
+  cpSync(SERVICE_WIT, join(into, 'wit', 'service.wit'));
+  // Named after its folder.
+  for (const file of ['package.json', 'Cargo.toml']) {
+    const path = join(into, file);
+    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replace(/my-weave-(service|game)/, name));
+  }
+  const wasm = kind.rust ? `target/wasm32-wasip2/release/${name.replace(/-/g, '_')}.wasm` : kind.website ? 'game.wasm' : 'service.wasm';
+  const add = kind.website ? `weave service add ${name} --wasm ${wasm} --site site --offers-website --reads nothing --spaces <project>` : `weave service add ${name} --wasm ${wasm} --reads addressed --spaces <project>`;
+  const build = kind.rust ? ['  rustup target add wasm32-wasip2   (once)', '  cargo build --target wasm32-wasip2 --release'] : ['  npm install', '  npm run build'];
+  return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, `  ${add}`, `Its README says what it can do, and how to release it.`] };
 }
 
 /** How a website of the website service is doing. */
@@ -1423,6 +1457,11 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
 
     case 'service': {
       const [sub, ref] = args;
+      // A new service of your own starts as files: no node needed.
+      if (sub === 'new' && ref) {
+        const made = newService(ref, { website: values.website, rust: values.rust });
+        return out(made, () => made.next.join('\n'));
+      }
       const b = await backend();
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
@@ -1511,7 +1550,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
         const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
         const s = await approving((approve) =>
-          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
+          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site !== undefined ? { site: values.site || null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
         );
         return out(s, () => line(s));
       }

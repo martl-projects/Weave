@@ -15,6 +15,7 @@
   "files": [
     "src",
     "wit",
+    "starters",
     "README.md"
   ],
   "engines": {

@@ -535,7 +535,7 @@ export class Services {
   }
 
   /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
-  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
+  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; wasm?: string; site?: string | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
     const away = this.h.isLinkedNode ? undefined : this.handedOver().get(input.name);
     if (away && !this.storedServices().some((s) => s.name === input.name)) {
       if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
@@ -576,9 +576,15 @@ export class Services {
       else delete spaceSettings[id];
     }
     const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
-    const { command: _command, spaceSettings: _spaceSettings, ...rest } = before;
+    // Its own WebAssembly component (and its site): another build of it, read on its next start.
+    if ((input.wasm || input.site) && !before.wasm) throw new Error(`${before.name} isn't a WebAssembly service of your own: it has no component to replace`);
+    const wasm = input.wasm ? this.wasmFile(input.wasm) : before.wasm;
+    const site = input.site === null ? undefined : input.site ? this.siteFolder(input.site) : before.site;
+    const { command: _command, spaceSettings: _spaceSettings, wasm: _wasm, site: _site, ...rest } = before;
     const after: StoredService = {
       ...rest,
+      ...(wasm ? { wasm } : {}),
+      ...(site ? { site } : {}),
       ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
       spaces,
       ...(command?.length ? { command } : {}),

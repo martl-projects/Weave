@@ -1,0 +1,12 @@
+{
+  "name": "my-weave-game",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "jco componentize src/game.js --wit wit --world-name website --disable http fetch-event -o game.wasm"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "^0.23.0",
+    "@bytecodealliance/jco": "^1.39.0"
+  }
+}
