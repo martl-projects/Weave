@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { checkManifest, checkServiceLabel, SERVICE_LABEL } from '@weave/core';
 import { startApi } from '../src/api.ts';
@@ -26,8 +27,6 @@ afterAll(() => {
 });
 afterEach(() => {
   delete process.env.FAKE_DOCKER_DOWN;
-  delete process.env.FAKE_DOCKER_DIR;
-  delete process.env.FAKE_DOCKER_PORT;
 });
 
 const freePort = () =>
@@ -71,6 +70,20 @@ function person(name: string, fetchImpl: Fetch): WeaveNode {
   return node;
 }
 
+/**
+ * The docker stand-in, told where to write down what it did and which port the app listens on. Weave starts
+ * containers with nothing of its own environment (only PATH and the service's settings), so that goes into a
+ * wrapper script, not the environment: on Linux the container shares the host's network (no -p to read the port from).
+ */
+function fakeDocker(node: WeaveNode, dir: string, port: number): void {
+  const wrapper = join(dir, 'docker.mjs');
+  const env = { FAKE_DOCKER_DIR: dir, FAKE_DOCKER_PORT: String(port) };
+  writeFileSync(wrapper, `Object.assign(process.env, ${JSON.stringify(env)});
+await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, 'helpers', 'fake-docker.mjs')).href)});
+`);
+  node.containerSetup = { ...node.containerSetup, docker: [process.execPath, wrapper] };
+}
+
 const syncAll = (nodes: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
@@ -104,9 +117,7 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
 
     // Lena's computer has Docker: installed as a service, the release runs as its container, no copy of it needed.
     const dockerDir = tempDir('weave-fake-docker-');
-    process.env.FAKE_DOCKER_DIR = dockerDir;
-    // On Linux the container shares the host's network (no -p): the stand-in needs to know the app's port.
-    process.env.FAKE_DOCKER_PORT = String(port);
+    fakeDocker(lena, dockerDir, port);
     const [artifact] = await lena.artifacts('Gameshow');
     expect(artifact).toMatchObject({ tag: 'v1.4', runs: 'container' });
     const run = artifact.command!.slice(2);
@@ -188,8 +199,7 @@ describe('Weave services: images carrying their manifest', { timeout: 60_000 }, 
 
     // Lena's computer has Docker: it runs read-only, limited, with a volume of its own, by its digest.
     const dockerDir = tempDir('weave-fake-docker-');
-    process.env.FAKE_DOCKER_DIR = dockerDir;
-    process.env.FAKE_DOCKER_PORT = String(port);
+    fakeDocker(lena, dockerDir, port);
     const [artifact] = await lena.artifacts('Quiz');
     expect(artifact).toMatchObject({ tag: '1.0', packaged: true, runs: 'container', applet: { reads: 'addressed' } });
     const run = artifact.command!.slice(2);
