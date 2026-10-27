@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.21.2 · 2026-10-27
+
+- Leave out empty signing variables when packaging
+
 ## v0.21.1 · 2026-10-27
 
 - Package the Mac app without bin links, and keep CI artifacts two days
