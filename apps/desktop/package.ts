@@ -76,7 +76,8 @@ await bundle({
 });
 const dependencies = Object.fromEntries([...NATIVE, ...BESIDE].map((name) => [name, pkg(join(root, 'node_modules', name)).version]));
 writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon', private: true, type: 'module', dependencies }, null, 2));
-execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
+// No bin links: cpSync below would turn them into absolute paths out of the app, which codesign refuses.
+execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false', '--no-bin-links'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
 // The starters for WebAssembly services, and their WIT (weave service new finds them next to the daemon).
 cpSync(join(root, 'packages', 'sdk', 'starters'), 'pack/daemon/starters', { recursive: true });

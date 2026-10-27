@@ -68,3 +68,5 @@ jobs:
             apps/desktop/release/*.pkg
             apps/desktop/release/*.AppImage
           if-no-files-found: error
+          # Only for the release job: the release keeps them, and old ones fill the storage quota.
+          retention-days: 2

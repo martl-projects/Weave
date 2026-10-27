@@ -40,6 +40,8 @@ jobs:
           name: installers-server
           path: weave-server-*.tgz
           if-no-files-found: error
+          # Only for the release job: the release keeps them, and old ones fill the storage quota.
+          retention-days: 2
 
   # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
   # On GitHub's runner: the self-hosted Linux runner has no Docker, which would
