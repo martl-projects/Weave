@@ -1,0 +1,50 @@
+# Weave Server as a container image: ghcr.io/<owner>/weave-server:<version> and
+# :latest. The release workflow runs it for every version tag; run it by hand
+# from the Actions tab with a tag to publish (or publish again) that version.
+#
+# Built with rootless Podman on the self-hosted Linux runner: no Docker, which
+# would give jobs root in the distro (docs/self-hosted-runners.md).
+name: Server image
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to build, like v0.21.2
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Image name
+        # The login stays in this job's temporary folder, not in the runner's home.
+        run: |
+          echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/weave-server" >> "$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/registry-auth.json" >> "$GITHUB_ENV"
+      - name: Build
+        # Docker's format, so the image keeps its HEALTHCHECK (OCI images have none).
+        run: podman build --format docker --pull=newer -f apps/server/Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+      - name: Push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman push "$IMAGE:$TAG"
+          podman push "$IMAGE:latest"
+      - name: Clean up
+        if: always()
+        run: |
+          podman logout ghcr.io || true
+          podman rmi -f "$IMAGE:$TAG" "$IMAGE:latest" || true
+          podman image prune -f || true

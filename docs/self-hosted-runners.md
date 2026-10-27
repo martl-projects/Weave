@@ -10,8 +10,8 @@ builds away from its host's files and keys:
 | `weave-runner-wsl` | `linux-wsl`  | its own WSL distro on the PC, started at logon     |
 | `weave-runner-mac` | `macos-mini` | a hidden user on the Mac mini, started at boot     |
 
-Only the server image still runs on GitHub (it needs Docker, which would give
-jobs root in the distro).
+The server image is built there too, with rootless Podman: Docker would give
+jobs root in the distro, Podman runs as runner in its own user namespace.
 
 To send jobs back to GitHub's runners (a machine is off, say), set the repository
 variable `WINDOWS_RUNNER` to `"windows-latest"`, `MACOS_RUNNER` to

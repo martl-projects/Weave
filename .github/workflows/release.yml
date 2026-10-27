@@ -44,31 +44,12 @@ jobs:
           retention-days: 2
 
   # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
-  # On GitHub's runner: the self-hosted Linux runner has no Docker, which would
-  # give jobs root there (docs/self-hosted-runners.md).
   server-image:
     needs: ci
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/server-image.yml
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image name
-        run: echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/weave-server" >> "$GITHUB_ENV"
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/server/Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
 
   release:
     needs: [ci, installers, server]
