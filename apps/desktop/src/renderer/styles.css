@@ -591,13 +591,18 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .boards-table td:nth-child(2) { width: 100%; }
 
 /* The Mentions panel: its own small window beside the work (overlay.tsx). */
-.mentions-window { height: 100%; display: flex; flex-direction: column; margin: 0; }
+.mentions-window { height: 100%; display: flex; flex-direction: column; margin: 0; padding: 0; }
 .mentions-drag { -webkit-app-region: drag; }
 .mentions-drag button { -webkit-app-region: no-drag; }
+.mentions-drag .title-bar-text { flex: 1; min-width: 0; margin: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mentions-drag .panel-nav { min-width: 0; min-height: 0; padding: 0 6px; font-size: 11px; }
 .mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
 .mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
-.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.mentions-scroll > .empty, .mentions-scroll > .panel-toggles, .mentions-scroll > .panel-lines, .mentions-scroll > .panel-sessions { margin-left: 8px; margin-right: 8px; }
+.mentions-scroll > .panel-sessions { margin-top: 8px; }
+.mentions-scroll > * { flex-shrink: 0; }
 .panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
 .panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
 .stack-item { display: flex; flex-direction: column; gap: 3px; }
@@ -610,7 +615,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .panel-bar-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-bar button.active, .panel-toggles button.active { font-weight: 700; }
 .panel-current { display: flex; flex-direction: column; gap: 6px; }
-.panel-current .post-full { margin: 0; }
+.panel-current .post-full { margin: 0; border: 0; box-shadow: none; max-height: none; overflow: visible; }
+.panel-current .stack-prompt { margin: 0 8px; }
 .panel-current .post-title { font-size: 16px; }
 .panel-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
 .panel-lines, .panel-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-family: var(--content-font); font-size: 12px; }

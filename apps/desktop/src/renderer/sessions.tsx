@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { SessionInfo, SpaceInfo } from '@weave/node/client';
+import type { ClaudeCodeFollow, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { Page } from './views.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
@@ -81,6 +81,8 @@ export function SessionsView() {
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const projects = (spaces ?? []).filter((s) => s.kind === 'project' && !s.closed);
   const [all, setAll] = useState(false);
+  const { data: follow } = useApi(() => api<ClaudeCodeFollow>('claudeCode'), []);
+  const toggleFollow = () => attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }).then(bump));
   // Sessions with a job first; the others only from the last day, unless you ask for all.
   const list = (sessions ?? []).filter((s) => all || s.role || Date.now() - Date.parse(s.active ?? s.time) < 24 * 3600 * 1000);
   const ordered = [...list.filter((s) => s.role === 'driver'), ...list.filter((s) => s.role === 'worker'), ...list.filter((s) => !s.role)];
@@ -93,6 +95,10 @@ export function SessionsView() {
       }
       actions={
         <>
+          <input type="checkbox" id="follow-claude-code" checked={!!follow?.on} disabled={!follow} onChange={() => void toggleFollow()} />
+          <label htmlFor="follow-claude-code" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
+            Follow Claude Code{follow && !follow.found ? ' (not found)' : ''}
+          </label>
           <input type="checkbox" id="sessions-all" checked={all} onChange={() => setAll((a) => !a)} />
           <label htmlFor="sessions-all">Last 3 days</label>
         </>

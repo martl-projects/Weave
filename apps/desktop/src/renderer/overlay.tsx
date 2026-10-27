@@ -1,5 +1,5 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
-import type { ClaudeCodeFollow, MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
+import type { MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
 import { PostHeader, spaceLabel } from './posts.tsx';
 import { attempt } from './ui.tsx';
@@ -51,10 +51,9 @@ function Line({ post, note }: { post: PostInfo | { id: string; missing: true }; 
 }
 
 /** The work item a session is on, in full: as Weave shows a post, without its chat, and its starting prompt. */
-function CurrentItem({ post, since, ctx }: { post: PostInfo; since: string; ctx: Context }) {
+function CurrentItem({ post, ctx }: { post: PostInfo; ctx: Context }) {
   return (
     <section className="panel-current" data-post={post.id}>
-      <div className="stack-state now">Now · {kindOf(post)} · since {ago(since)}</div>
       <PostHeader post={post} meDid={ctx.me.did} spaces={ctx.spaces} />
       {post.prompt && (
         <div className="stack-prompt">
@@ -75,10 +74,11 @@ function SessionView({ session, mentions, ctx }: { session: SessionInfo; mention
   return (
     <>
       {top && !('missing' in top.post) ? (
-        <CurrentItem post={top.post} since={top.since} ctx={ctx} />
+        <CurrentItem post={top.post} ctx={ctx} />
       ) : (
         <p className="empty">{top ? "This session is on a post you can't see here." : 'No work item on this session. Ctrl+click a post in Weave to bring one here.'}</p>
       )}
+      {(waiting.length > 0 || here.length > 0) && (
       <div className="panel-toggles">
         <button className={open === 'stack' ? 'active' : ''} disabled={!waiting.length} onClick={() => flip('stack')}>
           Stack ({waiting.length} waiting)
@@ -87,6 +87,7 @@ function SessionView({ session, mentions, ctx }: { session: SessionInfo; mention
           Mentions ({here.length})
         </button>
       </div>
+      )}
       {open === 'stack' && (
         <ul className="panel-lines">
           {waiting.map((entry, i) => (
@@ -163,7 +164,6 @@ function openInWeave(event: MouseEvent): void {
 
 export function MentionsPanel() {
   const [mentions, setMentions] = useState<MentionInfo[]>([]);
-  const [follow, setFollow] = useState<ClaudeCodeFollow>();
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [focused, setFocused] = useState<string>();
   const [ctx, setCtx] = useState<Context>();
@@ -182,7 +182,6 @@ export function MentionsPanel() {
       if (pinned) void api<SessionInfo>('session', { id: pinned }).then(setSession, () => {});
     };
     void api<MentionInfo[]>('mentions').then(setMentions, () => {});
-    void api<ClaudeCodeFollow>('claudeCode').then(setFollow, () => {});
     refresh();
     return onItem((item) => {
       if (item?.kind === 'weave.mention') setMentions((list) => [item.body as unknown as MentionInfo, ...list.filter((m) => m.id !== item.id)].slice(0, 100));
@@ -204,10 +203,7 @@ export function MentionsPanel() {
       }),
     [],
   );
-  const toggleFollow = async () => {
-    const next = await attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }));
-    if (next) setFollow(next);
-  };
+  // Picking the session open in Claude follows the Claude app again.
   const pick = (id: string) => {
     setPinned(id === focused ? '' : id);
     setPane('session');
@@ -215,56 +211,22 @@ export function MentionsPanel() {
   return (
     <div className="window mentions-window" onClickCapture={openInWeave}>
       <div className="title-bar mentions-drag">
-        <div className="title-bar-text">Weave · {pane === 'sessions' ? 'Sessions' : (session?.title ?? 'Session')}</div>
+        <button className="panel-nav" onClick={() => setPane(pane === 'sessions' ? 'session' : 'sessions')}>
+          {pane === 'sessions' ? '← Back' : 'Sessions'}
+        </button>
+        <div className="title-bar-text">{pane === 'session' && session ? (session.title ?? 'Untitled session') : ''}</div>
         <div className="title-bar-controls">
           <button aria-label="Close" onClick={() => window.close()} />
         </div>
       </div>
-      <div className="window-body mentions-body">
-        <div className="panel-bar">
-          <button className={pane === 'sessions' ? 'active' : ''} onClick={() => setPane(pane === 'sessions' ? 'session' : 'sessions')}>
-            {pane === 'sessions' ? '← Back' : 'Sessions'}
-          </button>
-          {pane === 'session' && (
-            <span className="panel-bar-what">
-              {session ? (
-                <>
-                  <b>{session.title ?? 'Untitled session'}</b> {folderName(session.folder) ? `· ${folderName(session.folder)}` : ''}
-                  {pinned ? (
-                    <button className="link" onClick={() => setPinned('')} title="Follow the session open in the Claude app again">
-                      follow Claude
-                    </button>
-                  ) : (
-                    <span className="muted"> · open in Claude</span>
-                  )}
-                </>
-              ) : (
-                <span className="muted">No session</span>
-              )}
-            </span>
-          )}
-        </div>
-        <div className="mentions-scroll">
-          {pane === 'sessions' ? (
-            <SessionsPane focused={focused} onPick={pick} />
-          ) : session && ctx ? (
-            <SessionView session={session} mentions={mentions} ctx={ctx} />
-          ) : (
-            <p className="empty">
-              {follow?.on
-                ? 'Switch to a session in the Claude app, or pick one under Sessions: the work item it is on shows here.'
-                : 'Turn on Follow Claude Code: this panel then follows the session you look at in the Claude app and shows the work item it is on.'}
-            </p>
-          )}
-        </div>
-        <div className="panel-foot">
-          <input id="follow-claude-code" type="checkbox" checked={!!follow?.on} onChange={() => void toggleFollow()} disabled={!follow} />
-          <label htmlFor="follow-claude-code" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
-            Follow Claude Code{follow && !follow.found ? ' (not found)' : ''}
-          </label>
-          <span className="grow" />
-          <button onClick={() => void bridge.show()}>Open Weave</button>
-        </div>
+      <div className="mentions-scroll">
+        {pane === 'sessions' ? (
+          <SessionsPane focused={focused} onPick={pick} />
+        ) : session && ctx ? (
+          <SessionView session={session} mentions={mentions} ctx={ctx} />
+        ) : (
+          <p className="empty">Switch to a session in the Claude app, or pick one under Sessions: the work item it is on shows here. (Weave follows the Claude app once Follow Claude Code is on, on its Sessions page.)</p>
+        )}
       </div>
     </div>
   );
