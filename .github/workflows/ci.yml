@@ -21,7 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    # Windows and Linux run on self-hosted runners (docs/self-hosted-runners.md); set the
+    # repository variable WINDOWS_RUNNER or LINUX_RUNNER to "windows-latest" or
+    # "ubuntu-latest" to go back to GitHub's.
+    runs-on: ${{ matrix.os == 'windows-latest' && fromJSON(vars.WINDOWS_RUNNER || '["self-hosted","windows-vm"]') || matrix.os == 'ubuntu-latest' && fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') || matrix.os }}
     env:
       # The build bundles the app with esbuild; the Electron binary itself isn't needed.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
