@@ -1,7 +1,10 @@
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { LINK_HOST, LINK_PORT, postLink } from '@weave/core';
+import { extname, join, resolve, sep } from 'node:path';
 import { Marked, type Tokens } from 'marked';
+import { TYPES } from './runtime.ts';
 import type { Actor, Backend, MessageInfo, PostInfo } from './backend.ts';
 
 export interface LinkServer {
@@ -34,10 +37,12 @@ export interface GitHubAppFlow {
  *   POST /open/<address>         bring the Weave app to the post (same-origin forms only)
  *   GET  /github/new-app?state   the App's description, sent to GitHub with one click
  *   GET  /github/app-created?code&state   GitHub's way back: the App's ID and key go to the GitHub service
+ *   GET  /lens/<release>/<file>  a board's client service's renderer (its site), while it's ready here: sandboxed
+ *                                (an opaque origin, scripts only, no network); it talks to the board view framing it
  */
-export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?: GitHubAppFlow): Promise<LinkServer> {
+export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?: GitHubAppFlow, lensSite?: (release: string) => Promise<string | undefined>): Promise<LinkServer> {
   const server: Server = createServer((req, res) => {
-    handle(backend, req, res, githubApp).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
+    handle(backend, req, res, githubApp, lensSite).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -56,7 +61,7 @@ export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?:
   };
 }
 
-async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse, githubApp?: GitHubAppFlow): Promise<void> {
+async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse, githubApp?: GitHubAppFlow, lensSite?: (release: string) => Promise<string | undefined>): Promise<void> {
   const host = req.headers.host ?? '';
   if (host.split(':')[0] !== LINK_HOST) return page(res, 403, 'Weave', '<p class="note">Open Weave links as http://weave.localhost:…</p>');
   const url = new URL(req.url ?? '/', `http://${host}`);
@@ -85,6 +90,8 @@ async function handle(backend: Backend, req: IncomingMessage, res: ServerRespons
     }
   }
 
+  if (req.method === 'GET' && lensSite && path.startsWith('lens/')) return lensFile(res, lensSite, url.pathname.slice('/lens/'.length));
+
   if (req.method === 'POST' && path.startsWith('open/')) {
     // A form on one of these pages, nothing else: browsers send Origin with every POST.
     if (req.headers.origin !== `http://${host}`) return page(res, 403, 'Weave', '<p class="note">Not from a Weave page.</p>');
@@ -105,6 +112,30 @@ async function handle(backend: Backend, req: IncomingMessage, res: ServerRespons
   }
   const chat = post.space && post.type !== 'project' ? await backend.messages(undefined, { post: post.id, limit: 50 }).catch(() => [] as MessageInfo[]) : [];
   return page(res, 200, post.title, postPage(post, chat, path, url.searchParams.has('opened')));
+}
+
+/**
+ * A renderer's file, from its site folder and nothing outside it. Its page runs sandboxed: no origin of its own (it
+ * reads nothing of Weave's), no network, no forms, no navigating its parent. All it knows is what the board view
+ * hands it by postMessage (the state and actions), and all it can do is ask that view for an action.
+ */
+async function lensFile(res: ServerResponse, lensSite: (release: string) => Promise<string | undefined>, rest: string): Promise<void> {
+  const [release, ...parts] = rest.split('/');
+  const folder = /^[A-Za-z0-9_-]{1,100}$/.test(release) ? await lensSite(release) : undefined;
+  if (!folder) return page(res, 404, 'Not here', '<p class="note">This board view is not ready on this computer.</p>');
+  const root = resolve(folder);
+  let file = resolve(root, `.${decodeURIComponent('/' + parts.join('/'))}`);
+  if (file !== root && !file.startsWith(root + sep)) return page(res, 404, 'Not here', '<p class="note">Not in this board view.</p>');
+  if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html');
+  if (!existsSync(file) || !statSync(file).isFile()) return page(res, 404, 'Not here', '<p class="note">Not in this board view.</p>');
+  res.writeHead(200, {
+    'content-type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'content-security-policy': "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'",
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'cache-control': 'no-cache',
+  });
+  createReadStream(file).pipe(res);
 }
 
 // ---------------------------------------------------------------- the page

@@ -499,6 +499,21 @@ export interface BoardInfo {
   rule?: { keepDays: number | null; maxMB: number | null; by: Actor; time: string };
   /** Projects: you follow this board, so its posts come to your Home and notify you (releases and showcase by default). */
   following?: boolean;
+  /** Its client service, if its maintainers chose one: suggested (each member chooses) or required. See boardView. */
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string };
+}
+
+/**
+ * A board as its client service (its lens) shows it on this node: the service's state and actions, and whether it has
+ * a renderer (`site`: its address on this computer's pages, http://weave.localhost:…/lens/<release>/). Without a lens, or with a suggested one not chosen
+ * here, just the board; `problem` when it couldn't be fetched or run.
+ */
+export interface BoardViewInfo {
+  space: { id: string; kind: string; name: string };
+  board: { name: string; title: string };
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; site?: string; problem?: string };
+  state?: Json;
+  actions?: Json[];
 }
 
 /** A person or group a board is open to. */
@@ -1769,6 +1784,12 @@ export interface Backend {
   setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]>;
   /** Maintainers or moderators: pin posts to the top of a board, in this order (empty unpins all). */
   curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]>;
+  /** Maintainers: show a board through a client service (a project's release, or a catalog's), suggested or required; off takes it away. */
+  setBoardLens(input: { space: string; board: string; from?: { project: string; tag?: string } | { catalog: string; app: string }; mode?: 'suggest' | 'require'; off?: boolean; as?: string }): Promise<BoardViewInfo>;
+  /** A board as its client service shows it (use: with a suggested one, too). */
+  boardView(input: { space: string; board: string; use?: boolean }): Promise<BoardViewInfo>;
+  /** Do one of the actions a board's client service offers: what it proposes is signed by you (or your agent), with your rights. */
+  boardAction(input: { space: string; board: string; action: string; input?: Json; as?: string }): Promise<{ published: FeedItem[]; view: BoardViewInfo }>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
@@ -1989,7 +2010,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',

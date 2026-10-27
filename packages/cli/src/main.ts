@@ -28,6 +28,7 @@ import {
   type Admission,
   type Backend,
   type BoardInfo,
+  type BoardViewInfo,
   type Bundle,
   type CreateCompanyInput,
   type CommunityInfo,
@@ -198,8 +199,9 @@ github — repositories that follow a group, tier or project (members who give t
   github repos               repositories you can link (the app is installed on them and you're admin)
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
-  service new <folder> [--website] [--rust]   start a WebAssembly service of your own from a starter: a bot (JavaScript, or
-                             Rust), or a website (a buzzer quiz in JavaScript); Weave runs it itself, nothing to install
+  service new <folder> [--website] [--rust] [--lens]   start a WebAssembly service of your own from a starter: a bot
+                             (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), or a client service that shows a
+                             board its own way (a Kanban in JavaScript); Weave runs it itself, nothing to install
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
@@ -253,6 +255,10 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board drop <name>          remove a board; its posts stay in the logs
   board follow <name>        bring a board's posts to your Home and notify you (releases and showcase by default); unfollow stops
   board access <name>        who may read and write (maintainers)  [--read <who,…>] [--write <who,…>]
+  board lens <name>          show a board through a client service (maintainers): --artifact <project>[@tag] | --from <space>/<app>
+                             [--require: every member's node uses it; otherwise suggested]; --off takes it away
+  board view <name>          the board as its client service shows it: its state and actions
+  board act <name> <action>  do one of its actions, signed by you (or --as <agent>)  [--input <json>]
                              people by name or did:key, groups as group:<name>; "everyone" opens it again,
                              "" leaves only the maintainers
   pin <id...>                pin posts to the top of a board, in this order (maintainers, moderators)  [-b <board>]; --clear unpins
@@ -441,9 +447,12 @@ const { values, positionals } = parseArgs({
     service: { type: 'string' },
     repo: { type: 'string' },
     from: { type: 'string' },
+    require: { type: 'boolean', default: false },
+    input: { type: 'string' },
     wasm: { type: 'string' },
     website: { type: 'boolean', default: false },
     rust: { type: 'boolean', default: false },
+    lens: { type: 'boolean', default: false },
     site: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
@@ -733,12 +742,14 @@ const STARTERS = [join(dirname(fileURLToPath(import.meta.url)), 'starters'), joi
 const SERVICE_WIT = STARTERS && join(STARTERS, '..', 'wit', 'service.wit');
 
 /**
- * A new WebAssembly service from a starter, in its own folder: a bot (JavaScript or Rust) or a website (a game, in
- * JavaScript), with Weave's WIT next to it. Nothing is overwritten.
+ * A new WebAssembly service from a starter, in its own folder: a bot (JavaScript or Rust), a website (a game, in
+ * JavaScript) or a client service (a board's Kanban, in JavaScript), with Weave's WIT next to it. Nothing is overwritten.
  */
-function newService(folder: string, kind: { website: boolean; rust: boolean }): { folder: string; starter: string; next: string[] } {
+function newService(folder: string, kind: { website: boolean; rust: boolean; lens?: boolean }): { folder: string; starter: string; next: string[] } {
   if (!STARTERS || !SERVICE_WIT || !existsSync(SERVICE_WIT)) throw new Error("this copy of Weave has no starters: get one from Weave's repository (packages/sdk/starters)");
-  if (kind.website && kind.rust) throw new Error('the website starter is in JavaScript for now: start from it, or from the Rust service starter');
+  if ((kind.website || kind.lens) && kind.rust) throw new Error(`the ${kind.lens ? 'client service' : 'website'} starter is in JavaScript for now: start from it, or from the Rust service starter`);
+  if (kind.website && kind.lens) throw new Error('a website or a client service: pick one');
+  if (kind.lens) return newLens(folder, resolvePath(process.env.INIT_CWD ?? process.cwd(), folder));
   const starter = kind.website ? 'js-website' : kind.rust ? 'rust-service' : 'js-service';
   const into = resolvePath(process.env.INIT_CWD ?? process.cwd(), folder);
   if (existsSync(into) && readdirSync(into).length) throw new Error(`${into} isn't empty: pick a new folder`);
@@ -755,6 +766,17 @@ function newService(folder: string, kind: { website: boolean; rust: boolean }): 
   const add = kind.website ? `weave service add ${name} --wasm ${wasm} --site site --offers-website --reads nothing --spaces <project>` : `weave service add ${name} --wasm ${wasm} --reads addressed --spaces <project>`;
   const build = kind.rust ? ['  rustup target add wasm32-wasip2   (once)', '  cargo build --target wasm32-wasip2 --release'] : ['  npm install', '  npm run build'];
   return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, `  ${add}`, `Its README says what it can do, and how to release it.`] };
+}
+
+/** The client service starter (a Kanban): built, released, and pinned to a board by the project's maintainers. */
+function newLens(folder: string, into: string): { folder: string; starter: string; next: string[] } {
+  if (existsSync(into) && readdirSync(into).length) throw new Error(`${into} isn't empty: pick a new folder`);
+  const name = basename(into).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'my-board';
+  cpSync(join(STARTERS!, 'js-board'), into, { recursive: true, filter: (from) => !/[\/]node_modules([\/]|$)/.test(from) });
+  mkdirSync(join(into, 'wit'), { recursive: true });
+  cpSync(SERVICE_WIT!, join(into, 'wit', 'service.wit'));
+  for (const file of ['package.json', 'weave.app.json']) writeFileSync(join(into, file), readFileSync(join(into, file), 'utf8').replace(/my-weave-board/, name));
+  return { folder: into, starter: 'js-board', next: [`A Kanban (a Weave client service) is in ${into}. Next:`, `  cd ${folder}`, '  npm install', '  npm run build', 'Its README says how to release it and show a board with it.'] };
 }
 
 /** How a website of the website service is doing. */
@@ -849,6 +871,19 @@ const postLine = (p: PostInfo) => {
                  ${where(p)} · ${actor(p.by)}${coauthors} · ${p.chat} in chat${p.link ? ` · ${p.link}` : ''}`;
 };
 const grantees = (list: BoardInfo['access']['read']) => (list?.length ? list.map((g) => (g.group ? `group:${g.name ?? g.group}` : (g.name ?? g.person))).join(', ') : 'maintainers only');
+/** How a board shows through its client service, in a line or two. */
+function lensLine(v: BoardViewInfo): string {
+  if (!v.lens) return `${v.board.title}: no client service, just its posts`;
+  const l = v.lens;
+  const how = `${v.board.title}: ${l.name} ${l.tag}, ${l.mode === 'require' ? 'required' : 'suggested'} by ${l.by.name ?? l.by.did}`;
+  if (l.problem) return `${how}
+  it can't run here: ${l.problem}`;
+  const actions = (v.actions ?? []).map((a) => (a && typeof a === 'object' && !Array.isArray(a) ? String((a as Record<string, unknown>).name) : '')).filter(Boolean);
+  return `${how}${actions.length ? `
+  actions: ${actions.join(', ')}` : ''}${l.site ? `
+  its view: ${l.site}` : ''}`;
+}
+
 const boardLine = (b: BoardInfo) =>
   `${b.name.padEnd(16)} ${b.title.padEnd(16)} ${b.type.padEnd(10)} sorted ${b.sort}, ${b.count} post${b.count === 1 ? '' : 's'}${b.pinned.length ? `, ${b.pinned.length} pinned` : ''}${b.following ? ', following' : ''}` +
   (b.access.read ? `\n${''.padEnd(17)}read: ${grantees(b.access.read)}` : '') +
@@ -1459,7 +1494,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const [sub, ref] = args;
       // A new service of your own starts as files: no node needed.
       if (sub === 'new' && ref) {
-        const made = newService(ref, { website: values.website, rust: values.rust });
+        const made = newService(ref, { website: values.website, rust: values.rust, lens: values.lens });
         return out(made, () => made.next.join('\n'));
       }
       const b = await backend();
@@ -1701,11 +1736,36 @@ ${postLine(p)}`);
         const boards = await (await backend()).setBoardAccess({ project: needProject(), board: name, read: list(values.read), write: list(values.write) });
         return out(boards, () => boards.map(boardLine).join('\n'));
       }
+      if (sub === 'lens' && name) {
+        const at = values.artifact?.lastIndexOf('@') ?? -1;
+        const slash = values.from?.lastIndexOf('/') ?? -1;
+        const from = values.artifact ? (at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact }) : values.from && slash > 0 ? { catalog: values.from.slice(0, slash), app: values.from.slice(slash + 1) } : undefined;
+        if (!from && !values.off) throw new Error('usage: weave board lens <name> -p <project> --artifact <project>[@tag] | --from <space>/<app>  [--require]  (--off takes it away)');
+        const view = await (await backend()).setBoardLens({ space: values.community ?? needProject(), board: name, ...(from ? { from } : {}), mode: values.require ? 'require' : 'suggest', off: values.off, as: values.as });
+        return out(view, () => lensLine(view));
+      }
+      if (sub === 'view' && name) {
+        const view = await (await backend()).boardView({ space: values.community ?? needProject(), board: name, use: true });
+        return out(view, () => `${lensLine(view)}${view.state !== undefined ? `
+
+${JSON.stringify(view.state, null, 2)}` : ''}`);
+      }
+      if (sub === 'act' && name && args[2]) {
+        let input: unknown = null;
+        try {
+          input = values.input === undefined ? null : JSON.parse(values.input);
+        } catch {
+          throw new Error('--input is JSON');
+        }
+        const done = await (await backend()).boardAction({ space: values.community ?? needProject(), board: name, action: args[2], input: input as never, as: values.as });
+        return out(done, () => `published ${done.published.length}: ${done.published.map((e) => e.kind).join(', ') || 'nothing'}
+${lensLine(done.view)}`);
+      }
       if ((sub === 'follow' || sub === 'unfollow') && name) {
         const boards = await (await backend()).followBoard({ project: needProject(), board: name, on: sub === 'follow' });
         return out(boards, () => boards.map(boardLine).join('\n'));
       }
-      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access|follow|unfollow <name> -p <project>');
+      if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access|follow|unfollow|lens|view|act <name> -p <project>');
       const boards = await (await backend()).setBoard({
         project: needProject(),
         name,

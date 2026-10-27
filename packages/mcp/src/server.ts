@@ -417,6 +417,36 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     run(async ({ space }: { space: string }) => backend.boards(space)),
   );
 
+  server.registerTool(
+    'weave_board_view',
+    {
+      title: 'Board view',
+      description:
+        "A board as its client service shows it: the maintainers can pin a service to a board (a Kanban, a to-do list, a calendar…) that folds its posts into its own state, with actions. Returns that state and the actions ({name, label, input?}); without a service, just the board (read its posts with weave_posts). Do an action with weave_board_action.",
+      inputSchema: { space: z.string(), board: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ space, board }: { space: string; board: string }) => backend.boardView({ space, board, use: true })),
+  );
+
+  server.registerTool(
+    'weave_board_action',
+    {
+      title: 'Board action',
+      description:
+        "Do one of the actions a board's client service offers (weave_board_view lists them, with the input each takes): the service proposes events, Weave checks them against its contract and the board, and you sign them with your own permissions. Returns what was published and the board's new state.",
+      inputSchema: {
+        space: z.string(),
+        board: z.string(),
+        action: z.string().describe('Its name, as weave_board_view lists it'),
+        input: z.any().optional().describe('What the action takes (JSON), as weave_board_view describes it'),
+      },
+    },
+    run(async ({ space, board, action, input }: { space: string; board: string; action: string; input?: unknown }) =>
+      backend.boardAction({ space, board, action, input: (input ?? null) as Parameters<Backend['boardAction']>[0]['input'], as }),
+    ),
+  );
+
   // ---------------------------------------------------------------- memberships
 
   server.registerTool(

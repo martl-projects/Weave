@@ -70,7 +70,14 @@ export interface WasmRun {
 }
 
 /** What a component handles, one at a time: an event, or what its website's players do. */
-type WasmTask = { type: 'event'; item: string } | { type: 'join'; player: string } | { type: 'message'; player: string; message: string } | { type: 'leave'; player: string } | { type: 'tick' };
+type WasmTask =
+  | { type: 'event'; item: string }
+  | { type: 'join'; player: string }
+  | { type: 'message'; player: string; message: string }
+  | { type: 'leave'; player: string }
+  | { type: 'tick' }
+  // A call of one of its functions, with its answer: a client service's fold or act.
+  | { type: 'call'; fn: string; args: unknown[]; reply(value: unknown, error?: string): void };
 
 /** A component running: its worker, what waits, what it's on, how to hand it the next, and its website. */
 interface WasmEntry {
@@ -86,7 +93,8 @@ interface WasmEntry {
 }
 
 /** What a file is, by its extension, for a website's files. */
-const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg' };
+/** Content types of the files a component's site serves. */
+export const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg' };
 
 /** What a WebAssembly service gets: memory, and how long one event may take. */
 export const WASM_LIMITS = { memoryMb: 256, eventMs: 10_000 };
@@ -273,14 +281,15 @@ export class Runtime {
       if (task === undefined) return;
       // Too long on one task: it's given up, and the worker ends (and starts again).
       const timer = setTimeout(() => {
-        log.write(`weave: ${run.name} took longer than ${WASM_LIMITS.eventMs / 1000}s on ${task.type === 'event' ? 'an event' : `a player's ${task.type}`}: stopped\n`);
+        log.write(`weave: ${run.name} took longer than ${WASM_LIMITS.eventMs / 1000}s on ${task.type === 'event' ? 'an event' : task.type === 'call' ? task.fn : `a player's ${task.type}`}: stopped\n`);
         if (task.type === 'event') run.handled?.(task.item, 'took too long');
+        if (task.type === 'call') task.reply(undefined, `${run.name} took too long`);
         void worker.terminate();
       }, WASM_LIMITS.eventMs);
       entry.busy = { task, timer };
-      worker.postMessage(task);
+      worker.postMessage(task.type === 'call' ? { type: 'call', fn: task.fn, args: task.args } : task);
     };
-    worker.on('message', (message: { type: string; error?: string; op?: string; player?: string; message?: string; ms?: number }) => {
+    worker.on('message', (message: { type: string; error?: string; value?: unknown; op?: string; player?: string; message?: string; ms?: number }) => {
       // What it does with its players: right away, without waiting for it.
       if (message.type === 'players') {
         if (message.op === 'send') entry.players.get(message.player ?? '')?.send(message.message ?? '');
@@ -301,6 +310,7 @@ export class Runtime {
         clearTimeout(entry.busy.timer);
         if (message.error) log.write(`weave: ${run.name} failed on ${entry.busy.task.type === 'event' ? 'an event' : `a player's ${entry.busy.task.type}`}: ${message.error}\n`);
         if (entry.busy.task.type === 'event') run.handled?.(entry.busy.task.item, message.error);
+        if (entry.busy.task.type === 'call') entry.busy.task.reply(message.value, message.error);
         entry.busy = undefined;
       }
       entry.next();
@@ -308,6 +318,8 @@ export class Runtime {
     worker.on('error', (error: Error) => log.write(`weave: ${run.name} stopped: ${error.message}\n`));
     worker.on('exit', (code) => {
       if (entry.busy) clearTimeout(entry.busy.timer);
+      // Calls it won't answer any more: answered as failed.
+      for (const task of [entry.busy?.task, ...entry.queue]) if (task?.type === 'call') task.reply(undefined, `${run.name} stopped`);
       if (entry.ticker) clearInterval(entry.ticker);
       for (const player of entry.players.values()) player.close();
       entry.server?.close();
@@ -363,6 +375,16 @@ export class Runtime {
       },
       () => {},
     );
+  }
+
+  /** Call one of a running component's functions: one call (or event) at a time, under the same time limit. */
+  callWasm(key: string, fn: string, args: unknown[]): Promise<unknown> {
+    const entry = this.#wasm.get(key);
+    if (!entry) return Promise.reject(new Error('not running'));
+    return new Promise((resolve, reject) => {
+      entry.queue.push({ type: 'call', fn, args, reply: (value, error) => (error === undefined ? resolve(value) : reject(new Error(error))) });
+      entry.next();
+    });
   }
 
   /** Hand a running component an event: it handles them one at a time, in order. */

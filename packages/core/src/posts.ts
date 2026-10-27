@@ -4,6 +4,7 @@ import type { Json } from './bytes.ts';
 import { KIND_ISSUE, KIND_PROPOSAL, KIND_THREAD, type Entry } from './collab.ts';
 import { isDid, type Did } from './keys.ts';
 import type { SpaceKind } from './spaces.ts';
+import { parseManifest, type AppManifest } from './rooms.ts';
 
 /*
  * Posts, boards and upvotes: the Reddit side of Weave. A project is itself a
@@ -28,6 +29,11 @@ import type { SpaceKind } from './spaces.ts';
  *   weave.board    {name, title, type, sort, position, on}
  *                                                      project maintainers add, change or drop a board
  *   weave.curate   {board, pinned}                     maintainers or moderators: a board's pinned posts, in order
+ *   weave.board.lens {board, origin, manifest, mode, on}
+ *                                                      maintainers or moderators: the board's client service, pinned to
+ *                                                      a release (origin: its project and weave.app event; manifest: as
+ *                                                      released, with where to get it), suggested or required;
+ *                                                      on: false takes it off
  *   weave.save     {target, mode}                      sealed to yourself: saved | pinned | null
  *
  * Boards of type `issues` and `proposals` list weave.issue and weave.proposal
@@ -42,6 +48,7 @@ export const KIND_POST_COAUTHOR = 'weave.post.coauthor';
 export const KIND_UPVOTE = 'weave.upvote';
 export const KIND_BOARD = 'weave.board';
 export const KIND_CURATE = 'weave.curate';
+export const KIND_BOARD_LENS = 'weave.board.lens';
 export const KIND_SAVE = 'weave.save';
 /** An event of a read-limited board, sealed with the board's key (see access.ts). */
 export const KIND_BOARD_SEALED = 'weave.board.sealed';
@@ -64,6 +71,41 @@ export interface Board {
   position: number;
   /** Post ids pinned to the top, in this order. */
   pinned: string[];
+  /** Its client service: how its members' nodes see it, if its maintainers chose one. */
+  lens?: BoardLens;
+}
+
+/**
+ * A board's client service, as its maintainers pinned it: a release, and whether members' nodes use it by
+ * themselves (require) or each member chooses (suggest). Without it (or before it's fetched) a board shows as it is.
+ */
+export interface BoardLens {
+  app: string;
+  name: string;
+  tag: string;
+  /** The release it comes from: its project and weave.app event (ids only). */
+  origin: { project: string; release: string };
+  /** As released: its client part, and where to get it (install.image or install.assets.wasm). */
+  manifest: AppManifest;
+  mode: 'suggest' | 'require';
+  by: Did;
+  time: string;
+}
+
+/** A lens from a board event's body, or undefined when it isn't one (a client service, released, with somewhere to get it). */
+function parseLens(body: Json, by: Did, time: string): BoardLens | undefined {
+  const origin = field(body, 'origin') as Record<string, unknown> | undefined;
+  const project = typeof origin?.project === 'string' ? origin.project : '';
+  const release = typeof origin?.release === 'string' ? origin.release : '';
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(project) || !/^[A-Za-z0-9_-]{1,100}$/.test(release)) return undefined;
+  let manifest: AppManifest;
+  try {
+    manifest = parseManifest(field(body, 'manifest'));
+  } catch {
+    return undefined;
+  }
+  if (!manifest.client || !manifest.install?.tag || !(manifest.install.image || manifest.install.assets?.wasm)) return undefined;
+  return { app: manifest.app, name: manifest.name, tag: manifest.install.tag, origin: { project, release }, manifest, mode: field(body, 'mode') === 'require' ? 'require' : 'suggest', by, time };
 }
 
 const DEFAULT_BOARDS: Record<SpaceKind, Array<Omit<Board, 'pinned'>>> = {
@@ -98,9 +140,17 @@ export function boardName(value: unknown): string | undefined {
  */
 export function boardsOf(kind: SpaceKind, entries: Entry[], maintainers: Set<Did>): Board[] {
   const boards = new Map<string, Board>(DEFAULT_BOARDS[kind].map((b) => [b.name, { ...b, pinned: [] }]));
-  for (const e of entries.filter((x) => (x.kind === KIND_BOARD || x.kind === KIND_CURATE) && maintainers.has(x.event.author)).sort(byTime)) {
+  for (const e of entries.filter((x) => (x.kind === KIND_BOARD || x.kind === KIND_CURATE || x.kind === KIND_BOARD_LENS) && maintainers.has(x.event.author)).sort(byTime)) {
     const name = boardName(field(e.body, e.kind === KIND_BOARD ? 'name' : 'board'));
     if (!name) continue;
+    if (e.kind === KIND_BOARD_LENS) {
+      const board = boards.get(name);
+      if (!board) continue;
+      const lens = field(e.body, 'on') === false ? undefined : parseLens(e.body, e.event.author, e.event.time);
+      if (lens) board.lens = lens;
+      else if (field(e.body, 'on') === false) delete board.lens;
+      continue;
+    }
     if (e.kind === KIND_CURATE) {
       const board = boards.get(name);
       const pinned = field(e.body, 'pinned');
@@ -123,6 +173,7 @@ export function boardsOf(kind: SpaceKind, entries: Entry[], maintainers: Set<Did
       sort: POST_SORTS.includes(sort) ? sort : (before?.sort ?? 'hot'),
       position: field(e.body, 'position') !== undefined && Number.isFinite(position) ? position : (before?.position ?? boards.size),
       pinned: before?.pinned ?? [],
+      ...(before?.lens ? { lens: before.lens } : {}),
     });
   }
   return [...boards.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));

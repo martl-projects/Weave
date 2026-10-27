@@ -12,6 +12,7 @@ export type {
   AgentInfo,
   Backend,
   BoardInfo,
+  BoardViewInfo,
   GranteeInfo,
   InviteOptions,
   KnockInfo,

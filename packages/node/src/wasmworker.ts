@@ -80,7 +80,7 @@ const imports = new Proxy(
 
 /** What a component exports: on-event always; a website's also on-join, on-message, on-leave and on-tick. */
 interface Exports {
-  onEvent(item: string): void;
+  onEvent?(item: string): void;
   onJoin?(player: string): void;
   onMessage?(player: string, message: string): void;
   onLeave?(player: string): void;
@@ -89,16 +89,24 @@ interface Exports {
 const { instantiate } = (await import(pathToFileURL(join(dir, entry)).href)) as { instantiate(getCoreModule: (file: string) => Promise<WebAssembly.Module>, imports: object): Promise<Exports> };
 const component = await instantiate(async (file) => WebAssembly.compile(await readFile(join(dir, file))), imports);
 // One task at a time, as the main thread hands them: each answered with done (or why it failed).
-parentPort!.on('message', (task: { type: string; item?: string; player?: string; message?: string }) => {
+parentPort!.on('message', (task: { type: string; item?: string; player?: string; message?: string; fn?: string; args?: unknown[] }) => {
   try {
-    if (task.type === 'event') component.onEvent(task.item!);
+    // A call of one of its functions (a client service's fold or act): its answer goes back.
+    if (task.type === 'call') {
+      const fn = (component as unknown as Record<string, (...args: unknown[]) => unknown>)[camel(task.fn!)];
+      if (typeof fn !== 'function') throw new Error(`it has no ${task.fn}`);
+      return void parentPort!.postMessage({ type: 'done', value: fn(...task.args!) });
+    }
+    if (task.type === 'event') component.onEvent?.(task.item!);
     if (task.type === 'join') component.onJoin?.(task.player!);
     if (task.type === 'message') component.onMessage?.(task.player!, task.message!);
     if (task.type === 'leave') component.onLeave?.(task.player!);
     if (task.type === 'tick') component.onTick?.();
     parentPort!.postMessage({ type: 'done' });
   } catch (error) {
-    parentPort!.postMessage({ type: 'done', error: String((error as Error)?.message ?? error) });
+    // A result's err comes as a ComponentError carrying it.
+    const why = (error as { payload?: unknown })?.payload ?? (error as Error)?.message ?? error;
+    parentPort!.postMessage({ type: 'done', error: String(why) });
   }
 });
 parentPort!.postMessage({ type: 'ready' });

@@ -60,3 +60,17 @@ world website {
   /// Its timer (tick-every).
   export on-tick: func();
 }
+
+/// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's
+/// called with (no clock, no randomness, no network), so every member folds the same state from the same events.
+/// It has no key: what its actions propose, the member signs, if their rights in the board allow it. Its site (the
+/// renderer) shows the state in a sandboxed frame and asks for actions; agents get the same state and actions.
+world board {
+  /// The board's state, from the board ({name, title}, JSON) and its items (a JSON array of feed items, oldest first:
+  /// its posts, their edits, deletions and votes, and the messages in their chats). The state is the service's own
+  /// (JSON); Weave reads only its "actions": [{name, label, input?}], what can be done with it.
+  export fold: func(board: string, items: string) -> string;
+  /// What an action proposes: events for the member to sign, as JSON [{kind, body}], or why not. The input is what the
+  /// renderer or agent gave (JSON), the state as fold made it, and me who asks ({did, name}).
+  export act: func(name: string, input: string, state: string, me: string) -> result<string, string>;
+}
