@@ -62,12 +62,13 @@ window.addEventListener('message', (event) => {
   }
 });
 
-$('add').addEventListener('submit', (e) => {
-  e.preventDefault();
+function add() {
   const title = $('title').value.trim();
   if (!title) return;
   act('add', { title }).then(
     () => ($('title').value = ''),
     (error) => ($('status').textContent = error),
   );
-});
+}
+$('add-card').addEventListener('click', add);
+$('title').addEventListener('keydown', (e) => e.key === 'Enter' && add());

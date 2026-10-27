@@ -6,7 +6,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import { createReadStream, existsSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { connectDaemon, machinePolicy, resolveHome } from '@weave/node/client';
@@ -52,7 +52,11 @@ createServer(async (req, res) => {
       const client = await connectDaemon(home);
       if (!client) return json(res, 503, { error: 'no daemon running for this home' });
       const fn = client[method] as (...a: unknown[]) => Promise<unknown>;
-      return json(res, 200, (await fn.apply(client, args)) ?? null);
+      const result = (await fn.apply(client, args)) ?? null;
+      // A board's client service's view comes from here (see /lens/ below): same origin as this page.
+      const view = method === 'boardView' ? (result as { lens?: { site?: string } }) : method === 'boardAction' ? (result as { view?: { lens?: { site?: string } } }).view : undefined;
+      if (view?.lens?.site) view.lens.site = new URL(view.lens.site).pathname;
+      return json(res, 200, result);
     }
     if (url.pathname === '/events') {
       const client = await connectDaemon(home);
@@ -65,6 +69,17 @@ createServer(async (req, res) => {
         controller.abort();
       });
       return client.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal).catch(() => res.end());
+    }
+    // Boards' client services' views, from the daemon's local pages (WEAVE_LINK_PORT, default 7710), headers and all:
+    // a browser (or a preview pane) may not frame weave.localhost from this page.
+    if (url.pathname.startsWith('/lens/')) {
+      const linkPort = Number(process.env.WEAVE_LINK_PORT ?? 7710);
+      return void request({ host: '127.0.0.1', port: linkPort, path: url.pathname, headers: { host: `weave.localhost:${linkPort}` } }, (from) => {
+        res.writeHead(from.statusCode ?? 502, from.headers);
+        from.pipe(res);
+      })
+        .on('error', (error) => json(res, 502, { error: error.message }))
+        .end();
     }
     const file = normalize(join(STATIC, url.pathname === '/' ? 'index.html' : url.pathname));
     if (!file.startsWith(STATIC) || !existsSync(file)) return json(res, 404, { error: 'not found' });
