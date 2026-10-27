@@ -241,6 +241,8 @@ export interface ServiceInfo {
   command?: string[];
   /** Or its own code as a WebAssembly component, which Weave runs itself, sandboxed: the .wasm file. */
   wasm?: string;
+  /** Its website's files, which Weave serves next to its players' connections: the folder. */
+  site?: string;
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
@@ -1613,7 +1615,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**

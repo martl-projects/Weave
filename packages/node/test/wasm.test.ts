@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { WASM_LIMITS } from '../src/runtime.ts';
-import type { ComponentizeOptions } from '@bytecodealliance/componentize-js';
+import { buildComponent } from './helpers/components.ts';
 
 /*
  * WebAssembly services (W1): a service's own code as a component that Weave runs itself, in a worker of its own,
@@ -34,21 +33,10 @@ const sync = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
 
-/** The test bot as a component: built once per machine (it takes a few seconds), kept by its source's hash. */
+/** The test bot as a component (built once per machine). */
 let component: string;
 beforeAll(async () => {
-  const source = join(import.meta.dirname, 'helpers', 'wasm-bot.js');
-  const wit = join(import.meta.dirname, '..', '..', 'sdk', 'wit', 'service.wit');
-  const hash = createHash('sha256').update(readFileSync(source)).update(readFileSync(wit)).digest('hex').slice(0, 16);
-  const cache = join(tmpdir(), 'weave-test-components');
-  component = join(cache, `wasm-bot-${hash}.wasm`);
-  if (existsSync(component)) return;
-  const { componentize } = await import('@bytecodealliance/componentize-js');
-  // The WIT as text (an option its typings leave out): its own file access can't open absolute Windows paths.
-  const options = { sourcePath: source, witWorld: readFileSync(wit, 'utf8'), worldName: 'service', disableFeatures: ['http', 'fetch-event'] };
-  const built = await componentize(options as ComponentizeOptions);
-  mkdirSync(cache, { recursive: true });
-  writeFileSync(component, built.component);
+  component = await buildComponent(join(import.meta.dirname, 'helpers', 'wasm-bot.js'), 'service');
 }, 180_000);
 
 describe('WebAssembly services', { timeout: 120_000 }, () => {

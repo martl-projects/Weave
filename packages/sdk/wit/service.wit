@@ -31,3 +31,32 @@ world service {
   /// body {to, text?, data?}), or what its contract reads. One at a time, in order; also what came while it was off.
   export on-event: func(item: string);
 }
+
+/// The players of a website it serves: Weave holds their connections, and tells it who each one is.
+interface players {
+  /// Send a message to one player's connection (by its id, from on-join).
+  send: func(player: string, message: string);
+  /// Send a message to every player connected now.
+  broadcast: func(message: string);
+  /// End a player's connection.
+  disconnect: func(player: string);
+  /// Be called (on-tick) every this many milliseconds, at least 50; 0 stops it.
+  tick-every: func(ms: u32);
+}
+
+/// A service with a website: a game, a board, a page with live parts. Weave serves its files (its site folder) and
+/// holds its visitors' connections (WebSockets at /weave/socket): it only handles what they say. The service's
+/// contract says website: true.
+world website {
+  import host;
+  import players;
+  export on-event: func(item: string);
+  /// A player connected: {id, did, name?, host, member, maintainer, room?: {id, name}}, as Weave vouches for them.
+  export on-join: func(player: string);
+  /// A message from a player (by id).
+  export on-message: func(player: string, message: string);
+  /// A player's connection ended.
+  export on-leave: func(player: string);
+  /// Its timer (tick-every).
+  export on-tick: func();
+}

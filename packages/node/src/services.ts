@@ -2,8 +2,8 @@ import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CA
 import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
-import { timingSafeEqual } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, releaseApproval } from './runtime.ts';
@@ -135,6 +135,7 @@ export class Services {
       }),
       ...(stored.command ? { command: stored.command } : {}),
       ...(stored.wasm ? { wasm: stored.wasm } : {}),
+      ...(stored.site ? { site: stored.site } : {}),
       ...(stored.builtin ? { builtin: stored.builtin, ...(stored.builtin === 'website' ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
@@ -258,7 +259,7 @@ export class Services {
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
    * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
@@ -267,6 +268,9 @@ export class Services {
     const wasm = input.wasm ? this.wasmFile(input.wasm) : undefined;
     if (wasm && (command?.length || builtin || input.artifact || input.from)) throw new Error('a service runs a WebAssembly component, a command, a release, or is one Weave ships: one of them');
     if (wasm && input.node) throw new Error('a WebAssembly service of your own runs on this computer for now (its file is here): release it to run it on an always-on node');
+    // Its website's files: a folder Weave serves next to its players' connections.
+    const site = input.site ? this.siteFolder(input.site) : undefined;
+    if (site && !wasm) throw new Error('a site folder goes with a WebAssembly service (--wasm): Weave serves it next to its players');
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     // Or a Weave service listed in a catalog: what it is comes from its image, not from the catalog.
     const found: { project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } } | undefined = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : input.from ? await this.fromCatalog(input.from) : undefined;
@@ -301,6 +305,7 @@ export class Services {
       spaces: this.serviceSpaces(input.spaces ?? []),
       ...(command?.length ? { command } : {}),
       ...(wasm ? { wasm } : {}),
+      ...(site ? { site } : {}),
       ...(builtin ? { builtin } : {}),
       ...(artifact ? { artifact, approved: [approved!] } : {}),
       settings,
@@ -1191,6 +1196,52 @@ export class Services {
   /** What a WebAssembly service reads, while it runs: stopped with it. */
   #watching = new Map<string, AbortController>();
 
+  /** A website's files for a WebAssembly service: a folder that is there. */
+  siteFolder(path: string): string {
+    const folder = resolvePath(path);
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`${path} isn't a folder on this computer`);
+    return folder;
+  }
+
+  /**
+   * Who a request to a WebAssembly service's website comes from: the player the website service vouches for in
+   * X-Weave-Person (signed with the service's own token, lately), or, without one, the host (only this computer
+   * reaches the site directly). A header that doesn't check out is turned away.
+   */
+  siteVisitor(stored: StoredService, header: string | string[] | undefined): Record<string, unknown> | undefined {
+    if (header === undefined) {
+      const me = this.h.identity.author;
+      const name = this.h.actor(me, me).name;
+      return { did: me, ...(name ? { name } : {}), host: true, member: true, maintainer: true };
+    }
+    const [payload, sig] = String(header).split('.');
+    if (!payload || !sig) return undefined;
+    const expected = createHmac('sha256', stored.token).update(payload).digest();
+    const given = Buffer.from(sig, 'base64url');
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+    try {
+      const { t, ...person } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { t?: number } & Record<string, unknown>;
+      if (typeof t !== 'number' || Math.abs(this.h.clock() / 1000 - t) > 300 || typeof person.did !== 'string') return undefined;
+      return person;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A WebAssembly service's website listens: it serves it in each of its projects (keeping a website's name there). */
+  async serveWasmSite(stored: StoredService, port: number): Promise<void> {
+    const errors: string[] = [];
+    for (const space of stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project')) {
+      try {
+        const before = this.web.hosted().find((h) => h.room.servedBy === stored.name && h.room.project === space);
+        await this.web.serve(stored.name, { space, port, name: before?.room.name ?? (stored.description || stored.name) });
+      } catch (error) {
+        errors.push((error as Error).message);
+      }
+    }
+    if (errors.length) this.h.releases.jobs.set(`service:${stored.name}`, { error: errors.join('; ') });
+  }
+
   /** A component file given for a service: a .wasm file that is there. */
   wasmFile(path: string): string {
     const file = resolvePath(path);
@@ -1272,6 +1323,15 @@ export class Services {
           void gate.watch(hand, watching.signal);
           for (const item of gate.events(cursor)) hand(item);
         },
+        ...(stored.contract.website
+          ? {
+              site: {
+                ...(stored.site ? { folder: stored.site } : {}),
+                who: (req) => this.siteVisitor(this.storedServices().find((s) => s.name === name) ?? stored, req.headers['x-weave-person']),
+                listening: (port) => void this.serveWasmSite(stored, port),
+              },
+            }
+          : {}),
         handled: (text) => {
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {

@@ -598,6 +598,8 @@ export interface StoredService {
   command?: string[];
   /** Its own code as a WebAssembly component: the .wasm file Weave runs itself. */
   wasm?: string;
+  /** Its website's files (a WebAssembly service with a website): the folder Weave serves. */
+  site?: string;
   settings: Record<string, string>;
   token: string;
   enabled: boolean;
