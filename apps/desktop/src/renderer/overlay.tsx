@@ -65,44 +65,67 @@ function CurrentItem({ post, ctx }: { post: PostInfo; ctx: Context }) {
   );
 }
 
-/** A session: its current item in full, then (on request) the rest of its stack and what was mentioned there. */
-function SessionView({ session, mentions, ctx }: { session: SessionInfo; mentions: MentionInfo[]; ctx: Context }) {
-  const [open, setOpen] = useState<'stack' | 'mentions'>();
-  const [top, ...waiting] = session.stack;
+/** A session: the item it's on, in full. */
+function SessionView({ session, ctx }: { session: SessionInfo; ctx: Context }) {
+  const top = session.stack[0];
+  return top && !('missing' in top.post) ? (
+    <CurrentItem post={top.post} ctx={ctx} />
+  ) : (
+    <p className="empty">{top ? "This session is on a post you can't see here." : 'No work item on this session. Ctrl+click a post in Weave to bring one here.'}</p>
+  );
+}
+
+/** The foldout under Stack: the session (to bring it up in Claude), what waits on its stack, and what was mentioned there. */
+function StackFoldout({ session, mentions, focused, onFollow, onClose }: { session: SessionInfo; mentions: MentionInfo[]; focused: boolean; onFollow(): void; onClose(): void }) {
+  const waiting = session.stack.slice(1);
   const here = mentions.filter((m) => m.session?.id === session.id);
-  const flip = (which: 'stack' | 'mentions') => setOpen((o) => (o === which ? undefined : which));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <>
-      {top && !('missing' in top.post) ? (
-        <CurrentItem post={top.post} ctx={ctx} />
-      ) : (
-        <p className="empty">{top ? "This session is on a post you can't see here." : 'No work item on this session. Ctrl+click a post in Weave to bring one here.'}</p>
-      )}
-      {(waiting.length > 0 || here.length > 0) && (
-      <div className="panel-toggles">
-        <button className={open === 'stack' ? 'active' : ''} disabled={!waiting.length} onClick={() => flip('stack')}>
-          Stack ({waiting.length} waiting)
-        </button>
-        <button className={open === 'mentions' ? 'active' : ''} disabled={!here.length} onClick={() => flip('mentions')}>
-          Mentions ({here.length})
-        </button>
+    <div className="panel-foldout window" onClick={(e) => (e.target as Element).closest('a') && onClose()}>
+      <div className="panel-heading">Session</div>
+      <div className="panel-foldout-session">
+        <span className="grow">
+          <b>{session.title ?? 'Untitled session'}</b>
+          <span className="panel-line-note">
+            {[folderName(session.folder), focused ? 'open in Claude' : running(session) ? 'running' : session.active ? `active ${ago(session.active)}` : ''].filter(Boolean).join(' · ')}
+          </span>
+        </span>
+        {session.host && bridge.showSession && (
+          <button onClick={() => void attempt(() => bridge.showSession!(session.host!))} title="Bring it to the front in the Claude app">
+            Open in Claude
+          </button>
+        )}
+        {!focused && (
+          <button onClick={onFollow} title="Show the session open in the Claude app again">
+            Follow Claude
+          </button>
+        )}
       </div>
-      )}
-      {open === 'stack' && (
+      <div className="panel-heading">Stack ({waiting.length} waiting)</div>
+      {waiting.length ? (
         <ul className="panel-lines">
           {waiting.map((entry, i) => (
             <Line key={`${entry.post.id}-${i}`} post={entry.post} note={`waiting since ${ago(entry.since)}`} />
           ))}
         </ul>
+      ) : (
+        <p className="empty">Nothing waits below this item.</p>
       )}
-      {open === 'mentions' && (
+      <div className="panel-heading">Mentions ({here.length})</div>
+      {here.length ? (
         <ul className="panel-lines">
           {here.map((m) => (
             <Line key={m.id} post={m.post} note={`${source(m)} · ${ago(m.time)}${m.note ? ` · “${m.note}”` : ''}`} />
           ))}
         </ul>
+      ) : (
+        <p className="empty">No posts mentioned in this session yet.</p>
       )}
-    </>
+    </div>
   );
 }
 
@@ -168,6 +191,7 @@ export function MentionsPanel() {
   const [focused, setFocused] = useState<string>();
   const [ctx, setCtx] = useState<Context>();
   const [pane, setPane] = useState<'session' | 'sessions'>('session');
+  const [fold, setFold] = useState(false);
   // Which session to show: the one the Claude app shows (''), or one you picked (#/overlay?session=…).
   const [pinned, setPinned] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '');
   useEffect(() => {
@@ -214,16 +238,24 @@ export function MentionsPanel() {
         <button className="panel-nav" onClick={() => setPane(pane === 'sessions' ? 'session' : 'sessions')}>
           {pane === 'sessions' ? '← Back' : 'Sessions'}
         </button>
-        <div className="title-bar-text">{pane === 'session' && session ? (session.title ?? 'Untitled session') : ''}</div>
+        <div className="title-bar-text" />
+        {pane === 'session' && session && (
+          <button className={`panel-nav${fold ? ' active' : ''}`} onClick={() => setFold((f) => !f)} aria-expanded={fold}>
+            Stack{session.stack.length > 1 ? ` (${session.stack.length - 1})` : ''} ▾
+          </button>
+        )}
         <div className="title-bar-controls">
           <button aria-label="Close" onClick={() => window.close()} />
         </div>
       </div>
+      {fold && pane === 'session' && session && (
+        <StackFoldout session={session} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
+      )}
       <div className="mentions-scroll">
         {pane === 'sessions' ? (
           <SessionsPane focused={focused} onPick={pick} />
         ) : session && ctx ? (
-          <SessionView session={session} mentions={mentions} ctx={ctx} />
+          <SessionView session={session} ctx={ctx} />
         ) : (
           <p className="empty">Switch to a session in the Claude app, or pick one under Sessions: the work item it is on shows here. (Weave follows the Claude app once Follow Claude Code is on, on its Sessions page.)</p>
         )}
