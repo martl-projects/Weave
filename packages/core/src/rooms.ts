@@ -72,7 +72,24 @@ export interface AppManifest {
    * (what it reads and writes). Installed, it becomes a service; an app (a web page, in `services`) runs in a room.
    */
   service?: ServiceContract;
+  /**
+   * A WebAssembly service: Weave runs it itself, with nothing installed (packages/sdk/wit/service.wit). Where its
+   * component is in the package (a release archive, or the image), and its website's files if it has a website.
+   */
+  wasm?: AppWasm;
 }
+
+/** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppWasm {
+  component: string;
+  site?: string;
+}
+
+/** A path inside a package: relative (a leading / is dropped, as in an image), and never out of it. */
+const packagePath = (value: unknown): string | undefined => {
+  const p = text(value, 200).replace(/\\/g, '/').replace(/^\/+/, '');
+  return p && !p.split('/').some((part) => part === '..' || part === '') ? p : undefined;
+};
 
 /**
  * A setting the app reads from its environment, like an API key. The manifest
@@ -148,7 +165,7 @@ export interface AppAsset {
   size?: number;
 }
 
-const PLATFORM = /^(win32|darwin|linux)-(x64|arm64|ia32|arm)$/;
+const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm)$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
 
 /** An install block from untrusted input; undefined when it says nothing usable. */
@@ -207,7 +224,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -289,8 +306,18 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (!IMAGE_REF.test(ref)) problems.push(`"start.image" isn't an image name: lowercase, like "ghcr.io/you/app" or "you/app" on Docker Hub`);
     else image = ref;
   }
-  if (rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
-  if ((rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
+  // A WebAssembly service: where its component (and its site) are in the package. Weave starts it itself.
+  let wasm: AppWasm | undefined;
+  if (m.wasm !== undefined) {
+    const raw = (m.wasm && typeof m.wasm === 'object' ? m.wasm : {}) as Record<string, unknown>;
+    const component = packagePath(raw.component);
+    const site = raw.site === undefined ? undefined : packagePath(raw.site);
+    if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
+    else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
+    else wasm = { component, ...(site ? { site } : {}) };
+  }
+  if (!m.wasm && rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
+  if (!m.wasm && (rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
   const start =
     hint || command || release || image
       ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}), ...(image ? { image } : {}) }
@@ -326,7 +353,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}) } };
 }
 
 /**
@@ -384,6 +411,7 @@ export const MANIFEST_RULES = [
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
+  'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",

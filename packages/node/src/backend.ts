@@ -324,8 +324,8 @@ export interface ArtifactInfo {
   settings: AppSetting[];
   /** A Weave service: an image carrying its manifest, run in the sandbox only. */
   packaged?: true;
-  /** How it would run on this node: its release file for this platform, or its container (Docker). */
-  runs?: 'release' | 'container';
+  /** How it would run on this node: its release file for this platform, its container (Docker), or in Weave itself (WebAssembly). */
+  runs?: 'release' | 'container' | 'wasm';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
 }

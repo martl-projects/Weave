@@ -181,7 +181,9 @@ export class Runtime {
   }
 
   /** How a release runs here: its container when it has one and Docker runs, else its build for this platform. */
-  runs(app: AppManifest): 'release' | 'container' | undefined {
+  runs(app: AppManifest): 'release' | 'container' | 'wasm' | undefined {
+    // A WebAssembly service runs in Weave itself, anywhere: from its image, or its release file for wasm.
+    if (app.wasm && (app.install?.image || app.install?.assets?.wasm)) return 'wasm';
     if (this.containerOf(app)) return 'container';
     return app.install?.assets?.[platformKey()] && startCommand(app, platformKey(), true) ? 'release' : undefined;
   }
@@ -196,6 +198,7 @@ export class Runtime {
   command(container: string, app: AppManifest): string[] | undefined {
     const runs = this.runs(app);
     if (runs === 'container') return this.dockerRun(container, app, [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT', 'WEAVE_WEBSITE', 'WEAVE_SERVICE', 'WEAVE_SERVICE_API', 'WEAVE_SERVICE_TOKEN', 'PORT']);
+    if (runs === 'wasm') return [`${app.wasm!.component} (WebAssembly, in Weave)`];
     return runs === 'release' ? startCommand(app, platformKey(), true) : undefined;
   }
 
@@ -203,6 +206,7 @@ export class Runtime {
   runText(app: AppManifest): string {
     const here = this.command('weave', app);
     if (here) return here.join(' ');
+    if (app.wasm) return `${app.wasm.component} (WebAssembly, in Weave)`;
     const builds = Object.entries(app.start?.release ?? {}).map(([platform, command]) => `${command.join(' ')} (${platform})`);
     return [...builds, ...(app.install?.image ? [`the container ${app.install.image.ref}@${app.install.image.digest}`] : [])].join(', ') || 'nothing';
   }

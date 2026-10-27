@@ -600,6 +600,8 @@ export interface StoredService {
   wasm?: string;
   /** Its website's files (a WebAssembly service with a website): the folder Weave serves. */
   site?: string;
+  /** When it came to this node: what it reads counts from then (a WebAssembly service starts there). */
+  since?: string;
   settings: Record<string, string>;
   token: string;
   enabled: boolean;
@@ -909,7 +911,7 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch);
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
