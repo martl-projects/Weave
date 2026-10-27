@@ -1,0 +1,33 @@
+/// A Weave service as a WebAssembly component: Weave runs it inside itself, in a sandbox, under the service's own
+/// key and with exactly its contract's rights. It needs nothing installed (no Docker), and gets only what Weave hands
+/// it: these functions, a folder of its own (/data), clocks and randomness. No network, no other files, no processes.
+///
+/// Values that carry Weave's own data (items, bodies, who it is) are JSON, so any language can read and write them.
+package weave:service@0.1.0;
+
+/// What Weave offers the service: who it is, and acting as itself within its contract.
+interface host {
+  /// Who the service is: {name, did, person, contract, spaces: [{id, kind, name, settings}]}.
+  me: func() -> string;
+  /// A setting its person gave it (sealed on the node that runs it), if there is one.
+  setting: func(name: string) -> option<string>;
+  /// Sign and publish an event in one of its spaces (by id or name), of a kind its contract writes, with a JSON body:
+  /// the new item (JSON), or why not.
+  publish: func(space: string, kind: string, body: string) -> result<string, string>;
+  /// Answer a request addressed to it (text, data as JSON, or an error): the answer (JSON), or why not.
+  answer: func(request: string, text: option<string>, data: option<string>, error: option<string>) -> result<string, string>;
+  /// What it saved under this name in its /data folder (a-z, 0-9, ., _ and -), if anything: for languages without
+  /// file access (JavaScript); others can use /data directly.
+  load: func(name: string) -> option<string>;
+  /// Keep something under this name in its /data folder (what it keeps between runs).
+  save: func(name: string, value: string) -> result<_, string>;
+  /// A line for its log (weave service log).
+  log: func(message: string);
+}
+
+world service {
+  import host;
+  /// Something it may read arrived, as a feed item (JSON): a request addressed to it (kind weave.service.request,
+  /// body {to, text?, data?}), or what its contract reads. One at a time, in order; also what came while it was off.
+  export on-event: func(item: string);
+}

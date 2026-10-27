@@ -596,6 +596,8 @@ export interface StoredService {
   /** Space ids it was added to. */
   spaces: string[];
   command?: string[];
+  /** Its own code as a WebAssembly component: the .wasm file Weave runs itself. */
+  wasm?: string;
   settings: Record<string, string>;
   token: string;
   enabled: boolean;

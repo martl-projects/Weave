@@ -1,6 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MessageChannel, Worker } from 'node:worker_threads';
 import { canonicalJson, startCommand, type AppImage, type AppManifest, type Json } from '@weave/core';
 import { platformKey } from './appinstall.ts';
 import { launchFingerprint } from './applaunch.ts';
@@ -14,7 +17,11 @@ import { launchFingerprint } from './applaunch.ts';
  *
  * A Weave service (an image carrying its manifest) runs in the standard sandbox only: a container that can't
  * write its own files or gain privileges, with limits on memory, CPU and processes, and one volume of its own for
- * what it keeps (/data). Without Docker it doesn't run here (lighter runtimes come later).
+ * what it keeps (/data). Without Docker it doesn't run here.
+ *
+ * A Weave service built as a WebAssembly component needs nothing installed: it runs inside Weave, in a worker thread
+ * of its own (wasmworker.ts) with a memory limit, and gets only its /data folder and the host's functions. It
+ * handles one event at a time; one that takes too long ends the worker (it starts again, the event is given up).
  */
 
 /** The standard sandbox's limits for a Weave service. */
@@ -35,12 +42,68 @@ export interface Run {
   name: string;
 }
 
+/** A WebAssembly component to run: a Weave service built for it, transpiled for this node (prepareWasm). */
+export interface WasmRun {
+  /** The transpiled component's folder and its entry file. */
+  dir: string;
+  entry: string;
+  /** Its own folder: the only one it sees, as /data. */
+  data: string;
+  log: string;
+  name: string;
+  /** Answers its calls to the host (me, setting, publish, answer, log); a throw is the call's error. */
+  host(name: string, args: unknown[]): unknown;
+  /** It's ready: hand it what it missed. */
+  ready?(): void;
+  /** An event was handled, or given up (`error`): either way the next one comes. */
+  handled?(item: string, error?: string): void;
+}
+
+/** A component running: its worker, the events waiting, the one it's on, and how to hand it the next. */
+interface WasmEntry {
+  worker: Worker;
+  stopping: boolean;
+  ready: boolean;
+  queue: string[];
+  busy?: { item: string; timer: ReturnType<typeof setTimeout> };
+  next(): void;
+}
+
+/** What a WebAssembly service gets: memory, and how long one event may take. */
+export const WASM_LIMITS = { memoryMb: 256, eventMs: 10_000 };
+
 /** Waits before starting something again that crashed: longer each time. */
 const RESTART_WAITS = [1000, 5000, 30_000, 60_000];
+
+/** The worker that runs a component: bundled next to the daemon, or this source file when run as it is. */
+const WASM_WORKER = [new URL('./wasmworker.mjs', import.meta.url), new URL('./wasmworker.ts', import.meta.url)].find((u) => existsSync(fileURLToPath(u)));
+
+/**
+ * Make a component runnable here: transpiled once (by its hash) into `dir`, as JavaScript and core WebAssembly
+ * modules this Node runs itself. The entry file to load.
+ */
+export async function prepareWasm(component: string, dir: string): Promise<string> {
+  const bytes = readFileSync(component);
+  const hash = createHash('sha256').update(bytes).digest('hex');
+  const marker = join(dir, '.component');
+  if (existsSync(marker) && readFileSync(marker, 'utf8') === hash) return 'component.js';
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const { transpileBytes } = await import('@bytecodealliance/jco-transpile');
+  const { files } = await transpileBytes(bytes, { name: 'component', instantiation: { tag: 'async' }, emitTypescriptDeclarations: false });
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true });
+    writeFileSync(join(dir, name), content);
+  }
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
+  writeFileSync(marker, hash);
+  return 'component.js';
+}
 
 export class Runtime {
   readonly #docker: () => string[];
   #procs = new Map<string, { child: ChildProcess; stopping: boolean; container?: string }>();
+  #wasm = new Map<string, WasmEntry>();
   #restarts = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>();
   /** Whether Docker answers on this computer: asked at most every 30 seconds. */
   #dockerSeen?: { at: number; up: boolean };
@@ -126,12 +189,100 @@ export class Runtime {
   }
 
   running(key: string): boolean {
-    return this.#procs.has(key);
+    return this.#procs.has(key) || this.#wasm.has(key);
   }
 
   /** How many things run now. */
   get size(): number {
-    return this.#procs.size;
+    return this.#procs.size + this.#wasm.size;
+  }
+
+  /** Crashed: start again, waiting longer each time. */
+  #again(key: string, again: () => void): void {
+    const restarts = this.#restarts.get(key) ?? { count: 0 };
+    restarts.count++;
+    restarts.timer = setTimeout(again, RESTART_WAITS[Math.min(restarts.count - 1, RESTART_WAITS.length - 1)]);
+    restarts.timer.unref?.();
+    this.#restarts.set(key, restarts);
+  }
+
+  /** Run a component under this key, in a worker of its own; when it crashes (or hangs), `again` after a wait. */
+  startWasm(key: string, run: WasmRun, again: () => void): void {
+    if (this.running(key) || !WASM_WORKER) return;
+    mkdirSync(dirname(run.log), { recursive: true });
+    mkdirSync(run.data, { recursive: true });
+    const log = createWriteStream(run.log, { flags: 'a' });
+    const { port1, port2 } = new MessageChannel();
+    const flag = new SharedArrayBuffer(4);
+    const waiting = new Int32Array(flag);
+    const worker = new Worker(WASM_WORKER, {
+      workerData: { dir: run.dir, entry: run.entry, data: run.data, host: port2, flag },
+      transferList: [port2],
+      resourceLimits: { maxOldGenerationSizeMb: WASM_LIMITS.memoryMb },
+      // Its own output only: nothing of the daemon's environment.
+      env: {},
+      stdout: true,
+      stderr: true,
+    });
+    worker.stdout.pipe(log, { end: false });
+    worker.stderr.pipe(log, { end: false });
+    const entry: WasmEntry = { worker, stopping: false, ready: false, queue: [], next: () => {} };
+    this.#wasm.set(key, entry);
+    // Its calls to the host: answered here (they may take a while), then it goes on.
+    port1.on('message', async ({ name, args }: { name: string; args: unknown[] }) => {
+      let reply: { value?: unknown; error?: string };
+      try {
+        reply = { value: await run.host(name, args) };
+      } catch (error) {
+        reply = { error: (error as Error)?.message ?? String(error) };
+      }
+      port1.postMessage(reply);
+      Atomics.store(waiting, 0, 1);
+      Atomics.notify(waiting, 0);
+    });
+    entry.next = () => {
+      if (entry.busy || !entry.ready || entry.stopping) return;
+      const item = entry.queue.shift();
+      if (item === undefined) return;
+      // Too long on one event: it's given up, and the worker ends (and starts again).
+      const timer = setTimeout(() => {
+        log.write(`weave: ${run.name} took longer than ${WASM_LIMITS.eventMs / 1000}s on an event: stopped\n`);
+        run.handled?.(item, 'took too long');
+        void worker.terminate();
+      }, WASM_LIMITS.eventMs);
+      entry.busy = { item, timer };
+      worker.postMessage({ type: 'event', item });
+    };
+    worker.on('message', (message: { type: string; error?: string }) => {
+      if (message.type === 'ready') {
+        entry.ready = true;
+        run.ready?.();
+      }
+      if (message.type === 'done' && entry.busy) {
+        clearTimeout(entry.busy.timer);
+        if (message.error) log.write(`weave: ${run.name} failed on an event: ${message.error}\n`);
+        run.handled?.(entry.busy.item, message.error);
+        entry.busy = undefined;
+      }
+      entry.next();
+    });
+    worker.on('error', (error: Error) => log.write(`weave: ${run.name} stopped: ${error.message}\n`));
+    worker.on('exit', (code) => {
+      if (entry.busy) clearTimeout(entry.busy.timer);
+      port1.close();
+      log.write(`weave: ${run.name} exited (${code})\n`);
+      log.end();
+      if (this.#wasm.get(key) === entry) this.#wasm.delete(key);
+      if (!entry.stopping) this.#again(key, again);
+    });
+  }
+
+  /** Hand a running component an event: it handles them one at a time, in order. */
+  deliver(key: string, item: string): void {
+    const entry = this.#wasm.get(key);
+    if (!entry) return;
+    entry.queue.push(item);
+    entry.next();
   }
 
   /** Run it under this key; when it crashes, `again` is called after a wait that grows each time. */
@@ -162,13 +313,7 @@ export class Runtime {
       log.write(`weave: ${run.name} exited (${code})\n`);
       log.end();
       if (this.#procs.get(key) === entry) this.#procs.delete(key);
-      if (entry.stopping) return;
-      // Crashed: start again, waiting longer each time.
-      const restarts = this.#restarts.get(key) ?? { count: 0 };
-      restarts.count++;
-      restarts.timer = setTimeout(again, RESTART_WAITS[Math.min(restarts.count - 1, RESTART_WAITS.length - 1)]);
-      restarts.timer.unref?.();
-      this.#restarts.set(key, restarts);
+      if (!entry.stopping) this.#again(key, again);
     });
   }
 
@@ -177,6 +322,13 @@ export class Runtime {
     const restarts = this.#restarts.get(key);
     if (restarts?.timer) clearTimeout(restarts.timer);
     this.#restarts.delete(key);
+    const wasm = this.#wasm.get(key);
+    if (wasm) {
+      wasm.stopping = true;
+      if (wasm.busy) clearTimeout(wasm.busy.timer);
+      void wasm.worker.terminate();
+      this.#wasm.delete(key);
+    }
     const entry = this.#procs.get(key);
     if (!entry) return;
     entry.stopping = true;
@@ -189,7 +341,7 @@ export class Runtime {
   }
 
   stopAll(): void {
-    for (const key of [...this.#procs.keys(), ...this.#restarts.keys()]) this.stop(key);
+    for (const key of [...this.#procs.keys(), ...this.#wasm.keys(), ...this.#restarts.keys()]) this.stop(key);
   }
 }
 
