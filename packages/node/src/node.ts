@@ -8971,9 +8971,8 @@ export class WeaveNode implements Backend {
     return this.#lenses.boardAction(...args);
   }
 
-  /** A board's client service's renderer folder, while it's ready here (for this computer's pages). */
-  lensSite(release: string): Promise<string | undefined> {
-    return this.#lenses.siteFolder(release);
+  lensFile(...args: Parameters<Lenses['lensFile']>): ReturnType<Lenses['lensFile']> {
+    return this.#lenses.lensFile(...args);
   }
 
   catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {

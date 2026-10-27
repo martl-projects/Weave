@@ -75,6 +75,8 @@ window.weave = {
   pickFolder: async () => undefined,
   show: async () => {},
   attention: async () => {},
+  // Served by the worker, which asks your computer for each file.
+  lensBase: (release) => ask<string>('lensBase', { release }),
   call: (method, ...args) => ask('call', { method, args }),
   onEvent: (listener) => void listeners.add(listener),
   onLink: () => {},

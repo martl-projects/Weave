@@ -3,3 +3,4 @@
 export { decodePhoneLink, type PhoneLink } from './phone-link.ts';
 export { connectTo, openTunnel, pairWith, type Dialer, type PairedNode, type RemoteSession, type Tunnel } from './remote-client.ts';
 export type { FeedItem, RpcMethod } from './backend.ts';
+export { LENS_CSP } from './lenscsp.ts';

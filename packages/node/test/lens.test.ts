@@ -1,11 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVICE_LABEL } from '@weave/core';
-import { startLinks } from '../src/links.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
 import { registry } from './helpers/registry.ts';
@@ -55,18 +53,6 @@ function person(name: string): WeaveNode {
 const sync = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
-
-/** A page of this computer's local pages, asked for by its name (as a browser would). */
-const get = (port: number, path: string) =>
-  new Promise<{ status: number; headers: Record<string, unknown>; body: string }>((resolve, reject) => {
-    request({ host: '127.0.0.1', port, path, headers: { host: `weave.localhost:${port}` } }, (res) => {
-      let body = '';
-      res.on('data', (c: Buffer) => (body += c.toString()));
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
-    })
-      .on('error', reject)
-      .end();
-  });
 
 type Kanban = { columns: Array<{ name: string; cards: Array<{ id: string; title: string; by: string }> }> };
 
@@ -118,20 +104,16 @@ describe('client services', { timeout: 120_000 }, () => {
     sync([martl, ola]);
     expect((await ola.boardView({ space: 'Team', board: 'tasks' })).state).toBeDefined();
 
-    // Its renderer, on this computer's pages: sandboxed, nothing outside its site.
-    const links = await startLinks(ola, 0, undefined, (release) => ola.lensSite(release));
-    try {
-      const release = seen.lens!.release;
-      const page = await get(links.port, `/lens/${release}/`);
-      expect(page.status).toBe(200);
-      expect(page.body).toContain('<main id="columns">');
-      expect(String(page.headers['content-security-policy'])).toMatch(/^sandbox allow-scripts;.*connect-src 'none'/);
-      expect((await get(links.port, `/lens/${release}/app.js`)).headers['content-type']).toBe('text/javascript');
-      expect((await get(links.port, `/lens/${release}/..%2F..%2Fdata`)).status).toBe(404);
-      expect((await get(links.port, `/lens/unknown/`)).status).toBe(404);
-    } finally {
-      await links.close();
-    }
+    // Its view's files, for the app's sandboxed frame: from its site, nothing outside it, and only of a lens pinned here.
+    const release = seen.lens!.release;
+    expect(seen.lens!.site).toBe(true);
+    const page = await ola.lensFile({ release, path: '' });
+    expect(page.type).toBe('text/html; charset=utf-8');
+    expect(Buffer.from(page.data, 'base64').toString()).toContain('<main id="columns">');
+    expect((await ola.lensFile({ release, path: 'app.js' })).type).toBe('text/javascript');
+    await expect(ola.lensFile({ release, path: '../../data' })).rejects.toThrow(/not in Kanban's view/);
+    await expect(ola.lensFile({ release, path: '../board.wasm' })).rejects.toThrow(/not in Kanban's view/);
+    await expect(ola.lensFile({ release: 'unknown', path: '' })).rejects.toThrow(/no board here/);
 
     // Taken away: just the board again.
     await martl.setBoardLens({ space: 'Team', board: 'tasks', off: true });

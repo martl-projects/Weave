@@ -1,4 +1,4 @@
-import { connectTo, decodePhoneLink, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+import { connectTo, decodePhoneLink, LENS_CSP, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
 
 /*
  * The phone app's worker: it keeps the phone's key pair and the computer it
@@ -11,10 +11,15 @@ import { connectTo, decodePhoneLink, openTunnel, pairWith, type Dialer, type Fee
  *                    {id, op: 'call', method, args}       → the node's answer
  *                    {id, op: 'forget'}                   unpair on this side
  *                    {id, op: 'openRoom', room, url}      → the room's app on this phone (a local address)
+ *                    {id, op: 'lensBase', release}        → where a board's client service's view is served here
  *                    {op: 'wake'}                         the app is in front again
  *   worker → screen  {id, result} | {id, error}
  *                    {event}                              the node's live events
  *                    {connected}                          the connection came or went
+ *
+ * Boards' client services' views: the worker serves their files on a local
+ * port of its own (/lens/<release>/<file>), each asked of the node (lensFile),
+ * for the board view's sandboxed frame.
  *
  * Rooms: the computer joins a room and reaches its app on a local port (the
  * room's url). For the phone's browser the worker listens on a local port of
@@ -32,7 +37,9 @@ type KeyPair = { publicKey: Buffer; secretKey: Buffer };
 export interface Pipe {
   pipe(destination: Pipe): unknown;
   write(data: Buffer): unknown;
+  end(data?: Buffer): unknown;
   on(event: 'error' | 'close', listener: () => void): unknown;
+  on(event: 'data', listener: (chunk: Buffer) => void): unknown;
   destroy(): void;
 }
 
@@ -76,6 +83,8 @@ export class Phone {
   #rooms = new Map<string, Promise<Listener>>();
   /** The browser's connections to them, open now. */
   #open = new Set<Pipe>();
+  /** Where boards' client services' views are served on this phone. */
+  #lenses?: Promise<Listener>;
 
   constructor(deps: PhoneDeps) {
     this.#deps = deps;
@@ -98,8 +107,9 @@ export class Phone {
   }
 
   #closeRooms(): void {
-    for (const listener of this.#rooms.values()) void listener.then((l) => l.close(), () => {});
+    for (const listener of [...this.#rooms.values(), ...(this.#lenses ? [this.#lenses] : [])]) void listener.then((l) => l.close(), () => {});
     this.#rooms.clear();
+    this.#lenses = undefined;
     for (const socket of this.#open) socket.destroy();
   }
 
@@ -165,6 +175,13 @@ export class Phone {
         }
         return `http://127.0.0.1:${(await listening).port}${at[2] ?? '/'}`;
       }
+      case 'lensBase': {
+        const release = String(message.release ?? '');
+        if (!/^[A-Za-z0-9_-]{1,100}$/.test(release)) throw new Error('which client service?');
+        this.#lenses ??= this.#deps.listen(0, (local) => this.#lensRequest(local));
+        this.#lenses.catch(() => (this.#lenses = undefined));
+        return `http://127.0.0.1:${(await this.#lenses).port}/lens/${release}/`;
+      }
       case 'wake': {
         // Back in front: try at once instead of waiting for the next retry.
         this.#retries = 0;
@@ -174,6 +191,48 @@ export class Phone {
       default:
         throw new Error(`unknown request: ${String(op)}`);
     }
+  }
+
+  /**
+   * One request for a file of a client service's view: GET /lens/<release>/<file>, answered with the file from the
+   * node, sandboxed (LENS_CSP), and the connection closed.
+   */
+  #lensRequest(local: Pipe): void {
+    this.#open.add(local);
+    let head = '';
+    let answered = false;
+    const answer = (status: string, type: string, body: Buffer) => {
+      answered = true;
+      const lines = [`HTTP/1.1 ${status}`, `content-type: ${type}`, `content-length: ${body.length}`, `content-security-policy: ${LENS_CSP}`, 'x-content-type-options: nosniff', 'cache-control: no-cache', 'connection: close'];
+      local.end(Buffer.concat([Buffer.from(`${lines.join('\r\n')}\r\n\r\n`), body]));
+    };
+    const end = () => {
+      this.#open.delete(local);
+      local.destroy();
+    };
+    local.on('error', end);
+    local.on('close', end);
+    local.on('data', (chunk: Buffer) => {
+      if (answered) return;
+      head += chunk.toString('latin1');
+      if (head.length > 8192) return answer('431 Request Header Fields Too Large', 'text/plain', Buffer.alloc(0));
+      if (!head.includes('\r\n\r\n')) return;
+      answered = true;
+      const at = /^GET \/lens\/([A-Za-z0-9_-]{1,100})\/([^ ?#]*)\S* HTTP\/1\.[01]\r\n/.exec(head);
+      let path: string | undefined;
+      try {
+        path = at ? decodeURIComponent(at[2]) : undefined;
+      } catch {
+        path = undefined;
+      }
+      if (!at || path === undefined) return answer('404 Not Found', 'text/plain', Buffer.from('Not here'));
+      this.#connect()
+        .then((session) => session.call('lensFile', { release: at[1], path }) as Promise<{ type: string; data: string }>)
+        .then(
+          (file) => answer('200 OK', file.type, Buffer.from(file.data, 'base64')),
+          (error: Error) => answer('404 Not Found', 'text/plain; charset=utf-8', Buffer.from(error.message)),
+        );
+    });
   }
 
   /** One connection of the phone's browser, through to the room's app on the computer. */

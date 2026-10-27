@@ -1,13 +1,16 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
+import { SERVICE_LABEL } from '@weave/core';
 import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo, type WebsiteInfo } from '@weave/node';
+import { buildComponent } from '../../../packages/node/test/helpers/components.ts';
+import { registry } from '../../../packages/node/test/helpers/registry.ts';
 
 /*
  * The phone app's worker, packed as on the phone and run on real Bare: it
@@ -191,4 +194,39 @@ describe('the phone app worker on Bare', () => {
       app.close();
     }
   }, 90_000);
+
+  it("serves a board's client service's view on a local port, each file from the computer", async () => {
+    // The Kanban starter, released as an image and pinned to a board of the computer's project.
+    const starter = join(app, '..', '..', 'packages', 'sdk', 'starters', 'js-board');
+    const dir = temp('weave-mobile-lens-');
+    cpSync(await buildComponent(join(starter, 'src', 'board.js'), 'board'), join(dir, 'board.wasm'));
+    cpSync(join(starter, 'site'), join(dir, 'site'), { recursive: true });
+    const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+    const layer = join(temp('weave-mobile-layer-'), 'layer.tar.gz');
+    execFileSync(tar, ['-czf', layer, '-C', dir, '.']);
+    node.containerSetup = { ...node.containerSetup, fetch: registry({ 'kanban:1.0': { labels: { [SERVICE_LABEL]: readFileSync(join(starter, 'weave.app.json'), 'utf8') }, wasm: readFileSync(layer) } }) };
+    await node.setBoard({ project: 'Weave', name: 'tasks', title: 'Tasks' });
+    await node.releaseService({ project: 'Weave', image: 'ghcr.io/martl/kanban:1.0' });
+    const view = await node.setBoardLens({ space: 'Weave', board: 'tasks', from: { project: 'Weave' }, mode: 'require' });
+
+    const phone = await worker(temp('weave-mobile-phone-'));
+    const { link } = await node.pairPhone();
+    await patiently(() => phone.ask('pair', { link, phoneName: 'iPhone' }));
+    // The board, folded on the computer.
+    const seen = await patiently(() => phone.ask<{ state: { columns: Array<{ name: string }> } }>('call', { method: 'boardView', args: [{ space: 'Weave', board: 'tasks' }] }));
+    expect(seen.state.columns.map((c) => c.name)).toEqual(['To do', 'Doing', 'Done']);
+
+    // Its view, served on the phone: sandboxed, and nothing but its files.
+    const base = await phone.ask<string>('lensBase', { release: view.lens!.release });
+    expect(base).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/lens\/[A-Za-z0-9_-]+\/$/);
+    const page = await fetch(base);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toMatch(/^sandbox allow-scripts;.*connect-src 'none'/);
+    expect(await page.text()).toContain('<main id="columns">');
+    expect((await fetch(`${base}app.js`)).headers.get('content-type')).toBe('text/javascript');
+    expect((await fetch(`${base}..%2Fboard.wasm`)).status).toBe(404);
+    expect((await fetch(base.replace(/lens\/.*$/, 'other'))).status).toBe(404);
+    await expect(phone.ask('lensBase', { release: '../x' })).rejects.toThrow(/which client service/);
+    phone.stop();
+  }, 180_000);
 });

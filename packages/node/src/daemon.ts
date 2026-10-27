@@ -40,7 +40,7 @@ export async function startDaemon(
   writeJson(home.daemon, info);
   // Post addresses (http://weave.localhost:7710/…). One Weave per computer gets the port; the others go without.
   const linkPort = options.linkPort ?? (process.env.WEAVE_LINK_PORT ? Number(process.env.WEAVE_LINK_PORT) : undefined);
-  const links = await startLinks(node, linkPort, node.githubAppFlow, (release) => node.lensSite(release)).catch((error: Error & { code?: string }): LinkServer | undefined => {
+  const links = await startLinks(node, linkPort, node.githubAppFlow).catch((error: Error & { code?: string }): LinkServer | undefined => {
     console.error(`weave: post links are off: ${error.code === 'EADDRINUSE' ? 'another Weave serves them on this computer' : error.message}`);
     return undefined;
   });

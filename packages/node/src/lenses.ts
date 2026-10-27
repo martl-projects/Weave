@@ -1,11 +1,11 @@
-import { existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { join as joinPath } from 'node:path';
-import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, LINK_HOST, postsOf, type BoardLens, type Did, type Json } from '@weave/core';
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
+import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type BoardLens, type Did, type Json } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
 import type { BoardViewInfo, FeedItem } from './backend.ts';
 import type { ServicesHost } from './node.ts';
 import { pullImage } from './registry.ts';
-import { prepareWasm } from './runtime.ts';
+import { prepareWasm, TYPES } from './runtime.ts';
 import type { Services } from './services.ts';
 
 /*
@@ -21,6 +21,9 @@ import type { Services } from './services.ts';
  * with posts. Never anything about the space, its members, keys or boards: those stay the member's own doing.
  */
 const LENS_WEAVE_KINDS = new Set(['weave.post', 'weave.post.edit', 'weave.upvote', 'weave.react', 'weave.msg', 'weave.reply', 'weave.issue.status', 'weave.issue.claim']);
+
+/** The largest file of a lens's view this node hands out (they travel as JSON, to phones too). */
+const LENS_FILE_MAX = 5_000_000;
 
 /** A lens ready to use on this node: where it runs, and its renderer's folder. */
 interface Ready {
@@ -152,9 +155,29 @@ export class Lenses {
     return ready;
   }
 
-  /** A ready lens's renderer folder (its site), for this computer's pages: undefined unless it's ready here. */
-  async siteFolder(release: string): Promise<string | undefined> {
-    return (await this.#ready.get(release)?.catch(() => undefined))?.site;
+  /** A file of a lens's view (its site): of a lens pinned to a board here, made ready if it isn't yet. */
+  async lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }> {
+    const lens = this.#pinned(input.release);
+    if (!lens) throw new Error('no board here is shown by that client service');
+    const site = (await this.#prepare(lens)).site;
+    if (!site) throw new Error(`${lens.name} has no view of its own`);
+    const root = resolvePath(site);
+    let file = resolvePath(root, `.${('/' + input.path).replace(/\\/g, '/')}`);
+    if (file !== root && !file.startsWith(root + sep)) throw new Error(`not in ${lens.name}'s view`);
+    if (existsSync(file) && statSync(file).isDirectory()) file = joinPath(file, 'index.html');
+    if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`not in ${lens.name}'s view`);
+    if (statSync(file).size > LENS_FILE_MAX) throw new Error(`${input.path} is larger than a view's file may be (${LENS_FILE_MAX / 1_000_000} MB)`);
+    return { type: TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream', data: readFileSync(file).toString('base64') };
+  }
+
+  /** The lens a board here is pinned to, by its release. */
+  #pinned(release: string): BoardLens | undefined {
+    for (const space of this.h.spaces.values()) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      const lens = boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers).find((b) => b.lens?.origin.release === release)?.lens;
+      if (lens) return lens;
+    }
+    return undefined;
   }
 
   /**
@@ -187,10 +210,7 @@ export class Lenses {
       this.#folded.set(key, { from, state });
     }
     const actions = state && typeof state === 'object' && !Array.isArray(state) && Array.isArray(state.actions) ? state.actions : [];
-    // Its renderer, on this computer's pages (when this Weave serves them).
-    const port = this.#svc().linkPort;
-    const site = ready.site && port ? `http://${LINK_HOST}:${port}/lens/${lens.origin.release}/` : undefined;
-    return { ...base, lens: { ...about, ...(site ? { site } : {}) }, state, actions };
+    return { ...base, lens: { ...about, ...(ready.site ? { site: true } : {}) }, state, actions };
   }
 
   /**

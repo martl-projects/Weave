@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
-import { api, bump, useApi } from './lib.ts';
+import { api, bridge, bump, useApi } from './lib.ts';
 import { toast } from './ui.tsx';
 
 /*
@@ -44,6 +44,8 @@ export function useLensChoice(space: SpaceInfo, board?: BoardInfo): [boolean, (o
 export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; board: BoardInfo; meDid: string; onOpen(post: string): void }) {
   const { data: view, error } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
   const frame = useRef<HTMLIFrameElement>(null);
+  // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
+  const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
   const latest = useRef(view);
   latest.current = view;
 
@@ -83,11 +85,12 @@ export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; bo
   if (!view.lens?.site)
     return (
       <div className="pad">
-        <p className="muted">{view.lens?.name} has no view of its own here (or this computer's Weave doesn't serve local pages). Its state:</p>
+        <p className="muted">{view.lens?.name} has no view of its own. Its state:</p>
         <pre className="sunken">{JSON.stringify(view.state, null, 2)}</pre>
       </div>
     );
-  return <iframe ref={frame} className="lens-frame" title={view.lens.name} src={view.lens.site} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
+  if (!base) return <p className="muted pad">Getting {view.lens.name} ready…</p>;
+  return <iframe ref={frame} className="lens-frame" title={view.lens.name} src={base} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
 }
 
 /** The switch between a board's posts and its suggested client service. */

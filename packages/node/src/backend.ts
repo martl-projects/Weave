@@ -505,13 +505,13 @@ export interface BoardInfo {
 
 /**
  * A board as its client service (its lens) shows it on this node: the service's state and actions, and whether it has
- * a renderer (`site`: its address on this computer's pages, http://weave.localhost:…/lens/<release>/). Without a lens, or with a suggested one not chosen
- * here, just the board; `problem` when it couldn't be fetched or run.
+ * a view of its own (`site`: its files come from lensFile). Without a lens, or with a suggested one not chosen here,
+ * just the board; `problem` when it couldn't be fetched or run.
  */
 export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
-  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; site?: string; problem?: string };
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; site?: boolean; problem?: string };
   state?: Json;
   actions?: Json[];
 }
@@ -1790,6 +1790,11 @@ export interface Backend {
   boardView(input: { space: string; board: string; use?: boolean }): Promise<BoardViewInfo>;
   /** Do one of the actions a board's client service offers: what it proposes is signed by you (or your agent), with your rights. */
   boardAction(input: { space: string; board: string; action: string; input?: Json; as?: string }): Promise<{ published: FeedItem[]; view: BoardViewInfo }>;
+  /**
+   * A file of a board's client service's view (its site), for the app to show in a sandboxed frame (LENS_CSP): the
+   * desktop, the phone and the web preview each serve it their own way. Only of lenses pinned to a board you're in.
+   */
+  lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
@@ -2004,13 +2009,15 @@ export interface Backend {
 /** Backend methods callable over the daemon's API (watch is a separate event stream). */
 export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
+export { LENS_CSP } from './lenscsp.ts';
+
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',

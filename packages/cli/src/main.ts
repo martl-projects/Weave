@@ -876,12 +876,9 @@ function lensLine(v: BoardViewInfo): string {
   if (!v.lens) return `${v.board.title}: no client service, just its posts`;
   const l = v.lens;
   const how = `${v.board.title}: ${l.name} ${l.tag}, ${l.mode === 'require' ? 'required' : 'suggested'} by ${l.by.name ?? l.by.did}`;
-  if (l.problem) return `${how}
-  it can't run here: ${l.problem}`;
+  if (l.problem) return `${how}\n  it can't run here: ${l.problem}`;
   const actions = (v.actions ?? []).map((a) => (a && typeof a === 'object' && !Array.isArray(a) ? String((a as Record<string, unknown>).name) : '')).filter(Boolean);
-  return `${how}${actions.length ? `
-  actions: ${actions.join(', ')}` : ''}${l.site ? `
-  its view: ${l.site}` : ''}`;
+  return `${how}${actions.length ? `\n  actions: ${actions.join(', ')}` : ''}${l.site ? '\n  it has a view of its own: open the board in Weave' : ''}`;
 }
 
 const boardLine = (b: BoardInfo) =>
@@ -1746,9 +1743,7 @@ ${postLine(p)}`);
       }
       if (sub === 'view' && name) {
         const view = await (await backend()).boardView({ space: values.community ?? needProject(), board: name, use: true });
-        return out(view, () => `${lensLine(view)}${view.state !== undefined ? `
-
-${JSON.stringify(view.state, null, 2)}` : ''}`);
+        return out(view, () => `${lensLine(view)}${view.state !== undefined ? `\n\n${JSON.stringify(view.state, null, 2)}` : ''}`);
       }
       if (sub === 'act' && name && args[2]) {
         let input: unknown = null;
@@ -1758,8 +1753,7 @@ ${JSON.stringify(view.state, null, 2)}` : ''}`);
           throw new Error('--input is JSON');
         }
         const done = await (await backend()).boardAction({ space: values.community ?? needProject(), board: name, action: args[2], input: input as never, as: values.as });
-        return out(done, () => `published ${done.published.length}: ${done.published.map((e) => e.kind).join(', ') || 'nothing'}
-${lensLine(done.view)}`);
+        return out(done, () => `published ${done.published.length}: ${done.published.map((e) => e.kind).join(', ') || 'nothing'}\n${lensLine(done.view)}`);
       }
       if ((sub === 'follow' || sub === 'unfollow') && name) {
         const boards = await (await backend()).followBoard({ project: needProject(), board: name, on: sub === 'follow' });
