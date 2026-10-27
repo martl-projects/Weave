@@ -12,6 +12,7 @@ import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
 import { ProjectServicesView } from './websites.tsx';
 import { CatalogView } from './catalog.tsx';
+import { LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
@@ -241,6 +242,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const { data: info } = useApi(() => (space.kind === 'project' ? api<{ maintainer: boolean }>('project', space.id) : space.kind === 'community' ? api<{ moderator: boolean }>('community', space.id).then((c) => ({ maintainer: c.moderator })) : Promise.resolve({ maintainer: false })), [space.id]);
   const list = members ?? [];
   const mine = waiting.filter((a) => a.project.id === space.id);
+  const lensBoard = view === 'b' && arg ? boards?.find((b) => b.name === arg) : undefined;
+  const [lensOn, chooseLens] = useLensChoice(space, lensBoard);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
   const invite = () => open({ kind: 'invite', space });
 
@@ -294,6 +297,21 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   } else if (view === 'b' && arg) {
     const board = boards?.find((b) => b.name === arg);
     if (postId) body = <PostView id={postId} space={space} {...common} moderator={!!info?.maintainer} back={{ href: `${spaceHref(space)}/b/${arg}`, label: board?.title ?? arg }} />;
+    // Its client service's view: required by its maintainers, or suggested and chosen here.
+    else if (board?.lens && lensOn)
+      body = (
+        <section className="pane-main">
+          <header className="pane-head">
+            <b>
+              p/{space.name} · {board.title}
+            </b>
+            <span className="pane-tools">
+              <LensSwitch board={board} on={lensOn} choose={chooseLens} />
+            </span>
+          </header>
+          <LensView space={space} board={board} meDid={me.did} onOpen={(post) => navigate(`${spaceHref(space)}/b/${arg}/${post}`)} />
+        </section>
+      );
     else
       body = (
         <PostList
@@ -308,9 +326,12 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           board={board}
           canCurate={!!info?.maintainer}
           toolbar={
-            <button onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
-              <Icon name="pencil" /> {board?.type === 'issues' ? 'Open issue' : board?.type === 'proposals' ? 'Propose' : 'Post'}
-            </button>
+            <>
+              {board && <LensSwitch board={board} on={lensOn} choose={chooseLens} />}
+              <button onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
+                <Icon name="pencil" /> {board?.type === 'issues' ? 'Open issue' : board?.type === 'proposals' ? 'Propose' : 'Post'}
+              </button>
+            </>
           }
           above={board?.type === 'proposals' ? <DelegationBar project={space} members={list} meDid={me.did} /> : undefined}
           empty={<>Nothing in {board?.title ?? arg} yet.</>}

@@ -106,6 +106,8 @@ button .icon { vertical-align: -3px; }
 .pane-tools button { min-height: 19px; min-width: 0; padding: 0 8px; }
 .pane-tools select { height: 19px; }
 .pane-main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+/* A board's client service's own view (lens.tsx): it fills the pane. */
+.lens-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
 .pane-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 2px; }
 .page { padding: 10px 12px; font-family: var(--content-font); font-size: 12px; }
 .page fieldset { margin-bottom: 10px; background: var(--face); }

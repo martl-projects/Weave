@@ -131,10 +131,17 @@ const TARGET_FIELDS: Record<string, string> = {
 };
 
 /**
+ * A kind of a board's client service (not Weave's own, like kanban.move): about a post in a board (its `target`),
+ * or in the board it names. See lenses.ts.
+ */
+const lensKind = (kind: string) => !kind.startsWith('weave.');
+
+/**
  * The board of each event that belongs to one: posts, issues and proposals by
  * their own board; votes, replies, post chat, upvotes and reactions by the
- * board of what they point at. `defaults` gives the board for issues and
- * proposals that don't name one.
+ * board of what they point at; client services' own kinds by their target, or
+ * the board they name. `defaults` gives the board for issues and proposals
+ * that don't name one.
  */
 export function boardOfEvents(entries: Entry[], defaults: { issues?: string; proposals?: string }): Map<string, string> {
   const boards = new Map<string, string>();
@@ -143,9 +150,10 @@ export function boardOfEvents(entries: Entry[], defaults: { issues?: string; pro
     if (e.kind === 'weave.post' && typeof named === 'string') boards.set(e.id, named);
     else if (e.kind === 'weave.issue') boards.set(e.id, typeof named === 'string' ? named : (defaults.issues ?? 'issues'));
     else if (e.kind === 'weave.proposal') boards.set(e.id, typeof named === 'string' ? named : (defaults.proposals ?? 'proposals'));
+    else if (lensKind(e.kind) && typeof named === 'string' && field(e.body, 'target') === undefined) boards.set(e.id, named);
   }
   for (const e of entries) {
-    const key = TARGET_FIELDS[e.kind];
+    const key = TARGET_FIELDS[e.kind] ?? (lensKind(e.kind) ? 'target' : undefined);
     const target = key ? field(e.body, key) : undefined;
     const board = typeof target === 'string' ? boards.get(target) : undefined;
     if (board && !boards.has(e.id)) boards.set(e.id, board);
@@ -159,7 +167,8 @@ export function boardOfInner(inner: Inner, boards: Map<string, string>, defaults
   if (inner.kind === 'weave.post') return typeof named === 'string' ? named : undefined;
   if (inner.kind === 'weave.issue') return typeof named === 'string' ? named : (defaults.issues ?? 'issues');
   if (inner.kind === 'weave.proposal') return typeof named === 'string' ? named : (defaults.proposals ?? 'proposals');
-  const key = TARGET_FIELDS[inner.kind];
+  if (lensKind(inner.kind) && typeof named === 'string' && field(inner.body, 'target') === undefined) return named;
+  const key = TARGET_FIELDS[inner.kind] ?? (lensKind(inner.kind) ? 'target' : undefined);
   const target = key ? field(inner.body, key) : undefined;
   return typeof target === 'string' ? boards.get(target) : undefined;
 }

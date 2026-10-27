@@ -9,7 +9,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { connectDaemon, machinePolicy, resolveHome } from '@weave/node/client';
+import { connectDaemon, LENS_CSP, machinePolicy, resolveHome } from '@weave/node/client';
 import { RENDERER_METHODS, type RendererMethod } from './src/methods.ts';
 
 const { values } = parseArgs({ options: { home: { type: 'string' }, port: { type: 'string', default: '8770' } } });
@@ -65,6 +65,16 @@ createServer(async (req, res) => {
         controller.abort();
       });
       return client.watch((item) => res.write(`data: ${JSON.stringify(item)}\n\n`), controller.signal).catch(() => res.end());
+    }
+    // Boards' client services' views (/lens/<release>/<file>), sandboxed, each file from the daemon (lensFile).
+    if (url.pathname.startsWith('/lens/')) {
+      const [release, ...path] = url.pathname.slice('/lens/'.length).split('/').map(decodeURIComponent);
+      const client = await connectDaemon(home);
+      if (!client) return json(res, 503, { error: 'no daemon running for this home' });
+      const file = await client.lensFile({ release, path: path.join('/') }).catch(() => undefined);
+      if (!file) return json(res, 404, { error: 'not found' });
+      res.writeHead(200, { 'content-type': file.type, 'content-security-policy': LENS_CSP, 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' });
+      return void res.end(Buffer.from(file.data, 'base64'));
     }
     const file = normalize(join(STATIC, url.pathname === '/' ? 'index.html' : url.pathname));
     if (!file.startsWith(STATIC) || !existsSync(file)) return json(res, 404, { error: 'not found' });

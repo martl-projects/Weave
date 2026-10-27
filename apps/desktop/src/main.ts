@@ -1,8 +1,8 @@
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from 'electron';
-import { machinePolicy, resolveHome, type Backend } from '@weave/node/client';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
+import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { newSession, openSession, showSession, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
@@ -384,8 +384,26 @@ async function createWindow(): Promise<void> {
   }
 }
 
+/**
+ * Boards' client services' views: weave-lens://lens/<release>/<file>, each file from the node (lensFile), shown
+ * sandboxed in the board view's frame (LENS_CSP). Standard, so a view's relative addresses resolve.
+ */
+protocol.registerSchemesAsPrivileged([{ scheme: 'weave-lens', privileges: { standard: true, secure: true } }]);
+
+async function lensResponse(request: Request): Promise<Response> {
+  const [, release, ...path] = new URL(request.url).pathname.split('/').map(decodeURIComponent);
+  if (request.method !== 'GET' || !daemon || !release) return new Response('Not here', { status: 404 });
+  try {
+    const file = await daemon.client.lensFile({ release, path: path.join('/') });
+    return new Response(Buffer.from(file.data, 'base64'), { headers: { 'content-type': file.type, 'content-security-policy': LENS_CSP, 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' } });
+  } catch (error) {
+    return new Response((error as Error).message, { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  }
+}
+
 app.whenReady().then(async () => {
   if (!primary) return;
+  protocol.handle('weave-lens', lensResponse);
   // macOS: the app menu offers to install the `weave` command (Windows' installer puts it on the PATH).
   if (process.platform === 'darwin' && hasCommand()) Menu.setApplicationMenu(Menu.buildFromTemplate(macMenu()));
   // The installer registers the installed app; a development build leaves the link handler alone.

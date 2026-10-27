@@ -42,6 +42,8 @@ interface Bridge {
   /** The app's own title bar buttons; missing in a browser, which has its own window. */
   windowControl?(action: 'minimize' | 'maximize' | 'close'): Promise<{ maximized: boolean; focused: boolean }>;
   onWindowState?(listener: (state: { maximized: boolean; focused: boolean }) => void): void;
+  /** Where a board's client service's view is served for the board view's frame (see lens.tsx). */
+  lensBase(release: string): Promise<string> | string;
   /** Flash the taskbar button until the person looks. */
   attention(): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
@@ -79,6 +81,8 @@ const webBridge: Bridge = {
   },
   show: async () => window.focus(),
   attention: async () => {},
+  // The web preview serves it from its own origin (dev-web.ts).
+  lensBase: (release) => `/lens/${encodeURIComponent(release)}/`,
   // A browser can't hand out folder paths: type it.
   pickFolder: async (title) => prompt(`${title}\n\nThe full path of the folder:`)?.trim() || undefined,
   restore: async () => {

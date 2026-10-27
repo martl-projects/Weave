@@ -21,6 +21,8 @@ const root = join(import.meta.dirname, '..', '..');
 const pkg = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version: string };
 const version = pkg(import.meta.dirname).version;
 const NATIVE = ['sodium-native', 'udx-native'];
+// Installed next to the daemon too: what runs WebAssembly services (preview2-shim starts a worker of its own from its files).
+const BESIDE = ['@bytecodealliance/jco-transpile', '@bytecodealliance/preview2-shim'];
 process.chdir(import.meta.dirname);
 
 execFileSync(process.execPath, ['build.ts'], { cwd: import.meta.dirname, stdio: 'inherit' });
@@ -44,15 +46,28 @@ await bundle({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  external: NATIVE,
+  external: [...NATIVE, ...BESIDE],
   define: { WEAVE_VERSION: JSON.stringify(version) },
   // Bundled CommonJS dependencies still call require().
   banner: { js: "import { createRequire as __weaveRequire } from 'node:module'; const require = __weaveRequire(import.meta.url);" },
 });
-const dependencies = Object.fromEntries(NATIVE.map((name) => [name, pkg(join(root, 'node_modules', name)).version]));
+// The worker a WebAssembly service runs in (runtime.ts finds it next to the daemon).
+await bundle({
+  entryPoints: [join(root, 'packages', 'node', 'src', 'wasmworker.ts')],
+  outfile: 'pack/daemon/wasmworker.mjs',
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  external: BESIDE,
+});
+const dependencies = Object.fromEntries([...NATIVE, ...BESIDE].map((name) => [name, pkg(join(root, 'node_modules', name)).version]));
 writeFileSync('pack/daemon/package.json', JSON.stringify({ name: 'weave-daemon', private: true, type: 'module', dependencies }, null, 2));
 execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'], { cwd: 'pack/daemon', stdio: 'inherit', shell: true });
 cpSync(join(root, 'weave.bundle.json'), 'pack/daemon/weave.bundle.json');
+// The starters for WebAssembly services, and their WIT (weave service new finds them next to the daemon).
+cpSync(join(root, 'packages', 'sdk', 'starters'), 'pack/daemon/starters', { recursive: true });
+cpSync(join(root, 'packages', 'sdk', 'wit'), 'pack/daemon/wit', { recursive: true });
 // The admin console a company's node serves (packages/node/src/console.ts looks for it next to the daemon).
 execFileSync(process.execPath, [join(root, 'apps', 'console', 'build.ts')], { stdio: 'inherit' });
 cpSync(join(root, 'apps', 'console', 'dist'), 'pack/daemon/console', { recursive: true });

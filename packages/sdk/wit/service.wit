@@ -1,0 +1,76 @@
+/// A Weave service as a WebAssembly component: Weave runs it inside itself, in a sandbox, under the service's own
+/// key and with exactly its contract's rights. It needs nothing installed (no Docker), and gets only what Weave hands
+/// it: these functions, a folder of its own (/data), clocks and randomness. No network, no other files, no processes.
+///
+/// Values that carry Weave's own data (items, bodies, who it is) are JSON, so any language can read and write them.
+package weave:service@0.1.0;
+
+/// What Weave offers the service: who it is, and acting as itself within its contract.
+interface host {
+  /// Who the service is: {name, did, person, contract, spaces: [{id, kind, name, settings}]}.
+  me: func() -> string;
+  /// A setting its person gave it (sealed on the node that runs it), if there is one.
+  setting: func(name: string) -> option<string>;
+  /// Sign and publish an event in one of its spaces (by id or name), of a kind its contract writes, with a JSON body:
+  /// the new item (JSON), or why not.
+  publish: func(space: string, kind: string, body: string) -> result<string, string>;
+  /// Answer a request addressed to it (text, data as JSON, or an error): the answer (JSON), or why not.
+  answer: func(request: string, text: option<string>, data: option<string>, error: option<string>) -> result<string, string>;
+  /// What it saved under this name in its /data folder (a-z, 0-9, ., _ and -), if anything: for languages without
+  /// file access (JavaScript); others can use /data directly.
+  load: func(name: string) -> option<string>;
+  /// Keep something under this name in its /data folder (what it keeps between runs).
+  save: func(name: string, value: string) -> result<_, string>;
+  /// A line for its log (weave service log).
+  log: func(message: string);
+}
+
+world service {
+  import host;
+  /// Something it may read arrived, as a feed item (JSON): a request addressed to it (kind weave.service.request,
+  /// body {to, text?, data?}), or what its contract reads. One at a time, in order; also what came while it was off.
+  export on-event: func(item: string);
+}
+
+/// The players of a website it serves: Weave holds their connections, and tells it who each one is.
+interface players {
+  /// Send a message to one player's connection (by its id, from on-join).
+  send: func(player: string, message: string);
+  /// Send a message to every player connected now.
+  broadcast: func(message: string);
+  /// End a player's connection.
+  disconnect: func(player: string);
+  /// Be called (on-tick) every this many milliseconds, at least 50; 0 stops it.
+  tick-every: func(ms: u32);
+}
+
+/// A service with a website: a game, a board, a page with live parts. Weave serves its files (its site folder) and
+/// holds its visitors' connections (WebSockets at /weave/socket): it only handles what they say. The service's
+/// contract says website: true.
+world website {
+  import host;
+  import players;
+  export on-event: func(item: string);
+  /// A player connected: {id, did, name?, host, member, maintainer, room?: {id, name}}, as Weave vouches for them.
+  export on-join: func(player: string);
+  /// A message from a player (by id).
+  export on-message: func(player: string, message: string);
+  /// A player's connection ended.
+  export on-leave: func(player: string);
+  /// Its timer (tick-every).
+  export on-tick: func();
+}
+
+/// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's
+/// called with (no clock, no randomness, no network), so every member folds the same state from the same events.
+/// It has no key: what its actions propose, the member signs, if their rights in the board allow it. Its site (the
+/// renderer) shows the state in a sandboxed frame and asks for actions; agents get the same state and actions.
+world board {
+  /// The board's state, from the board ({name, title}, JSON) and its items (a JSON array of feed items, oldest first:
+  /// its posts, their edits, deletions and votes, and the messages in their chats). The state is the service's own
+  /// (JSON); Weave reads only its "actions": [{name, label, input?}], what can be done with it.
+  export fold: func(board: string, items: string) -> string;
+  /// What an action proposes: events for the member to sign, as JSON [{kind, body}], or why not. The input is what the
+  /// renderer or agent gave (JSON), the state as fold made it, and me who asks ({did, name}).
+  export act: func(name: string, input: string, state: string, me: string) -> result<string, string>;
+}

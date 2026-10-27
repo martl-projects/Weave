@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppAsset, AppManifest } from '@weave/core';
 import { platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import type { GitHub } from './github.ts';
 import { writeJson } from './home.ts';
 import type { Runtime } from './runtime.ts';
+import { imageLocation, pullImage } from './registry.ts';
 
 /*
  * Releases on this node: fetched, refused unless they match the fingerprint their project published, and
@@ -49,12 +50,14 @@ export class Releases {
   readonly #changed: () => void;
   readonly #locate: (a: ArtifactRef) => Promise<Located | undefined>;
   readonly #fetchFile: () => typeof fetch;
+  readonly #registryFetch: () => typeof fetch;
 
   /**
    * `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any;
    * `locate`: asks a provider in the release's project; `fetchFile`: downloads what a provider points at.
    */
-  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef) => Promise<Located | undefined>, fetchFile: () => typeof fetch) {
+  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef) => Promise<Located | undefined>, fetchFile: () => typeof fetch, registryFetch: () => typeof fetch) {
+    this.#registryFetch = registryFetch;
     this.#services = services;
     this.#github = github;
     this.#runtime = runtime;
@@ -122,14 +125,18 @@ export class Releases {
     const folder = join(dir, tagFolder(a.tag));
     if (this.#runtime.runs(a.manifest) === 'container' || existsSync(folder)) return then();
     if (this.jobs.get(job)?.progress) return;
-    const asset = a.manifest.install?.assets?.[platformKey()];
-    if (!asset) {
+    // A WebAssembly service: its release file for wasm, or its image, pulled by Weave itself (no Docker).
+    const wasm = this.#runtime.runs(a.manifest) === 'wasm';
+    const asset = a.manifest.install?.assets?.[wasm ? 'wasm' : platformKey()];
+    const image = wasm && !asset ? a.manifest.install?.image : undefined;
+    if (!asset && !image) {
       this.jobs.set(job, { error: this.#runtime.whyNot(a.manifest) });
       return;
     }
-    const progress: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset.size ? { total: asset.size } : {}) } };
+    const progress: InstallJob = { progress: { state: 'downloading', done: 0, ...(asset?.size ? { total: asset.size } : {}) } };
     this.jobs.set(job, progress);
-    const fetched = (this.#fetching.get(folder) ?? this.fetch(dir, a, asset, progress).then(() => undefined)).finally(() => this.#fetching.delete(folder));
+    const work = image ? this.#pull(dir, a, image) : this.fetch(dir, a, asset!, progress);
+    const fetched = (this.#fetching.get(folder) ?? work.then(() => undefined)).finally(() => this.#fetching.delete(folder));
     this.#fetching.set(folder, fetched);
     const done = fetched.then(
       () => {
@@ -139,6 +146,23 @@ export class Releases {
       (error: Error) => void this.jobs.set(job, { error: error.message }),
     );
     this.#waiting.set(job, done.finally(() => this.#changed()));
+  }
+
+  /** A WebAssembly service's image, unpacked into dir/<tag>: each layer checked against its digest (see pullImage). */
+  async #pull(dir: string, a: ArtifactRef, image: { ref: string; digest: string }): Promise<void> {
+    const target = join(dir, tagFolder(a.tag));
+    const staging = `${target}.unpacking`;
+    rmSync(staging, { recursive: true, force: true });
+    try {
+      await pullImage(image.ref, image.digest, staging, { fetch: this.#registryFetch() });
+      if (!existsSync(join(staging, a.manifest.wasm!.component))) throw new Error(`${image.ref}@${image.digest.slice(0, 19)}… has no ${a.manifest.wasm!.component}`);
+      rmSync(target, { recursive: true, force: true });
+      renameSync(staging, target);
+    } catch (error) {
+      rmSync(staging, { recursive: true, force: true });
+      throw error;
+    }
+    writeJson(join(dir, `${tagFolder(a.tag)}.from.json`), { from: `its image, ${imageLocation(image.ref).host}` });
   }
 
   /** Resolves when a job's fetch ends (for tests and the CLI). */

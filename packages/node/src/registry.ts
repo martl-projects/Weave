@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { safePath, untar } from './untar.ts';
 
 /*
  * Container images in registries (Weave and Docker): which image a release
@@ -94,25 +98,61 @@ async function byDigest(url: string, digest: string, accept: string, fetchImpl: 
 /** The platform an image index offers for this computer, as OCI names it. */
 const ociArch = (arch: string): string => ({ x64: 'amd64', arm64: 'arm64', arm: 'arm', ia32: '386' })[arch] ?? arch;
 
+type RegistryOptions = { fetch?: Fetch; credentials?: { user: string; token: string }; arch?: string };
+type ImageManifest = { mediaType?: string; manifests?: Array<{ digest: string; platform?: { os?: string; architecture?: string } }>; config?: { digest: string }; layers?: Array<{ digest: string; mediaType?: string; size?: number; annotations?: Record<string, string> }> };
+
 /**
- * The labels of an image's config, at its digest: an index's image for Linux on this machine's architecture (or its
- * first Linux one). Every step is checked against its digest, so the labels are as pinned as the image.
+ * The image at a digest, as Weave runs it: from an index, its WebAssembly one (wasi/wasm) when it has one, else the
+ * one for Linux on this machine's architecture (or its first Linux one). Every step checked against its digest.
  */
-export async function imageLabels(ref: string, digest: string, options: { fetch?: Fetch; credentials?: { user: string; token: string }; arch?: string } = {}): Promise<Record<string, string>> {
+async function imageAt(ref: string, digest: string, options: RegistryOptions): Promise<{ manifest: ImageManifest; blob(digest: string): Promise<Buffer>; wasm: boolean }> {
   const fetchImpl = options.fetch ?? fetch;
   const { host, path } = imageLocation(ref);
   const basic = options.credentials ? Buffer.from(`${options.credentials.user}:${options.credentials.token}`).toString('base64') : undefined;
-  const manifestAt = (d: string) => byDigest(`${base(host)}/v2/${path}/manifests/${d}`, d, ACCEPT, fetchImpl, basic);
-  type Manifest = { mediaType?: string; manifests?: Array<{ digest: string; platform?: { os?: string; architecture?: string } }>; config?: { digest: string } };
-  let manifest = JSON.parse((await manifestAt(digest)).toString('utf8')) as Manifest;
+  const manifestAt = async (d: string) => JSON.parse((await byDigest(`${base(host)}/v2/${path}/manifests/${d}`, d, ACCEPT, fetchImpl, basic)).toString('utf8')) as ImageManifest;
+  let manifest = await manifestAt(digest);
+  let wasm = false;
   if (manifest.manifests) {
+    const wasi = manifest.manifests.find((m) => m.platform?.os === 'wasi' && m.platform.architecture === 'wasm');
     const linux = manifest.manifests.filter((m) => m.platform?.os === 'linux');
     const arch = ociArch(options.arch ?? process.arch);
-    const chosen = linux.find((m) => m.platform?.architecture === arch) ?? linux[0];
-    if (!chosen) throw new Error(`${ref} has no image for Linux`);
-    manifest = JSON.parse((await manifestAt(chosen.digest)).toString('utf8')) as Manifest;
+    const chosen = wasi ?? linux.find((m) => m.platform?.architecture === arch) ?? linux[0];
+    if (!chosen) throw new Error(`${ref} has no image for Linux or WebAssembly`);
+    wasm = !!wasi;
+    manifest = await manifestAt(chosen.digest);
   }
+  return { manifest, wasm, blob: (d) => byDigest(`${base(host)}/v2/${path}/blobs/${d}`, d, '*/*', fetchImpl, basic) };
+}
+
+/** The labels of an image's config, at its digest (see imageAt): as pinned as the image. */
+export async function imageLabels(ref: string, digest: string, options: RegistryOptions = {}): Promise<Record<string, string>> {
+  const { manifest, blob } = await imageAt(ref, digest, options);
   if (!manifest.config?.digest) throw new Error(`${ref}@${digest} has no config`);
-  const config = JSON.parse((await byDigest(`${base(host)}/v2/${path}/blobs/${manifest.config.digest}`, manifest.config.digest, '*/*', fetchImpl, basic)).toString('utf8')) as { config?: { Labels?: Record<string, string> | null } };
+  const config = JSON.parse((await blob(manifest.config.digest)).toString('utf8')) as { config?: { Labels?: Record<string, string> | null } };
   return config.config?.Labels ?? {};
+}
+
+/**
+ * The files of an image, at its digest, unpacked into `into` without Docker: what a WebAssembly service's image holds
+ * (its component, its website's files). Each layer is checked against its digest and unpacked strictly (see untar);
+ * a layer that is a bare WebAssembly module (the OCI artifact way) is kept under its title, or service.wasm.
+ */
+export async function pullImage(ref: string, digest: string, into: string, options: RegistryOptions & { limit?: number } = {}): Promise<void> {
+  const { manifest, blob } = await imageAt(ref, digest, options);
+  const limit = options.limit ?? 200 * 1024 * 1024;
+  let written = 0;
+  mkdirSync(into, { recursive: true });
+  for (const layer of manifest.layers ?? []) {
+    if ((layer.size ?? 0) > limit) throw new Error(`a layer of ${ref} is larger than ${Math.round(limit / 1024 / 1024)} MB`);
+    let bytes: Uint8Array = await blob(layer.digest);
+    const type = layer.mediaType ?? '';
+    if (type.endsWith('+wasm') || type === 'application/wasm') {
+      written += bytes.length;
+      if (written > limit) throw new Error(`${ref} holds more than ${Math.round(limit / 1024 / 1024)} MB`);
+      writeFileSync(join(into, safePath(layer.annotations?.['org.opencontainers.image.title'] ?? '') ?? 'service.wasm'), bytes);
+      continue;
+    }
+    if (type.includes('gzip') || (bytes[0] === 0x1f && bytes[1] === 0x8b)) bytes = gunzipSync(bytes, { maxOutputLength: limit });
+    written = untar(bytes, into, limit, written);
+  }
 }

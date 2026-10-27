@@ -239,6 +239,10 @@ export interface ServiceInfo {
   spaces: Array<SpaceRef & { settings?: string[] }>;
   /** What runs it on this node, if anything does (else something else uses its token). */
   command?: string[];
+  /** Or its own code as a WebAssembly component, which Weave runs itself, sandboxed: the .wasm file. */
+  wasm?: string;
+  /** Its website's files, which Weave serves next to its players' connections: the folder. */
+  site?: string;
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
@@ -320,8 +324,8 @@ export interface ArtifactInfo {
   settings: AppSetting[];
   /** A Weave service: an image carrying its manifest, run in the sandbox only. */
   packaged?: true;
-  /** How it would run on this node: its release file for this platform, or its container (Docker). */
-  runs?: 'release' | 'container';
+  /** How it would run on this node: its release file for this platform, its container (Docker), or in Weave itself (WebAssembly). */
+  runs?: 'release' | 'container' | 'wasm';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
 }
@@ -495,6 +499,21 @@ export interface BoardInfo {
   rule?: { keepDays: number | null; maxMB: number | null; by: Actor; time: string };
   /** Projects: you follow this board, so its posts come to your Home and notify you (releases and showcase by default). */
   following?: boolean;
+  /** Its client service, if its maintainers chose one: suggested (each member chooses) or required. See boardView. */
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string };
+}
+
+/**
+ * A board as its client service (its lens) shows it on this node: the service's state and actions, and whether it has
+ * a view of its own (`site`: its files come from lensFile). Without a lens, or with a suggested one not chosen here,
+ * just the board; `problem` when it couldn't be fetched or run.
+ */
+export interface BoardViewInfo {
+  space: { id: string; kind: string; name: string };
+  board: { name: string; title: string };
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; site?: boolean; problem?: string };
+  state?: Json;
+  actions?: Json[];
 }
 
 /** A person or group a board is open to. */
@@ -1619,7 +1638,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
@@ -1641,7 +1660,7 @@ export interface Backend {
   unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
   /** Change a service; `artifact: {tag}` moves an applet to another release (the latest without a tag), which needs `approve`. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
+  setService(input: { name: string; spaces?: string[]; command?: string[] | null; wasm?: string; site?: string | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */
@@ -1785,6 +1804,17 @@ export interface Backend {
   setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]>;
   /** Maintainers or moderators: pin posts to the top of a board, in this order (empty unpins all). */
   curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]>;
+  /** Maintainers: show a board through a client service (a project's release, or a catalog's), suggested or required; off takes it away. */
+  setBoardLens(input: { space: string; board: string; from?: { project: string; tag?: string } | { catalog: string; app: string }; mode?: 'suggest' | 'require'; off?: boolean; as?: string }): Promise<BoardViewInfo>;
+  /** A board as its client service shows it (use: with a suggested one, too). */
+  boardView(input: { space: string; board: string; use?: boolean }): Promise<BoardViewInfo>;
+  /** Do one of the actions a board's client service offers: what it proposes is signed by you (or your agent), with your rights. */
+  boardAction(input: { space: string; board: string; action: string; input?: Json; as?: string }): Promise<{ published: FeedItem[]; view: BoardViewInfo }>;
+  /**
+   * A file of a board's client service's view (its site), for the app to show in a sandboxed frame (LENS_CSP): the
+   * desktop, the phone and the web preview each serve it their own way. Only of lenses pinned to a board you're in.
+   */
+  lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
@@ -1999,13 +2029,15 @@ export interface Backend {
 /** Backend methods callable over the daemon's API (watch is a separate event stream). */
 export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 
+export { LENS_CSP } from './lenscsp.ts';
+
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',

@@ -394,6 +394,7 @@ import {
   type UpdateInfo,
   type Backend,
   type BoardInfo,
+  type BoardViewInfo,
   type ChatInfo,
   type CoauthorRequest,
   type GitHubInfo,
@@ -524,6 +525,7 @@ import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
+import { Lenses } from './lenses.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
@@ -598,6 +600,12 @@ export interface StoredService {
   /** Space ids it was added to. */
   spaces: string[];
   command?: string[];
+  /** Its own code as a WebAssembly component: the .wasm file Weave runs itself. */
+  wasm?: string;
+  /** Its website's files (a WebAssembly service with a website): the folder Weave serves. */
+  site?: string;
+  /** When it came to this node: what it reads counts from then (a WebAssembly service starts there). */
+  since?: string;
   settings: Record<string, string>;
   token: string;
   enabled: boolean;
@@ -910,11 +918,13 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch);
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
   #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
+  /** Boards' client services, run here for this member. */
+  #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services);
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -2842,7 +2852,7 @@ export class WeaveNode implements Backend {
     const forgetting = boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt);
     return boards
       .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
-      .map((b) => {
+      .map(({ lens, ...b }) => {
         const inBoard = posts.filter((p) => p.board === b.name);
         const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
         const rules = access?.rules.get(b.name);
@@ -2855,6 +2865,7 @@ export class WeaveNode implements Backend {
           canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
           ...(space.kind === 'project' ? { following: this.#follows(space.id, b.name) } : {}),
           ...(forgetting.get(b.name) ? { rule: this.#ruleInfo(forgetting.get(b.name)!) } : {}),
+          ...(lens ? { lens: { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release } } : {}),
         };
       });
   }
@@ -9013,6 +9024,22 @@ export class WeaveNode implements Backend {
   /** The local pages' part in setting up a GitHub App (not on the API: only the browser reaches it, with its secret state). */
   get githubAppFlow(): GitHubAppFlow {
     return { manifest: (state) => this.#services.githubAppManifest(state), created: (input) => this.#services.githubAppCreated(input) };
+  }
+
+  setBoardLens(...args: Parameters<Lenses['setBoardLens']>): Promise<BoardViewInfo> {
+    return this.#lenses.setBoardLens(...args);
+  }
+
+  boardView(...args: Parameters<Lenses['boardView']>): Promise<BoardViewInfo> {
+    return this.#lenses.boardView(...args);
+  }
+
+  boardAction(...args: Parameters<Lenses['boardAction']>): ReturnType<Lenses['boardAction']> {
+    return this.#lenses.boardAction(...args);
+  }
+
+  lensFile(...args: Parameters<Lenses['lensFile']>): ReturnType<Lenses['lensFile']> {
+    return this.#lenses.lensFile(...args);
   }
 
   catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {

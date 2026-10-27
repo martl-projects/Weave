@@ -1,12 +1,12 @@
 import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
-import { type ServiceGate, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { platformKey } from './appinstall.ts';
-import { timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join as joinPath } from 'node:path';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
-import { releaseApproval } from './runtime.ts';
+import { prepareWasm, releaseApproval } from './runtime.ts';
 import { imageLabels } from './registry.ts';
 import { GitHubAppAuth, type GitHub } from './github.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
@@ -134,6 +134,8 @@ export class Services {
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
       ...(stored.command ? { command: stored.command } : {}),
+      ...(stored.wasm ? { wasm: stored.wasm } : {}),
+      ...(stored.site ? { site: stored.site } : {}),
       ...(stored.builtin ? { builtin: stored.builtin, ...(stored.builtin === 'website' ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
@@ -156,7 +158,7 @@ export class Services {
         name: a.manifest.name,
         released: this.h.actor(a.author, a.signer as Did),
         time: a.time,
-        website: !!this.artifactWeb(a.manifest),
+        website: !!this.artifactWeb(a.manifest) || !!a.manifest.wasm?.site,
         settings: a.manifest.env ?? [],
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
@@ -184,7 +186,8 @@ export class Services {
    * contract reads nothing and writes nothing: it only serves its page.
    */
   artifactContract(app: AppManifest): ServiceContract {
-    const web = !!this.artifactWeb(app);
+    // A web page: a port it listens on, or a WebAssembly service's site (Weave serves it).
+    const web = !!this.artifactWeb(app) || !!app.wasm?.site;
     if (app.service) return web && !app.service.website ? { ...app.service, website: true } : app.service;
     return { reads: 'nothing', writes: [], website: true, version: '1.0' };
   }
@@ -217,7 +220,7 @@ export class Services {
     const found = this.artifact(artifact.project, tag);
     if (found.artifact.id === artifact.id) return undefined;
     const manifest = found.artifact.manifest;
-    if (!manifest.service && !this.artifactWeb(manifest)) throw new Error(`${manifest.name} ${found.artifact.tag} has nothing to run as a service: it can't replace ${name}`);
+    if (!manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} ${found.artifact.tag} has nothing to run as a service: it can't replace ${name}`);
     const contract = this.artifactContract(manifest);
     const fingerprint = releaseApproval(found.artifact);
     if (!approve && !approved.includes(fingerprint)) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(contract)}`);
@@ -257,17 +260,24 @@ export class Services {
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
    * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
     if (builtin && command?.length) throw new Error(`the ${builtin} service runs in Weave: it runs no command`);
+    // Its own code as a WebAssembly component: Weave runs it itself, sandboxed.
+    const wasm = input.wasm ? this.wasmFile(input.wasm) : undefined;
+    if (wasm && (command?.length || builtin || input.artifact || input.from)) throw new Error('a service runs a WebAssembly component, a command, a release, or is one Weave ships: one of them');
+    if (wasm && input.node) throw new Error('a WebAssembly service of your own runs on this computer for now (its file is here): release it to run it on an always-on node');
+    // Its website's files: a folder Weave serves next to its players' connections.
+    const site = input.site ? this.siteFolder(input.site) : undefined;
+    if (site && !wasm) throw new Error('a site folder goes with a WebAssembly service (--wasm): Weave serves it next to its players');
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     // Or a Weave service listed in a catalog: what it is comes from its image, not from the catalog.
     const found: { project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } } | undefined = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : input.from ? await this.fromCatalog(input.from) : undefined;
     if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
     const manifest = found?.artifact.manifest;
-    if (manifest && !manifest.service && !this.artifactWeb(manifest)) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
+    if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
@@ -295,11 +305,14 @@ export class Services {
       contract,
       spaces: this.serviceSpaces(input.spaces ?? []),
       ...(command?.length ? { command } : {}),
+      ...(wasm ? { wasm } : {}),
+      ...(site ? { site } : {}),
       ...(builtin ? { builtin } : {}),
       ...(artifact ? { artifact, approved: [approved!] } : {}),
       settings,
       token: b64u.encode(randomBytes(24)),
       enabled: true,
+      since: new Date(this.h.clock()).toISOString(),
     };
     // Its own key, with exactly its contract's rights; named so that everyone knows it's a service.
     const permissions = servicePermissions(contract);
@@ -487,6 +500,7 @@ export class Services {
         ...(h.artifact ? { artifact: h.artifact, approved: h.approved ?? [] } : {}),
         settings,
         token: before?.token ?? b64u.encode(randomBytes(24)),
+        since: before?.since ?? d.event.time,
         enabled: h.enabled !== false,
       };
       // The website service: websites gone from the handover end here; new ones are announced here.
@@ -521,7 +535,7 @@ export class Services {
   }
 
   /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
-  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
+  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; wasm?: string; site?: string | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
     const away = this.h.isLinkedNode ? undefined : this.handedOver().get(input.name);
     if (away && !this.storedServices().some((s) => s.name === input.name)) {
       if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
@@ -562,9 +576,15 @@ export class Services {
       else delete spaceSettings[id];
     }
     const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
-    const { command: _command, spaceSettings: _spaceSettings, ...rest } = before;
+    // Its own WebAssembly component (and its site): another build of it, read on its next start.
+    if ((input.wasm || input.site) && !before.wasm) throw new Error(`${before.name} isn't a WebAssembly service of your own: it has no component to replace`);
+    const wasm = input.wasm ? this.wasmFile(input.wasm) : before.wasm;
+    const site = input.site === null ? undefined : input.site ? this.siteFolder(input.site) : before.site;
+    const { command: _command, spaceSettings: _spaceSettings, wasm: _wasm, site: _site, ...rest } = before;
     const after: StoredService = {
       ...rest,
+      ...(wasm ? { wasm } : {}),
+      ...(site ? { site } : {}),
       ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
       spaces,
       ...(command?.length ? { command } : {}),
@@ -775,7 +795,7 @@ export class Services {
       name: m.name,
       released: this.h.actor(entry.by, entry.by),
       time: entry.time,
-      website: !!this.artifactWeb(m),
+      website: !!this.artifactWeb(m) || !!m.wasm?.site,
       settings: m.env ?? [],
       ...(m.service ? { applet: m.service } : {}),
       packaged: true,
@@ -1080,6 +1100,7 @@ export class Services {
   startService(stored: StoredService): void {
     if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
     const a = stored.artifact;
+    if (!a && stored.wasm) return void this.spawnWasm(stored, stored.wasm);
     if (!a) return stored.command?.length ? this.spawnService(stored) : undefined;
     // An applet: only the release you approved, fetched and checked against its fingerprints first.
     if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
@@ -1100,6 +1121,11 @@ export class Services {
     if (!this.serviceApi || !this.web.appApiPort || this.h.runtime.running(`service:${stored.name}`)) return;
     const dir = joinPath(this.h.home.dir, 'services', stored.name);
     const a = stored.artifact;
+    // A WebAssembly release: its component (and its site) from the release's folder, run in Weave.
+    if (a?.manifest.wasm && this.h.runtime.runs(a.manifest) === 'wasm') {
+      const folder = this.h.releases.folder(stored.name, a);
+      return void this.spawnWasm(stored, joinPath(folder, a.manifest.wasm.component), a.manifest.wasm.site ? joinPath(folder, a.manifest.wasm.site) : undefined);
+    }
     const container = a && this.h.runtime.runs(a.manifest) === 'container' ? `weave-service-${stored.name}` : undefined;
     let run: string[] | undefined = stored.command;
     let cwd = dir;
@@ -1173,7 +1199,167 @@ export class Services {
   }
 
   stopService(name: string): void {
+    this.#watching.get(name)?.abort();
+    this.#watching.delete(name);
     this.h.runtime.stop(`service:${name}`);
+  }
+
+  // WebAssembly services: Weave runs the component itself (Runtime.startWasm), and is its whole world: it reads
+  // through the service's gate, so only what its contract lets it, and acts through it, so only as its contract says.
+
+  /** What a WebAssembly service reads, while it runs: stopped with it. */
+  #watching = new Map<string, AbortController>();
+
+  /** A website's files for a WebAssembly service: a folder that is there. */
+  siteFolder(path: string): string {
+    const folder = resolvePath(path);
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`${path} isn't a folder on this computer`);
+    return folder;
+  }
+
+  /**
+   * Who a request to a WebAssembly service's website comes from: the player the website service vouches for in
+   * X-Weave-Person (signed with the service's own token, lately), or, without one, the host (only this computer
+   * reaches the site directly). A header that doesn't check out is turned away.
+   */
+  siteVisitor(stored: StoredService, header: string | string[] | undefined): Record<string, unknown> | undefined {
+    if (header === undefined) {
+      const me = this.h.identity.author;
+      const name = this.h.actor(me, me).name;
+      return { did: me, ...(name ? { name } : {}), host: true, member: true, maintainer: true };
+    }
+    const [payload, sig] = String(header).split('.');
+    if (!payload || !sig) return undefined;
+    const expected = createHmac('sha256', stored.token).update(payload).digest();
+    const given = Buffer.from(sig, 'base64url');
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+    try {
+      const { t, ...person } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { t?: number } & Record<string, unknown>;
+      if (typeof t !== 'number' || Math.abs(this.h.clock() / 1000 - t) > 300 || typeof person.did !== 'string') return undefined;
+      return person;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A WebAssembly service's website listens: it serves it in each of its projects (keeping a website's name there). */
+  async serveWasmSite(stored: StoredService, port: number): Promise<void> {
+    const errors: string[] = [];
+    for (const space of stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project')) {
+      try {
+        const before = this.web.hosted().find((h) => h.room.servedBy === stored.name && h.room.project === space);
+        await this.web.serve(stored.name, { space, port, name: before?.room.name ?? stored.artifact?.manifest.name ?? (stored.description || stored.name) });
+      } catch (error) {
+        errors.push((error as Error).message);
+      }
+    }
+    if (errors.length) this.h.releases.jobs.set(`service:${stored.name}`, { error: errors.join('; ') });
+  }
+
+  /** A component file given for a service: a .wasm file that is there. */
+  wasmFile(path: string): string {
+    const file = resolvePath(path);
+    if (!/\.wasm$/i.test(file) || !existsSync(file)) throw new Error(`${path} isn't a WebAssembly component (a .wasm file) on this computer`);
+    return file;
+  }
+
+  /**
+   * Run a WebAssembly service: transpiled once, then in a worker of its own, answered through its gate, and handed
+   * what it may read, one item at a time: first what came while it was off (from where it got to), then as it comes.
+   */
+  async spawnWasm(stored: StoredService, component: string, site = stored.site): Promise<void> {
+    const name = stored.name;
+    const key = `service:${name}`;
+    if (this.h.runtime.running(key)) return;
+    const dir = joinPath(this.h.home.dir, 'services', name);
+    let entry: string;
+    try {
+      entry = await prepareWasm(component, joinPath(dir, 'wasm'));
+      this.h.releases.jobs.delete(key);
+    } catch (error) {
+      this.h.releases.jobs.set(key, { error: `${component} doesn't run as a Weave service: ${(error as Error).message}` });
+      return;
+    }
+    const gate = this.serviceGate(stored.token);
+    const now = this.storedServices().find((s) => s.name === name);
+    if (!gate || !now?.enabled || this.h.runtime.running(key)) return;
+    const log = joinPath(dir, 'service.log');
+    const data = joinPath(dir, 'data');
+    // Where it got to: what it has handled (or given up on), by time. A new service starts from when it was added.
+    const cursorFile = joinPath(dir, 'cursor');
+    let cursor = existsSync(cursorFile) ? readFileSync(cursorFile, 'utf8').trim() : (stored.since ?? new Date(this.h.clock()).toISOString());
+    if (!existsSync(cursorFile)) writeFileSync(cursorFile, cursor);
+    const watching = new AbortController();
+    this.#watching.get(name)?.abort();
+    this.#watching.set(name, watching);
+    const handed = new Set<string>();
+    const hand = (item: FeedItem) => {
+      if (handed.has(item.id)) return;
+      handed.add(item.id);
+      this.h.runtime.deliver(key, JSON.stringify(item));
+    };
+    this.h.runtime.startWasm(
+      key,
+      {
+        dir: joinPath(dir, 'wasm'),
+        entry,
+        data,
+        log,
+        name,
+        host: async (call, args) => {
+          const current = this.storedServices().find((s) => s.name === name);
+          if (!current?.enabled) throw new Error(`${name} is stopped`);
+          if (call === 'me') return JSON.stringify(gate.me());
+          if (call === 'setting') return current.settings[String(args[0])] ?? undefined;
+          if (call === 'publish') {
+            const [space, kind, body] = args as [string, string, string];
+            return JSON.stringify(await gate.publish({ space, kind, body: JSON.parse(body) as Json }));
+          }
+          if (call === 'answer') {
+            const [request, text, data, error] = args as [string, string | undefined, string | undefined, string | undefined];
+            return JSON.stringify(await gate.answer({ request, ...(text ? { text } : {}), ...(data !== undefined && data !== null ? { data: JSON.parse(data) as Json } : {}), ...(error ? { error } : {}) }));
+          }
+          if (call === 'load' || call === 'save') {
+            // A file of its own /data folder, by a plain name: nothing outside it.
+            const file = String(args[0]);
+            if (!/^[a-z0-9._-]{1,100}$/.test(file) || file.startsWith('.')) throw new Error('a name is a-z, 0-9, ., _ and - (up to 100), not starting with a dot');
+            const path = joinPath(data, file);
+            if (call === 'load') return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
+            const value = String(args[1]);
+            if (value.length > 4 * 1024 * 1024) throw new Error('at most 4 MB under one name');
+            return void writeFileSync(path, value);
+          }
+          if (call === 'log') return void appendFileSync(log, `${String(args[0]).slice(0, 2000)}\n`);
+          throw new Error(`no host function ${call}`);
+        },
+        ready: () => {
+          // What it missed first, then as it comes.
+          void gate.watch(hand, watching.signal);
+          for (const item of gate.events(cursor)) hand(item);
+        },
+        ...(stored.contract.website
+          ? {
+              site: {
+                ...(site ? { folder: site } : {}),
+                who: (req) => this.siteVisitor(this.storedServices().find((s) => s.name === name) ?? stored, req.headers['x-weave-person']),
+                listening: (port) => void this.serveWasmSite(stored, port),
+              },
+            }
+          : {}),
+        handled: (text) => {
+          const time = (JSON.parse(text) as FeedItem).time;
+          if (time > cursor) {
+            cursor = time;
+            writeFileSync(cursorFile, cursor);
+          }
+        },
+      },
+      () => {
+        watching.abort();
+        const again = this.storedServices().find((s) => s.name === name);
+        if (again) this.startService(again);
+      },
+    );
   }
 
   stopServiceProcesses(): void {

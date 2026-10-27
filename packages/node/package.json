@@ -10,6 +10,8 @@
     "./phone": "./src/phone-entry.ts"
   },
   "dependencies": {
+    "@bytecodealliance/jco-transpile": "^0.20.0",
+    "@bytecodealliance/preview2-shim": "^0.30.0",
     "@weave/core": "*",
     "@weave/net": "*",
     "marked": "^18.1.1"
