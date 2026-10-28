@@ -1,7 +1,9 @@
 # Publishes a GitHub Release for every version tag (made by `npm run release`),
 # after the full CI passes, with that version's section of CHANGELOG.md as notes
 # and the installers for Windows, macOS and Linux attached, and Weave Server (a
-# folder for Node 24, and an image on ghcr.io).
+# folder for Node 24, and an image on ghcr.io). The release starts as a draft;
+# each build job attaches its own files to it (no Actions artifacts, whose
+# storage quota runs out), and it's published once they're all there.
 name: Release
 
 on:
@@ -15,44 +17,9 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  installers:
+  # The release as a draft, with its notes: what the build jobs attach their files to.
+  draft:
     needs: ci
-    uses: ./.github/workflows/installers.yml
-    secrets: inherit
-
-  # Weave Server: the company's node as a folder to run with Node 24 (attached to the release) ...
-  server:
-    needs: ci
-    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: node apps/server/build.ts
-      - run: tar -czf "weave-server-$GITHUB_REF_NAME.tgz" -C apps/server/dist .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: installers-server
-          path: weave-server-*.tgz
-          if-no-files-found: error
-          # Only for the release job: the release keeps them, and old ones fill the storage quota.
-          retention-days: 2
-
-  # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
-  server-image:
-    needs: ci
-    uses: ./.github/workflows/server-image.yml
-    permissions:
-      contents: read
-      packages: write
-
-  release:
-    needs: [ci, installers, server]
     runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
     permissions:
       contents: write
@@ -70,15 +37,64 @@ jobs:
             on { print }
           ' CHANGELOG.md > notes.md
           test -s notes.md || { echo "no CHANGELOG.md section for $GITHUB_REF_NAME"; exit 1; }
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: installers-*
-          path: installers
-          merge-multiple: true
-      - name: Publish
+      - name: Draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Run again: the draft is there already, with what was attached so far.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then gh release edit "$GITHUB_REF_NAME" --notes-file notes.md; exit 0; fi
           prerelease=""
           case "$GITHUB_REF_NAME" in v0.*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --title "Weave $GITHUB_REF_NAME" --notes-file notes.md --verify-tag $prerelease installers/*
+          gh release create "$GITHUB_REF_NAME" --draft --title "Weave $GITHUB_REF_NAME" --notes-file notes.md --verify-tag $prerelease
+
+  installers:
+    needs: draft
+    uses: ./.github/workflows/installers.yml
+    with:
+      release: ${{ github.ref_name }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  # Weave Server: the company's node as a folder to run with Node 24 (attached to the release) ...
+  server:
+    needs: draft
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
+    permissions:
+      contents: write
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node apps/server/build.ts
+      - run: tar -czf "weave-server-$GITHUB_REF_NAME.tgz" -C apps/server/dist .
+      - name: Attach to the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-upload.ts "$GITHUB_REF_NAME" "weave-server-$GITHUB_REF_NAME.tgz"
+
+  # ... and as a container image: ghcr.io/<owner>/weave-server:<version> and :latest.
+  server-image:
+    needs: ci
+    uses: ./.github/workflows/server-image.yml
+    permissions:
+      contents: read
+      packages: write
+
+  # Everything attached: out of draft.
+  release:
+    needs: [installers, server]
+    runs-on: ${{ fromJSON(vars.LINUX_RUNNER || '["self-hosted","linux-wsl"]') }}
+    permissions:
+      contents: write
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
