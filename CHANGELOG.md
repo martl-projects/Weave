@@ -2,6 +2,16 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.23.0 · 2026-10-28
+
+- Release: draft and publish with a Node script, not gh, so it runs on every runner
+- Release: set up Node in the draft job, the runner has none of its own
+- Artifacts say where their files are (install.source), not GitHub
+- Weave knows nothing of GitHub: accounts elsewhere, verifiers, and GitHub access as a service
+- Weave signs in to GitHub nowhere: services have their own access
+- GitHub access as a service of its own, with its own token
+- Publish through the project's GitHub releases service, and fetch open releases directly
+
 ## v0.22.0 · 2026-10-28
 
 - Requests sealed for the service and the asker, and how long they count
