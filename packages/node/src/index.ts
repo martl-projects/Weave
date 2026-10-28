@@ -90,6 +90,7 @@ export type {
   ArtifactInfo,
   CatalogEntryInfo,
   ServiceProfileInfo,
+  ServiceSettingsInfo,
   ServiceOriginInfo,
   ServiceRequestInfo,
   Status,

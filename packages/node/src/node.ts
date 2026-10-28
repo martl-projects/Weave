@@ -328,6 +328,7 @@ import {
   tiersOf,
   visibleIn,
   type AppManifest,
+  type AppSetting,
   type Board,
   type Member,
   type BoardType,
@@ -479,6 +480,7 @@ import {
   type SignInStatus,
   type AuditStreamInfo,
   type ExportLine,
+  type ServiceSettingsInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -620,6 +622,8 @@ export interface StoredService {
   builtin?: Builtin;
   /** The room service's rooms: room id → room, kept across restarts. */
   hosted?: Record<string, StoredRoom>;
+  /** The settings your own code asks for (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
+  asks?: AppSetting[];
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
   approved?: string[];
   /** An applet: the release it runs, pinned (its manifest as released). */
@@ -902,6 +906,8 @@ export class WeaveNode implements Backend {
     fetch: (...args) => fetch(...args),
     docker: process.env.WEAVE_DOCKER?.trim().startsWith('[') ? (JSON.parse(process.env.WEAVE_DOCKER) as string[]) : [process.env.WEAVE_DOCKER || 'docker'],
   };
+  /** How services' sign-ins reach their providers' token pages (tests put a stand-in there). */
+  oauthSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
   wasmSetup: { testHosts: Record<string, number> } = { testHosts: {} };
   #githubLogin?: GitHubLogin;
@@ -8983,6 +8989,8 @@ export class WeaveNode implements Backend {
       registryFetch: () => n.containerSetup.fetch,
       /** Fetch for GitHub (tests put a stand-in there). */
       githubFetch: () => n.githubSetup.fetch,
+      /** Fetch for services' sign-ins (tests put a stand-in there). */
+      oauthFetch: () => n.oauthSetup.fetch,
       clock: () => n.clock(),
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
@@ -9064,6 +9072,23 @@ export class WeaveNode implements Backend {
 
   servicesIn(...args: Parameters<Services['servicesIn']>): ReturnType<Services['servicesIn']> {
     return this.#services.servicesIn(...args);
+  }
+
+  serviceSettings(input: { space: string; service: string }): Promise<ServiceSettingsInfo> {
+    return this.#services.settings.serviceSettings(input);
+  }
+
+  setServiceSetting(input: { space: string; service: string; name: string; value?: string | null; secret?: boolean }): Promise<ServiceSettingsInfo> {
+    // Never a sign-in's grant from outside: those come from startServiceSignIn alone.
+    return this.#services.settings.setServiceSetting({ space: input.space, service: input.service, name: input.name, value: input.value, secret: input.secret });
+  }
+
+  startServiceSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string }> {
+    return this.#services.settings.startSignIn(input);
+  }
+
+  finishServiceSignIn(input: { id: string }): Promise<ServiceSettingsInfo> {
+    return this.#services.settings.finishSignIn(input);
   }
 
   artifacts(...args: Parameters<Services['artifacts']>): ReturnType<Services['artifacts']> {

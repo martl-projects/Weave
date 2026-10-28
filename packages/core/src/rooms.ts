@@ -2,7 +2,7 @@ import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
-import { isNetHost, parseContract, type ServiceContract } from './services.ts';
+import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -121,6 +121,65 @@ export interface AppSetting {
   optional?: true;
   /** Where to get it, like "platform.deepseek.com → API keys". */
   hint?: string;
+  /** A sign-in rather than something typed: Weave opens the provider's page, and the service gets an access token. */
+  oauth?: AppOAuth;
+}
+
+/**
+ * An OAuth sign-in a setting asks for: the provider's pages and the app's client (a desktop app's: PKCE, a loopback
+ * address to come back to, as RFC 8252 has it). Weave keeps the grant, refreshes it on the node that runs the service,
+ * and hands the service only a current access token.
+ */
+export interface AppOAuth {
+  /** Where people allow it, like https://accounts.google.com/o/oauth2/v2/auth. */
+  authorize: string;
+  /** Where the code (and later the refresh token) becomes an access token. */
+  token: string;
+  /** The app's client ID with the provider, registered with a loopback redirect (http://127.0.0.1). */
+  client: string;
+  /** A desktop client's secret, where the provider issues one: in the repository, so not secret (Google's are like that). */
+  clientSecret?: string;
+  scopes?: string[];
+}
+
+/** Settings as a service's profile lists them (checked as a manifest's are; anything off is left out). */
+export function appSettingsOf(value: unknown): AppSetting[] {
+  if (!Array.isArray(value)) return [];
+  const out: AppSetting[] = [];
+  for (const raw of value.slice(0, 16)) {
+    const e = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const name = typeof e.name === 'string' ? e.name : '';
+    if (!isSettingName(name) || out.some((x) => x.name === name)) continue;
+    const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim().slice(0, 60) : name;
+    const hint = typeof e.hint === 'string' ? e.hint.trim().slice(0, 200) : '';
+    const oauth = e.oauth === undefined ? undefined : parseOAuth(e.oauth).oauth;
+    out.push({ name, label, ...(e.secret === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}) });
+  }
+  return out;
+}
+
+/** A setting's name: an environment variable in capitals, digits and _, none that changes how programs start. */
+export const isSettingName = (name: string): boolean => ENV_NAME.test(name) && !ENV_RESERVED.test(name);
+
+const httpsUrl = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || value.length > 500) return undefined;
+  try {
+    return new URL(value).protocol === 'https:' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** A setting's oauth, checked: the problem with it, or what it is. */
+export function parseOAuth(value: unknown): { oauth?: AppOAuth; problem?: string } {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const authorize = httpsUrl(o.authorize);
+  const token = httpsUrl(o.token);
+  const client = typeof o.client === 'string' ? o.client.trim().slice(0, 300) : '';
+  if (!authorize || !token || !client) return { problem: '"oauth" names the provider’s pages and the app’s client: {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]}' };
+  const scopes = Array.isArray(o.scopes) ? o.scopes.filter((x): x is string => typeof x === 'string' && /^[!-~]{1,200}$/.test(x)).slice(0, 30) : [];
+  const clientSecret = typeof o.clientSecret === 'string' ? o.clientSecret.trim().slice(0, 300) : '';
+  return { oauth: { authorize, token, client, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) } };
 }
 
 /** Variables an app may not ask hosts for: they change how programs start or what they load. */
@@ -260,7 +319,7 @@ export function checkManifest(input: unknown): ManifestCheck {
     if (!service) problems.push('"service" is a service\'s contract: what it reads ("nothing", "addressed", "space" or {"kinds": [...]}), which kinds it writes, and its "version" (like "1.0")');
     const net = (m.service as { net?: unknown }).net;
     if (net !== undefined) {
-      const bad = Array.isArray(net) ? net.filter((h) => !isNetHost(typeof h === 'string' ? h.toLowerCase() : h)) : [net];
+      const bad = Array.isArray(net) ? net.filter((h) => !isNetHost(lowerHost(h))) : [net];
       if (bad.length) problems.push(`"service.net" lists the hosts it reaches over HTTPS, by name: like ["api.example.com", "*.example.com"], no addresses or localhost (not ${bad.map((h) => JSON.stringify(h)).join(', ')})`);
       else if ((net as unknown[]).length > 20) warnings.push('only the first 20 hosts in "service.net" count');
     }
@@ -377,7 +436,9 @@ export function checkManifest(input: unknown): ManifestCheck {
         const label = text(e.label, 60) || name;
         if (!text(e.label, 60)) warnings.push(`${where}: "label" is what hosts see, like "DeepSeek API key"`);
         const hint = text(e.hint, 200);
-        env.push({ name, label, ...(e.secret === true ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}) });
+        const oauth = e.oauth === undefined ? {} : parseOAuth(e.oauth);
+        if (oauth.problem) { problems.push(`${where}: ${oauth.problem}`); continue; }
+        env.push({ name, label, ...(e.secret === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}) });
       }
     }
   }
@@ -438,7 +499,7 @@ export const MANIFEST_RULES = [
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',

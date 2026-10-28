@@ -1,5 +1,6 @@
 import type { Entry } from './collab.ts';
 import { isDid, type Did } from './keys.ts';
+import { appSettingsOf, type AppSetting } from './rooms.ts';
 
 /*
  * Services: code a person runs on a node of theirs, under a key of its own
@@ -95,6 +96,8 @@ export interface ServiceProfile {
   contract: ServiceContract;
   /** The release it runs, as its profile claims it. */
   origin?: ServiceOrigin;
+  /** The settings it asks for (its manifest's env): what its space's maintainers can fill in. */
+  settings?: AppSetting[];
   time: string;
 }
 
@@ -123,9 +126,31 @@ export const serviceName = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(value) ? value : undefined;
 
 /** A contract from untrusted input, or undefined. */
-/** A host a contract may name in net: a DNS name (no IP addresses, no localhost), optionally *. for its subdomains. */
-export const isNetHost = (host: unknown): host is string =>
-  typeof host === 'string' && host.length <= 253 && /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/.test(host);
+const PLACEHOLDER = /\{([A-Z_][A-Z0-9_]{0,63})\}/g;
+const DNS_NAME = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A host a contract may name in net: a DNS name (no IP addresses, no localhost), optionally *. for its subdomains, and
+ * with settings as placeholders where the host depends on them: {S3_BUCKET}.s3.{S3_REGION}.amazonaws.com.
+ */
+export const isNetHost = (host: unknown): host is string => typeof host === 'string' && host.length <= 253 && DNS_NAME.test(host.replace(PLACEHOLDER, 'x'));
+
+/** A host in lowercase, but its placeholders keep their names: {S3_BUCKET}.S3.amazonaws.com → {S3_BUCKET}.s3.amazonaws.com. */
+export const lowerHost = (host: unknown): unknown => (typeof host === 'string' ? host.replace(/[^{}]+(?=\{|$)|^[^{]+/g, (part) => part.toLowerCase()) : host);
+
+/** A contract's hosts with their placeholders filled in from settings; a host whose settings aren't there is left out. */
+export function resolveNet(net: string[] | undefined, settings: Record<string, string | undefined>): string[] {
+  return (net ?? []).flatMap((host) => {
+    let missing = false;
+    const filled = host.replace(PLACEHOLDER, (_, name: string) => {
+      const value = settings[name]?.trim().toLowerCase() ?? '';
+      // A part of a name, never a wildcard or another host's syntax.
+      if (!/^[a-z0-9]([a-z0-9.-]{0,200}[a-z0-9])?$/.test(value)) missing = true;
+      return value;
+    });
+    return !missing && filled.length <= 253 && DNS_NAME.test(filled) ? [filled] : [];
+  });
+}
 
 /** Whether a contract's net lets a service reach this host. */
 export const netAllows = (net: string[] | undefined, host: string): boolean =>
@@ -146,7 +171,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   if (!version) return undefined;
   // Offering a protocol means answering requests in it: a service that reads nothing offers none.
   const offers = reads !== 'nothing' && Array.isArray(c.offers) ? [...new Set(c.offers.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(p) && p.length <= 60))].slice(0, 20) : [];
-  const net = Array.isArray(c.net) ? [...new Set(c.net.map((h) => (typeof h === 'string' ? h.toLowerCase() : h)).filter(isNetHost))].slice(0, 20) : [];
+  const net = Array.isArray(c.net) ? [...new Set(c.net.map(lowerHost).filter(isNetHost))].slice(0, 20) : [];
   return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), version };
 }
 
@@ -198,6 +223,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       ...(isBuiltin(body.builtin) ? { builtin: body.builtin } : {}),
       contract,
       ...(parseOrigin(body.origin) ? { origin: parseOrigin(body.origin) } : {}),
+      ...(appSettingsOf(body.settings).length ? { settings: appSettingsOf(body.settings) } : {}),
       time: e.time,
     });
   }

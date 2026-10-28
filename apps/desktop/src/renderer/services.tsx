@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, SpaceInfo } from '@weave/node/client';
+import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
 import type { ServiceContract } from '@weave/core';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
@@ -425,5 +425,91 @@ export function SpaceServices({ space }: { space: SpaceInfo }) {
       ))}
       {open && <ServiceCard space={space} service={open} onClose={() => setOpen(undefined)} />}
     </>
+  );
+}
+
+/**
+ * A service's settings kept in a space by its maintainers: each it asks for, set (by whom, when) or not. A plain one
+ * shows its value; a secret is set blind (sealed for the service, nobody reads it back); a sign-in goes through the
+ * provider's own page, and the node that runs the service keeps it current.
+ */
+export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
+  const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [extra, setExtra] = useState({ name: '', value: '', secret: true });
+  if (!data) return null;
+  const save = (name: string, value: string | null, secret?: boolean) =>
+    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump())), value === null ? `${name} removed` : `${name} set`);
+  const names = [...data.asks.map((a) => a.name), ...data.settings.map((x) => x.name).filter((n) => !data.asks.some((a) => a.name === n))];
+  return (
+    <Modal title={`${service.name}: settings in ${space.name}`} onClose={onClose} wide>
+      <p className="small muted">
+        Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
+      </p>
+      {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      {names.map((name) => {
+        const asked = data.asks.find((a) => a.name === name);
+        const set = data.settings.find((x) => x.name === name);
+        const secret = asked?.secret ?? set?.secret ?? false;
+        return (
+          <fieldset key={name} className="service-setting">
+            <legend>
+              {asked?.label ?? name} <span className="muted small">{name}{asked?.optional ? ' · optional' : ''}</span>
+            </legend>
+            {asked?.hint && <p className="small muted">{asked.hint}</p>}
+            <p className="small">
+              {set ? (set.oauth ? 'Signed in' : secret ? 'Set (secret)' : <code>{set.value}</code>) : asked?.oauth ? 'Not signed in' : 'Not set'}
+              {set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
+            </p>
+            {data.mayChange && (
+              <div className="field-row">
+                {asked?.oauth ? (
+                  <AsyncButton
+                    className="default"
+                    onClick={() =>
+                      attempt(async () => {
+                        const { id, url } = await api<{ id: string; url: string }>('startServiceSignIn', { space: space.id, service: service.did, name });
+                        window.open(url, '_blank', 'noopener');
+                        await api('finishServiceSignIn', { id });
+                        reload();
+                      }, `${service.name} is signed in`)
+                    }
+                  >
+                    {set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth.authorize).hostname}…`}
+                  </AsyncButton>
+                ) : (
+                  <>
+                    <input className="grow" type={secret ? 'password' : 'text'} value={values[name] ?? (secret ? '' : (set?.value ?? ''))} placeholder={secret ? (set ? 'A new value…' : 'Its value…') : ''} onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))} />
+                    <AsyncButton className="default" disabled={!(values[name] ?? '').trim()} onClick={() => save(name, values[name].trim(), secret)}>
+                      {set ? 'Change' : 'Set'}
+                    </AsyncButton>
+                  </>
+                )}
+                {set && <AsyncButton onClick={() => save(name, null)}>Remove</AsyncButton>}
+              </div>
+            )}
+          </fieldset>
+        );
+      })}
+      {data.mayChange && !data.asks.length && (
+        <fieldset className="service-setting">
+          <legend>Another setting</legend>
+          <div className="field-row">
+            <input placeholder="NAME" value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value.toUpperCase() })} />
+            <input className="grow" type={extra.secret ? 'password' : 'text'} placeholder="value" value={extra.value} onChange={(e) => setExtra({ ...extra, value: e.target.value })} />
+            <label className="small">
+              <input type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} /> secret
+            </label>
+            <AsyncButton disabled={!extra.name || !extra.value} onClick={() => save(extra.name, extra.value, extra.secret).then(() => setExtra({ name: '', value: '', secret: true }))}>
+              Set
+            </AsyncButton>
+          </div>
+        </fieldset>
+      )}
+      {!data.mayChange && <p className="small muted">Only the maintainers of {space.name} change them.</p>}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
   );
 }

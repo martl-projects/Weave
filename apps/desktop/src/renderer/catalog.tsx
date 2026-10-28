@@ -58,7 +58,7 @@ function InstallFromCatalog({ space, entry, onClose }: { space: SpaceInfo; entry
   useEffect(() => {
     api<ArtifactInfo>('catalogArtifact', { catalog: space.id, app: entry.app }).then(setArtifact, (e: Error) => setProblem(e.message));
   }, [space.id, entry.app]);
-  const missing = artifact?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? [];
+  const missing = artifact?.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim()) ?? [];
   const install = async () => {
     setBusy(true);
     const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));

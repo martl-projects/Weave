@@ -1,6 +1,7 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract } from '@weave/core';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
+import { ServiceSettings } from './servicesettings.ts';
 import { platformKey } from './appinstall.ts';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -50,13 +51,18 @@ const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string;
 const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin].settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
-const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact'>): Json => ({
+/** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
+const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
+
+const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact' | 'asks'>): Json => ({
   name: s.name,
   description: s.description,
   ...(s.icon ? { icon: s.icon } : {}),
   ...(s.builtin ? { builtin: s.builtin } : {}),
   contract: s.contract as unknown as Json,
   ...(s.artifact ? { origin: { project: s.artifact.project, release: s.artifact.id, tag: s.artifact.tag, fingerprint: releaseApproval(s.artifact) } } : {}),
+  // What it asks for, so its spaces' maintainers can fill it in (sign-ins with their provider).
+  ...(asksOf(s)?.length ? { settings: asksOf(s) as unknown as Json } : {}),
 });
 
 export class Services {
@@ -66,9 +72,13 @@ export class Services {
     return this.#web();
   }
 
+  /** Settings its spaces' maintainers keep for a service (servicesettings.ts). */
+  readonly settings: ServiceSettings;
+
   constructor(h: ServicesHost, web: () => Website) {
     this.h = h;
     this.#web = web;
+    this.settings = new ServiceSettings(h, () => this, () => h.oauthFetch());
   }
 
   localServiceByKey(did: Did): StoredService | undefined {
@@ -260,7 +270,7 @@ export class Services {
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
    * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
@@ -281,10 +291,18 @@ export class Services {
     if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
-    const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
-    this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : undefined), settings);
-    if (builtin === 'github') this.githubAppOf(settings);
-    const missing = (manifest?.env ?? []).filter((e) => !e.optional && !settings[e.name]);
+    const given = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
+    // What it asks for: its manifest's settings, or (your own code) what you say it asks for.
+    const asks = manifest?.env ?? (builtin ? undefined : appSettingsOf(input.asks));
+    this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : asks?.length ? { name: 'it', env: asks } : undefined), given);
+    if (builtin === 'github') this.githubAppOf(given);
+    // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
+    const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
+    if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
+    if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
+    const settings = keptIn ? {} : given;
+    // A sign-in comes after: its provider's page opens once the service is there.
+    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
@@ -303,12 +321,14 @@ export class Services {
       description,
       ...(input.icon?.startsWith('wblob:') ? { icon: input.icon } : {}),
       contract,
-      spaces: this.serviceSpaces(input.spaces ?? []),
+      // Settings kept in a project go with the service being there.
+      spaces: this.serviceSpaces([...new Set([...(input.spaces ?? []), ...(keptIn ? [keptIn.id] : [])])]),
       ...(command?.length ? { command } : {}),
       ...(wasm ? { wasm } : {}),
       ...(site ? { site } : {}),
       ...(builtin ? { builtin } : {}),
       ...(artifact ? { artifact, approved: [approved!] } : {}),
+      ...(!manifest && asks?.length ? { asks } : {}),
       settings,
       token: b64u.encode(randomBytes(24)),
       enabled: true,
@@ -321,6 +341,9 @@ export class Services {
     this.h.agents.push(key);
     this.saveServices([...this.storedServices(), stored]);
     this.publishServiceProfile(stored);
+    if (keptIn) {
+      for (const [name, value] of Object.entries(given)) this.settings.write(keptIn, key.did, name, value, (asks ?? []).find((e) => e.name === name)?.secret === true);
+    }
     this.announceService(key.did, [], stored.spaces);
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
@@ -652,6 +675,7 @@ export class Services {
       ...(p.builtin ? { builtin: p.builtin } : {}),
       contract: p.contract,
       origin: this.originInfo(p.builtin, p.origin),
+      ...(p.settings ? { settings: p.settings } : {}),
       time: p.time,
     }));
   }
@@ -747,7 +771,10 @@ export class Services {
         did: key.did,
         person: this.h.identity.author,
         contract: current().contract,
-        spaces: this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: current().spaceSettings?.[id] ?? {} })),
+        spaces: (() => {
+          const kept = this.settings.valuesOf(current());
+          return this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: { ...(current().spaceSettings?.[id] ?? {}), ...(kept[id] ?? {}) } }));
+        })(),
       }),
       events: (since) =>
         this.h.decodeAll()
@@ -1081,13 +1108,35 @@ export class Services {
     if (!this.#providing) {
       this.#providing = true;
       let soon: ReturnType<typeof setTimeout> | undefined;
-      this.h.replica.onAppend(() => {
+      // A service's setting changed in one of its spaces: it starts again with it (a sign-in renewed here likewise).
+      const restarting = new Set<string>();
+      const restart = (name: string) => {
+        if (restarting.has(name)) return;
+        restarting.add(name);
+        setTimeout(() => {
+          restarting.delete(name);
+          const now = this.storedServices().find((x) => x.name === name);
+          if (!now?.enabled || !this.h.runtime.running(`service:${name}`)) return;
+          this.stopService(name);
+          this.startService(now);
+        }, 200);
+      };
+      this.h.replica.onAppend((event) => {
         soon ??= setTimeout(() => {
           soon = undefined;
           this.provide();
         }, 50);
+        const d = this.h.decode(event);
+        if (d?.inner.kind !== KIND_SERVICE_SETTING) return;
+        const of = (d.inner.body as { service?: unknown } | null)?.service;
+        for (const stored of this.storedServices()) if (stored.spaces.includes(d.space?.id ?? '') && this.serviceKey(stored.name).did === of) restart(stored.name);
       });
       this.provide();
+      setInterval(() => {
+        const running = this.storedServices().filter((x) => x.enabled && this.h.runtime.running(`service:${x.name}`));
+        // A WebAssembly service asks for its settings as it goes; a process got them when it started.
+        void this.settings.renew(running).then((names) => names.forEach((name) => !this.storedService(name).wasm && !this.storedService(name).artifact?.manifest.wasm && restart(name)));
+      }, 60_000).unref();
     }
     void this.web.startAppApi().then(async () => {
       await this.migrateWebsites().catch(() => {});
@@ -1137,7 +1186,8 @@ export class Services {
     if (!run?.length) return;
     const project = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');
     // An applet gets the settings its manifest names, nothing else; in a container, the local APIs are the host's.
-    const settings = a ? Object.fromEntries((a.manifest.env ?? []).filter((e) => stored.settings[e.name]).map((e) => [e.name, stored.settings[e.name]])) : stored.settings;
+    const given = this.settings.effective(stored);
+    const settings = a ? Object.fromEntries((a.manifest.env ?? []).filter((e) => given[e.name]).map((e) => [e.name, given[e.name]])) : given;
     const host = container && process.platform !== 'linux' ? 'host.docker.internal' : '127.0.0.1';
     const web = a && this.artifactWeb(a.manifest);
     this.h.runtime.start(
@@ -1306,12 +1356,17 @@ export class Services {
         data,
         log,
         name,
-        ...(stored.contract.net ? { net: stored.contract.net } : {}),
+        // Its hosts, with the settings they name filled in (a bucket, a region).
+        ...(stored.contract.net ? { net: resolveNet(stored.contract.net, this.settings.effective(stored)) } : {}),
         host: async (call, args) => {
           const current = this.storedServices().find((s) => s.name === name);
           if (!current?.enabled) throw new Error(`${name} is stopped`);
           if (call === 'me') return JSON.stringify(gate.me());
-          if (call === 'setting') return current.settings[String(args[0])] ?? undefined;
+          if (call === 'setting') {
+            // A sign-in about to run out is renewed first: it always gets a current token.
+            await this.settings.renew([current]);
+            return this.settings.effective(current)[String(args[0])] ?? undefined;
+          }
           if (call === 'publish') {
             const [space, kind, body] = args as [string, string, string];
             return JSON.stringify(await gate.publish({ space, kind, body: JSON.parse(body) as Json }));

@@ -6,7 +6,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { contractText, OriginText, ServiceCard } from './services.tsx';
+import { contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -276,6 +276,14 @@ function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
 
 /** One setting typed in the start dialog. */
 function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
+  // A sign-in: nothing to type; its provider's page opens from its settings once it's installed.
+  if (setting.oauth)
+    return (
+      <div className="app-setting">
+        <label>{setting.label}</label>
+        <div className="small muted">A sign-in with {new URL(setting.oauth.authorize).hostname}: once it's installed, sign it in from its Settings.</div>
+      </div>
+    );
   return (
     <div className="app-setting">
       <label htmlFor={`setting-${setting.name}`}>
@@ -429,9 +437,10 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Hands the project's release files to its participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
+  const [setting, setSetting] = useState(false);
   const own = service.person.did === meDid;
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
@@ -453,6 +462,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
         {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
         {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
         {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
+        {(!!service.settings?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>
@@ -466,6 +476,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       </div>
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
+      {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
     </fieldset>
   );
 }
@@ -474,22 +485,24 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
  * Installing a project's release as a service in this project: what it runs is shown and approved here, once per
  * release. One with a web page serves it as a website here (by the website service); one with a contract does what it says.
  */
-function InstallRelease({ project, onDone }: { project: SpaceInfo; onDone(): void }) {
+function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; maintainer: boolean; onDone(): void }) {
   const artifacts = useArtifacts(project);
   const [picked, setPicked] = useState<string>();
   const [values, setValues] = useState<Record<string, string>>({});
+  // Its settings kept in the project, for its maintainers to change (rather than only on this computer).
+  const [keep, setKeep] = useState(maintainer);
   const [busy, setBusy] = useState(false);
   const usable = (artifacts ?? []).filter((a) => a.runs && (a.website || a.applet));
   const chosen = usable.find((a) => a.id === picked);
   useEffect(() => setValues({}), [chosen?.id]);
-  const missing = chosen?.settings.filter((s) => !s.optional && !values[s.name]?.trim()) ?? [];
+  const missing = chosen?.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim()) ?? [];
   if (!artifacts) return <p className="small">Looking for releases…</p>;
   if (!usable.length) return <p className="small muted">No project you're in has released anything that runs on this computer yet.</p>;
   const install = async () => {
     setBusy(true);
     const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
     await attempt(
-      () => api<ServiceInfo>('addService', { artifact: { project: chosen!.project.id, tag: chosen!.tag }, spaces: [project.id], settings, approve: true }).then(() => (bump(), onDone())),
+      () => api<ServiceInfo>('addService', { artifact: { project: chosen!.project.id, tag: chosen!.tag }, spaces: [project.id], settings, approve: true, ...(keep && maintainer ? { settingsIn: project.id } : {}) }).then(() => (bump(), onDone())),
       `${chosen!.name} runs as a service in p/${project.name}${chosen!.website ? ': its website opens once it runs' : ''}`,
     );
     setBusy(false);
@@ -513,6 +526,11 @@ function InstallRelease({ project, onDone }: { project: SpaceInfo; onDone(): voi
       {chosen && (
         <>
           {chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
+          {maintainer && chosen.settings.length > 0 && (
+            <label className="small">
+              <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} /> Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)
+            </label>
+          )}
           <div className="approve-launch">
             <Icon name="warning" size={32} />
             <div>
@@ -541,7 +559,7 @@ function InstallRelease({ project, onDone }: { project: SpaceInfo; onDone(): voi
 }
 
 /** Adding a service to the project: the website service Weave ships (yours, or a new one), another of your services, or a project's release. */
-function AddProjectService({ project, services, onClose }: { project: SpaceInfo; services: ServiceInfo[]; onClose(): void }) {
+function AddProjectService({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
   const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
   const rooms = services.filter((s) => s.builtin === 'website');
   const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
@@ -581,7 +599,7 @@ function AddProjectService({ project, services, onClose }: { project: SpaceInfo;
           </div>
         ))}
         {rooms.length > 0 && !away.length && <p className="small">Your services are all in p/{project.name} already.</p>}
-        <InstallRelease project={project} onDone={onClose} />
+        <InstallRelease project={project} maintainer={maintainer} onDone={onClose} />
         <p className="small muted">
           A service you add reads what's addressed to it here, as in its other spaces, and so could carry things between them: add it only where you'd trust it with that. Your own code becomes a service in{' '}
           <a href="#/keys">Keys &amp; devices → Services</a>.
@@ -618,11 +636,11 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
     >
       {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add websites, and everyone here can join in.</p>}
       {list.map((s) => (
-        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} />
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} />
       ))}
       {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
       <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
-      {adding && <AddProjectService project={project} services={services ?? []} onClose={() => setAdding(false)} />}
+      {adding && <AddProjectService project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>
   );
 }
