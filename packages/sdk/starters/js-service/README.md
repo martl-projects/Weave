@@ -27,6 +27,20 @@ What it may do comes from `weave:service/host` (`wit/service.wit` says it all):
 
 Each item has 10 seconds: one that takes longer is given up, and the service starts again.
 
+## Calling an API
+
+It reaches nothing until its contract names the hosts: `--net api.example.com` (or `*.example.com` for any subdomain), and in a release's `weave.app.json` `"service": { …, "net": ["api.example.com"] }`. Whoever installs it reads those hosts in its contract. Then `fetch` works for them, over HTTPS only; anything else is refused, and `weave service log` says why. Return the promise from `onEvent` (an `async function`), so Weave waits for it:
+
+```js
+export async function onEvent(text) {
+  const item = JSON.parse(text);
+  const res = await fetch('https://api.example.com/v1/answer', { headers: { authorization: `Bearer ${setting('API_KEY')}` } });
+  answer(item.id, await res.text(), undefined, undefined);
+}
+```
+
+A key it needs is a setting (`--setting API_KEY=…`), so it never sits in the code. Hosts on the node's own networks (localhost, 192.168.…) are never reached, whatever their name says, and redirects aren't followed.
+
 **One thing to know:** code at the top level of your module runs while the component is built (componentize-js takes a snapshot then), when Weave's functions aren't there yet. Call them from the exported functions, or on first use there, never at the top level.
 
 ## Releasing it

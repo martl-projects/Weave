@@ -1306,6 +1306,7 @@ export class Services {
         data,
         log,
         name,
+        ...(stored.contract.net ? { net: stored.contract.net } : {}),
         host: async (call, args) => {
           const current = this.storedServices().find((s) => s.name === name);
           if (!current?.enabled) throw new Error(`${name} is stopped`);

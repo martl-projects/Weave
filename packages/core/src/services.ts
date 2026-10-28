@@ -75,6 +75,8 @@ export interface ServiceContract {
   website?: boolean;
   /** Protocols it answers requests in, like artifact.fetch. */
   offers?: string[];
+  /** Hosts it may reach over HTTPS: api.example.com, or *.example.com for any of its subdomains. Enforced for WebAssembly services; a container has its container's network. */
+  net?: string[];
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -121,6 +123,14 @@ export const serviceName = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(value) ? value : undefined;
 
 /** A contract from untrusted input, or undefined. */
+/** A host a contract may name in net: a DNS name (no IP addresses, no localhost), optionally *. for its subdomains. */
+export const isNetHost = (host: unknown): host is string =>
+  typeof host === 'string' && host.length <= 253 && /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/.test(host);
+
+/** Whether a contract's net lets a service reach this host. */
+export const netAllows = (net: string[] | undefined, host: string): boolean =>
+  !!net?.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : host === h));
+
 export function parseContract(value: unknown): ServiceContract | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
@@ -136,7 +146,8 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   if (!version) return undefined;
   // Offering a protocol means answering requests in it: a service that reads nothing offers none.
   const offers = reads !== 'nothing' && Array.isArray(c.offers) ? [...new Set(c.offers.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(p) && p.length <= 60))].slice(0, 20) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), version };
+  const net = Array.isArray(c.net) ? [...new Set(c.net.map((h) => (typeof h === 'string' ? h.toLowerCase() : h)).filter(isNetHost))].slice(0, 20) : [];
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), version };
 }
 
 /**
@@ -154,7 +165,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */

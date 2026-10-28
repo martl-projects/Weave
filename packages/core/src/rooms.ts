@@ -2,7 +2,7 @@ import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
-import { parseContract, type ServiceContract } from './services.ts';
+import { isNetHost, parseContract, type ServiceContract } from './services.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -258,6 +258,12 @@ export function checkManifest(input: unknown): ManifestCheck {
   if (m.service !== undefined) {
     service = parseContract(m.service);
     if (!service) problems.push('"service" is a service\'s contract: what it reads ("nothing", "addressed", "space" or {"kinds": [...]}), which kinds it writes, and its "version" (like "1.0")');
+    const net = (m.service as { net?: unknown }).net;
+    if (net !== undefined) {
+      const bad = Array.isArray(net) ? net.filter((h) => !isNetHost(typeof h === 'string' ? h.toLowerCase() : h)) : [net];
+      if (bad.length) problems.push(`"service.net" lists the hosts it reaches over HTTPS, by name: like ["api.example.com", "*.example.com"], no addresses or localhost (not ${bad.map((h) => JSON.stringify(h)).join(', ')})`);
+      else if ((net as unknown[]).length > 20) warnings.push('only the first 20 hosts in "service.net" count');
+    }
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
@@ -433,7 +439,7 @@ export const MANIFEST_RULES = [
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY).',
-  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
+  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',

@@ -207,6 +207,7 @@ github — repositories that follow a group, tier or project (members who give t
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
                              or [--wasm <component.wasm>]: your own WebAssembly component (packages/sdk/wit/service.wit), which
                              Weave runs itself, sandboxed: nothing to install, only /data and its contract
+                             [--net <host,…>]: hosts it may reach over HTTPS (api.example.com, *.example.com), nothing else
                              [--offers-website --site <folder>]: a game or page (the website world): Weave serves its files and
                              holds its players' connections (/weave/socket), telling it who each player is
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
@@ -431,6 +432,7 @@ const { values, positionals } = parseArgs({
     writes: { type: 'string' },
     'offers-website': { type: 'boolean', default: false },
     'contract-version': { type: 'string' },
+    net: { type: 'string' },
     run: { type: 'string' },
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
@@ -566,7 +568,7 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; reaches ${c.net.join(', ')} over HTTPS` : ''}; contract ${c.version}`;
 
 /** Where a service comes from, and whether that's checked here. */
 const originLine = (o: ServiceOriginInfo): string => {
@@ -1565,7 +1567,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
-        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), version: values['contract-version'] ?? '1.0' };
+        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), ...(values.net ? { net: list(values.net) } : {}), version: values['contract-version'] ?? '1.0' };
         const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site ? { site: values.site } : {}), ...(values.node ? { node: values.node } : {}) });
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : s.wasm ? ' Weave runs its component itself, sandboxed: its log is weave service log.' : ' Give it a command with --run (or a WebAssembly component with --wasm), or let a process use its token.'}`);
       }

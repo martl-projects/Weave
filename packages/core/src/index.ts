@@ -424,6 +424,8 @@ export {
   isBuiltin,
   type Builtin,
   parseContract,
+  isNetHost,
+  netAllows,
   profilesOf,
   requestsOf,
   serviceName,

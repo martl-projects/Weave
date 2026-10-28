@@ -902,6 +902,8 @@ export class WeaveNode implements Backend {
     fetch: (...args) => fetch(...args),
     docker: process.env.WEAVE_DOCKER?.trim().startsWith('[') ? (JSON.parse(process.env.WEAVE_DOCKER) as string[]) : [process.env.WEAVE_DOCKER || 'docker'],
   };
+  /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
+  wasmSetup: { testHosts: Record<string, number> } = { testHosts: {} };
   #githubLogin?: GitHubLogin;
 
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
@@ -921,7 +923,7 @@ export class WeaveNode implements Backend {
     roomPort: async (roomId) => this.#website.roomPort(roomId),
   });
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
-  #runtime = new Runtime(() => this.containerSetup.docker);
+  #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** Services: code you run under keys of their own (see services.ts). */
