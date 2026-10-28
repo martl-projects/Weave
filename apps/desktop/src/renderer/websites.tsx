@@ -554,13 +554,18 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       </legend>
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
-      {its.map((room) => (
-        <div key={room.id}>
-          <WebsiteCard room={room} shows={shows} />
-          <HostedStatus hosted={mine?.websites?.find((r) => r.id === room.id)} />
-        </div>
-      ))}
-      {hostsSites(service) && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
+      {/* What it hosts runs in Live: a link there (one with its own page shows its overview below). */}
+      {hostsSites(service) && (
+        <p className="small">
+          {its.length ? (
+            <a href={`#/p/${project.id}/live`}>
+              Hosts {its.length} running website{its.length === 1 ? '' : 's'} → Live
+            </a>
+          ) : (
+            <span className="muted">No running websites{own ? '' : ` from ${by}`}.</span>
+          )}
+        </p>
+      )}
       {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
       <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
@@ -652,6 +657,42 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
 
 /** Adding a service to the project: the website service Weave ships (yours, or a new one), another of your services, or a project's release. */
 
+/**
+ * What runs live in a project: its running websites, as windows to visit or play (Weave holds the connections), and
+ * the shows whose tickets let people in. Opening one for a program of yours is here too, if you host websites here.
+ */
+export function ProjectLiveView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
+  const [opening, setOpening] = useState(false);
+  // Yours that host websites here: you open websites for programs of yours through it.
+  const host = (services ?? []).find((s) => (s.builtin === 'website' || s.contract.websites === 'host') && !s.node && s.spaces.some((x) => x.id === project.id));
+  return (
+    <Page
+      title={<><Icon name="globe" /> Live · p/{project.name}</>}
+      actions={
+        host ? (
+          <button onClick={() => setOpening(true)}>
+            <Icon name="plus" /> Open a website…
+          </button>
+        ) : undefined
+      }
+    >
+      {rooms && !rooms.length && <p className="empty">Nothing running in p/{project.name} right now.</p>}
+      {(rooms ?? []).map((room) => (
+        <div key={room.id}>
+          <WebsiteCard room={room} shows={shows ?? []} />
+          <HostedStatus hosted={(services ?? []).flatMap((s) => s.websites ?? []).find((r) => r.id === room.id)} />
+        </div>
+      ))}
+      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
+      {opening && host && <OpenWebsiteDialog project={project} service={host.name} away={host.node?.name} members={members} meDid={meDid} groups={info?.groups ?? []} shows={shows ?? []} onClose={() => setOpening(false)} />}
+    </Page>
+  );
+}
+
 /** A project's services: each with what it's for and what it offers here. Websites are what the website service serves. */
 export function ProjectServicesView({ project, members, meDid, focus }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; focus?: string }) {
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
@@ -682,7 +723,6 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
         <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} boards={(boards ?? []).map((b) => b.name)} />
       ))}
       {!focus && info?.maintainer && (!all.some(handsOutGitHub) || (artifacts ?? []).some((a) => a.from && 'image' in a.from)) && <ProjectArtifacts project={project} app={app} artifacts={all.some(handsOutGitHub) ? (artifacts ?? []).filter((a) => a.from && 'image' in a.from) : (artifacts ?? [])} covered={all.some(handsOutGitHub)} />}
-      {!focus && <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />}
       {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>
   );

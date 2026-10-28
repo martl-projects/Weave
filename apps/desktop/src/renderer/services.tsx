@@ -552,16 +552,19 @@ export function ActionScopes({ space, service, groups, extras }: { space: { id: 
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
   const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
+  const options = sections.filter((who) => all.some((a) => JSON.stringify(a.who) === JSON.stringify(who)));
   return (
     <div className="action-scopes">
-      {sections.map((who) => (
+      {/* Its own pages first (each shown only to who may see it), then what one can do with it, by who may. */}
+      {shown.map((p) => (
+        <div className="service-panel-box" key={p.name}>
+          {p.who !== 'members' && <div className="small muted">{title(p.who)} see this</div>}
+          <ServicePanel space={space} service={service} panel={p} actions={actions ?? []} />
+        </div>
+      ))}
+      {options.map((who) => (
         <div className="action-scope" key={JSON.stringify(who)}>
           <div className="action-scope-title small">{title(who)}</div>
-          {shown
-            .filter((p) => JSON.stringify(p.who) === JSON.stringify(who))
-            .map((p) => (
-              <ServicePanel key={p.name} space={space} service={service} panel={p} actions={actions ?? []} />
-            ))}
           <div className="action-row">
             {all
               .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
@@ -672,7 +675,7 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
  * and gets the service's answer back; it may say how tall it is.
  *
  *   to it:    {weave: 'view', panel, space, me, actions} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
- *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}
+ *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}   {weave: 'visit', website} (to Live)
  */
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -691,6 +694,8 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
       if (!frame.current || event.source !== frame.current.contentWindow) return;
       const m = event.data as { weave?: string; id?: unknown; name?: unknown; input?: unknown; px?: unknown };
       if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
+      // A running website it shows: its window is in the project's Live.
+      if (m?.weave === 'visit') location.hash = `#/p/${space.id}/live`;
       if (m?.weave === 'act' && typeof m.name === 'string') {
         const action = latest.current.find((a) => a.name === m.name);
         void (async () => {
