@@ -808,7 +808,13 @@ export class Services {
     if (!action) return `it has no action ${name}`;
     const state = this.h.state(space);
     const who = policiesOf(this.h.entries(space), state.maintainers, service, contract.actions!).get(name) ?? action.who;
-    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board)) ? undefined : `only ${whoWords(who)} can ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)} in ${this.h.spaceName(space)}`;
+    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)) ? undefined : `only ${whoWords(who)} can ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)} in ${this.h.spaceName(space)}`;
+  }
+
+  /** Whether someone is in a group (a tier, say) this node knows; unknown here: no. */
+  inGroup(group: string, person: Did): boolean {
+    const space = this.h.spaces.get(group);
+    return !!space && this.h.state(space).members.has(person);
   }
 
   /** Requests refused already, so each is answered once. */
@@ -831,7 +837,7 @@ export class Services {
     const tightened = policiesOf(this.h.entries(space), state.maintainers, did, actions);
     return actions.map((a) => {
       const who = tightened.get(a.name) ?? a.who;
-      return { name: a.name, label: a.label, who, declared: a.who, ...(a.input ? { input: a.input } : {}), mine: mayAct(who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board)) };
+      return { name: a.name, label: a.label, who, declared: a.who, ...(a.input ? { input: a.input } : {}), mine: mayAct(who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)) };
     });
   }
 

@@ -6,7 +6,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { contractText, OriginText, ServiceActions, ServiceCard, KeptSettingsDialog } from './services.tsx';
+import { ActionScopes, contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -518,7 +518,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Gives the project's members access to its repositories" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app, boards }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; boards: string[] }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const [setting, setSetting] = useState(false);
@@ -539,13 +539,13 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
         </div>
       ))}
       {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
+      {!!service.contract.actions?.length && <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} boards={boards} maintainer={maintainer} />}
       {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
       <div className="buttons">
         {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
         {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
-        {!!service.contract.actions?.length && <ServiceActions space={{ id: project.id, name: `p/${project.name}` }} service={service} />}
         {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
-        {(!!service.settings?.length || !!service.contract.actions?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
+        {(!!service.settings?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>
@@ -654,6 +654,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
   const [adding, setAdding] = useState(false);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
 
   // Room services first, then the rest.
   const all = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
@@ -670,7 +671,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
     >
       {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add websites, and everyone here can join in.</p>}
       {list.map((s) => (
-        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} />
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} boards={(boards ?? []).map((b) => b.name)} />
       ))}
       {!focus && info?.maintainer && (!all.some(handsOutGitHub) || (artifacts ?? []).some((a) => a.from && 'image' in a.from)) && <ProjectArtifacts project={project} app={app} artifacts={all.some(handsOutGitHub) ? (artifacts ?? []).filter((a) => a.from && 'image' in a.from) : (artifacts ?? [])} covered={all.some(handsOutGitHub)} />}
       {!focus && <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />}

@@ -236,7 +236,7 @@ github — repositories that follow a group, tier or project (members who give t
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
                              [--action <name> --input '{"field": "…"}']: use one of its actions (only if you may: Weave checks)
   service actions <service>        what you may ask it to do there (-p/-g), and who may
-  service who <service> <action> members|maintainers|owner|board:<name>|contract   maintainers: who may use it there (only narrower)
+  service who <service> <action> members|maintainers|owner|board:<name>|group:<id>|contract   maintainers: who may use it there (only narrower)
   service settings <service>       its settings kept in a space (-p/-g): what it asks for, what the maintainers set (a secret only as set)
   service setting <service> KEY=VALUE   maintainers: keep a setting for it in the space (KEY= removes it); one it asks for as secret,
                              or with --blind, is boxed to the service: readable by it alone, you included
@@ -1641,7 +1641,7 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out(all, () => all.map((a) => `${a.name}  ${a.label}: ${whoWords(a.who)}${JSON.stringify(a.who) !== JSON.stringify(a.declared) ? ` (its contract: ${whoWords(a.declared)})` : ''}${a.mine ? '  · you may' : ''}${a.input?.length ? `\n  asks for: ${a.input.map((f) => f.name).join(', ')}` : ''}`).join('\n') || '(it declares no actions)');
       }
       if (sub === 'who' && ref && args[2] && args[3]) {
-        const who = args[3] === 'contract' ? null : args[3] === 'members' || args[3] === 'maintainers' || args[3] === 'owner' ? args[3] : { board: args[3].replace(/^board:/, '') };
+        const who = args[3] === 'contract' ? null : args[3] === 'members' || args[3] === 'maintainers' || args[3] === 'owner' ? args[3] : args[3].startsWith('group:') ? { group: args[3].slice(6) } : { board: args[3].replace(/^board:/, '') };
         const all = await b.setServicePolicy({ space: needSpace(), service: ref, action: args[2], who });
         return out(all, () => all.map((a) => `${a.name}: ${whoWords(a.who)}`).join('\n'));
       }

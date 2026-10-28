@@ -14,8 +14,8 @@ import { isDid, type Did } from './keys.ts';
  */
 export const KIND_SERVICE_POLICY = 'weave.service.policy';
 
-/** Who may use an action: everyone in the space, its maintainers, its owner, or whoever reads a board (projects). */
-export type ActionWho = 'members' | 'maintainers' | 'owner' | { board: string };
+/** Who may use an action: everyone in the space, its maintainers, its owner, whoever reads a board, or the members of a group (a tier, say) invited to the project. */
+export type ActionWho = 'members' | 'maintainers' | 'owner' | { board: string } | { group: string };
 
 export interface ServiceActionField {
   name: string;
@@ -40,7 +40,9 @@ const ACTION_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 export const parseWho = (value: unknown): ActionWho | undefined => {
   if (value === 'members' || value === 'maintainers' || value === 'owner') return value;
   const board = (value as { board?: unknown } | null)?.board;
-  return typeof board === 'string' && /^[a-z0-9-]{1,40}$/.test(board) ? { board } : undefined;
+  if (typeof board === 'string' && /^[a-z0-9-]{1,40}$/.test(board)) return { board };
+  const group = (value as { group?: unknown } | null)?.group;
+  return typeof group === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(group) ? { group } : undefined;
 };
 
 /** A contract's actions from untrusted input: the valid ones, by distinct names. */
@@ -65,14 +67,14 @@ export function parseActions(value: unknown): ServiceAction[] {
 }
 
 /** Who may, in plain words. */
-export const whoWords = (who: ActionWho): string => (who === 'members' ? 'members' : who === 'maintainers' ? 'maintainers' : who === 'owner' ? 'the owner' : `readers of ${who.board}`);
+export const whoWords = (who: ActionWho, groupName?: string): string => (who === 'members' ? 'members' : who === 'maintainers' ? 'maintainers' : who === 'owner' ? 'the owner' : 'board' in who ? `readers of ${who.board}` : `members of ${groupName ?? 'a group'}`);
 
 /** How narrow a who is: members, then a board's readers, then maintainers, then the owner. */
 const narrowness = (who: ActionWho): number => (who === 'members' ? 0 : who === 'maintainers' ? 2 : who === 'owner' ? 3 : 1);
 
 /** Whether `next` is at least as narrow as `declared` (a project may tighten an action, never widen it). */
 export function tightens(declared: ActionWho, next: ActionWho): boolean {
-  if (typeof declared === 'object' && typeof next === 'object') return declared.board === next.board;
+  if (typeof declared === 'object' && typeof next === 'object') return JSON.stringify(declared) === JSON.stringify(next);
   if (typeof next === 'object') return declared === 'members';
   return narrowness(next) >= narrowness(declared);
 }
@@ -93,11 +95,15 @@ export function policiesOf(entries: Entry[], maintainers: Set<Did>, service: Did
   return out;
 }
 
-/** Whether someone may use an action, by their role in the space (`readers`: who reads a board, when it names one). */
-export function mayAct(who: ActionWho, person: Did, roles: { owner: Did; maintainers: Set<Did>; members: Map<Did, unknown> | Set<Did> }, readers?: (board: string) => Did[]): boolean {
+/**
+ * Whether someone may use an action, by their role in the space (`readers`: who reads a board; `inGroup`: whether
+ * they're in a group, when it names one; unknown there: no).
+ */
+export function mayAct(who: ActionWho, person: Did, roles: { owner: Did; maintainers: Set<Did>; members: Map<Did, unknown> | Set<Did> }, readers?: (board: string) => Did[], inGroup?: (group: string, person: Did) => boolean): boolean {
   if (!roles.members.has(person)) return false;
   if (who === 'members') return true;
   if (who === 'owner') return person === roles.owner;
   if (who === 'maintainers') return roles.maintainers.has(person) || person === roles.owner;
-  return !!readers?.(who.board).includes(person);
+  if ('board' in who) return !!readers?.(who.board).includes(person);
+  return !!inGroup?.(who.group, person);
 }

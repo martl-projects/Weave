@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { contractWords, parseContract, tightens } from '@weave/core';
+import { contractWords, mayAct, parseContract, tightens, type Did } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
@@ -59,6 +59,15 @@ describe('a contract’s actions', () => {
     expect(tightens('maintainers', 'members')).toBe(false);
     expect(tightens('maintainers', 'owner')).toBe(true);
     expect(tightens({ board: 'tasks' }, 'members')).toBe(false);
+    // A group (a tier, say): narrower than everyone, and only its members may.
+    const tier = { group: 'TierGroupId123' };
+    expect(tightens('members', tier)).toBe(true);
+    expect(tightens('maintainers', tier)).toBe(false);
+    const roles = { owner: 'did:key:zOwner' as Did, maintainers: new Set<Did>(), members: new Set<Did>(['did:key:zLena' as Did, 'did:key:zKofi' as Did]) };
+    const inGroup = (group: string, who: Did) => group === tier.group && who === 'did:key:zLena';
+    expect(mayAct(tier, 'did:key:zLena' as Did, roles, undefined, inGroup)).toBe(true);
+    expect(mayAct(tier, 'did:key:zKofi' as Did, roles, undefined, inGroup)).toBe(false);
+    expect(mayAct(tier, 'did:key:zStranger' as Did, roles, undefined, () => true)).toBe(false);
   });
 });
 
