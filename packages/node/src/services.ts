@@ -1,12 +1,12 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf } from '@weave/core';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
 import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, releaseApproval } from './runtime.ts';
 import { imageLabels } from './registry.ts';
@@ -68,6 +68,9 @@ function signWith(key: string | undefined, name: string, algorithm: string, data
 
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
+
+/** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
+export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
 /** The services this Weave ships (tests give their own folder). */
 const shippedHere = (h: ServicesHost) => shippedServices(h.shippedDir() ?? SHIPPED_DIR);
@@ -165,13 +168,15 @@ export class Services {
       ...(stored.command ? { command: stored.command } : {}),
       ...(stored.wasm ? { wasm: stored.wasm } : {}),
       ...(stored.site ? { site: stored.site } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, ...(stored.builtin === 'website' ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin } : {}),
+      ...(hostsWebsites(stored) ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
       running: stored.builtin ? stored.enabled : this.h.runtime.running(`service:${stored.name}`),
       // Why it doesn't run (a shipped component that isn't what Weave ships, say); a release says so in its artifact.
       ...(!stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
+      ...(stored.shipped ? { shipped: stored.shipped.name } : {}),
     };
   }
 
@@ -179,9 +184,13 @@ export class Services {
 
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.h.project(ref);
+    const access = artifactAccessOf(this.h.entries(project), this.h.state(project).maintainers);
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
       const runs = this.h.runtime.runs(a.manifest);
+      const who = access.get(a.id) ?? 'members';
       return {
+        who,
+        mine: !this.artifactRefusal(project, a.id, this.h.identity.author),
         id: a.id,
         project: { id: project.id, kind: 'project', name: this.h.spaceName(project) },
         tag: a.tag,
@@ -194,6 +203,8 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
+        ...(a.manifest.install?.github ? { from: { github: a.manifest.install.github } } : a.manifest.install?.image ? { from: { image: a.manifest.install.image.ref } } : {}),
+        ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
   }
@@ -312,6 +323,7 @@ export class Services {
     if (input.shipped && !shipped) throw new Error(`this Weave ships no service named ${input.shipped}${shippedHere(this.h).size ? ` (it ships ${[...shippedHere(this.h).keys()].join(', ')})` : ''}`);
     if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
+    if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
@@ -337,7 +349,7 @@ export class Services {
     const contract = parseContract(builtin ? BUILTIN[builtin].contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? `${manifest!.name}, shipped with Weave` : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -375,7 +387,7 @@ export class Services {
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
-    if (builtin === 'website') this.serveRunning();
+    if (hostsWebsites(stored)) this.serveRunning();
     if (builtin === 'github') this.provide();
     return this.serviceInfo(this.storedService(name));
   }
@@ -723,6 +735,38 @@ export class Services {
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
   }
 
+  /** A shipped service's panels' folder (its pages ship with this Weave), if it has one. */
+  shippedPanelFolder(name: string): string | undefined {
+    return shippedHere(this.h).get(name)?.panel;
+  }
+
+  /**
+   * A service's panels in a space: its own pages for its card, each for whoever may see it. Only a shipped service's
+   * for now, and only when it runs exactly what this Weave ships (its pages are this Weave's copy).
+   */
+  async servicePanels(input: { space: string; service: string }): Promise<ServicePanelInfo[]> {
+    const space = this.h.space(input.space);
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    if (profile?.origin.kind !== 'shipped' || profile.origin.checked !== 'verified') return [];
+    const s = shippedHere(this.h).get(profile.origin.name);
+    if (!s?.panel) return [];
+    const state = this.h.state(space);
+    return (s.manifest.wasm?.panels ?? []).map((p) => ({
+      name: p.name,
+      title: p.title,
+      who: p.who,
+      key: `shipped-${s.name}`,
+      page: p.page,
+      mine: mayAct(p.who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)),
+    }));
+  }
+
+  /** The services this Weave ships, as the app offers them. */
+  shippedServices(): ShippedServiceInfo[] {
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+  }
+
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */
   shippedOrigin(claim: { name: string; digest: string }): ServiceOriginInfo {
     return { kind: 'shipped', name: claim.name, checked: shippedHere(this.h).get(claim.name)?.digest === claim.digest ? 'verified' : 'other' };
@@ -739,13 +783,17 @@ export class Services {
     throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
   }
 
-  async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
+  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === to);
     if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
+    if (input.action && profile) {
+      const why = this.refusal(profile.contract, to, this.h.space(input.space), this.h.identity.author, input.action);
+      if (why) throw new Error(`${profile.name}: ${why}`);
+    }
     const text = input.text?.trim() ?? '';
     if (!text && input.data === undefined) throw new Error('ask with some text or data');
-    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
+    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) }, space: input.space, as: input.as });
     return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
   }
 
@@ -760,15 +808,35 @@ export class Services {
       from: this.h.actor(r.from, r.from),
       text: r.text,
       ...(r.data !== undefined ? { data: r.data as Json } : {}),
+      ...(r.action ? { action: r.action } : {}),
       time: r.time,
       // Only the service it was for answers it.
       results: results
         .filter((e) => (e.body as { request?: unknown } | null)?.request === r.id && e.event.signer === r.to)
         .map((e) => {
-          const body = (e.body ?? {}) as Record<string, Json>;
+          const sealed = (e.body ?? {}) as Record<string, Json>;
+          // An answer for who asked: opened if that's me (or my service's), else only that it came.
+          const boxes = Array.isArray(sealed.for) ? (sealed.for as unknown as Box[]) : undefined;
+          const body = (boxes ? this.#openAnswer(boxes) : sealed) as Record<string, Json> | undefined;
+          if (!body) return { id: e.id, text: '', private: true as const, time: e.event.time };
           return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
         }),
     }));
+  }
+
+  /** An answer sealed for who asked: its content, if one of the boxes is mine. */
+  #openAnswer(boxes: Box[]): Json | undefined {
+    for (const box of boxes) {
+      const opened = this.h.tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, box);
+        } catch {
+          return undefined;
+        }
+      });
+      if (opened !== undefined) return opened;
+    }
+    return undefined;
   }
 
   /**
@@ -777,8 +845,94 @@ export class Services {
    */
   serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
     if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
-    if (d.inner.kind === KIND_SERVICE_REQUEST) return takesRequests(stored.contract) && (d.inner.body as { to?: unknown } | null)?.to === did;
+    if (d.inner.kind === KIND_SERVICE_REQUEST) {
+      const body = d.inner.body as { to?: unknown; action?: unknown } | null;
+      if (!takesRequests(stored.contract) || body?.to !== did) return false;
+      // Refused once (Weave answered no): it stays that, even if who may changes later.
+      if (this.#refused.has(d.id)) return false;
+      const fetching = (body as { data?: { protocol?: unknown; artifact?: unknown } }).data;
+      if (fetching?.protocol === PROTOCOL_ARTIFACT_FETCH && typeof fetching.artifact === 'string') {
+        const no = this.artifactRefusal(d.space, fetching.artifact, d.event.author);
+        if (no) return (this.#refuse(stored, d.id, no), false);
+      }
+      if (body.action === undefined) return true;
+      // An action: only from someone who may use it here. Anyone else gets Weave's no, and the service never sees it.
+      const why = this.refusal(stored.contract, did, d.space, d.event.author, String(body.action));
+      if (why) this.#refuse(stored, d.id, why);
+      return !why;
+    }
     return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** Why someone may not use an action of a service in a space, or undefined: they may. */
+  refusal(contract: ServiceContract, service: Did, space: StoredSpace, person: Did, name: string): string | undefined {
+    const action = contract.actions?.find((a) => a.name === name);
+    if (!action) return `it has no action ${name}`;
+    const state = this.h.state(space);
+    const who = policiesOf(this.h.entries(space), state.maintainers, service, contract.actions!).get(name) ?? action.who;
+    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)) ? undefined : `only ${whoWords(who)} can ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)} in ${this.h.spaceName(space)}`;
+  }
+
+  /** Whether someone is in a group (a tier, say) this node knows; unknown here: no. */
+  inGroup(group: string, person: Did): boolean {
+    const space = this.h.spaces.get(group);
+    return !!space && this.h.state(space).members.has(person);
+  }
+
+  /** Why someone may not get a project's artifact (its maintainers narrowed who may), or undefined: they may. */
+  artifactRefusal(project: StoredSpace, artifact: string, person: Did): string | undefined {
+    const state = this.h.state(project);
+    const who = artifactAccessOf(this.h.entries(project), state.maintainers).get(artifact) ?? 'members';
+    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(project, board), (group, p) => this.inGroup(group, p)) ? undefined : `only ${whoWords(who)} may get that in ${this.h.spaceName(project)}`;
+  }
+
+  /** Maintainers: who may get one of a project's artifacts (null: everyone there). */
+  async setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]> {
+    const project = this.h.project(input.project);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such artifact`);
+    const who = input.who === null ? 'members' : parseWho(input.who);
+    if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_ACCESS, body: { artifact: input.artifact, who: who as unknown as Json } }));
+    return this.artifacts(project.id);
+  }
+
+  /** Requests refused already, so each is answered once. */
+  #refused = new Set<string>();
+
+  #refuse(stored: StoredService, request: string, why: string): void {
+    if (this.#refused.has(request)) return;
+    this.#refused.add(request);
+    const gate = this.serviceGate(stored.token);
+    void gate?.answer({ request, error: why }).catch(() => this.#refused.delete(request));
+  }
+
+  /** A service's actions in a space: who may use each there, and whether you may. */
+  async serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]> {
+    const space = this.h.space(input.space);
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    const actions = profile?.contract.actions ?? [];
+    const state = this.h.state(space);
+    const tightened = policiesOf(this.h.entries(space), state.maintainers, did, actions);
+    return actions.map((a) => {
+      const who = tightened.get(a.name) ?? a.who;
+      return { name: a.name, label: a.label, who, declared: a.who, ...(a.input ? { input: a.input } : {}), mine: mayAct(who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)) };
+    });
+  }
+
+  /** Maintainers: who may use a service's action in a space, tighter than its contract (or null: as it says). */
+  async setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]> {
+    const space = this.h.space(input.space);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
+    const did = await this.serviceDid(input.service);
+    const action = (await this.serviceProfiles()).find((p) => p.did === did)?.contract.actions?.find((a) => a.name === input.action);
+    if (!action) throw new Error(`that service has no action ${input.action}`);
+    const who = input.who === null ? action.who : parseWho(input.who);
+    if (!who) throw new Error('who is members, maintainers, owner, or {board: <name>}');
+    if (!tightens(action.who, who)) throw new Error(`${action.label} is for ${whoWords(action.who)}: a project can make that narrower, not wider`);
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(space), { kind: KIND_SERVICE_POLICY, body: { service: did, action: action.name, who: who as unknown as Json } }));
+    return this.serviceActions({ space: space.id, service: did });
   }
 
   /** The gate a service's token opens on the local API, or undefined for any other token. */
@@ -831,7 +985,10 @@ export class Services {
         const found = this.h.find(request, [KIND_SERVICE_REQUEST]);
         if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
         inSpace(found.space.id);
-        return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
+        // For who asked alone (and the service's person): the others in the project see that it was answered, not what.
+        const said: Json = { ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) };
+        const sealed = [...new Set([found.event.author, this.h.identity.author])].map((person) => boxTo(this.h.encryptionKeyOf(person), said) as unknown as Json);
+        return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, for: sealed }, space: found.space.id, as: name });
       },
       serve: (input) => this.web.serve(name, input),
     };
@@ -847,6 +1004,9 @@ export class Services {
     const m = artifact.manifest;
     const runs = this.h.runtime.runs(m);
     return {
+      // A catalog lists it for anyone in its space to install.
+      who: 'members',
+      mine: true,
       id: artifact.id,
       project: { id: project.id, kind: 'project', name: project.name },
       tag: artifact.tag,
@@ -859,6 +1019,7 @@ export class Services {
       ...(m.service ? { applet: m.service } : {}),
       packaged: true,
       ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${m.app}`, m) } : {}),
+      ...(m.install?.image ? { from: { image: m.install.image.ref } } : {}),
     };
   }
 
@@ -940,6 +1101,11 @@ export class Services {
       const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];
       if (result?.error) throw new Error(`${by}: ${result.error}`);
       if (result) {
+        // Its fetcher's grant: whatever it answered, for that fetcher alone (which runs here, with my own access).
+        if (provider.contract.fetcher) {
+          if (result.data === undefined) throw new Error(`${by} answered without a grant`);
+          return { grant: result.data, fetcher: provider.contract.fetcher, by };
+        }
         const url = (result.data as { url?: unknown } | undefined)?.url;
         if (typeof url === 'string' && url.startsWith('https://')) return { url, by };
         throw new Error(`${by} answered without a download address`);
@@ -1067,7 +1233,7 @@ export class Services {
   }
 
   /** The GitHub service answers artifact.fetch: the release must be its space's, and the file its maintainer fingerprinted. */
-  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; data?: unknown }): Promise<void> {
+  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; from: Did; data?: unknown }): Promise<void> {
     const gate = this.serviceGate(stored.token);
     if (!gate) return;
     const data = (r.data && typeof r.data === 'object' ? r.data : {}) as { protocol?: unknown; artifact?: unknown; platform?: unknown };
@@ -1075,6 +1241,8 @@ export class Services {
       if (data.protocol !== PROTOCOL_ARTIFACT_FETCH) throw new Error(`${stored.name} answers ${PROTOCOL_ARTIFACT_FETCH} only`);
       const artifact = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === data.artifact);
       if (!artifact) throw new Error(`${this.h.spaceName(space)} has no such release`);
+      const no = this.artifactRefusal(space, artifact.id, r.from);
+      if (no) throw new Error(no);
       const asset = typeof data.platform === 'string' ? artifact.manifest.install?.assets?.[data.platform] : undefined;
       if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
       const repo = artifact.manifest.install?.github;
@@ -1343,8 +1511,26 @@ export class Services {
     }
   }
 
+  /** The ports Weave opened for WebAssembly services' websites, by service. */
+  #sitePorts = new Map<string, number>();
+
+  /**
+   * The ports a service of code from others may serve as a website: a release's, as its manifest names them (its
+   * process or its container listens there); a WebAssembly site's, as Weave opened it. Your own code (a command, or
+   * a component of yours): undefined, any (it runs with your rights).
+   */
+  servesOn(stored: StoredService): Set<number> | undefined {
+    if (!stored.artifact && !stored.shipped) return stored.wasm ? new Set([this.#sitePorts.get(stored.name)].filter((p): p is number => !!p)) : undefined;
+    const ports = new Set<number>();
+    for (const s of stored.artifact?.manifest.services ?? []) ports.add(s.port);
+    const site = this.#sitePorts.get(stored.name);
+    if (site) ports.add(site);
+    return ports;
+  }
+
   /** A WebAssembly service's website listens: it serves it in each of its projects (keeping a website's name there). */
   async serveWasmSite(stored: StoredService, port: number): Promise<void> {
+    this.#sitePorts.set(stored.name, port);
     const errors: string[] = [];
     for (const space of stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project')) {
       try {
@@ -1423,6 +1609,34 @@ export class Services {
             await this.settings.renew([current]);
             return this.settings.effective(current)[String(args[0])] ?? undefined;
           }
+          if (call === 'websites' || call === 'closeWebsite') {
+            // Only one that hosts websites, only in its projects, only the websites it hosts.
+            if (!hostsWebsites(current)) throw new Error(`${name} doesn't host websites in its contract`);
+            if (call === 'websites') {
+              const space = this.h.spaces.get(String(args[0]));
+              if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that project`);
+              const hosted = new Set(Object.keys(current.hosted ?? {}));
+              return JSON.stringify(
+                (await this.web.websites(space.id))
+                  .filter((w) => hosted.has(w.id))
+                  .map((w) => {
+                    const room = current.hosted![w.id];
+                    return { id: w.id, name: w.name, host: w.host.name ?? w.host.did, ...(room.servedBy ? { by: room.servedBy } : {}), visitors: w.show ? 'ticket holders' : w.groups?.length ? 'members of tiers' : room.access?.invite ? 'invited people' : 'everyone here', open: w.open, time: w.time };
+                  }),
+              );
+            }
+            const id = String(args[0]);
+            if (!current.hosted?.[id]) throw new Error(`${name} doesn't host that website`);
+            return void (await this.web.closeWebsite(id));
+          }
+          if (call === 'release') {
+            // Only a provider of releases' files, only its spaces' releases, only those its maintainers published.
+            if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it reads no releases`);
+            const space = this.h.spaces.get(String(args[0]));
+            if (!space || !current.spaces.includes(space.id)) return undefined;
+            const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
+            return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
+          }
           if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (call === 'tickEvery') {
             clearInterval(ticking.timer);
@@ -1476,7 +1690,8 @@ export class Services {
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {
             cursor = time;
-            writeFileSync(cursorFile, cursor);
+            // Taken out meanwhile (its folder with it): nothing left to keep.
+            if (existsSync(dirname(cursorFile))) writeFileSync(cursorFile, cursor);
           }
         },
       },

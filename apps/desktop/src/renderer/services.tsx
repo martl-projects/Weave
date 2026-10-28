@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react';
-import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
-import type { ServiceContract } from '@weave/core';
+import { useEffect, useRef, useState } from 'react';
+import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import type { ActionWho, ServiceContract } from '@weave/core';
+import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
-import { ago, api, bump, shortDid, useApi } from './lib.ts';
+import { ago, api, bump, shortDid, useApi, useTick } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /*
@@ -21,20 +22,13 @@ export function contractText(c: ServiceContract): string {
 
 /** Where a service comes from, and whether this computer could check it. */
 export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
-  if (origin.kind === 'weave') return <div className="small muted">Comes with Weave</div>;
-  if (origin.kind === 'unreleased') return <div className="small muted">Its person's own code, not released in a project</div>;
-  if (origin.kind === 'shipped')
-    return origin.checked === 'verified' ? <div className="small muted">✓ Ships with Weave: exactly the component your Weave has</div> : <div className="small muted">Ships with another version of Weave (not the component yours has)</div>;
-  const where = `${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, release ${origin.tag}`;
-  if (origin.checked === 'verified')
-    return (
-      <div className="small muted">
-        ✓ From {where}, released by {origin.publisher?.name ?? shortDid(origin.publisher?.did ?? '')}
-        {origin.packaged ? ' · a Weave service' : ''}
-      </div>
-    );
-  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but that project has no such release: don't trust it</div>;
-  return <div className="small muted">From {where} (only its participants can check)</div>;
+  if (origin.kind === 'weave') return <div className="small muted">Part of Weave</div>;
+  if (origin.kind === 'unreleased') return null;
+  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">✓ Made by Weave</div> : <div className="small muted">Made by another version of Weave</div>;
+  const where = origin.project.name ? `p/${origin.project.name}` : "a project you aren't in";
+  if (origin.checked === 'verified') return <div className="small muted">✓ From {where}, version {origin.tag}</div>;
+  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but isn't: don't trust it</div>;
+  return <div className="small muted">From {where}, version {origin.tag}</div>;
 }
 
 /** Every kind name, comma or space separated. */
@@ -288,6 +282,109 @@ function GitHubAppSettings({ service, set, onChange }: { service: string; set: b
 }
 
 /** In Keys & devices: the services you run, here and on your always-on nodes. */
+/**
+ * Your fetchers: client apps that fetch what a project's provider grants you (its contract names which), on this
+ * node. Yours, not a project's: each fetches only for the projects you allow, with your own settings.
+ */
+export function FetchersBox() {
+  const { data: fetchers } = useApi(() => api<FetcherInfo[]>('fetchers'), []);
+  const [editing, setEditing] = useState<FetcherInfo>();
+  if (!fetchers?.length) return null;
+  return (
+    <fieldset>
+      <legend>Fetchers</legend>
+      <p className="small">
+        A project's provider can hand out its artifacts through a fetcher: it grants you access, and your fetcher gets the files with it, here. Each file is checked against
+        what the project released. A fetcher only works for the projects you allow.
+      </p>
+      {fetchers.map((f) => (
+        <div className="service-row" key={f.name}>
+          <Icon name="download" />
+          <div className="grow">
+            <b>{f.title}</b>{' '}
+            <span className="small muted">
+              {!f.added ? 'not added' : f.projects === 'all' ? 'for all your projects' : f.projects.length ? `for ${f.projects.map((p) => `p/${p.name}`).join(', ')}` : 'for no project'}
+            </span>
+            {f.about && <div className="small">{f.about}</div>}
+            {f.net.length > 0 && <div className="small muted">Reaches {f.net.join(', ')} only.</div>}
+            {f.problem && <div className="small error-text">{f.problem}</div>}
+          </div>
+          <div className="service-actions">
+            <button onClick={() => setEditing(f)}>{f.added ? 'Settings…' : 'Add…'}</button>
+            {f.added && (
+              <AsyncButton onClick={async () => (await ask(`Remove ${f.title}? It fetches for no project any more, and your settings for it are gone.`, 'Remove')) && attempt(() => api('removeFetcher', f.name).then(bump), `${f.title} is removed`)}>
+                Remove
+              </AsyncButton>
+            )}
+          </div>
+        </div>
+      ))}
+      {editing && <FetcherDialog fetcher={editing} onClose={() => setEditing(undefined)} />}
+    </fieldset>
+  );
+}
+
+/** Which projects a fetcher fetches for, and your settings for it (a secret only as set, never shown). */
+function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): void }) {
+  const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
+  const projects = (spaces ?? []).filter((s) => s.kind === 'project');
+  const [all, setAll] = useState(fetcher.projects === 'all');
+  const [picked, setPicked] = useState<string[]>(fetcher.projects === 'all' ? [] : fetcher.projects.map((p) => p.id));
+  const [values, setValues] = useState<Record<string, string>>({});
+  const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
+  return (
+    <Modal title={`${fetcher.title}: ${fetcher.added ? 'settings' : 'add it'}`} onClose={onClose}>
+      <p className="small">It fetches for these projects only. Their providers' grants never reach it anywhere else.</p>
+      <div className="field-row">
+        <input type="checkbox" id="fetcher-all" checked={all} onChange={(e) => setAll(e.target.checked)} />
+        <label htmlFor="fetcher-all">All my projects</label>
+      </div>
+      {!all &&
+        projects.map((p) => (
+          <div className="field-row" key={p.id}>
+            <input type="checkbox" id={`fetcher-${p.id}`} checked={picked.includes(p.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, p.id] : picked.filter((x) => x !== p.id))} />
+            <label htmlFor={`fetcher-${p.id}`}>p/{p.name}</label>
+          </div>
+        ))}
+      {fetcher.settings.map((s) => (
+        <div className="field-row" key={s.name}>
+          <label htmlFor={`fetcher-setting-${s.name}`}>{s.label ?? s.name}</label>
+          <input
+            id={`fetcher-setting-${s.name}`}
+            className="grow"
+            type={s.secret ? 'password' : 'text'}
+            placeholder={fetcher.filled.includes(s.name) ? 'set (type to replace)' : s.optional ? 'optional' : ''}
+            value={values[s.name] ?? ''}
+            onChange={(e) => setValues({ ...values, [s.name]: e.target.value })}
+          />
+        </div>
+      ))}
+      {fetcher.settings.some((s) => s.hint) && <p className="small muted">{fetcher.settings.map((s) => s.hint).filter(Boolean).join(' · ')}</p>}
+      <p className="small muted">Your settings stay sealed on this computer: never in a project.</p>
+      <div className="buttons">
+        <AsyncButton
+          className="default"
+          onClick={() =>
+            attempt(async () => {
+              const to = all ? 'all' : picked;
+              if (!fetcher.added) {
+                if (!all && !picked.length) throw new Error('pick the projects it fetches for');
+                await api('addFetcher', { shipped: fetcher.name, projects: to });
+              }
+              await api('setFetcher', { name: fetcher.name, projects: to, ...(Object.keys(settings).length ? { settings } : {}) });
+              bump();
+              onClose();
+            }, fetcher.added ? `${fetcher.title} is set` : `${fetcher.title} is added`)
+          }
+        >
+          {fetcher.added ? 'Save' : 'Add'}
+        </AsyncButton>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
+  );
+}
+
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
   const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
@@ -394,8 +491,8 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
               </div>
               {r.results.length ? (
                 r.results.map((x) => (
-                  <div className={`small service-answer${x.error ? ' error-text' : ''}`} key={x.id}>
-                    {x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
+                  <div className={`small service-answer${x.error ? ' error-text' : ''}${x.private ? ' muted' : ''}`} key={x.id}>
+                    {x.private ? `answered, for ${r.from.name ?? 'them'} only` : x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
                   </div>
                 ))
               ) : (
@@ -449,6 +546,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
       </p>
       {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
         const set = data.settings.find((x) => x.name === name);
@@ -499,9 +597,8 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
           <div className="field-row">
             <input placeholder="NAME" value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value.toUpperCase() })} />
             <input className="grow" type={extra.secret ? 'password' : 'text'} placeholder="value" value={extra.value} onChange={(e) => setExtra({ ...extra, value: e.target.value })} />
-            <label className="small">
-              <input type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} /> secret
-            </label>
+            <input id="extra-secret" type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} />
+            <label htmlFor="extra-secret" className="small">secret</label>
             <AsyncButton disabled={!extra.name || !extra.value} onClick={() => save(extra.name, extra.value, extra.secret).then(() => setExtra({ name: '', value: '', secret: true }))}>
               Set
             </AsyncButton>
@@ -514,4 +611,215 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
       </div>
     </Modal>
   );
+}
+
+/** A group of people, as a section's title. */
+export const whoLabel = (who: ActionWho, space: string, groups: Array<{ id: string; name: string }>): string =>
+  who === 'members' ? `Everyone in ${space}` : who === 'maintainers' ? 'Maintainers' : who === 'owner' ? 'The owner' : 'board' in who ? `Readers of ${who.board}` : `Members of ${groups.find((g) => g.id === who.group)?.name ?? 'a group'}`;
+
+export const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+
+/** Broadest first: everyone, then a board's readers or a group, then maintainers, then the owner. */
+const breadth = (who: ActionWho): number => (who === 'members' ? 0 : who === 'maintainers' ? 2 : who === 'owner' ? 3 : 1);
+
+/** Where a project may move an action: as narrow as its contract says, or narrower (never wider). */
+function narrower(declared: ActionWho, boards: string[], groups: Array<{ id: string }>): ActionWho[] {
+  const all: ActionWho[] = ['members', ...boards.map((board) => ({ board })), ...groups.map((g) => ({ group: g.id })), 'maintainers', 'owner'];
+  if (typeof declared === 'object') return [declared];
+  return all.filter((w) => breadth(w) >= breadth(declared) && (declared === 'members' || typeof w === 'string'));
+}
+
+/** Something done with a service besides its contract's actions: asking it, getting access, running it, its settings. */
+export interface ScopedAction {
+  key: string;
+  label: string;
+  /** Whose: a group of people here, or 'runner': only whoever runs the service. */
+  who: ActionWho | 'runner';
+  mine: boolean;
+  run(): void;
+}
+
+/**
+ * Everything one can do with a service, by who may: a section per group (everyone, a board's readers, a group's
+ * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
+ * which is changed in its settings (maintainers).
+ */
+export function ActionScopes({ space, service, groups, extras }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[] }) {
+  const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
+  const [using, setUsing] = useState<ServiceActionInfo>();
+  const all: ScopedAction[] = [...(actions ?? []).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
+  // Its own pages: in their section, only for who may see them.
+  const shown = (panels ?? []).filter((p) => p.mine);
+  if (!all.length && !shown.length) return null;
+  const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
+  const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
+  const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
+  const options = sections.filter((who) => all.some((a) => JSON.stringify(a.who) === JSON.stringify(who)));
+  return (
+    <div className="action-scopes">
+      {/* Its own pages first (each shown only to who may see it), then what one can do with it, by who may. */}
+      {shown.map((p) => (
+        <div className="service-panel-box" key={p.name}>
+          {p.who !== 'members' && <div className="small muted">{title(p.who)} see this</div>}
+          <ServicePanel space={space} service={service} panel={p} actions={actions ?? []} />
+        </div>
+      ))}
+      {options.map((who) => (
+        <div className="action-scope" key={JSON.stringify(who)}>
+          <div className="action-scope-title small">{title(who)}</div>
+          <div className="action-row">
+            {all
+              .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
+              .map((a) => (
+                <button key={a.key} disabled={!a.mine} title={a.mine ? undefined : `Only ${lowerFirst(title(a.who))}`} onClick={a.run}>
+                  {a.label}
+                </button>
+              ))}
+          </div>
+        </div>
+      ))}
+      {using && <ActionDialog space={space} service={service} action={using} onClose={() => setUsing(undefined)} />}
+    </div>
+  );
+}
+
+/** Who may use each of a service's actions here (in its settings): maintainers make one narrower than its contract, never wider. */
+function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string } }) {
+  const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  const { data: info } = useApi(() => api<{ groups: Array<{ id: string; name: string }> }>('project', space.id).catch(() => ({ groups: [] })), [space.id]);
+  const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
+  if (!actions?.length) return null;
+  const groups = info?.groups ?? [];
+  const move = (a: ServiceActionInfo, to: string) => attempt(() => api('setServicePolicy', { space: space.id, service: service.did, action: a.name, who: to === JSON.stringify(a.declared) ? null : JSON.parse(to) }).then(reload));
+  return (
+    <fieldset className="service-setting">
+      <legend>Who can</legend>
+      {actions.map((a) => {
+        const options = narrower(a.declared, (boards ?? []).map((b) => b.name), groups);
+        return (
+          <div className="field-row" key={a.name}>
+            <span className="grow">
+              {a.label}
+              {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted"> · its contract: {lowerFirst(whoLabel(a.declared, space.name, groups))}</span>}
+            </span>
+            {options.length > 1 ? (
+              <select value={JSON.stringify(a.who)} onChange={(e) => void move(a, e.target.value)}>
+                {options.map((w) => (
+                  <option key={JSON.stringify(w)} value={JSON.stringify(w)}>
+                    {whoLabel(w, space.name, groups)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="small">{whoLabel(a.who, space.name, groups)}</span>
+            )}
+          </div>
+        );
+      })}
+      <p className="small muted">A project can make who may narrower than the service's contract, never wider.</p>
+    </fieldset>
+  );
+}
+
+function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [asked, setAsked] = useState<string>();
+  const { data: answer } = useApi(
+    () => (asked ? api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }).then((all) => all.find((r) => r.id === asked)?.results[0]) : Promise.resolve(undefined)),
+    [asked],
+  );
+  const missing = (action.input ?? []).some((f) => !f.optional && !values[f.name]?.trim());
+  return (
+    <Modal title={`${action.label} · ${service.name}`} onClose={onClose}>
+      {!asked ? (
+        <>
+          {(action.input ?? []).map((f) => (
+            <div className="app-setting" key={f.name}>
+              <label htmlFor={`action-${f.name}`}>
+                {f.label}
+                {f.optional ? <span className="muted"> (optional)</span> : null}
+              </label>
+              <input id={`action-${f.name}`} className="wide" type={f.secret ? 'password' : 'text'} value={values[f.name] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))} />
+            </div>
+          ))}
+          <div className="buttons">
+            <AsyncButton
+              className="default"
+              disabled={missing}
+              onClick={() =>
+                attempt(async () => {
+                  const data = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
+                  const r = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action.label, action: action.name, ...(Object.keys(data).length ? { data } : {}) });
+                  setAsked(r.id);
+                })
+              }
+            >
+              {action.label}
+            </AsyncButton>
+          </div>
+        </>
+      ) : answer ? (
+        <p className={answer.error ? 'error-text' : ''}>{answer.error ?? (answer.text || 'Done.')}</p>
+      ) : (
+        <p className="small muted">Asked {service.name}: its answer shows here once it comes.</p>
+      )}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+/**
+ * A service's own page in its card: its panel, sandboxed with no network (like a board's view). It learns where it is
+ * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
+ * and gets the service's answer back; it may say how tall it is.
+ *
+ *   to it:    {weave: 'view', panel, space, me, actions} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
+ *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}   {weave: 'visit', website} (to Live)
+ */
+function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(160);
+  const { data: base } = useApi(async () => bridge.lensBase(panel.key), [panel.key]);
+  const latest = useRef(actions);
+  latest.current = actions;
+  const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
+  const sendView = () =>
+    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })) });
+  // Again whenever something changed here (a website opened, a setting changed): it shows what's current.
+  const tick = useTick();
+  useEffect(sendView, [actions, tick]);
+  useEffect(() => {
+    const listen = (event: MessageEvent) => {
+      if (!frame.current || event.source !== frame.current.contentWindow) return;
+      const m = event.data as { weave?: string; id?: unknown; name?: unknown; input?: unknown; px?: unknown };
+      if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
+      // A running website it shows: its window is in the project's Live.
+      if (m?.weave === 'visit') location.hash = `#/p/${space.id}/live`;
+      if (m?.weave === 'act' && typeof m.name === 'string') {
+        const action = latest.current.find((a) => a.name === m.name);
+        void (async () => {
+          try {
+            const asked = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action?.label ?? String(m.name), action: m.name, ...(m.input !== undefined && m.input !== null ? { data: m.input } : {}) });
+            // Its answer comes from the node that runs it: wait for it (half a minute at most).
+            for (let i = 0; i < 60; i++) {
+              const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did })).find((r) => r.id === asked.id)?.results[0];
+              if (answer) return send({ weave: 'acted', id: m.id, ...(answer.error ? { error: answer.error } : { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) }) });
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            send({ weave: 'acted', id: m.id, error: `${service.name} didn't answer in time` });
+          } catch (error) {
+            send({ weave: 'acted', id: m.id, error: (error as Error).message });
+          }
+        })();
+      }
+    };
+    window.addEventListener('message', listen);
+    return () => window.removeEventListener('message', listen);
+  }, [space.id, service.did]);
+  if (!base) return null;
+  return <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />;
 }

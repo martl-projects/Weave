@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { Builtin, GumroadLink, OnchainPrice, VisitorRule } from '@weave/core';
+import type { ActionWho, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -258,6 +258,8 @@ export interface ServiceInfo {
   running: boolean;
   /** Why it doesn't run, when something stops it (a release says so in its artifact). */
   problem?: string;
+  /** One Weave ships: its name there. */
+  shipped?: string;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
 }
@@ -334,6 +336,13 @@ export interface ArtifactInfo {
   runs?: 'release' | 'container' | 'wasm';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
+  /** Where its files are: a GitHub release (handed out by a service that offers artifact.fetch), or an image. */
+  from?: { github: string } | { image: string };
+  /** A board's view (a client service), pinned to boards rather than run. */
+  lens?: true;
+  /** Who may get it in its project (everyone there, unless its maintainers narrowed it), and whether you may. */
+  who: ActionWho;
+  mine: boolean;
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -350,6 +359,35 @@ export interface ServiceProfileInfo {
   /** The settings it asks for (its manifest's env): what its spaces' maintainers can fill in. */
   settings?: AppSetting[];
   time: string;
+}
+
+/** A service Weave ships (packages/shipped): what it is, does and asks for, and the digest it runs as. */
+export interface ShippedServiceInfo {
+  name: string;
+  title: string;
+  about?: string;
+  contract: ServiceContract;
+  settings: AppSetting[];
+  digest: string;
+}
+
+/**
+ * A fetcher of yours: a client app that fetches artifacts for you, with what providers grant you, in the projects
+ * you allow (or all). Its settings are yours (your own sign-in), kept sealed on your node: only which are filled in.
+ */
+export interface FetcherInfo {
+  name: string;
+  title: string;
+  about?: string;
+  digest: string;
+  projects: Array<{ id: string; name: string }> | 'all';
+  settings: AppSetting[];
+  filled: string[];
+  net: string[];
+  /** Why it can't run here, if it can't. */
+  problem?: string;
+  /** Not added yet: one this Weave ships. */
+  added: boolean;
 }
 
 /** A service's settings in a space, as its maintainers keep them there (secrets only as set: never their value). */
@@ -395,14 +433,40 @@ export interface ServiceGate {
 }
 
 /** A request to a service in a space, and what the service answered. */
+/** One of a service's own pages for its card in a space: where its files are (lensBase(key) + page), who sees it, and you. */
+export interface ServicePanelInfo {
+  name: string;
+  title: string;
+  who: ActionWho;
+  key: string;
+  page: string;
+  mine: boolean;
+}
+
+/** One of a service's actions in a space: who may use it there (its contract's, or tighter), and whether you may. */
+export interface ServiceActionInfo {
+  name: string;
+  label: string;
+  /** Who may, here. */
+  who: ActionWho;
+  /** Who may, as its contract says. */
+  declared: ActionWho;
+  /** What using it asks for. */
+  input?: ServiceActionField[];
+  /** You may use it. */
+  mine: boolean;
+}
+
 export interface ServiceRequestInfo {
   id: string;
   to: Actor;
   from: Actor;
   text: string;
   data?: Json;
+  action?: string;
   time: string;
-  results: Array<{ id: string; text: string; data?: Json; error?: string; time: string }>;
+  /** Its answers: one for someone else shows only that it came (private). */
+  results: Array<{ id: string; text: string; data?: Json; error?: string; private?: true; time: string }>;
 }
 
 export interface SpaceRepos {
@@ -1751,6 +1815,8 @@ export interface Backend {
   serviceProfiles(): Promise<ServiceProfileInfo[]>;
   /** The services in a space: those whose people added them there. */
   servicesIn(space: string): Promise<ServiceProfileInfo[]>;
+  /** The services this Weave ships, to add with addService({shipped}). */
+  shippedServices(): Promise<ShippedServiceInfo[]>;
   /** A service's settings in a space, kept there by its maintainers. */
   serviceSettings(input: { space: string; service: string }): Promise<ServiceSettingsInfo>;
   /** Set (or with null remove) a service's setting in a space, as a maintainer; a secret is boxed to the service, readable by it alone. */
@@ -1760,7 +1826,22 @@ export interface Backend {
   /** Wait until the provider came back (5 minutes at most): the service's settings with the sign-in. */
   finishServiceSignIn(input: { id: string }): Promise<ServiceSettingsInfo>;
   /** Ask a service something in a space: a request it reads (it must be in that space). */
-  askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo>;
+  askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo>;
+  /** What you may ask a service to do in a space: its actions, who may use each there, and whether you may. */
+  serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]>;
+  /** A service's own pages for its card in a space (a shipped service's), each for whoever may see it. */
+  servicePanels(input: { space: string; service: string }): Promise<ServicePanelInfo[]>;
+  /** Maintainers: tighten who may use one of a service's actions in a space (null: as its contract says). */
+  setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
+  /** Maintainers: who may get one of the project's artifacts (null: everyone there). Providers' nodes refuse the rest. */
+  setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]>;
+  /** Your fetchers, and those this Weave ships that you haven't added. */
+  fetchers(): Promise<FetcherInfo[]>;
+  /** Add a fetcher Weave ships, for these projects (names or ids) or all; added again, for more of them. */
+  addFetcher(input: { shipped: string; projects: string[] | 'all' }): Promise<FetcherInfo>;
+  /** Change what a fetcher of yours fetches for, or your settings for it (null: take one out). */
+  setFetcher(input: { name: string; projects?: string[] | 'all'; settings?: Record<string, string | null> }): Promise<FetcherInfo>;
+  removeFetcher(name: string): Promise<void>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
   /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
@@ -2144,7 +2225,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

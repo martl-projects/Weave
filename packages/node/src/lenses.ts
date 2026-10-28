@@ -164,15 +164,18 @@ export class Lenses {
 
   /** A file of a lens's view (its site): of a lens pinned to a board here, made ready if it isn't yet. */
   async lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }> {
-    const lens = this.#pinned(input.release);
-    if (!lens) throw new Error('no board here is shown by that client service');
-    const site = (await this.#prepare(lens)).site;
-    if (!site) throw new Error(`${lens.name} has no view of its own`);
+    // A shipped service's panels: the pages that ship with this Weave, by its name.
+    const shipped = input.release.startsWith('shipped-') ? this.#svc().shippedPanelFolder(input.release.slice(8)) : undefined;
+    const lens = shipped ? undefined : this.#pinned(input.release);
+    if (!shipped && !lens) throw new Error('no board here is shown by that client service');
+    const site = shipped ?? (await this.#prepare(lens!)).site;
+    const name = shipped ? input.release.slice(8) : lens!.name;
+    if (!site) throw new Error(`${name} has no view of its own`);
     const root = resolvePath(site);
     let file = resolvePath(root, `.${('/' + input.path).replace(/\\/g, '/')}`);
-    if (file !== root && !file.startsWith(root + sep)) throw new Error(`not in ${lens.name}'s view`);
+    if (file !== root && !file.startsWith(root + sep)) throw new Error(`not in ${name}'s view`);
     if (existsSync(file) && statSync(file).isDirectory()) file = joinPath(file, 'index.html');
-    if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`not in ${lens.name}'s view`);
+    if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`not in ${name}'s view`);
     if (statSync(file).size > LENS_FILE_MAX) throw new Error(`${input.path} is larger than a view's file may be (${LENS_FILE_MAX / 1_000_000} MB)`);
     return { type: TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream', data: readFileSync(file).toString('base64') };
   }

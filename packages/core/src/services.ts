@@ -1,6 +1,7 @@
 import type { Entry } from './collab.ts';
 import { isDid, type Did } from './keys.ts';
 import { appSettingsOf, type AppSetting } from './rooms.ts';
+import { parseActions, whoWords, type ServiceAction } from './serviceactions.ts';
 
 /*
  * Services: code a person runs on a node of theirs, under a key of its own
@@ -78,6 +79,19 @@ export interface ServiceContract {
   offers?: string[];
   /** Hosts it may reach over HTTPS: api.example.com, or *.example.com for any of its subdomains. Enforced for WebAssembly services; a container has its container's network. */
   net?: string[];
+  /** What people may ask it to do, each with who may (serviceactions.ts): checked before it sees a request. */
+  actions?: ServiceAction[];
+  /**
+   * It hosts websites in its projects, as Weave's website service does: what its person's services serve, and what
+   * its person opens for a program of theirs, announced under its key; it lists and closes them. It never opens a
+   * port itself.
+   */
+  websites?: 'host';
+  /**
+   * Who fetches what it hands out (artifact.fetch): its answer is a grant only that fetcher understands, run by the
+   * asker's own node. A fetcher Weave ships, by name ("github-checkout"), or exactly this component ("sha256:…").
+   */
+  fetcher?: string;
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -164,6 +178,9 @@ export function resolveNet(net: string[] | undefined, settings: Record<string, s
 export const netAllows = (net: string[] | undefined, host: string): boolean =>
   !!net?.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : host === h));
 
+/** A fetcher a contract names: one Weave ships ("github-checkout"), or a component by its digest ("sha256:…"). */
+export const isFetcherRef = (value: string): boolean => /^[a-z][a-z0-9-]{0,39}$/.test(value) || /^sha256:[0-9a-f]{64}$/.test(value);
+
 export function parseContract(value: unknown): ServiceContract | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
@@ -180,7 +197,10 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   // Offering a protocol means answering requests in it: a service that reads nothing offers none.
   const offers = reads !== 'nothing' && Array.isArray(c.offers) ? [...new Set(c.offers.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(p) && p.length <= 60))].slice(0, 20) : [];
   const net = Array.isArray(c.net) ? [...new Set(c.net.map(lowerHost).filter(isNetHost))].slice(0, 20) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), version };
+  // Actions are requests: a service that reads nothing takes none.
+  const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
+  const fetcher = offers.length && typeof c.fetcher === 'string' && isFetcherRef(c.fetcher) ? c.fetcher : undefined;
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**
@@ -188,7 +208,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
  * writes (rooms, if it serves websites). A service that reads nothing and writes nothing signs its profile alone.
  */
 export const servicePermissions = (contract: ServiceContract): string[] =>
-  [...new Set([KIND_SERVICE_PROFILE, ...(contract.reads === 'nothing' ? [] : [KIND_SERVICE_RESULT]), ...contract.writes, ...(contract.website ? ['weave.room', 'weave.room.*'] : [])])];
+  [...new Set([KIND_SERVICE_PROFILE, ...(contract.reads === 'nothing' ? [] : [KIND_SERVICE_RESULT]), ...contract.writes, ...(contract.website || contract.websites === 'host' ? ['weave.room', 'weave.room.*'] : [])])];
 
 /** Whether a service takes requests (and may answer them). */
 export const takesRequests = (contract: ServiceContract): boolean => contract.reads !== 'nothing';
@@ -198,7 +218,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
@@ -246,6 +266,8 @@ export interface ServiceRequest {
   from: Did;
   text: string;
   data?: unknown;
+  /** The action it asks for (one its contract declares): its asker's role was checked. */
+  action?: string;
   time: string;
 }
 
@@ -256,7 +278,7 @@ export function requestsOf(entries: Entry[], to?: Did): ServiceRequest[] {
     .map((e) => {
       const body = (e.body && typeof e.body === 'object' && !Array.isArray(e.body) ? e.body : {}) as Record<string, unknown>;
       if (!isDid(body.to) || (to && body.to !== to)) return undefined;
-      return { id: e.id, to: body.to, from: e.event.author, text: typeof body.text === 'string' ? body.text.slice(0, 4000) : '', ...(body.data !== undefined ? { data: body.data } : {}), time: e.event.time };
+      return { id: e.id, to: body.to, from: e.event.author, text: typeof body.text === 'string' ? body.text.slice(0, 4000) : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.action === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(body.action) ? { action: body.action } : {}), time: e.event.time };
     })
     .filter((r): r is ServiceRequest => !!r)
     .sort((a, b) => a.time.localeCompare(b.time));

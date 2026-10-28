@@ -1,12 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
-import { Icon } from './icons.tsx';
+import type { AppManifest, ArtifactInfo, BoardInfo, SpaceRepos, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { ActionWho } from '@weave/core';
+import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
+import { ActionScopes, contractText, lowerFirst, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -221,50 +223,171 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 }
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
-function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[] }) {
-  const [picking, setPicking] = useState(false);
-  const [describing, setDescribing] = useState(false);
-  if (app === undefined) return null;
-  if (app === null)
-    return describing ? (
-      <PublishApp project={project} />
-    ) : (
+/** What an artifact is, in a word. */
+const artifactKind = (a: ArtifactInfo): string => (a.lens ? 'Board view' : a.website && a.applet ? 'Website and service' : a.website ? 'Website' : a.applet || a.packaged ? 'Service' : 'App');
+const artifactIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.website ? 'globe' : a.packaged ? 'store' : 'plug');
+
+/** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
+export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
+
+/** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
+function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; maintainer: boolean }) {
+  const [adding, setAdding] = useState<ArtifactInfo>();
+  const [access, setAccess] = useState<ArtifactInfo>();
+  // Yours to get; maintainers see them all, and set who may get each.
+  const shown = artifacts.filter((a) => a.mine || maintainer);
+  if (!shown.length) return <p className="small muted">Nothing yet.</p>;
+  return (
+    <div className="service-releases">
+      {shown.map((a) => (
+        <div className="service-release" key={a.id}>
+          <Icon name={artifactIcon(a)} />
+          <span className="grow">
+            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
+          </span>
+          {a.mine && <button onClick={() => setAdding(a)}>Add to…</button>}
+          {maintainer && (
+            <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
+              <Icon name="gear" />
+            </button>
+          )}
+        </div>
+      ))}
+      {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
+      {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
+    </div>
+  );
+}
+
+/** Who may get an artifact of the project (maintainers): everyone there, a board's readers, a group's members, maintainers, the owner. */
+function ArtifactAccessDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+  const project = artifact.project;
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
+  const groups = info?.groups ?? [];
+  const options: ActionWho[] = ['members', ...(boards ?? []).map((b) => ({ board: b.name })), ...groups.map((g) => ({ group: g.id })), 'maintainers', 'owner'];
+  const [who, setWho] = useState(JSON.stringify(artifact.who));
+  return (
+    <Modal title={`${artifact.name} ${artifact.tag}: who may get it`} onClose={onClose}>
+      <div className="field-row">
+        <label htmlFor="artifact-who">Who</label>
+        <select id="artifact-who" className="grow" value={who} onChange={(e) => setWho(e.target.value)}>
+          {options.map((w) => (
+            <option key={JSON.stringify(w)} value={JSON.stringify(w)}>
+              {whoLabel(w, `p/${project.name}`, groups)}
+            </option>
+          ))}
+        </select>
+      </div>
       <p className="small muted">
-        p/{project.name} has released nothing to run yet; other projects' releases install here as services (Add a service).{' '}
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setDescribing(true);
-          }}
-        >
-          Describe one…
-        </a>
+        {artifact.from && 'image' in artifact.from
+          ? `Only they see it here. Its image comes from its registry, though: whoever can reach it there still can.`
+          : `Its providers' nodes hand it only to them: nobody else gets its files through p/${project.name}, nor sees it here.`}
       </p>
-    );
+      <div className="buttons">
+        <AsyncButton
+          className="default"
+          onClick={() => attempt(() => api('setArtifactAccess', { project: project.id, artifact: artifact.id, who: who === '"members"' ? null : JSON.parse(who) }).then(() => (bump(), onClose())), `Who may get ${artifact.name} is set`)}
+        >
+          Save
+        </AsyncButton>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Adding an artifact: to a project of yours as a service or website, or (a board view) to one of its boards. */
+function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+  const { data: projects } = useApi(() => api<SpaceInfo[]>('spaces', 'project'), []);
+  const [where, setWhere] = useState<string>();
+  const project = (projects ?? []).find((p) => p.id === where);
+  const { data: boards } = useApi(() => (artifact.lens && where ? api<BoardInfo[]>('boards', where) : Promise.resolve([] as BoardInfo[])), [where, artifact.lens]);
+  const [board, setBoard] = useState<string>();
+  const { data: info } = useApi(() => (where ? api<ProjectInfo>('project', where) : Promise.resolve(undefined)), [where]);
+  return (
+    <Modal title={`Add ${artifact.name} to…`} onClose={onClose}>
+      <div className="field-row">
+        <label htmlFor="add-to-project">Project</label>
+        <select id="add-to-project" className="grow" value={where ?? ''} onChange={(e) => (setWhere(e.target.value || undefined), setBoard(undefined))}>
+          <option value="">Pick one…</option>
+          {(projects ?? []).filter((p) => !p.closed).map((p) => (
+            <option key={p.id} value={p.id}>
+              p/{p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {project && artifact.lens && (
+        <>
+          <div className="field-row">
+            <label htmlFor="add-to-board">Board</label>
+            <select id="add-to-board" className="grow" value={board ?? ''} onChange={(e) => setBoard(e.target.value || undefined)}>
+              <option value="">Pick one…</option>
+              {(boards ?? []).map((b) => (
+                <option key={b.name} value={b.name}>
+                  {b.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="small muted">Everyone in p/{project.name} can see this board through it.</p>
+          <div className="buttons">
+            <AsyncButton
+              className="default"
+              disabled={!board}
+              onClick={() => attempt(() => api('setBoardLens', { space: project.id, board, from: { project: artifact.project.id, tag: artifact.tag } }).then(() => (bump(), onClose())), `${artifact.name} shows ${board} in p/${project.name}`)}
+            >
+              Add to the board
+            </AsyncButton>
+          </div>
+        </>
+      )}
+      {project && !artifact.lens && <InstallRelease project={project} maintainer={!!info?.maintainer} only={artifact.id} onDone={onClose} />}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** What a service provides here: its artifacts; maintainers publish more from GitHub. */
+function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
+  const [describing, setDescribing] = useState(false);
+  return (
+    <>
+      <div className="small"><b>Available</b></div>
+      <ArtifactList artifacts={artifacts} maintainer={maintainer} />
+      {maintainer && app === null && !describing && (
+        <p className="small muted">
+          <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Make this project's code available…</a>
+        </p>
+      )}
+      {describing && <PublishApp project={project} />}
+    </>
+  );
+}
+
+/** What's available here that no service provides: from images Weave fetches itself, or GitHub releases before a service provides them. */
+function ProjectArtifacts({ project, app, artifacts, covered }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[]; covered: boolean }) {
+  const [picking, setPicking] = useState(false);
+  if (app === undefined || (!artifacts.length && covered)) return null;
   return (
     <fieldset>
-      <legend>{project.name}'s artifacts</legend>
-      {artifacts.length ? (
-        <p className="small">
-          {artifacts
-            .slice(0, 5)
-            .map((a) => `${a.name} ${a.tag} (${ago(a.time)})`)
-            .join(' · ')}
-        </p>
-      ) : (
-        <p className="small">Nothing released yet: release {app.name} from one of its repository's GitHub releases, and everyone in {project.name} can start it.</p>
+      <legend>Available</legend>
+      <ArtifactList artifacts={artifacts} maintainer />
+      {!covered && app && (
+        <div className="buttons">
+          <button onClick={() => setPicking(true)}>Publish from GitHub…</button>
+        </div>
       )}
-      <div className="buttons">
-        <button onClick={() => setPicking(true)}>Release from GitHub…</button>
-      </div>
-      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
+      {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
     </fieldset>
   );
 }
 
 /** Artifacts of every project you're in, this one's first. */
-function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
+export function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
   const { data } = useApi(async () => {
     const projects = await api<SpaceInfo[]>('spaces', 'project');
     const ordered = [project, ...projects.filter((p) => p.id !== project.id)];
@@ -275,7 +398,7 @@ function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
 }
 
 /** One setting typed in the start dialog. */
-function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
+export function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
   // A sign-in: nothing to type; its provider's page opens from its settings once it's installed.
   if (setting.oauth)
     return (
@@ -434,49 +557,71 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 }
 
 /** What a service is there for, in a project. */
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Hands the project's release files to its participants" : s.description || `A service: it ${contractText(s.contract)}`);
+/** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
+const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
+
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Gives the project's members access to its repositories" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app, boards }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; boards: string[] }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const [setting, setSetting] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const own = service.person.did === meDid;
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
+  // Getting access to a GitHub service's repositories: your GitHub account, shared with this project.
+  const { data: repos, reload: reloadRepos } = useApi(() => (service.builtin === 'github' ? api<SpaceRepos>('spaceRepos', project.id).catch(() => undefined) : Promise.resolve(undefined)), [project.id, service.builtin]);
+  const extras: ScopedAction[] = [
+    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
+    ...(service.builtin === 'github' && repos?.repos.length
+      ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories', who: 'members' as const, mine: true, run: () => void attempt(() => api('shareGithub', { space: project.id, on: !repos.shared }).then(reloadRepos), repos.shared ? 'Your access goes' : `Your GitHub account is shared with p/${project.name}: you'll get an invitation`) }]
+      : []),
+    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true) }] : []),
+    ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
+    ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
+    ...(own && mine
+      ? [
+          {
+            key: 'out',
+            label: `Take out of p/${project.name}`,
+            who: 'runner' as const,
+            mine: true,
+            run: () =>
+              void (async () =>
+                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
+                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))(),
+          },
+        ]
+      : []),
+  ];
   return (
     <fieldset className="project-service">
       <legend>
-        <Icon name={service.builtin === 'website' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
+        <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
       </legend>
-      <p className="small">{purpose(service)}</p>
+      {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
-      {its.map((room) => (
-        <div key={room.id}>
-          <WebsiteCard room={room} shows={shows} />
-          <HostedStatus hosted={mine?.websites?.find((r) => r.id === room.id)} />
-        </div>
-      ))}
-      {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
-      <div className="buttons">
-        {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
-        {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
-        {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
-        {(!!service.settings?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
-        {own && mine && (
-          <AsyncButton
-            onClick={async () =>
-              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
-              attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`)
-            }
-          >
-            Take out of p/{project.name}
-          </AsyncButton>
-        )}
-      </div>
+      {/* What it hosts runs in Live: a link there (one with its own page shows its overview below). */}
+      {hostsSites(service) && (
+        <p className="small">
+          {its.length ? (
+            <a href={`#/p/${project.id}/live`}>
+              Hosts {its.length} running website{its.length === 1 ? '' : 's'} → Live
+            </a>
+          ) : (
+            <span className="muted">No running websites{own ? '' : ` from ${by}`}.</span>
+          )}
+        </p>
+      )}
+      {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
+      {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
+      {publishing && app && <ReleasePicker project={project} app={app} onClose={() => setPublishing(false)} />}
     </fieldset>
   );
 }
@@ -485,9 +630,9 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
  * Installing a project's release as a service in this project: what it runs is shown and approved here, once per
  * release. One with a web page serves it as a website here (by the website service); one with a contract does what it says.
  */
-function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; maintainer: boolean; onDone(): void }) {
+export function InstallRelease({ project, maintainer, only, onDone }: { project: SpaceInfo; maintainer: boolean; only?: string; onDone(): void }) {
   const artifacts = useArtifacts(project);
-  const [picked, setPicked] = useState<string>();
+  const [picked, setPicked] = useState<string | undefined>(only);
   const [values, setValues] = useState<Record<string, string>>({});
   // Its settings kept in the project, for its maintainers to change (rather than only on this computer).
   const [keep, setKeep] = useState(maintainer);
@@ -509,8 +654,8 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
   };
   return (
     <fieldset>
-      <legend>Install a project's release</legend>
-      {usable.map((a) => (
+      {!only && <legend>Install a project's release</legend>}
+      {!only && usable.map((a) => (
         <div className="field-row" key={a.id}>
           <input id={`artifact-${a.id}`} type="radio" checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
           <label htmlFor={`artifact-${a.id}`}>
@@ -527,9 +672,10 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
         <>
           {chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
           {maintainer && chosen.settings.length > 0 && (
-            <label className="small">
-              <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} /> Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)
-            </label>
+            <div className="field-row small">
+              <input id={`keep-${project.id}`} type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
+              <label htmlFor={`keep-${project.id}`}>Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)</label>
+            </div>
           )}
           <div className="approve-launch">
             <Icon name="warning" size={32} />
@@ -559,61 +705,45 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
 }
 
 /** Adding a service to the project: the website service Weave ships (yours, or a new one), another of your services, or a project's release. */
-function AddProjectService({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
-  const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
-  const rooms = services.filter((s) => s.builtin === 'website');
-  const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
+
+/**
+ * What runs live in a project: its running websites, as windows to visit or play (Weave holds the connections), and
+ * the shows whose tickets let people in. Opening one for a program of yours is here too, if you host websites here.
+ */
+export function ProjectLiveView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
+  const [opening, setOpening] = useState(false);
+  // Yours that host websites here: you open websites for programs of yours through it.
+  const host = (services ?? []).find((s) => (s.builtin === 'website' || s.contract.websites === 'host') && !s.node && s.spaces.some((x) => x.id === project.id));
   return (
-    <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
-      <div className="form">
-        {!rooms.length && (
-          <div className="install-box">
-            <span className="grow">
-              <b>Websites</b>
-              <br />
-              <span className="small">A way to join in with the project's participants: services with a web page show up here as websites, and so can programs of yours.</span>
-            </span>
-            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Websites are on in p/${project.name}`)}>
-              Add
-            </AsyncButton>
-          </div>
-        )}
-        {!services.some((s) => s.builtin === 'github') && (
-          <div className="install-box">
-            <span className="grow">
-              <b>Releases from GitHub</b>
-              <br />
-              <span className="small">Hands the project's release files to its participants, with your GitHub sign-in: they can install releases of a private repository without access to it. Each file is checked against what its maintainer released.</span>
-            </span>
-            <AsyncButton onClick={() => attempt(() => api('addService', { builtin: 'github', spaces: [project.id] }).then(() => (bump(), onClose())), `p/${project.name} gets its releases through you`)}>Add</AsyncButton>
-          </div>
-        )}
-        {away.map((s) => (
-          <div className="install-box" key={s.name}>
-            <span className="grow">
-              <b>{s.name}</b>
-              <br />
-              <span className="small">{s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
-            </span>
-            <AsyncButton onClick={() => add(s)}>Add</AsyncButton>
-          </div>
-        ))}
-        {rooms.length > 0 && !away.length && <p className="small">Your services are all in p/{project.name} already.</p>}
-        <InstallRelease project={project} maintainer={maintainer} onDone={onClose} />
-        <p className="small muted">
-          A service you add reads what's addressed to it here, as in its other spaces, and so could carry things between them: add it only where you'd trust it with that. Your own code becomes a service in{' '}
-          <a href="#/keys">Keys &amp; devices → Services</a>.
-        </p>
-      </div>
-      <div className="buttons">
-        <button onClick={onClose}>Close</button>
-      </div>
-    </Modal>
+    <Page
+      title={<><Icon name="globe" /> Live · p/{project.name}</>}
+      actions={
+        host ? (
+          <button onClick={() => setOpening(true)}>
+            <Icon name="plus" /> Open a website…
+          </button>
+        ) : undefined
+      }
+    >
+      {rooms && !rooms.length && <p className="empty">Nothing running in p/{project.name} right now.</p>}
+      {(rooms ?? []).map((room) => (
+        <div key={room.id}>
+          <WebsiteCard room={room} shows={shows ?? []} />
+          <HostedStatus hosted={(services ?? []).flatMap((s) => s.websites ?? []).find((r) => r.id === room.id)} />
+        </div>
+      ))}
+      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
+      {opening && host && <OpenWebsiteDialog project={project} service={host.name} away={host.node?.name} members={members} meDid={meDid} groups={info?.groups ?? []} shows={shows ?? []} onClose={() => setOpening(false)} />}
+    </Page>
   );
 }
 
 /** A project's services: each with what it's for and what it offers here. Websites are what the website service serves. */
-export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+export function ProjectServicesView({ project, members, meDid, focus }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; focus?: string }) {
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
   const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
   const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
@@ -622,12 +752,15 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
   const [adding, setAdding] = useState(false);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
 
   // Room services first, then the rest.
-  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
+  const all = [...(profiles ?? [])].sort((a, b) => Number(hostsSites(b)) - Number(hostsSites(a)));
+  // One picked in the sidebar: that one alone.
+  const list = focus ? all.filter((s) => s.did === focus) : all;
   return (
     <Page
-      title={<><Icon name="zap" /> Services · p/{project.name}</>}
+      title={list.length === 1 && focus ? <><Icon name={serviceIcon(list[0])} /> {list[0].name} · p/{project.name}</> : <><Icon name="zap" /> Services · p/{project.name}</>}
       actions={
         <button onClick={() => setAdding(true)}>
           <Icon name="plus" /> Add a service…
@@ -636,11 +769,10 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
     >
       {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add websites, and everyone here can join in.</p>}
       {list.map((s) => (
-        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} />
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} boards={(boards ?? []).map((b) => b.name)} />
       ))}
-      {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
-      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
-      {adding && <AddProjectService project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
+      {!focus && info?.maintainer && (!all.some(handsOutGitHub) || (artifacts ?? []).some((a) => a.from && 'image' in a.from)) && <ProjectArtifacts project={project} app={app} artifacts={all.some(handsOutGitHub) ? (artifacts ?? []).filter((a) => a.from && 'image' in a.from) : (artifacts ?? [])} covered={all.some(handsOutGitHub)} />}
+      {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>
   );
 }

@@ -1,0 +1,19 @@
+{
+  "app": "websites",
+  "name": "Websites",
+  "service": {
+    "reads": "addressed",
+    "writes": [],
+    "websites": "host",
+    "actions": [
+      { "name": "list", "label": "See the websites", "who": "members" },
+      { "name": "close", "label": "Close a website", "who": "maintainers", "input": [{ "name": "id", "label": "Website" }] }
+    ],
+    "version": "1.0"
+  },
+  "wasm": {
+    "component": "websites.wasm",
+    "panel": "panel",
+    "panels": [{ "name": "overview", "title": "Websites", "who": "members", "page": "index.html" }]
+  }
+}

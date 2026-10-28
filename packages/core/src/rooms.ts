@@ -4,6 +4,7 @@ import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
 import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
 import { parseAppMarks, type AppMarks } from './marks.ts';
+import { parseWho, type ActionWho } from './serviceactions.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -89,6 +90,12 @@ export interface AppManifest {
    * packages/sdk/wit/service.wit; docs/v2-stage19.md). Pure like a client service, run by every node that took it in.
    */
   marks?: AppMarks;
+  /**
+   * A fetcher: a client app that fetches artifacts for its person, on their node, with what a provider grants them
+   * (artifact.fetch) and their own access. It answers no requests and has no key: Weave runs it when something is
+   * to be fetched, in the projects its person allows, and checks what it hands over against the artifact's digest.
+   */
+  fetcher?: AppFetcher;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -99,9 +106,29 @@ export interface AppClient {
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppFetcher {
+  /** Hosts it may reach over HTTPS, as a service's contract names them. */
+  net?: string[];
+}
+
 export interface AppWasm {
   component: string;
   site?: string;
+  /** The folder of its panels' pages (panels says which page is which). */
+  panel?: string;
+  /**
+   * Its own pages in its card, each in the section of who may see it: an overview, a form. Shown sandboxed, with no
+   * network: they act only through its actions (checked as buttons are), and get what they show by asking one.
+   */
+  panels?: AppPanel[];
+}
+
+export interface AppPanel {
+  name: string;
+  title: string;
+  who: ActionWho;
+  /** Its page in the panel folder, like index.html. */
+  page: string;
 }
 
 /** A path inside a package: relative (a leading / is dropped, as in an image), and never out of it. */
@@ -304,7 +331,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'marks']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'marks']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -334,7 +361,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.marks === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.marks === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -398,9 +425,30 @@ export function checkManifest(input: unknown): ManifestCheck {
     const raw = (m.wasm && typeof m.wasm === 'object' ? m.wasm : {}) as Record<string, unknown>;
     const component = packagePath(raw.component);
     const site = raw.site === undefined ? undefined : packagePath(raw.site);
+    const panel = raw.panel === undefined ? undefined : packagePath(raw.panel);
+    const panels: AppPanel[] = [];
+    for (const [i, p] of (Array.isArray(raw.panels) ? raw.panels : []).slice(0, 8).entries()) {
+      const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+      const who = parseWho(o.who);
+      const page = packagePath(o.page);
+      const name = text(o.name, 40);
+      if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
+      else panels.push({ name, title: text(o.title, 60) || name, who, page });
+    }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
-    else wasm = { component, ...(site ? { site } : {}) };
+    else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
+    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
+  }
+  // A fetcher: a component (wasm) that fetches artifacts for its person, reaching only the hosts it names.
+  let fetcher: AppFetcher | undefined;
+  if (m.fetcher !== undefined) {
+    const raw = (m.fetcher && typeof m.fetcher === 'object' && !Array.isArray(m.fetcher) ? m.fetcher : {}) as Record<string, unknown>;
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost) : [];
+    const bad = net.filter((h) => !isNetHost(h));
+    if (raw.net !== undefined && (!Array.isArray(raw.net) || bad.length)) problems.push('"fetcher.net" lists the hosts it reaches over HTTPS, by name: like ["api.github.com", "*.githubusercontent.com"]');
+    else if (!m.wasm) problems.push('a fetcher is a WebAssembly component: say where it is ("wasm": {"component": "fetcher.wasm"})');
+    else fetcher = { ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}) };
   }
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;
@@ -460,7 +508,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(marks ? { marks } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(marks ? { marks } : {}) } };
 }
 
 /**
@@ -516,7 +564,7 @@ export const MANIFEST_RULES = [
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
-  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
+  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',

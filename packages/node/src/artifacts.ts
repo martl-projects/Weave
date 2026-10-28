@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AppAsset, AppManifest } from '@weave/core';
+import type { AppAsset, AppManifest, Json } from '@weave/core';
+import type { Fetchers } from './fetchers.ts';
 import { platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import type { GitHub } from './github.ts';
 import { writeJson } from './home.ts';
@@ -15,9 +16,12 @@ import { imageLocation, pullImage } from './registry.ts';
  * got, or why it failed, until the release is here.
  */
 
-/** Where a provider says a release file can be downloaded (artifact.fetch). */
+/** Where a provider says a release file can be downloaded (artifact.fetch), or what it grants its fetcher. */
 export interface Located {
-  url: string;
+  url?: string;
+  /** A grant for the fetcher its contract names, which this node runs. */
+  grant?: Json;
+  fetcher?: string;
   /** The provider, for messages. */
   by: string;
 }
@@ -51,6 +55,8 @@ export class Releases {
   readonly #locate: (a: ArtifactRef) => Promise<Located | undefined>;
   readonly #fetchFile: () => typeof fetch;
   readonly #registryFetch: () => typeof fetch;
+  /** The fetchers its person added: they fetch what a provider grants. */
+  fetchers?: Fetchers;
 
   /**
    * `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any;
@@ -71,7 +77,15 @@ export class Releases {
     let refused: string | undefined;
     try {
       const located = await this.#locate(a);
-      if (located) {
+      if (located?.fetcher) {
+        // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
+        if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);
+        const found = this.fetchers.forProject(located.fetcher, a.project);
+        if ('missing' in found) throw new Error(`${located.by} hands it out through a fetcher: this needs ${found.missing}`);
+        const run = await this.fetchers.run(found, { grant: located.grant ?? null, artifact: { project: a.project, id: a.id, tag: a.tag, name: a.manifest.name }, asset: { file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
+        return { body: run.body, ...(asset.size ? { size: asset.size } : {}), from: `${found.shipped.manifest.name}, with what ${located.by} granted` };
+      }
+      if (located?.url) {
         const res = await this.#fetchFile()(located.url);
         if (res.ok && res.body) {
           const size = Number(res.headers.get('content-length'));
