@@ -7,6 +7,7 @@ import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
+import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -264,7 +265,7 @@ function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app
 }
 
 /** Artifacts of every project you're in, this one's first. */
-function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
+export function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
   const { data } = useApi(async () => {
     const projects = await api<SpaceInfo[]>('spaces', 'project');
     const ordered = [project, ...projects.filter((p) => p.id !== project.id)];
@@ -275,7 +276,7 @@ function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
 }
 
 /** One setting typed in the start dialog. */
-function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
+export function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
   // A sign-in: nothing to type; its provider's page opens from its settings once it's installed.
   if (setting.oauth)
     return (
@@ -447,7 +448,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   return (
     <fieldset className="project-service">
       <legend>
-        <Icon name={service.builtin === 'website' ? 'zap' : 'gear'} /> {service.name} <span className="muted small">· {by}</span>
+        <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
       </legend>
       <p className="small">{purpose(service)}</p>
       <OriginText origin={service.origin} />
@@ -482,60 +483,12 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
 }
 
 /**
- * A service Weave ships, added to this project: what it's for and may do, and the settings it asks for, kept in the
- * project for its maintainers when you are one (a secret sealed for the service alone; a sign-in from its Settings).
- */
-function ShippedInstall({ project, shipped, maintainer, onDone }: { project: SpaceInfo; shipped: ShippedServiceInfo; maintainer: boolean; onDone(): void }) {
-  const [open, setOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [keep, setKeep] = useState(maintainer);
-  const missing = shipped.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim());
-  const install = () => {
-    const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
-    return attempt(
-      () => api<ServiceInfo>('addService', { shipped: shipped.name, spaces: [project.id], settings, ...(keep && maintainer ? { settingsIn: project.id } : {}) }).then(() => (bump(), onDone())),
-      `${shipped.title} runs in p/${project.name}`,
-    );
-  };
-  return (
-    <div className="install-box shipped-install">
-      <span className="grow">
-        <b>{shipped.title}</b> <span className="muted small">· ships with Weave</span>
-        <br />
-        <span className="small">{shipped.about ?? `It ${contractText(shipped.contract)}`}</span>
-        {open && (
-          <>
-            <p className="small muted">It {contractText(shipped.contract)}. Weave runs it only as exactly the component it ships.</p>
-            {shipped.settings.map((s) => (
-              <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />
-            ))}
-            {maintainer && shipped.settings.length > 0 && (
-              <div className="field-row small">
-                <input id={`keep-${shipped.name}`} type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
-                <label htmlFor={`keep-${shipped.name}`}>Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)</label>
-              </div>
-            )}
-            <div className="buttons">
-              <button onClick={() => setOpen(false)}>Cancel</button>
-              <AsyncButton className="default" disabled={missing.length > 0} onClick={install}>
-                Add to p/{project.name}
-              </AsyncButton>
-            </div>
-          </>
-        )}
-      </span>
-      {!open && <button onClick={() => setOpen(true)}>Add…</button>}
-    </div>
-  );
-}
-
-/**
  * Installing a project's release as a service in this project: what it runs is shown and approved here, once per
  * release. One with a web page serves it as a website here (by the website service); one with a contract does what it says.
  */
-function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; maintainer: boolean; onDone(): void }) {
+export function InstallRelease({ project, maintainer, only, onDone }: { project: SpaceInfo; maintainer: boolean; only?: string; onDone(): void }) {
   const artifacts = useArtifacts(project);
-  const [picked, setPicked] = useState<string>();
+  const [picked, setPicked] = useState<string | undefined>(only);
   const [values, setValues] = useState<Record<string, string>>({});
   // Its settings kept in the project, for its maintainers to change (rather than only on this computer).
   const [keep, setKeep] = useState(maintainer);
@@ -557,8 +510,8 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
   };
   return (
     <fieldset>
-      <legend>Install a project's release</legend>
-      {usable.map((a) => (
+      {!only && <legend>Install a project's release</legend>}
+      {usable.filter((a) => !only || a.id === only).map((a) => (
         <div className="field-row" key={a.id}>
           <input id={`artifact-${a.id}`} type="radio" checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
           <label htmlFor={`artifact-${a.id}`}>
@@ -608,67 +561,9 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
 }
 
 /** Adding a service to the project: the website service Weave ships (yours, or a new one), another of your services, or a project's release. */
-function AddProjectService({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
-  const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
-  const rooms = services.filter((s) => s.builtin === 'website');
-  const { data: shipped } = useApi(() => api<ShippedServiceInfo[]>('shippedServices').catch(() => [] as ShippedServiceInfo[]), []);
-  // What Weave ships and you don't run yet (one you run elsewhere is among yours, below).
-  const offered = (shipped ?? []).filter((x) => !services.some((s) => s.shipped === x.name));
-  const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
-  return (
-    <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
-      <div className="form">
-        {!rooms.length && (
-          <div className="install-box">
-            <span className="grow">
-              <b>Websites</b>
-              <br />
-              <span className="small">A way to join in with the project's participants: services with a web page show up here as websites, and so can programs of yours.</span>
-            </span>
-            <AsyncButton className="default" onClick={() => attempt(() => api('addService', { builtin: 'website', spaces: [project.id] }).then(() => (bump(), onClose())), `Websites are on in p/${project.name}`)}>
-              Add
-            </AsyncButton>
-          </div>
-        )}
-        {offered.map((x) => (
-          <ShippedInstall key={x.name} project={project} shipped={x} maintainer={maintainer} onDone={onClose} />
-        ))}
-        {!services.some((s) => s.builtin === 'github') && !(shipped ?? []).some((x) => x.name === 'github-releases') && (
-          <div className="install-box">
-            <span className="grow">
-              <b>Releases from GitHub</b>
-              <br />
-              <span className="small">Hands the project's release files to its participants, with your GitHub sign-in: they can install releases of a private repository without access to it. Each file is checked against what its maintainer released.</span>
-            </span>
-            <AsyncButton onClick={() => attempt(() => api('addService', { builtin: 'github', spaces: [project.id] }).then(() => (bump(), onClose())), `p/${project.name} gets its releases through you`)}>Add</AsyncButton>
-          </div>
-        )}
-        {away.map((s) => (
-          <div className="install-box" key={s.name}>
-            <span className="grow">
-              <b>{s.name}</b>
-              <br />
-              <span className="small">{s.builtin === 'website' ? "A way to join in with the project's participants" : s.description || `It ${contractText(s.contract)}`}</span>
-            </span>
-            <AsyncButton onClick={() => add(s)}>Add</AsyncButton>
-          </div>
-        ))}
-        {rooms.length > 0 && !away.length && <p className="small">Your services are all in p/{project.name} already.</p>}
-        <InstallRelease project={project} maintainer={maintainer} onDone={onClose} />
-        <p className="small muted">
-          A service you add reads what's addressed to it here, as in its other spaces, and so could carry things between them: add it only where you'd trust it with that. Your own code becomes a service in{' '}
-          <a href="#/keys">Keys &amp; devices → Services</a>.
-        </p>
-      </div>
-      <div className="buttons">
-        <button onClick={onClose}>Close</button>
-      </div>
-    </Modal>
-  );
-}
 
 /** A project's services: each with what it's for and what it offers here. Websites are what the website service serves. */
-export function ProjectServicesView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+export function ProjectServicesView({ project, members, meDid, focus }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; focus?: string }) {
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
   const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
   const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
@@ -679,10 +574,12 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
   const [adding, setAdding] = useState(false);
 
   // Room services first, then the rest.
-  const list = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
+  const all = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
+  // One picked in the sidebar: that one alone.
+  const list = focus ? all.filter((s) => s.did === focus) : all;
   return (
     <Page
-      title={<><Icon name="zap" /> Services · p/{project.name}</>}
+      title={list.length === 1 && focus ? <><Icon name={serviceIcon(list[0])} /> {list[0].name} · p/{project.name}</> : <><Icon name="zap" /> Services · p/{project.name}</>}
       actions={
         <button onClick={() => setAdding(true)}>
           <Icon name="plus" /> Add a service…
@@ -693,9 +590,9 @@ export function ProjectServicesView({ project, members, meDid }: { project: Spac
       {list.map((s) => (
         <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} />
       ))}
-      {info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
-      <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />
-      {adding && <AddProjectService project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
+      {!focus && info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
+      {!focus && <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />}
+      {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>
   );
 }

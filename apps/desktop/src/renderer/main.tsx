@@ -1,7 +1,7 @@
 import { checkForUpdates, UpdatePrompt } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
+import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest, ServiceProfileInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
@@ -11,6 +11,7 @@ import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
 import { ProjectServicesView } from './websites.tsx';
+import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
 import { LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
@@ -65,6 +66,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: rooms } = useApi(() => (space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id]);
+  const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   return (
@@ -85,7 +87,8 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={(view === 'services' && !arg) || view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && (services ?? []).map((s) => <TreeLink key={s.did} depth={2} href={`${base}/services/${s.did}`} icon={serviceIcon(s)} label={s.name} on={view === 'services' && arg === s.did} />)}
           <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label="Catalog" on={view === 'catalog'} />
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
@@ -339,7 +342,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
         />
       );
   } else if (view === 'services' || view === 'live') {
-    body = <ProjectServicesView project={space} members={list} meDid={me.did} />;
+    body = <ProjectServicesView project={space} members={list} meDid={me.did} focus={view === 'services' ? arg : undefined} />;
   } else if (view === 'routines') {
     body = <RoutinesPage project={space} />;
   } else if (view === 'settings') {

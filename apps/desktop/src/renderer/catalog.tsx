@@ -48,7 +48,7 @@ export function CatalogView({ space, maintainer }: { space: SpaceInfo; maintaine
 }
 
 /** Installing a catalog entry: what its image says it runs and may do, its settings, and where it goes. */
-function InstallFromCatalog({ space, entry, onClose }: { space: SpaceInfo; entry: CatalogEntryInfo; onClose(): void }) {
+export function InstallFromCatalog({ space, entry, onClose }: { space: SpaceInfo; entry: CatalogEntryInfo; onClose(): void }) {
   const [artifact, setArtifact] = useState<ArtifactInfo>();
   const [problem, setProblem] = useState<string>();
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);

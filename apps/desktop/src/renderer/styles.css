@@ -578,6 +578,16 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 
 /* ---------- installing a project's app */
 .install-box { display: flex; align-items: center; gap: 6px; padding: 6px 0; flex-wrap: wrap; }
+/* Add a service: a catalog of tiles, each with its icon, who it's by, and what it's for. */
+.service-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin: 8px 0; max-height: 60vh; overflow-y: auto; padding: 2px; }
+.service-tile { display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 10px; min-height: 92px; height: auto; white-space: normal; }
+.service-tile .icon { flex: none; }
+.service-tile-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.service-tile-about { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.service-tile-badge { color: var(--accent, #000080); }
+.service-details { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.service-details > button:first-child { align-self: flex-start; }
+.service-details-head { display: flex; gap: 10px; align-items: flex-start; }
 .install-box progress { display: block; width: 100%; margin-top: 4px; }
 .install-facts { background: transparent; border-collapse: collapse; margin-bottom: 6px; }
 .install-facts th { text-align: left; padding-right: 10px; vertical-align: top; white-space: nowrap; }
