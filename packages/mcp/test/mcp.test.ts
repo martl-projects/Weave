@@ -58,25 +58,15 @@ describe('Weave over MCP', () => {
   it('tells the harness how Weave works, including what only the person can do', async () => {
     const { client, close } = await setup();
     const instructions = client.getInstructions() ?? '';
-    expect(instructions).toContain('weave_github_connect');
-    expect(instructions).toContain('Only select repositories');
+    expect(instructions).toContain('weave_github_proof');
+    expect(instructions).toContain('GitHub access service');
     expect(instructions).toMatch(/Things only the person does/);
     close();
   });
 
   it('links repositories and publishes apps only with the permissions for it', async () => {
     const { node, call, close } = await setup();
-    // A GitHub sign-in on this node, and a GitHub where the app may manage martl/weave.
-    writeFileSync(join(node.home.dir, 'github.json'), JSON.stringify({ token: 't', login: 'martl' }));
-    node.githubSetup = {
-      ...node.githubSetup,
-      fetch: (async (input: string | URL | Request) => {
-        const path = new URL(String(input)).pathname;
-        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : path === '/repos/martl/weave' ? { full_name: 'martl/weave', owner: { type: 'Organization' } } : { message: 'Not Found' };
-        return new Response(JSON.stringify(body), { status: 'message' in body ? 404 : 200 });
-      }) as typeof fetch,
-    };
-
+    // Linking is Weave's alone: no GitHub sign-in, no call to GitHub.
     const refused = await call('weave_link_repo', { space: 'Weave', repo: 'martl/weave' });
     expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.github\.repo/);
     writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));

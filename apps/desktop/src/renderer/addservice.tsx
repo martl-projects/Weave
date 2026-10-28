@@ -38,13 +38,12 @@ interface Entry {
 
 type Picked =
   | { kind: 'shipped'; shipped: ShippedServiceInfo }
-  | { kind: 'builtin'; builtin: 'website' | 'github' }
+  | { kind: 'builtin'; builtin: 'website' }
   | { kind: 'release'; artifact: ArtifactInfo }
   | { kind: 'mine'; service: ServiceInfo };
 
 const BUILTINS = {
   website: { title: 'Websites', about: "A way to join in with the project's participants: services with a web page show up as websites here, and so can programs of yours." },
-  github: { title: 'GitHub access', about: "Gives the project's members read access to its linked repositories, and takes it back when they leave. It acts with your GitHub sign-in, or your own GitHub App." },
 } as const;
 
 export function ServiceCatalog({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
@@ -64,7 +63,7 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
     ...(shipped ?? [])
       .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
       .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
-    ...(['website', 'github'] as const)
+    ...(['website'] as const)
       // Websites ship with Weave now: the built-in one only where this Weave ships none.
       .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
       .map((b): Entry => ({ key: `builtin:${b}`, icon: serviceIcon({ name: b, builtin: b }), title: BUILTINS[b].title, by: 'Weave', about: BUILTINS[b].about, badge: 'built into Weave', open: () => setPicked({ kind: 'builtin', builtin: b }) })),

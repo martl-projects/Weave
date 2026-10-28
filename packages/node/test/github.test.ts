@@ -104,7 +104,7 @@ function person(name: string, github: FakeGitHub, login: string): WeaveNode {
   const dir = mkdtempSync(join(tmpdir(), 'weave-github-'));
   dirs.push(dir);
   const node = WeaveNode.init(name, dir);
-  node.githubSetup = { clientId: 'Iv1.test', fetch: github.fetchAs(login), sleep: async () => {} };
+  node.githubSetup = { ...node.githubSetup, fetch: github.fetchAs(login) };
   return node;
 }
 
@@ -112,12 +112,6 @@ function syncAll(nodes: WeaveNode[]): void {
   for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 }
 
-async function connect(node: WeaveNode): Promise<string> {
-  const started = await node.connectGithub();
-  expect(started.pending?.userCode).toBe('WDJB-MJHT');
-  await vi.waitFor(async () => expect((await node.github()).login).toBeDefined());
-  return (await node.github()).login!;
-}
 
 describe('GitHub repos that follow a space', () => {
   it('shows a GitHub account on the hub only with a gist of that account naming the did', async () => {
@@ -125,15 +119,18 @@ describe('GitHub repos that follow a space', () => {
     const martl = person('martl', github, 'martl');
     const lena = person('Lena', github, 'lena-gh');
 
-    await expect(martl.showGithubOnHub({ on: true })).rejects.toThrow(/connect GitHub first/);
-    await connect(martl);
-    const mine = await martl.showGithubOnHub({ on: true });
+    // Nobody signs in: martl makes the gist himself, holding the line Weave gives him, and pastes its address.
+    await expect(martl.showGithubOnHub({ on: true })).rejects.toThrow(/a gist of yours that proves it/);
+    const { text } = await martl.githubProof({ login: 'martl' });
+    github.gists.set('aaaaaaaaaaaaaaaaaaaa', { owner: 'lena-gh', content: text });
+    await expect(martl.showGithubOnHub({ on: true, login: 'martl', gist: 'https://gist.github.com/lena-gh/aaaaaaaaaaaaaaaaaaaa' })).rejects.toThrow(/has to belong to martl/);
+    github.gists.set('bbbbbbbbbbbbbbbbbbbb', { owner: 'martl', content: 'something else' });
+    await expect(martl.showGithubOnHub({ on: true, login: 'martl', gist: 'bbbbbbbbbbbbbbbbbbbb' })).rejects.toThrow(/doesn't prove it/);
+    github.gists.set('cccccccccccccccccccc', { owner: 'martl', content: text });
+    const mine = await martl.showGithubOnHub({ on: true, login: 'martl', gist: 'https://gist.github.com/martl/cccccccccccccccccccc' });
     expect(mine.github).toEqual({ login: 'martl', url: 'https://github.com/martl', verified: true });
-    expect(github.gists.size).toBe(1);
 
-    // Others see it, checked against GitHub; showing it again makes no new gist.
-    await martl.showGithubOnHub({ on: true });
-    expect(github.gists.size).toBe(1);
+    // Others see it, checked against GitHub.
     martl.replica.events().forEach((e) => lena.replica.ingest(e));
     expect((await lena.profile(martl.identity.author)).github).toMatchObject({ login: 'martl', verified: true });
 
@@ -144,23 +141,6 @@ describe('GitHub repos that follow a space', () => {
     await martl.showGithubOnHub({ on: false });
     martl.replica.events().forEach((e) => lena.replica.ingest(e));
     expect((await lena.profile(martl.identity.author)).github).toBeUndefined();
-  });
-
-  it('signs in through your own GitHub App when you choose one, and says whose app it is', async () => {
-    const github = new FakeGitHub();
-    const lena = person('Lena', github, 'lena-gh');
-    expect((await lena.github()).app).toEqual({ name: 'Weave Connect', slug: 'weave-connect', owner: 'martldennl', url: 'https://github.com/apps/weave-connect', own: false });
-    await connect(lena);
-
-    await expect(lena.setGithubApp('https://github.com/apps/nobody-here')).rejects.toThrow(/no public app/);
-    const mine = await lena.setGithubApp('https://github.com/apps/my-weave');
-    expect(mine.app).toMatchObject({ name: 'My Weave', owner: 'lena-gh', own: true });
-    expect(mine.installUrl).toBe('https://github.com/apps/my-weave/installations/new');
-    // The sign-in went through the other app: it's gone.
-    expect(mine.login).toBeUndefined();
-
-    const back = await lena.setGithubApp(null);
-    expect(back.app.own).toBe(false);
   });
 
   it('plans: never re-invites someone who declined, never removes people added by hand', () => {

@@ -128,6 +128,8 @@ describe('GitHub access, shipped with Weave', { timeout: 120_000 }, () => {
     martl.runServices({ port: api.port });
     const syncing = setInterval(() => sync([martl, lena, kofi]), 100);
     try {
+      // Weave's own GitHub service is gone: these two do what it did.
+      await expect(martl.addService({ builtin: 'github', spaces: ['Site'] })).rejects.toThrow(/GitHub service is gone: add GitHub releases .* and GitHub access/);
       // Linking is Weave's, by a maintainer: nobody signs in to GitHub.
       await expect(lena.linkRepo({ space: 'Site', repo: 'acme/site', on: true })).rejects.toThrow(/only the maintainers/);
       await martl.linkRepo({ space: 'Site', repo: 'https://github.com/acme/site', on: true });

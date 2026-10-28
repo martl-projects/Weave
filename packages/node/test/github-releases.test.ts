@@ -109,7 +109,7 @@ class PrivateGitHub {
 
 function person(name: string, github: PrivateGitHub, shipped: string): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-github-releases-'));
-  node.githubSetup = { clientId: 'Iv1.test', fetch: github.fetch, sleep: async () => {} };
+  node.githubSetup = { fetch: github.fetch };
   node.wasmSetup.shippedDir = shipped;
   nodes.push(node);
   return node;

@@ -181,21 +181,6 @@ export interface SpaceInfo extends SpaceRef {
   visitors?: { agents: VisitorRule; services: VisitorRule; approved: string[] };
 }
 
-export interface GitHubInfo {
-  /** This copy of Weave knows the Weave GitHub app (it has its client ID). */
-  available: boolean;
-  /** Where to install the app on repositories, so they can be linked. */
-  installUrl: string;
-  /** The GitHub App you sign in through, who owns it, and whether it's your own choice (not Weave Connect). */
-  app: { name: string; slug: string; owner: string; url: string; own: boolean };
-  /** Who you're signed in as on this device. */
-  login?: string;
-  /** A sign-in waiting for you to enter the code on GitHub. */
-  pending?: { userCode: string; verificationUri: string; expires: string };
-  /** Why the last sign-in didn't work. */
-  error?: string;
-}
-
 export interface GumroadInfo {
   /** This copy of Weave knows the Weave application on Gumroad (it has its client ID), so it can connect in the browser. */
   available: boolean;
@@ -1730,16 +1715,6 @@ export interface Backend {
   removeMember(space: string, who: string): Promise<void>;
 
   // GitHub: repositories that follow a space's membership
-  /** Your GitHub sign-in on this device, and a sign-in waiting for its code. */
-  github(): Promise<GitHubInfo>;
-  /** Start signing in to GitHub: a code to enter on github.com. Ask github() until it's done. */
-  connectGithub(): Promise<GitHubInfo>;
-  /** Forget the GitHub sign-in on this device. Repos you linked stop following their spaces until you connect again. */
-  disconnectGithub(): Promise<GitHubInfo>;
-  /** Sign in through your own GitHub App (its page link, https://github.com/apps/<name>), or null for Weave Connect. Signs you out of the other one. */
-  setGithubApp(app: string | null): Promise<GitHubInfo>;
-  /** Repositories you can link: those the Weave GitHub app is installed on, which you administer. */
-  githubRepos(): Promise<string[]>;
   // services: code you run under keys of their own, with exactly the rights their contracts declare
   /** Run a new service on this node: its own key, its contract's rights, in these spaces, started with `command`. */
   /**
@@ -1762,8 +1737,6 @@ export interface Backend {
   listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo>;
   /** What installing a catalog entry would run, read from its image (shown before approving it); `released` is who listed it. */
   catalogArtifact(input: { catalog: string; app: string }): Promise<ArtifactInfo>;
-  /** Start setting up your own GitHub App for a GitHub service (GitHub's App-manifest flow): the page to open in the browser. */
-  githubAppSetup(input: { service?: string; org?: string }): Promise<{ url: string }>;
   /** Take an app off a catalog (its maintainers). */
   unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
@@ -1813,8 +1786,6 @@ export interface Backend {
   removeFetcher(name: string): Promise<void>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
-  /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
-  githubRepoOwner(repo: string): Promise<'organization' | 'personal'>;
   /** A space's repositories, and whether you gave it your GitHub account. */
   spaceRepos(space: string): Promise<SpaceRepos>;
   /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
@@ -1823,10 +1794,12 @@ export interface Backend {
    * access none (just linked) or write (writers: people in the space personally, picked one by one).
    */
   linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos>;
-  /** Give a space your GitHub account (the one you're signed in with), so its repos invite you; on: false takes it back. */
-  shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos>;
-  /** Show the GitHub account you're signed in with on your hub (proven by a public gist naming your did), or (on: false) stop. */
-  showGithubOnHub(input: { on: boolean }): Promise<Profile>;
+  /** What a gist proving your GitHub account holds (you make it on github.com: nobody signs in to Weave). */
+  githubProof(input: { login: string }): Promise<{ text: string; url: string }>;
+  /** Give a space your GitHub account, with a gist of yours that proves it, so its repos invite you; on: false takes it back. */
+  shareGithub(input: { space: string; on: boolean; login?: string; gist?: string; as?: string }): Promise<SpaceRepos>;
+  /** Show your GitHub account on your hub, with a gist of yours that proves it, or (on: false) stop. */
+  showGithubOnHub(input: { on: boolean; login?: string; gist?: string }): Promise<Profile>;
 
   // communities
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
@@ -2181,8 +2154,8 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'spaceRepos', 'linkRepo',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'githubProof', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

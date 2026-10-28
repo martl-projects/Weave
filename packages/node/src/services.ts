@@ -10,7 +10,6 @@ import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
 import { imageDigest, imageLabels } from './registry.ts';
-import { GitHubAppAuth, type GitHub } from './github.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
@@ -32,24 +31,21 @@ export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
 export const NODE_PREFIX = 'node:';
 
-/** The services Weave ships: what each does, as its contract and in words, and the settings it takes. */
-const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }> = {
+/**
+ * The services built into Weave: what each does, as its contract and in words, and the settings it takes. Weave's
+ * GitHub service was one: GitHub releases and GitHub access, services Weave ships, do what it did, with their own
+ * access; one from before runs no more (it says so).
+ */
+const BUILTIN: Partial<Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }>> = {
   // Reads nothing and writes its websites.
   website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
-  // Reads what's asked of it and answers where to download a release's files; with a GitHub App of the person's own,
-  // it also keeps linked repositories' access in step with their spaces, and records whom it gave access.
-  github: {
-    contract: { reads: 'addressed', writes: [KIND_GITHUB_ADDED], offers: [PROTOCOL_ARTIFACT_FETCH], sources: ['github'], version: '1.0' },
-    description: 'GitHub: hands the project’s release files to its participants, and keeps linked repositories’ access in step with their spaces',
-    settings: [
-      { name: 'GITHUB_APP_ID', label: 'GitHub App ID', optional: true, hint: 'Your own GitHub App, installed on the organization: it acts without anyone signing in' },
-      { name: 'GITHUB_APP_KEY', label: 'GitHub App private key (.pem)', secret: true, optional: true, hint: 'The App needs Administration (read and write), Contents (read) and Metadata (read)' },
-    ],
-  },
 };
 
+/** What replaced Weave's own GitHub service. */
+export const GITHUB_SERVICE_GONE = "Weave's GitHub service is gone: add GitHub releases (it hands out releases) and GitHub access (it gives repository access) instead, each with its own GitHub access";
+
 /** What a service Weave ships accepts as settings, as a manifest would say it. */
-const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin].settings ?? [] });
+const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin]?.settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
 /** A signature with a key among a service's settings (it never sees the key): RS256, ES256 (r||s) or HS256. */
@@ -67,7 +63,7 @@ function signWith(key: string | undefined, name: string, algorithm: string, data
 }
 
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
-const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
+const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin]?.settings : s.asks);
 
 /** The fetcher for an open artifact of a source, when no provider there names one. */
 const DIRECT_FETCHERS: Record<string, string> = { github: 'github-checkout' };
@@ -341,7 +337,7 @@ export class Services {
     // What it asks for: its manifest's settings, or (your own code) what you say it asks for.
     const asks = manifest?.env ?? (builtin ? undefined : appSettingsOf(input.asks));
     this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : asks?.length ? { name: 'it', env: asks } : undefined), given);
-    if (builtin === 'github') this.githubAppOf(given);
+    if (builtin === 'github') throw new Error(GITHUB_SERVICE_GONE);
     // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
     if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
@@ -354,10 +350,10 @@ export class Services {
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
-    const contract = parseContract(builtin ? BUILTIN[builtin].contract : manifest ? this.artifactContract(manifest) : input.contract);
+    const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? (BUILTIN[builtin]?.description ?? '') : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -396,7 +392,6 @@ export class Services {
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
     if (hostsWebsites(stored)) this.serveRunning();
-    if (builtin === 'github') this.provide();
     return this.serviceInfo(this.storedService(name));
   }
 
@@ -629,7 +624,6 @@ export class Services {
       if (value === null) delete settings[key];
       else settings[key] = String(value);
     }
-    if (before.builtin === 'github') this.githubAppOf(settings);
     const spaces = input.spaces ? this.serviceSpaces(input.spaces) : before.spaces;
     // Per-space settings: only for spaces it's in; a space it leaves takes its settings along.
     const spaceSettings: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(before.spaceSettings ?? {}).filter(([id]) => spaces.includes(id)));
@@ -1262,154 +1256,6 @@ export class Services {
     }
   }
 
-  /** The GitHub App a GitHub service's settings name (both, or neither); a half-given one is refused. */
-  githubAppOf(settings: Record<string, string>): GitHubAppAuth | undefined {
-    const id = settings.GITHUB_APP_ID;
-    const key = settings.GITHUB_APP_KEY;
-    if (!id && !key) return undefined;
-    if (!id || !key) throw new Error('a GitHub App takes both its ID (GITHUB_APP_ID) and its private key (GITHUB_APP_KEY)');
-    const kept = this.#apps.get(`${id}:${key}`);
-    if (kept) return kept;
-    const app = new GitHubAppAuth(id, key.replace(/\\n/g, '\n'), this.h.githubFetch(), this.h.clock);
-    this.#apps.set(`${id}:${key}`, app);
-    return app;
-  }
-
-  #apps = new Map<string, GitHubAppAuth>();
-
-  /** The GitHub service on this node that acts as its person's own GitHub App, if one does. */
-  githubApp(): { service: StoredService; app: GitHubAppAuth } | undefined {
-    for (const s of this.storedServices().filter((x) => x.builtin === 'github' && x.enabled)) {
-      const app = this.githubAppOf(s.settings);
-      if (app) return { service: s, app };
-    }
-    return undefined;
-  }
-
-  /** Whether a GitHub service with an App of its own runs somewhere else (an always-on node): it keeps access in step then. */
-  githubAppAway(): string | undefined {
-    if (this.h.isLinkedNode) return undefined;
-    const away = [...this.handedOver().values()].find((h) => h.builtin === 'github' && h.enabled !== false && (h.settingNames ?? []).includes('GITHUB_APP_KEY'));
-    return away ? this.nodeKey(away.node).name : undefined;
-  }
-
-  /** GitHub for a repository: as the person's own App when it's installed there, else with this node's sign-in. */
-  async githubFor(repo: string): Promise<GitHub> {
-    const own = this.githubApp();
-    const client = own ? await own.app.clientFor(repo) : undefined;
-    return client ?? this.h.github();
-  }
-
-  // Setting up the person's own GitHub App in one go (GitHub's App-manifest flow): Weave opens a page on this
-  // computer that sends GitHub the App's description, the person confirms on GitHub, GitHub sends them back with a
-  // one-time code, and Weave exchanges it for the App's ID and key: they go into the GitHub service's settings.
-
-  /** The port of this computer's local pages (http://weave.localhost:…), where GitHub sends the person back. */
-  linkPort?: number;
-  /** Setups started here, by their secret state: valid for an hour, once. */
-  #appSetups = new Map<string, { service: string; org?: string; at: number }>();
-
-  /** Start setting up a GitHub App for a GitHub service: the address to open in the browser. */
-  githubAppSetup(input: { service?: string; org?: string }): { url: string } {
-    const here = this.storedServices().filter((s) => s.builtin === 'github').map((s) => s.name);
-    const away = this.h.isLinkedNode ? [] : [...this.handedOver().values()].filter((h) => h.builtin === 'github').map((h) => h.service);
-    const all = [...here, ...away];
-    const service = input.service ?? (all.length === 1 ? all[0] : undefined);
-    if (!service || !all.includes(service)) throw new Error(all.length ? `which GitHub service? (${all.join(', ')})` : 'add the GitHub service first (weave service add github --builtin github)');
-    const org = input.org?.trim();
-    if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(org)) throw new Error('an organization is its GitHub name, like acme');
-    if (!this.linkPort) throw new Error("this computer's Weave doesn't serve its local pages (another Weave has their port): set the App's ID and key by hand instead");
-    const state = b64u.encode(randomBytes(18));
-    for (const [key, s] of this.#appSetups) if (this.h.clock() - s.at > 3600_000) this.#appSetups.delete(key);
-    this.#appSetups.set(state, { service, ...(org ? { org } : {}), at: this.h.clock() });
-    return { url: `http://${LINK_HOST}:${this.linkPort}/github/new-app?state=${state}` };
-  }
-
-  /** What the start page sends GitHub: where (the organization's or the person's App settings) and the App's description. */
-  githubAppManifest(state: string): { action: string; manifest: string; org?: string; service: string } {
-    const setup = this.#appSetups.get(state);
-    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup link has expired or was used: start again in Weave');
-    const back = `http://${LINK_HOST}:${this.linkPort}`;
-    const person = (this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'my').replace(/[^A-Za-z0-9 -]/g, '').slice(0, 14).trim();
-    const manifest = {
-      // App names are unique on GitHub: a few random letters keep it free. It can be renamed on GitHub.
-      name: `Weave ${person} ${b64u.encode(randomBytes(3)).replace(/[^A-Za-z0-9]/g, 'x')}`.slice(0, 34),
-      description: 'Weave: keeps repository access in step with your Weave spaces, and hands their release files to participants.',
-      url: back,
-      redirect_url: `${back}/github/app-created`,
-      public: false,
-      default_permissions: { administration: 'write', contents: 'read', metadata: 'read' },
-      default_events: [],
-    };
-    const action = setup.org ? `https://github.com/organizations/${setup.org}/settings/apps/new?state=${state}` : `https://github.com/settings/apps/new?state=${state}`;
-    return { action, manifest: JSON.stringify(manifest), ...(setup.org ? { org: setup.org } : {}), service: setup.service };
-  }
-
-  /** GitHub sent the person back with a code: the App's ID and key go into the service; next, installing it. */
-  async githubAppCreated(input: { code: string; state: string }): Promise<{ name: string; install: string; service: string }> {
-    const setup = this.#appSetups.get(input.state);
-    this.#appSetups.delete(input.state);
-    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup has expired or was used: start again in Weave');
-    if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.code)) throw new Error('GitHub sent no code back');
-    const res = await this.h.githubFetch()(`https://api.github.com/app-manifests/${input.code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' } });
-    const app = (await res.json().catch(() => ({}))) as { id?: number; slug?: string; name?: string; pem?: string; message?: string };
-    if (!res.ok || !app.id || !app.pem || !app.slug) throw new Error(`GitHub didn't hand over the App${app.message ? `: ${app.message}` : ''}`);
-    await this.setService({ name: setup.service, settings: { GITHUB_APP_ID: String(app.id), GITHUB_APP_KEY: app.pem } });
-    return { name: app.name ?? app.slug, install: `https://github.com/apps/${app.slug}/installations/new`, service: setup.service };
-  }
-
-  /** Requests the node is answering now, so each is answered once. */
-  #answering = new Set<string>();
-
-  /** Weave's services that answer in the node (the GitHub service): each request addressed to them, once. */
-  provide(): void {
-    for (const stored of this.storedServices().filter((s) => s.builtin === 'github' && s.enabled)) {
-      const did = this.serviceKey(stored.name).did;
-      for (const id of stored.spaces) {
-        const space = this.h.spaces.get(id);
-        if (!space) continue;
-        const entries = this.#openedEntries(space);
-        const answered = new Set(entries.filter((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did).map((e) => (e.body as { request?: unknown } | null)?.request));
-        for (const r of requestsOf(entries, did)) {
-          if (answered.has(r.id) || this.#answering.has(r.id)) continue;
-          this.#answering.add(r.id);
-          const deadline = this.requestDeadline(stored.contract, entries.find((e) => e.id === r.id)!.body as Record<string, Json>, r.time);
-          if (deadline !== undefined && this.h.clock() > deadline) {
-            void (this.serviceGate(stored.token)?.answer({ request: r.id, error: `it expired before ${stored.name} got to it: ask again` }) ?? Promise.resolve()).catch(() => {}).finally(() => this.#answering.delete(r.id));
-            continue;
-          }
-          void this.answerFetch(stored, space, r).finally(() => this.#answering.delete(r.id));
-        }
-      }
-    }
-  }
-
-  /** The GitHub service answers artifact.fetch: the release must be its space's, and the file its maintainer fingerprinted. */
-  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; from: Did; data?: unknown }): Promise<void> {
-    const gate = this.serviceGate(stored.token);
-    if (!gate) return;
-    const data = (r.data && typeof r.data === 'object' ? r.data : {}) as { protocol?: unknown; artifact?: unknown; platform?: unknown };
-    try {
-      if (data.protocol !== PROTOCOL_ARTIFACT_FETCH) throw new Error(`${stored.name} answers ${PROTOCOL_ARTIFACT_FETCH} only`);
-      const artifact = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === data.artifact);
-      if (!artifact) throw new Error(`${this.h.spaceName(space)} has no such release`);
-      const no = this.artifactRefusal(space, artifact.id, r.from);
-      if (no) throw new Error(no);
-      const asset = typeof data.platform === 'string' ? artifact.manifest.install?.assets?.[data.platform] : undefined;
-      if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
-      const repo = artifact.manifest.install?.github;
-      if (!repo) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't released on GitHub`);
-      const client = await this.githubFor(repo);
-      const found = (await client.release(repo, artifact.tag)).assets.find((x) => x.name === asset.file);
-      if (!found) throw new Error(`the release ${artifact.tag} on GitHub has no file ${asset.file}`);
-      const url = await client.downloadUrl(repo, found.id);
-      await gate.answer({ request: r.id, data: { url, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
-    } catch (error) {
-      await gate.answer({ request: r.id, error: (error as Error).message }).catch(() => {});
-    }
-  }
-
-  #providing = false;
 
   serviceApi?: string;
 
@@ -1453,13 +1299,14 @@ export class Services {
     this.saveServices(this.storedServices().map((s) => (s.name === site ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
   }
 
+  #restarts = false;
+
   /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
-    // Weave's own providers answer as requests arrive (in a moment, so a burst of events is looked at once).
-    if (!this.#providing) {
-      this.#providing = true;
-      let soon: ReturnType<typeof setTimeout> | undefined;
+    // Once: services' settings changing restart them.
+    if (!this.#restarts) {
+      this.#restarts = true;
       // A service's setting changed in one of its spaces: it starts again with it (a sign-in renewed here likewise).
       const restarting = new Set<string>();
       const restart = (name: string) => {
@@ -1474,16 +1321,11 @@ export class Services {
         }, 200);
       };
       this.h.replica.onAppend((event) => {
-        soon ??= setTimeout(() => {
-          soon = undefined;
-          this.provide();
-        }, 50);
         const d = this.h.decode(event);
         if (d?.inner.kind !== KIND_SERVICE_SETTING) return;
         const of = (d.inner.body as { service?: unknown } | null)?.service;
         for (const stored of this.storedServices()) if (stored.spaces.includes(d.space?.id ?? '') && this.serviceKey(stored.name).did === of) restart(stored.name);
       });
-      this.provide();
       setInterval(() => {
         const running = this.storedServices().filter((x) => x.enabled && this.h.runtime.running(`service:${x.name}`));
         // A WebAssembly service asks for its settings as it goes; a process got them when it started.
@@ -1499,6 +1341,8 @@ export class Services {
   }
 
   startService(stored: StoredService): void {
+    // Weave's own GitHub service from before: it runs no more, and says what replaced it.
+    if (stored.builtin === 'github') return void this.h.releases.jobs.set(`service:${stored.name}`, { error: GITHUB_SERVICE_GONE });
     if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
     const a = stored.artifact;
     if (stored.shipped) return this.startShipped(stored);

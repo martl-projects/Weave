@@ -5,6 +5,7 @@ import {
   type SharedAccount,
   canManage as mayManageSpace,
   isLogin,
+  isGistId,
   isRepoName,
   KIND_GITHUB_ACCOUNT,
   KIND_GITHUB_ADDED,
@@ -406,7 +407,6 @@ import {
   type BoardViewInfo,
   type ChatInfo,
   type CoauthorRequest,
-  type GitHubInfo,
   type GumroadInfo,
   type HarnessInfo,
   type PermissionRequest,
@@ -500,7 +500,7 @@ import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, t
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform } from './appinstall.ts';
-import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
+import { checkGistProof, GitHub, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
@@ -515,7 +515,6 @@ import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, 
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLabels, imageLocation } from './registry.ts';
-import type { GitHubAppFlow } from './links.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -572,13 +571,6 @@ export const KIND_BOARD_FOLLOW = 'weave.board.follow';
 export const FOLLOWED_BOARDS = ['releases', 'showcase'];
 const SELF_SCOPE = 'self';
 
-
-/** A GitHub sign-in waiting for its code, or why the last one failed. */
-interface GitHubLogin {
-  code?: DeviceCode;
-  error?: string;
-  cancel: AbortController;
-}
 
 /** An event as this node can read it, before names are resolved. */
 /** A service handed to an always-on node (the body of a handover, sealed to yourself). */
@@ -912,7 +904,8 @@ export class WeaveNode implements Backend {
     env: process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : ({} as Record<string, string>),
   });
   /** How this node reaches GitHub (tests put a stand-in here). */
-  githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+  /** Fetch for GitHub's public API (gists that prove accounts, public releases): tests put a stand-in there. */
+  githubSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /**
    * Containers (Weave and Docker): the registry API is reached with `fetch`; `docker` is the Docker command line
    * (WEAVE_DOCKER: a path, or a JSON list of a program and its first arguments). Tests use stand-ins.
@@ -925,7 +918,6 @@ export class WeaveNode implements Backend {
   oauthSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
   wasmSetup: { testHosts: Record<string, number>; shippedDir?: string } = { testHosts: {} };
-  #githubLogin?: GitHubLogin;
 
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
@@ -1007,7 +999,9 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
+    // Weave's own GitHub sign-in is gone (services have their own access): its token isn't kept.
+    rmSync(joinPath(home.dir, 'github.json'), { force: true });
+    for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -3209,97 +3203,6 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- GitHub: repos that follow a space
 
-  get #githubFile(): string {
-    return joinPath(this.home.dir, 'github.json');
-  }
-
-  /** The GitHub sign-in on this device (kept in the home, never in a log). */
-  #githubAuth(): { token: string; login: string } | undefined {
-    const saved = readSecretJson<{ token?: string; login?: string }>(this.home, this.#githubFile);
-    return saved?.token && saved.login ? { token: saved.token, login: saved.login } : undefined;
-  }
-
-  /** The GitHub App this node signs in through: your own, or Weave Connect. */
-  #githubApp(): GitHubApp {
-    return this.config.githubApp ?? { ...DEFAULT_GITHUB_APP, clientId: this.githubSetup.clientId };
-  }
-
-  async github(): Promise<GitHubInfo> {
-    const auth = this.#githubAuth();
-    const login = this.#githubLogin;
-    const app = this.#githubApp();
-    return {
-      available: !!app.clientId,
-      installUrl: githubInstallUrl(app.slug),
-      app: { name: app.name, slug: app.slug, owner: app.owner, url: `https://github.com/apps/${app.slug}`, own: !!this.config.githubApp },
-      ...(auth ? { login: auth.login } : {}),
-      ...(login?.code ? { pending: { userCode: login.code.userCode, verificationUri: login.code.verificationUri, expires: login.code.expiresAt } } : {}),
-      ...(login?.error ? { error: login.error } : {}),
-    };
-  }
-
-  async setGithubApp(link: string | null): Promise<GitHubInfo> {
-    const app = link?.trim() ? await lookUpGitHubApp(link, this.githubSetup.fetch) : undefined;
-    const before = this.#githubApp().clientId;
-    const { githubApp: _old, ...rest } = this.config;
-    this.config = app && app.clientId !== DEFAULT_GITHUB_APP.clientId ? { ...rest, githubApp: app } : rest;
-    saveConfig(this.home, this.config);
-    // A sign-in belongs to the app it went through.
-    if (this.#githubApp().clientId !== before) await this.disconnectGithub();
-    return this.github();
-  }
-
-  async connectGithub(): Promise<GitHubInfo> {
-    const { fetch: fetchImpl, sleep } = this.githubSetup;
-    const { clientId } = this.#githubApp();
-    this.#githubLogin?.cancel.abort();
-    const cancel = new AbortController();
-    const code = await startDeviceFlow(clientId, fetchImpl);
-    const login: GitHubLogin = { code, cancel };
-    this.#githubLogin = login;
-    // Wait for the person to enter the code on GitHub, in the background; github() tells how it went.
-    void finishDeviceFlow(clientId, code, fetchImpl, cancel.signal, sleep)
-      .then(async (token) => {
-        const user = await new GitHub(token, fetchImpl).user();
-        writeSecretJson(this.home, this.#githubFile, { token, login: user.login, id: user.id, connected: new Date(this.clock()).toISOString() });
-        this.#githubSynced.clear();
-        if (this.#githubLogin === login) this.#githubLogin = undefined;
-      })
-      .catch((error: Error) => {
-        if (this.#githubLogin === login) this.#githubLogin = cancel.signal.aborted ? undefined : { error: error.message, cancel };
-      });
-    return this.github();
-  }
-
-  async disconnectGithub(): Promise<GitHubInfo> {
-    this.#githubLogin?.cancel.abort();
-    this.#githubLogin = undefined;
-    rmSync(this.#githubFile, { force: true });
-    return this.github();
-  }
-
-  /** Repositories known to belong to an organization (a person's are asked again: they may have moved). */
-  #organizationRepos = new Set<string>();
-
-  async #ownedByOrganization(client: GitHub, repo: string): Promise<boolean> {
-    if (this.#organizationRepos.has(repo.toLowerCase())) return true;
-    const organization = (await client.owner(repo)) === 'Organization';
-    if (organization) this.#organizationRepos.add(repo.toLowerCase());
-    return organization;
-  }
-
-  async githubRepoOwner(repo: string): Promise<'organization' | 'personal'> {
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
-    return (await this.#ownedByOrganization(new GitHub(auth.token, this.githubSetup.fetch), repo)) ? 'organization' : 'personal';
-  }
-
-  async githubRepos(): Promise<string[]> {
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
-    return new GitHub(auth.token, this.githubSetup.fetch).repos();
-  }
-
   async spaceRepos(ref: string): Promise<SpaceRepos> {
     const space = this.#space(ref);
     if (space.kind === 'direct') throw new Error('direct chats have no repositories');
@@ -3375,31 +3278,40 @@ export class WeaveNode implements Backend {
     return this.spaceRepos(space.id);
   }
 
-  async shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos> {
+  /** The text a gist proving a GitHub account is yours holds: made by you on github.com, nobody signs in to Weave. */
+  async githubProof(input: { login: string }): Promise<{ text: string; url: string }> {
+    if (!isLogin(input.login)) throw new Error('a GitHub username: letters, digits and single hyphens');
+    return { text: githubProofText(this.identity.author, input.login), url: 'https://gist.github.com/' };
+  }
+
+  /**
+   * A gist that proves a GitHub account is yours (its owner is that account, and it names you): checked here before
+   * it's shared, as everyone's Weave checks it again. Its id, from its address or as it is.
+   */
+  async #provenGist(login: string, gist: string): Promise<string> {
+    if (!isLogin(login)) throw new Error('a GitHub username: letters, digits and single hyphens');
+    const id = gist.trim().replace(/\/+$/, '').split('/').pop() ?? '';
+    if (!isGistId(id)) throw new Error('the gist: its address (https://gist.github.com/<you>/<id>) or its id');
+    const proven = await checkGistProof(id, login, this.identity.author, this.githubSetup.fetch);
+    if (proven === undefined) throw new Error("GitHub can't be asked right now: try again in a moment");
+    if (!proven) throw new Error(`that gist doesn't prove it: it has to belong to ${login} and hold "${githubProofText(this.identity.author, login).trim()}"`);
+    return id;
+  }
+
+  /** Give a space your GitHub account, with a gist of yours that proves it (or take it back): its repositories' access follows. */
+  async shareGithub(input: { space: string; on: boolean; login?: string; gist?: string; as?: string }): Promise<SpaceRepos> {
     if (input.as) this.#agentMay(input.as, KIND_GITHUB_ACCOUNT);
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('direct chats have no repositories');
     if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
-    const auth = input.on ? this.#githubAuth() : undefined;
-    if (input.on && !auth) throw new Error('connect GitHub first, so Weave knows your account');
-    // The proof it's yours: a secret gist of that account naming you (one for all your spaces).
-    const gist = auth ? await this.#githubProof(auth) : undefined;
-    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, gist: gist!, on: true } : { on: false }, space: space.id, as: input.as });
+    if (!input.on) {
+      await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: { on: false }, space: space.id, as: input.as });
+      return this.spaceRepos(space.id);
+    }
+    if (!input.login || !input.gist) throw new Error('your GitHub username, and a gist of yours that proves it (weave github proof <username>)');
+    const gist = await this.#provenGist(input.login, input.gist);
+    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: { login: input.login, gist, on: true }, space: space.id, as: input.as });
     return this.spaceRepos(space.id);
-  }
-
-  /**
-   * A gist of the signed-in GitHub account naming this person: the one shared before (in any space, or shown on the
-   * hub) while it still proves it, or a new secret one. Owners' nodes check it before inviting anyone.
-   */
-  async #githubProof(auth: { token: string; login: string }): Promise<string> {
-    const me = this.identity.author;
-    const login = auth.login.toLowerCase();
-    const known = [...this.#spaces.values()].flatMap((space) => (space.kind === 'direct' ? [] : [sharedAccountsOf(this.#entries(space)).get(me)])).filter((a) => a?.gist && a.login.toLowerCase() === login).map((a) => a!.gist!);
-    const hub = this.#hubGithub(me);
-    if (hub && hub.login.toLowerCase() === login) known.push(hub.gist);
-    for (const gist of new Set(known)) if ((await checkGistProof(gist, auth.login, me, this.githubSetup.fetch)) === true) return gist;
-    return (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login), false)).id;
   }
 
   /**
@@ -3417,33 +3329,17 @@ export class WeaveNode implements Backend {
     return proven;
   }
 
-  /** Your own shares from before proofs: shared again, with one, where this device is signed in to that account. */
-  async #proveGithubShares(): Promise<void> {
-    const auth = this.#githubAuth();
-    if (!auth || this.#githubSharesProven === auth.login) return;
-    const me = this.identity.author;
-    for (const space of this.#spaces.values()) {
-      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
-      const mine = sharedAccountsOf(this.#entries(space)).get(me);
-      if (mine && !mine.gist && mine.login.toLowerCase() === auth.login.toLowerCase()) await this.shareGithub({ space: space.id, on: true }).catch(() => {});
-    }
-    this.#githubSharesProven = auth.login;
-  }
-
-  async showGithubOnHub(input: { on: boolean }): Promise<Profile> {
-    const me = this.identity.author;
-    const before = this.#hubGithub(me);
+  /** Show your GitHub account on your hub, with a gist of yours that proves it (or stop showing it). */
+  async showGithubOnHub(input: { on: boolean; login?: string; gist?: string }): Promise<Profile> {
+    const before = this.#hubGithub(this.identity.author);
     if (!input.on) {
       if (before) this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { on: false } });
       return this.profile();
     }
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first');
-    // The proof: a public gist of this account naming this did. Made once, kept while the account stays the same.
-    let gist = before && before.login.toLowerCase() === auth.login.toLowerCase() ? before.gist : undefined;
-    if (!gist) gist = (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login))).id;
-    if (before?.gist === gist) return this.profile();
-    this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: auth.login, gist, on: true } });
+    if (!input.login || !input.gist) throw new Error('your GitHub username, and a gist of yours that proves it (weave github proof <username>)');
+    const gist = await this.#provenGist(input.login, input.gist);
+    if (before?.gist === gist && before.login === input.login) return this.profile();
+    this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: input.login, gist, on: true } });
     return this.profile();
   }
 
@@ -3729,10 +3625,9 @@ export class WeaveNode implements Backend {
         found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
       }
     }
-    // The repository's releases, with your GitHub sign-in if you have one (the repository may be private).
+    // The repository's releases, as anyone sees them (a private repository's: its release posts are enough).
     try {
-      const auth = this.#githubAuth();
-      const releases = await withTimeout(new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(source.repo), 8000);
+      const releases = await withTimeout(new GitHub('', this.githubSetup.fetch).releases(source.repo), 8000);
       for (const r of releases) {
         const version = parseVersion(r.tag);
         if (version) found.push({ version: formatVersion(version), url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(r.tag)}`, ...(r.published ? { published: r.published } : {}), source: 'github' });
@@ -3787,8 +3682,8 @@ export class WeaveNode implements Backend {
     const colon = given.lastIndexOf(':');
     const [ref, tag] = colon > given.lastIndexOf('/') ? [given.slice(0, colon), given.slice(colon + 1)] : [given, ''];
     if (!tag || !IMAGE_REF.test(ref)) throw new Error('which image? its name and tag, like ghcr.io/you/service:1.0 (Weave pins the tag to its digest)');
-    const auth = this.#githubAuth();
-    const options = { fetch: this.containerSetup.fetch, ...(auth && imageLocation(ref).host === 'ghcr.io' ? { credentials: { user: auth.login, token: auth.token } } : {}) };
+    // A public image: Weave signs in nowhere, and those who install it pull it the same way.
+    const options = { fetch: this.containerSetup.fetch };
     const { digest } = await imageDigest(ref, [tag], options);
     const checked = checkServiceLabel((await imageLabels(ref, digest, options))[SERVICE_LABEL]);
     if (!checked.manifest) throw new Error(`${ref}:${tag} isn't a Weave service: ${checked.problems.join('; ')}`);
@@ -8943,7 +8838,6 @@ export class WeaveNode implements Backend {
       /** Hosts a test stands in for (none in use). */
       testHosts: () => n.wasmSetup.testHosts,
       clock: () => n.clock(),
-      github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
       publish: n.publish.bind(n),
       get releases() {
@@ -9060,20 +8954,6 @@ export class WeaveNode implements Backend {
 
   catalog(...args: Parameters<Services['catalog']>): ReturnType<Services['catalog']> {
     return this.#services.catalog(...args);
-  }
-
-  async githubAppSetup(input: { service?: string; org?: string }): Promise<{ url: string }> {
-    return this.#services.githubAppSetup(input);
-  }
-
-  /** Where GitHub sends the person back when they set up an App (this computer's local pages); the daemon sets it. */
-  set linkPort(port: number | undefined) {
-    this.#services.linkPort = port;
-  }
-
-  /** The local pages' part in setting up a GitHub App (not on the API: only the browser reaches it, with its secret state). */
-  get githubAppFlow(): GitHubAppFlow {
-    return { manifest: (state) => this.#services.githubAppManifest(state), created: (input) => this.#services.githubAppCreated(input) };
   }
 
   setBoardLens(...args: Parameters<Lenses['setBoardLens']>): Promise<BoardViewInfo> {

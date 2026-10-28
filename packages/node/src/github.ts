@@ -1,66 +1,14 @@
 /*
- * GitHub, as seen from a Weave node: signing in with GitHub's device flow
- * (a code the person approves on github.com; no server, no secret, only the
- * public client ID of a GitHub App), and the few repository calls group
- * access and app installs need.
- *
- * Which app: Weave Connect by default. A GitHub App's owner can act on every
- * repository the app is installed on (with a private key Weave never uses),
- * so people who'd rather not trust that owner register their own app and
- * enter it in Linked accounts.
+ * GitHub, as seen from a Weave node: what anyone reaches without signing in. Gists that prove a GitHub account is a
+ * person's, and a repository's public releases (for the update check). Weave signs in to GitHub nowhere: services
+ * that need access (GitHub releases, GitHub access) have their own, in their settings.
  *
  * `fetch` can be replaced, so tests run against a stand-in GitHub.
  */
 
-import { createSign } from 'node:crypto';
-
 const API = 'https://api.github.com';
 
 export type Fetch = typeof fetch;
-
-/** A GitHub App people sign in through: its public client ID (not a secret), its page (github.com/apps/<slug>) and who owns it. */
-export interface GitHubApp {
-  clientId: string;
-  slug: string;
-  name: string;
-  /** The GitHub account that owns the app. */
-  owner: string;
-}
-
-/** Weave Connect (app id 5393663), owned by martldennl. WEAVE_GITHUB_CLIENT_ID and WEAVE_GITHUB_APP_SLUG override it, e.g. for a test app. */
-export const DEFAULT_GITHUB_APP: GitHubApp = {
-  clientId: process.env.WEAVE_GITHUB_CLIENT_ID ?? 'Iv23liJqCYJwODDieXu5',
-  slug: process.env.WEAVE_GITHUB_APP_SLUG ?? 'weave-connect',
-  name: 'Weave Connect',
-  owner: 'martldennl',
-};
-export const GITHUB_CLIENT_ID = DEFAULT_GITHUB_APP.clientId;
-
-/** Where people install an app on their repositories. */
-export const githubInstallUrl = (slug = DEFAULT_GITHUB_APP.slug) => `https://github.com/apps/${slug}/installations/new`;
-
-/** A GitHub App's public facts from its page link (https://github.com/apps/<slug>) or slug. */
-export async function lookUpGitHubApp(link: string, fetchImpl: Fetch = fetch): Promise<GitHubApp> {
-  const slug = link.trim().replace(/^https:\/\/github\.com\/apps\//, '').replace(/\/.*$/, '');
-  if (!/^[a-z0-9][a-z0-9-]{0,99}$/.test(slug)) throw new Error("that isn't a GitHub App's page: it looks like https://github.com/apps/<name>");
-  const res = await fetchImpl(`${API}/apps/${slug}`, { headers: { accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10_000) });
-  if (res.status === 404) throw new Error(`GitHub has no public app "${slug}": make it installable on any account, or check the link`);
-  if (!res.ok) throw new Error(`GitHub said ${res.status}`);
-  const data = (await res.json()) as { client_id?: string; slug?: string; name?: string; owner?: { login?: string } };
-  if (!data.client_id) throw new Error(`GitHub didn't give the client ID of ${slug}`);
-  return { clientId: data.client_id, slug: data.slug ?? slug, name: data.name ?? slug, owner: data.owner?.login ?? '?' };
-}
-
-
-export interface DeviceCode {
-  deviceCode: string;
-  /** What the person types on github.com/login/device, like WDJB-MJHT. */
-  userCode: string;
-  verificationUri: string;
-  /** Seconds between polls. */
-  interval: number;
-  expiresAt: string;
-}
 
 export interface ReleaseAsset {
   id: number;
@@ -71,48 +19,6 @@ export interface ReleaseAsset {
 export interface GitHubUser {
   login: string;
   id: number;
-}
-
-/** Start signing in: GitHub hands out a code for the person to approve. */
-export async function startDeviceFlow(clientId: string, fetchImpl: Fetch = fetch): Promise<DeviceCode> {
-  if (!clientId) throw new Error("GitHub isn't set up in this copy of Weave yet (no GitHub App client ID)");
-  const res = await fetchImpl('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: clientId }),
-  });
-  const data = (await res.json()) as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error?: string };
-  if (!data.device_code || !data.user_code) throw new Error(`GitHub didn't start the sign-in${data.error ? `: ${data.error}` : ''}`);
-  return {
-    deviceCode: data.device_code,
-    userCode: data.user_code,
-    verificationUri: data.verification_uri ?? 'https://github.com/login/device',
-    interval: data.interval ?? 5,
-    expiresAt: new Date(Date.now() + (data.expires_in ?? 900) * 1000).toISOString(),
-  };
-}
-
-/** Wait until the person approved the code; resolves to the access token. */
-export async function finishDeviceFlow(clientId: string, code: DeviceCode, fetchImpl: Fetch = fetch, signal?: AbortSignal, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<string> {
-  let interval = code.interval;
-  while (Date.now() < Date.parse(code.expiresAt)) {
-    if (signal?.aborted) throw new Error('sign-in cancelled');
-    await sleep(interval * 1000);
-    const res = await fetchImpl('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: clientId, device_code: code.deviceCode, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }),
-    });
-    const data = (await res.json()) as { access_token?: string; error?: string; interval?: number };
-    if (data.access_token) return data.access_token;
-    if (data.error === 'authorization_pending') continue;
-    if (data.error === 'slow_down') {
-      interval = data.interval ?? interval + 5;
-      continue;
-    }
-    throw new Error(data.error === 'access_denied' ? 'the sign-in was declined on GitHub' : data.error === 'expired_token' ? 'the code expired: start again' : `GitHub sign-in failed: ${data.error ?? res.status}`);
-  }
-  throw new Error('the code expired: start again');
 }
 
 /** The calls group access needs, with a signed-in person's token. */
@@ -288,64 +194,5 @@ export async function checkGistProof(gist: string, login: string, did: string, f
     return Object.values(data.files ?? {}).some((f) => f.content?.includes(did));
   } catch {
     return undefined;
-  }
-}
-
-/**
- * Acting as a GitHub App of the person's own (the GitHub service's credentials): a short JWT signed with the App's
- * private key, exchanged for an installation token per account the App is installed on. Tokens last an hour and are
- * renewed before then; nobody has to sign in.
- */
-export class GitHubAppAuth {
-  readonly #appId: string;
-  readonly #key: string;
-  readonly #fetch: Fetch;
-  readonly #clock: () => number;
-  /** Installation per repository owner, and its current token. */
-  #installations = new Map<string, number>();
-  #tokens = new Map<number, { token: string; expires: number }>();
-
-  constructor(appId: string, privateKey: string, fetchImpl: Fetch = fetch, clock: () => number = Date.now) {
-    if (!/^\d{1,12}$/.test(appId.trim())) throw new Error('a GitHub App ID is a number, like 123456 (on the App\'s settings page)');
-    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(privateKey)) throw new Error('a GitHub App private key is the .pem file GitHub gave you (it starts with -----BEGIN RSA PRIVATE KEY-----)');
-    this.#appId = appId.trim();
-    this.#key = privateKey;
-    this.#fetch = fetchImpl;
-    this.#clock = clock;
-  }
-
-  /** The App itself, for ten minutes: what asks GitHub for installation tokens. */
-  jwt(): string {
-    const now = Math.floor(this.#clock() / 1000);
-    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
-    const unsigned = `${part({ alg: 'RS256', typ: 'JWT' })}.${part({ iat: now - 60, exp: now + 540, iss: this.#appId })}`;
-    return `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(this.#key).toString('base64url')}`;
-  }
-
-  async #asApp<T>(method: string, path: string): Promise<T> {
-    const res = await this.#fetch(`${API}${path}`, { method, headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${this.jwt()}`, 'x-github-api-version': '2022-11-28' } });
-    const data = (await res.json().catch(() => ({}))) as T & { message?: string };
-    if (!res.ok) throw new Error(res.status === 404 ? 'not found' : `GitHub said ${res.status} to the App${data.message ? `: ${data.message}` : ''}`);
-    return data;
-  }
-
-  /** A client acting as the App on a repository; undefined when the App isn't installed where it lives. */
-  async clientFor(repo: string): Promise<GitHub | undefined> {
-    const owner = repo.split('/')[0].toLowerCase();
-    let installation = this.#installations.get(owner);
-    if (installation === undefined) {
-      try {
-        installation = (await this.#asApp<{ id: number }>('GET', `/repos/${repo}/installation`)).id;
-      } catch (error) {
-        if ((error as Error).message === 'not found') return undefined;
-        throw error;
-      }
-      this.#installations.set(owner, installation);
-    }
-    const kept = this.#tokens.get(installation);
-    if (kept && kept.expires - this.#clock() > 5 * 60_000) return new GitHub(kept.token, this.#fetch);
-    const { token, expires_at } = await this.#asApp<{ token: string; expires_at: string }>('POST', `/app/installations/${installation}/access_tokens`);
-    this.#tokens.set(installation, { token, expires: Date.parse(expires_at) || this.#clock() + 50 * 60_000 });
-    return new GitHub(token, this.#fetch);
   }
 }

@@ -33,7 +33,6 @@ import {
   type CreateCompanyInput,
   type CommunityInfo,
   type FeedItem,
-  type GitHubInfo,
   type GumroadInfo,
   type SpaceRepos,
   type SpaceRef,
@@ -194,13 +193,10 @@ github — repositories that follow a group, tier or project (members who give t
   gumroad                    your Gumroad connection on this device (for tier … --gumroad new)
   gumroad connect            connect Gumroad in the browser (through the Weave application on Gumroad)
   gumroad disconnect         forget the connection on this device
-  github                     your GitHub sign-in on this device
-  github connect             sign in to GitHub with a code (through the Weave GitHub app)
-  github disconnect          forget the sign-in on this device
-  github app <link>|default  sign in through your own GitHub App (https://github.com/apps/…) instead of Weave Connect
-  github repos               repositories you can link (the app is installed on them and you're admin)
-  github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
-  github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  github proof <login>       what a gist proving your GitHub account holds: make it on gist.github.com (nobody signs in to Weave)
+  github share <space> --login <you> --gist <its address>   give a space your GitHub account, proven: its repos invite you
+  github unshare <space>     take it back
+  github hub --login <you> --gist <its address>   show your GitHub account on your hub; hub off to stop
   service new <folder> [--website] [--rust] [--lens]   start a WebAssembly service of your own from a starter: a bot
                              (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), or a client service that shows a
                              board its own way (a Kanban in JavaScript); Weave runs it itself, nothing to install
@@ -221,7 +217,6 @@ github — repositories that follow a group, tier or project (members who give t
                              (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
                              [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
                              installed on the organization, so nobody has to sign in (with --node, on an always-on node)
-  service github-app [<name>] [--org <org>] [--open]   create that App in one go: confirm on GitHub, install it, done
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -415,6 +410,8 @@ const { values, positionals } = parseArgs({
     out: { type: 'string' },
     open: { type: 'boolean', default: false },
     org: { type: 'string' },
+    login: { type: 'string' },
+    gist: { type: 'string' },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -1483,46 +1480,20 @@ async function main(): Promise<void> {
     case 'github': {
       const [sub, ref] = args;
       const b = await backend();
-      const status = (g: GitHubInfo) =>
-        `${g.login ? `signed in to GitHub as ${g.login}` : g.available ? 'not signed in to GitHub (weave github connect)' : "this copy of Weave can't reach GitHub yet (no GitHub app client ID)"}
-through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.app.own ? ', your own choice' : ''}`;
-      if (!sub) {
-        const g = await b.github();
-        return out(g, () => status(g));
-      }
-      if (sub === 'connect') {
-        const started = await b.connectGithub();
-        console.error(`Open ${started.pending!.verificationUri} and enter the code  ${started.pending!.userCode}`);
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const g = await b.github();
-          if (g.error) throw new Error(g.error);
-          if (!g.pending && g.login) return out(g, () => status(g));
-        }
-      }
-      if (sub === 'app') {
-        const g = await b.setGithubApp(!ref || ref === 'default' ? null : ref);
-        return out(g, () => `${status(g)}
-(sign in again: weave github connect)`);
-      }
-      if (sub === 'disconnect') {
-        const g = await b.disconnectGithub();
-        return out(g, () => 'GitHub sign-in forgotten on this device');
-      }
-      if (sub === 'repos') {
-        const repos = await b.githubRepos();
-        return out(repos, () => repos.join('\n') || '(none: install the Weave GitHub app on a repository you administer)');
+      if (sub === 'proof' && ref) {
+        const { text, url } = await b.githubProof({ login: ref });
+        return out({ text, url }, () => `Make a gist (secret is fine) as ${ref} on ${url}, holding:\n\n  ${text.trim()}\n\nthen: weave github share <space> --login ${ref} --gist <its address>`);
       }
       if (sub === 'hub') {
         const off = ref === 'off';
-        const p = await b.showGithubOnHub({ on: !off });
+        const p = await b.showGithubOnHub({ on: !off, ...(values.login ? { login: values.login } : {}), ...(values.gist ? { gist: values.gist } : {}) });
         return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login} (${p.github.url})` : 'your hub no longer shows GitHub'));
       }
       if ((sub === 'share' || sub === 'unshare') && ref) {
-        const r = await b.shareGithub({ space: ref, on: sub === 'share' });
+        const r = await b.shareGithub({ space: ref, on: sub === 'share', ...(values.login ? { login: values.login } : {}), ...(values.gist ? { gist: values.gist } : {}) });
         return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
       }
-      throw new Error('usage: weave github [connect|disconnect|app <link>|default|repos|hub [off]|share <space>|unshare <space>]');
+      throw new Error('usage: weave github proof <login> | share <space> --login <you> --gist <address> | unshare <space> | hub --login <you> --gist <address> | hub off');
     }
 
     case 'service': {
@@ -1562,15 +1533,6 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const all = await b.artifacts(ref ?? needSpace());
         return out(all, () => all.map((a) => `${a.name} ${a.tag}  ${a.kind.replace('-', ' ')}${a.source ? ` from ${a.source.provider}` : ''}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.mine ? '' : '  (not for you)'}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.kind === 'file' ? `${a.file?.name ?? 'a file'}${a.type ? ` (${a.type})` : ''}: weave file get ${a.id} -p ${a.project.name}` : a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
-      if (sub === 'github-app') {
-        const { url } = await b.githubAppSetup({ ...(ref ? { service: ref } : {}), ...(values.org ? { org: values.org } : {}) });
-        if (values.open) {
-          const { spawn } = await import('node:child_process');
-          const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
-          spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
-        }
-        return out({ url }, () => `Open this in your browser (within an hour) to create your own GitHub App${values.org ? ` in ${values.org}` : ''}:\n  ${url}\nConfirm it on GitHub, then install it on the repositories it should manage: the GitHub service gets its ID and key by itself.`);
-      }
       if (sub === 'release' && ref) {
         const app = await b.releaseService({ project: needProject(), image: ref });
         const image = app.install!.image!;
@@ -1593,13 +1555,9 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'add' && values.builtin) {
         const builtin = values.builtin === 'room' ? 'website' : values.builtin;
-        if (builtin !== 'website' && builtin !== 'github') throw new Error('Weave ships two services: --builtin website, or --builtin github');
+        if (builtin !== 'website') throw new Error("Weave has one built-in service, --builtin website: the others it ships are added with --shipped (github-releases, github-access, websites)");
         const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin, ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
-        return out(s, () =>
-          builtin === 'website'
-            ? `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`
-            : `${line(s)}\n\nIt answers as you · ${s.name}: participants of its projects fetch release files through it, with this node's GitHub sign-in (weave github connect for private repositories).`,
-        );
+        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`);
       }
       if (sub === 'add' && values.shipped) {
         const settings = settingsOf();

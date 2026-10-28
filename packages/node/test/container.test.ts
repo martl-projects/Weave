@@ -66,7 +66,7 @@ function fakes(manifest: unknown, options: { privateImage?: boolean } = {}): Fet
 
 function person(name: string, fetchImpl: Fetch): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-container-'));
-  node.githubSetup = { clientId: 'Iv1.test', fetch: fetchImpl, sleep: async () => {} };
+  node.githubSetup = { fetch: fetchImpl };
   node.containerSetup = { fetch: fetchImpl, docker: [process.execPath, join(import.meta.dirname, 'helpers', 'fake-docker.mjs')] };
   return node;
 }
