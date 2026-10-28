@@ -239,8 +239,15 @@ const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes
 /** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
 export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
 
+/**
+ * Whether a service hands out an artifact: it offers artifact.fetch for where the artifact's files are (any source, if
+ * its contract names none). An image Weave pulls itself needs none.
+ */
+export const providesArtifact = (s: ServiceProfileInfo, a: ArtifactInfo): boolean =>
+  !!s.contract.offers?.includes('artifact.fetch') && !!a.source && a.source.provider !== 'oci' && (!s.contract.sources || s.contract.sources.includes(a.source.provider));
+
 /** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
-function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; maintainer: boolean }) {
+function ArtifactList({ artifacts, maintainer, via }: { artifacts: ArtifactInfo[]; maintainer: boolean; via?: (a: ArtifactInfo) => string | undefined }) {
   const [adding, setAdding] = useState<ArtifactInfo>();
   const [access, setAccess] = useState<ArtifactInfo>();
   const [launching, setLaunching] = useState<ArtifactInfo>();
@@ -254,6 +261,7 @@ function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; ma
           <Icon name={artifactIcon(a)} />
           <span className="grow">
             {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
+            {via?.(a) && <div className="small muted">{via(a)}</div>}
           </span>
           {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
           {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
@@ -456,21 +464,60 @@ function ServiceReleases({ project, artifacts, app, maintainer }: { project: Spa
   );
 }
 
-/** What's available here that no service provides: from images Weave fetches itself, or GitHub releases before a service provides them. */
-function ProjectArtifacts({ project, app, artifacts, covered }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[]; covered: boolean }) {
+/** The kinds, in the order a project shows them, with their headings. */
+const KIND_GROUPS: Array<{ kind: ArtifactInfo['kind']; title: string; about: string }> = [
+  { kind: 'website', title: 'Websites', about: 'Launch one, and it runs as a website everyone in a project of yours can visit.' },
+  { kind: 'service', title: 'Services', about: 'Add one to a project: it acts there with exactly its contract.' },
+  { kind: 'board-view', title: 'Board views', about: 'Show a board their way.' },
+  { kind: 'file', title: 'Files', about: 'Get one: it comes checked against what was released.' },
+  { kind: 'fetcher', title: 'Fetchers', about: 'Client apps that fetch artifacts for you.' },
+  { kind: 'app', title: 'Apps', about: 'Programs its people run on their computers, in rooms.' },
+];
+
+/**
+ * Everything a project offers, by kind: what each is, who hands it out (a provider here, or Weave pulling its image
+ * itself), and what you can do with it. Maintainers see all of it, with who may get each, and publish more.
+ */
+export function ProjectAvailableView({ project }: { project: SpaceInfo }) {
+  const { data: all } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
+  const { data: profiles } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', project.id).catch(() => [] as ServiceProfileInfo[]), [project.id]);
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: app } = useApi(() => api<AppManifest | null>('projectApp', project.id), [project.id]);
   const [picking, setPicking] = useState(false);
-  if (app === undefined || (!artifacts.length && covered)) return null;
+  const maintainer = !!info?.maintainer;
+  const shown = (all ?? []).filter((a) => a.mine || maintainer);
+  // Who hands each out: a provider here, or Weave itself for an image.
+  const via = (a: ArtifactInfo): string | undefined => {
+    if (a.source?.provider === 'oci') return 'Weave fetches its image itself';
+    const provider = (profiles ?? []).find((s) => providesArtifact(s, a));
+    if (provider) return `Handed out by ${provider.name}${provider.person.name ? ` (${provider.person.name})` : ''}`;
+    return a.source ? `Nothing here hands out what's on ${a.source.provider} yet` : undefined;
+  };
   return (
-    <fieldset>
-      <legend>Available</legend>
-      <ArtifactList artifacts={artifacts} maintainer />
-      {!covered && app && (
-        <div className="buttons">
-          <button onClick={() => setPicking(true)}>Publish from GitHub…</button>
-        </div>
-      )}
+    <Page
+      title={<><Icon name="store" /> Available · p/{project.name}</>}
+      actions={
+        maintainer && app ? (
+          <button onClick={() => setPicking(true)}>
+            <Icon name="plus" /> Publish from GitHub…
+          </button>
+        ) : undefined
+      }
+    >
+      {all && !shown.length && <p className="empty">p/{project.name} offers nothing{all.length ? ' you may get' : ''} yet.</p>}
+      {KIND_GROUPS.map((g) => {
+        const these = shown.filter((a) => a.kind === g.kind);
+        if (!these.length) return null;
+        return (
+          <fieldset key={g.kind}>
+            <legend>{g.title}</legend>
+            <p className="small muted">{g.about}</p>
+            <ArtifactList artifacts={these} maintainer={maintainer} via={via} />
+          </fieldset>
+        );
+      })}
       {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
-    </fieldset>
+    </Page>
   );
 }
 
@@ -703,7 +750,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
           )}
         </p>
       )}
-      {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
+      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
       <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
@@ -860,7 +907,11 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
       {list.map((s) => (
         <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} boards={(boards ?? []).map((b) => b.name)} />
       ))}
-      {!focus && info?.maintainer && (!all.some(handsOutGitHub) || (artifacts ?? []).some((a) => a.from && 'image' in a.from)) && <ProjectArtifacts project={project} app={app} artifacts={all.some(handsOutGitHub) ? (artifacts ?? []).filter((a) => a.from && 'image' in a.from) : (artifacts ?? [])} covered={all.some(handsOutGitHub)} />}
+      {!focus && (artifacts ?? []).some((a) => a.project.id === project.id) && (
+        <p className="small">
+          <a href={`#/p/${project.id}/available`}>Everything p/{project.name} offers, by kind → Available</a>
+        </p>
+      )}
       {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>
   );
