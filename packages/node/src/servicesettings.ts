@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { boxTo, openBox, isSettingName, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting } from '@weave/core';
+import { boxTo, openBox, isSettingName, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting, type AppOAuth } from '@weave/core';
 import type { ServiceSettingsInfo } from './backend.ts';
 import type { ServicesHost, StoredService } from './node.ts';
 import type { Services } from './services.ts';
@@ -184,7 +184,8 @@ export class ServiceSettings {
     const body = new URLSearchParams({ ...params, client_id: oauth.client, ...(oauth.clientSecret ? { client_secret: oauth.clientSecret } : {}) });
     const res = await this.#fetch()(oauth.token, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: AbortSignal.timeout(20_000) });
     const data = (await res.json().catch(() => ({}))) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown };
-    if (!res.ok || typeof data.access_token !== 'string') throw new Error(String(data.error_description ?? data.error ?? `the provider answered ${res.status}`));
+    // Its error's code first (authorization_pending, slow_down…: a sign-in with a code waits on them), then what it says.
+    if (!res.ok || typeof data.access_token !== 'string') throw new Error(data.error ? `${String(data.error)}${data.error_description ? `: ${String(data.error_description)}` : ''}` : `the provider answered ${res.status}`);
     return {
       access: data.access_token,
       ...(typeof data.refresh_token === 'string' ? { refresh: data.refresh_token } : {}),
@@ -200,13 +201,14 @@ export class ServiceSettings {
    * the provider comes back to this computer (a loopback address, with PKCE), and the grant is boxed to the service;
    * finishSignIn waits for that (5 minutes at most).
    */
-  async startSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string }> {
+  async startSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string; code?: string }> {
     const space = this.h.space(input.space);
     if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
     const profile = await this.#inSpace(space, input.service);
     const asked = profile.settings?.find((s) => s.name === input.name);
     if (!asked?.oauth) throw new Error(`${profile.name} doesn't ask for a sign-in named ${input.name}`);
     const oauth = asked.oauth;
+    if (!oauth.authorize) return this.#startDevice(space, profile.did, asked.name, asked.label, oauth as AppOAuth & { device: string });
     const verifier = randomBytes(32).toString('base64url');
     const state = randomBytes(16).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -228,7 +230,7 @@ export class ServiceSettings {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const redirect = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-    const page = new URL(oauth.authorize);
+    const page = new URL(oauth.authorize!);
     for (const [k, v] of Object.entries({ response_type: 'code', client_id: oauth.client, redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: 'S256', ...(oauth.scopes?.length ? { scope: oauth.scopes.join(' ') } : {}) })) page.searchParams.set(k, v);
     // Google gives a refresh token only when asked for offline access; other providers ignore these.
     page.searchParams.set('access_type', 'offline');
@@ -248,6 +250,49 @@ export class ServiceSettings {
     done.catch(() => {});
     this.#signIns.set(id, { done });
     return { id, url: page.toString() };
+  }
+
+  /**
+   * A sign-in with a code (RFC 8628's device flow): the provider gives a code, the person enters it on its page and
+   * allows it there, and this node asks for the token until it comes (as often as the provider lets it). Nothing comes
+   * back to this computer, and no secret is needed.
+   */
+  async #startDevice(space: StoredSpace, service: Did, name: string, label: string, oauth: AppOAuth & { device: string }): Promise<{ id: string; url: string; code: string }> {
+    const res = await this.#fetch()(oauth.device, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams({ client_id: oauth.client, ...(oauth.scopes?.length ? { scope: oauth.scopes.join(' ') } : {}) }), signal: AbortSignal.timeout(20_000) });
+    const asked = (await res.json().catch(() => ({}))) as { device_code?: unknown; user_code?: unknown; verification_uri?: unknown; verification_uri_complete?: unknown; expires_in?: unknown; interval?: unknown; error?: unknown; error_description?: unknown };
+    if (!res.ok || typeof asked.device_code !== 'string' || typeof asked.user_code !== 'string' || typeof asked.verification_uri !== 'string') throw new Error(`no code from the provider: ${String(asked.error_description ?? asked.error ?? res.status)}`);
+    const deviceCode = asked.device_code;
+    const until = Date.now() + (typeof asked.expires_in === 'number' ? asked.expires_in : 900) * 1000;
+    let every = (typeof asked.interval === 'number' ? asked.interval : 5) * 1000;
+    const id = randomBytes(16).toString('base64url');
+    const done = (async () => {
+      try {
+        for (;;) {
+          await new Promise((resolve) => setTimeout(resolve, every).unref());
+          if (Date.now() > until) throw new Error(`the code for ${label} ran out: sign in again`);
+          try {
+            const got = await this.#tokenRequest(oauth, { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: deviceCode });
+            const grant: Grant = { ...got, token: oauth.token, client: oauth.client, ...(oauth.clientSecret ? { clientSecret: oauth.clientSecret } : {}) };
+            return await this.setServiceSetting({ space: space.id, service, name, grant });
+          } catch (error) {
+            const why = (error as Error).message;
+            // Not yet allowed: asked again; too often: more slowly. Anything else ends it.
+            if (/^authorization_pending/.test(why)) continue;
+            if (/^slow_down/.test(why)) {
+              every += 5000;
+              continue;
+            }
+            throw new Error(/^access_denied/.test(why) ? 'not signed in: it was declined' : /^expired_token/.test(why) ? `the code for ${label} ran out: sign in again` : why);
+          }
+        }
+      } finally {
+        setTimeout(() => this.#signIns.delete(id), 60_000).unref();
+      }
+    })();
+    done.catch(() => {});
+    this.#signIns.set(id, { done });
+    const url = typeof asked.verification_uri_complete === 'string' && asked.verification_uri_complete.startsWith('https://') ? asked.verification_uri_complete : asked.verification_uri;
+    return { id, url, code: asked.user_code };
   }
 
   /** Wait for a sign-in startSignIn began: the service's settings once it's signed in, or why not. */

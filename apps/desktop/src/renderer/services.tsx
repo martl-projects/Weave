@@ -475,6 +475,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState({ name: '', value: '', secret: true });
+  const [signing, setSigning] = useState<{ code: string; url: string }>();
   if (!data) return null;
   const save = (name: string, value: string | null, secret?: boolean) =>
     attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump())), value === null ? `${name} removed` : `${name} set`);
@@ -484,6 +485,15 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
       <p className="small muted">
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
       </p>
+      {signing && (
+        <div className="notice">
+          Enter this code on{' '}
+          <a href={signing.url} target="_blank" rel="noopener noreferrer">
+            {new URL(signing.url).hostname}
+          </a>{' '}
+          (it's copied): <b className="user-code">{signing.code}</b>. Only ever enter a code Weave shows you, here.
+        </div>
+      )}
       {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
       {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
@@ -507,14 +517,23 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
                     className="default"
                     onClick={() =>
                       attempt(async () => {
-                        const { id, url } = await api<{ id: string; url: string }>('startServiceSignIn', { space: space.id, service: service.did, name });
+                        const { id, url, code } = await api<{ id: string; url: string; code?: string }>('startServiceSignIn', { space: space.id, service: service.did, name });
+                        // A sign-in with a code: the code to enter there, shown here (and copied) until it's done.
+                        if (code) {
+                          void navigator.clipboard?.writeText(code).catch(() => {});
+                          setSigning({ code, url });
+                        }
                         window.open(url, '_blank', 'noopener');
-                        await api('finishServiceSignIn', { id });
+                        try {
+                          await api('finishServiceSignIn', { id });
+                        } finally {
+                          setSigning(undefined);
+                        }
                         reload();
                       }, `${service.name} is signed in`)
                     }
                   >
-                    {set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth.authorize).hostname}…`}
+                    {set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth.authorize ?? asked.oauth.device ?? asked.oauth.token).hostname.replace(/^(www|api|accounts)\./, '')}…`}
                   </AsyncButton>
                 ) : (
                   <>

@@ -1637,7 +1637,8 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out(s, () => `${value ? `set ${name}` : `removed ${name}`} for ${s.service.name} in ${s.space.name}\n${settingsText(s)}`);
       }
       if (sub === 'sign-in' && ref && args[2]) {
-        const { id, url } = await b.startServiceSignIn({ space: needSpace(), service: ref, name: args[2] });
+        const { id, url, code } = await b.startServiceSignIn({ space: needSpace(), service: ref, name: args[2] });
+        if (code && !values.json) console.log(`Enter this code there: ${code}`);
         const { spawn } = await import('node:child_process');
         const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
         spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();

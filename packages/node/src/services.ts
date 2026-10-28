@@ -1365,8 +1365,9 @@ export class Services {
     const s = shippedHere(this.h).get(stored.shipped!.name);
     const problem = s ? shippedProblem(s) : `this Weave doesn't ship ${stored.shipped!.name} any more`;
     if (problem || !s) return void this.h.releases.jobs.set(key, { error: problem! });
-    if (s.digest !== stored.shipped!.digest) {
-      const after = { ...stored, shipped: { name: s.name, digest: s.digest } };
+    if (s.digest !== stored.shipped!.digest || JSON.stringify(stored.asks ?? []) !== JSON.stringify(s.manifest.env ?? [])) {
+      // This Weave ships a new one: its settings as it asks for them now (its contract stays what was approved).
+      const after = { ...stored, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
       this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
       this.publishServiceProfile(after);
       stored = after;

@@ -1724,7 +1724,7 @@ export interface Backend {
   /** Set (or with null remove) a service's setting in a space, as a maintainer; a secret is boxed to the service, readable by it alone. */
   setServiceSetting(input: { space: string; service: string; name: string; value?: string | null; secret?: boolean }): Promise<ServiceSettingsInfo>;
   /** Start signing a service in (a setting that is a sign-in): open the url in the browser, then finishServiceSignIn. */
-  startServiceSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string }>;
+  startServiceSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string; code?: string }>;
   /** Wait until the provider came back (5 minutes at most): the service's settings with the sign-in. */
   finishServiceSignIn(input: { id: string }): Promise<ServiceSettingsInfo>;
   /** Ask a service something in a space: a request it reads (it must be in that space). */

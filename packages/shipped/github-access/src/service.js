@@ -7,6 +7,8 @@
 import { accounts, answer, load, log, me, publish, readers, save, setting, tickEvery } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
+/** Its access: a maintainer's sign-in (renewed by Weave), or a token they gave. */
+const token = () => setting('GITHUB') ?? setting('GITHUB_TOKEN');
 const isRepo = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value);
 
 /**
@@ -25,7 +27,7 @@ const change = (edit) => {
 async function github(method, path, body) {
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-access', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${setting('GITHUB_TOKEN')}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-access', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : method === 'POST' || method === 'PUT' ? { body: '{}' } : {}),
   });
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${method} ${path}`);
@@ -73,7 +75,7 @@ async function syncRepo(space, repo, link) {
 
 /** Every repository of every space it's in; unlinked ones only take back what it gave. */
 async function syncAll() {
-  if (!setting('GITHUB_TOKEN')) return log('no GitHub token: its maintainers give it one (an admin of the repositories)');
+  if (!token()) return log('not signed in to GitHub: one of its maintainers signs it in (an admin of the repositories)');
   const spaces = JSON.parse(me()).spaces;
   const { links, gave } = state();
   for (const space of spaces) {
@@ -99,9 +101,9 @@ async function syncAll() {
 async function link(space, input) {
   const repo = String(input?.repo ?? '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
   if (!isRepo(repo)) throw new Error('a repository looks like owner/name');
-  if (!setting('GITHUB_TOKEN')) throw new Error('it has no GitHub token yet: its maintainers give it one (an admin of the repository)');
+  if (!token()) throw new Error("it isn't signed in to GitHub yet: one of its maintainers signs it in, in its Settings (an admin of the repository)");
   const found = await github('GET', `/repos/${repo}`).catch(() => undefined);
-  if (!found) throw new Error(`its token doesn't reach ${repo}: is it an admin's, for that repository?`);
+  if (!found) throw new Error(`its GitHub access doesn't reach ${repo}: is whoever signed it in an admin of that repository?`);
   const access = input.access === 'write' || input.access === 'none' ? input.access : 'read';
   if (access === 'read' && found.owner?.type !== 'Organization')
     throw new Error(`${repo} belongs to a person, not an organization: GitHub gives its collaborators write access, never read-only. Move it to an organization (free; its Settings, Transfer), or link it for people you pick to write`);

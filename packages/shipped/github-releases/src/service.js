@@ -49,13 +49,13 @@ async function appToken(repo) {
   return token;
 }
 
-/** Its access to a repository: its App's, or its token; none for public repositories only. */
-const accessTo = async (repo) => (await appToken(repo)) ?? setting('GITHUB_TOKEN');
+/** Its access to a repository: its App's, a maintainer's sign-in, or a token; none for public repositories only. */
+const accessTo = async (repo) => (await appToken(repo)) ?? setting('GITHUB') ?? setting('GITHUB_TOKEN');
 
 /** A release by its tag, as GitHub has it: its files and whether its repository is public. */
 async function releaseAt(repo, tag, token) {
   const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
-  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': for a private repository, give it a GitHub token (or your App)'}`);
+  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}`);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
   return res.json();
 }
@@ -88,7 +88,7 @@ async function publishRelease(space, input) {
   if (!tag) throw new Error('which release? (its tag, like v1.0)');
   const token = await accessTo(repo);
   const info = await github(`/repos/${repo}`, token);
-  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, give it a GitHub token (or your App)'}` : `GitHub said ${info.status} for ${repo}`);
+  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}` : `GitHub said ${info.status} for ${repo}`);
   // Public: its files are anyone's, so fetchers get them directly. Private: only through a grant of this service.
   const access = (await info.json()).private ? 'grant' : 'direct';
   const found = await releaseAt(repo, tag, token);
@@ -173,7 +173,7 @@ async function grant(space, data) {
   if (manifest.install.access === 'direct') return release_;
   // Closed: only this service reaches it, and grants one file, for a few minutes. Never the asker's own access.
   const token = await accessTo(repo);
-  if (!token) throw new Error(`it has no GitHub access for ${repo}: its maintainers give it a token (or an App)`);
+  if (!token) throw new Error(`it has no GitHub access for ${repo}: one of its maintainers signs it in to GitHub (its Settings)`);
   const file = (await releaseAt(repo, tag, token)).assets.find((a) => a.name === asset.file);
   if (!file) throw new Error(`the release ${tag} on GitHub has no file ${asset.file}`);
   return { ...release_, url: await downloadAddress(repo, file.id, token) };

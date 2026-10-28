@@ -182,8 +182,13 @@ export interface AppSetting {
  * and hands the service only a current access token.
  */
 export interface AppOAuth {
-  /** Where people allow it, like https://accounts.google.com/o/oauth2/v2/auth. */
-  authorize: string;
+  /** Where people allow it, like https://accounts.google.com/o/oauth2/v2/auth (a sign-in through the browser). */
+  authorize?: string;
+  /**
+   * Or a sign-in with a code (RFC 8628's device flow): where the code is asked for, like
+   * https://github.com/login/device/code. People enter the code on the provider's page; no secret, no redirect.
+   */
+  device?: string;
   /** Where the code (and later the refresh token) becomes an access token. */
   token: string;
   /** The app's client ID with the provider, registered with a loopback redirect (http://127.0.0.1). */
@@ -225,12 +230,13 @@ const httpsUrl = (value: unknown): string | undefined => {
 export function parseOAuth(value: unknown): { oauth?: AppOAuth; problem?: string } {
   const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
   const authorize = httpsUrl(o.authorize);
+  const device = httpsUrl(o.device);
   const token = httpsUrl(o.token);
   const client = typeof o.client === 'string' ? o.client.trim().slice(0, 300) : '';
-  if (!authorize || !token || !client) return { problem: '"oauth" names the provider’s pages and the app’s client: {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]}' };
+  if ((!authorize && !device) || !token || !client) return { problem: '"oauth" names the provider’s pages and the app’s client: {"authorize": "https://…" (or "device": "https://…", for a sign-in with a code), "token": "https://…", "client": "<client id>", "scopes": [...]}' };
   const scopes = Array.isArray(o.scopes) ? o.scopes.filter((x): x is string => typeof x === 'string' && /^[!-~]{1,200}$/.test(x)).slice(0, 30) : [];
   const clientSecret = typeof o.clientSecret === 'string' ? o.clientSecret.trim().slice(0, 300) : '';
-  return { oauth: { authorize, token, client, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) } };
+  return { oauth: { ...(authorize ? { authorize } : {}), ...(device ? { device } : {}), token, client, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) } };
 }
 
 /** Variables an app may not ask hosts for: they change how programs start or what they load. */

@@ -539,7 +539,7 @@ export function SettingInput({ setting, value, onChange }: { setting: ArtifactIn
     return (
       <div className="app-setting">
         <label>{setting.label}</label>
-        <div className="small muted">A sign-in with {new URL(setting.oauth.authorize).hostname}: once it's installed, sign it in from its Settings.</div>
+        <div className="small muted">A sign-in with {new URL(setting.oauth.authorize ?? setting.oauth.device ?? setting.oauth.token).hostname}: once it's added, sign it in from its Settings (one click).</div>
       </div>
     );
   return (

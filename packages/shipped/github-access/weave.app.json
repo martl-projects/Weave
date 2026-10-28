@@ -2,22 +2,19 @@
   "app": "github-access",
   "name": "GitHub access",
   "service": {
-    "reads": { "kinds": ["weave.account"] },
+    "reads": {"kinds": ["weave.account"]},
     "writes": ["github.added"],
     "net": ["api.github.com"],
-    "actions": [
-      { "name": "repos", "label": "See the repositories", "who": "members" },
-      { "name": "link", "label": "Link a repository", "who": "maintainers", "input": [{ "name": "repo", "label": "Repository (owner/name)" }, { "name": "board", "label": "Only readers of board (optional)" }] },
-      { "name": "unlink", "label": "Unlink a repository", "who": "maintainers", "input": [{ "name": "repo", "label": "Repository (owner/name)" }] }
-    ],
+    "actions": [{"name": "repos", "label": "See the repositories", "who": "members"}, {"name": "link", "label": "Link a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}, {"name": "board", "label": "Only readers of board (optional)"}]}, {"name": "unlink", "label": "Unlink a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}]}],
     "version": "1.0"
   },
   "wasm": {
     "component": "github-access.wasm",
     "panel": "panel",
-    "panels": [{ "name": "repos", "title": "Repositories", "who": "members", "page": "index.html" }]
+    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html"}]
   },
   "env": [
-    { "name": "GITHUB_TOKEN", "label": "GitHub token", "secret": true, "hint": "A token of an admin of the repositories: github.com → Settings → Developer settings → Fine-grained tokens, the organization's repositories, Administration read and write" }
+    {"name": "GITHUB", "label": "GitHub", "oauth": {"device": "https://github.com/login/device/code", "token": "https://github.com/login/oauth/access_token", "client": "WEAVE_GITHUB_CLIENT_ID", "scopes": ["repo"]}, "hint": "Sign in as an admin of the repositories: it invites and removes people with that access"},
+    {"name": "GITHUB_TOKEN", "label": "Or a GitHub token", "secret": true, "optional": true, "hint": "Instead of signing in: a token of an admin of the repositories (Administration: read and write)"}
   ]
 }
