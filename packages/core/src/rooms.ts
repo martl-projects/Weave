@@ -3,6 +3,7 @@ import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isRepoName } from './github.ts';
 import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
+import { parseWho, type ActionWho } from './serviceactions.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -96,6 +97,21 @@ export interface AppClient {
 export interface AppWasm {
   component: string;
   site?: string;
+  /** The folder of its panels' pages (panels says which page is which). */
+  panel?: string;
+  /**
+   * Its own pages in its card, each in the section of who may see it: an overview, a form. Shown sandboxed, with no
+   * network: they act only through its actions (checked as buttons are), and get what they show by asking one.
+   */
+  panels?: AppPanel[];
+}
+
+export interface AppPanel {
+  name: string;
+  title: string;
+  who: ActionWho;
+  /** Its page in the panel folder, like index.html. */
+  page: string;
 }
 
 /** A path inside a package: relative (a leading / is dropped, as in an image), and never out of it. */
@@ -392,9 +408,20 @@ export function checkManifest(input: unknown): ManifestCheck {
     const raw = (m.wasm && typeof m.wasm === 'object' ? m.wasm : {}) as Record<string, unknown>;
     const component = packagePath(raw.component);
     const site = raw.site === undefined ? undefined : packagePath(raw.site);
+    const panel = raw.panel === undefined ? undefined : packagePath(raw.panel);
+    const panels: AppPanel[] = [];
+    for (const [i, p] of (Array.isArray(raw.panels) ? raw.panels : []).slice(0, 8).entries()) {
+      const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+      const who = parseWho(o.who);
+      const page = packagePath(o.page);
+      const name = text(o.name, 40);
+      if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
+      else panels.push({ name, title: text(o.title, 60) || name, who, page });
+    }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
-    else wasm = { component, ...(site ? { site } : {}) };
+    else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
+    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
   }
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;

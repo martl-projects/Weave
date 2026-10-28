@@ -1,5 +1,5 @@
 import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -724,6 +724,33 @@ export class Services {
     const found = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release);
     if (!found || releaseApproval(found) !== origin.fingerprint) return { ...base, checked: 'unmatched' };
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
+  }
+
+  /** A shipped service's panels' folder (its pages ship with this Weave), if it has one. */
+  shippedPanelFolder(name: string): string | undefined {
+    return shippedHere(this.h).get(name)?.panel;
+  }
+
+  /**
+   * A service's panels in a space: its own pages for its card, each for whoever may see it. Only a shipped service's
+   * for now, and only when it runs exactly what this Weave ships (its pages are this Weave's copy).
+   */
+  async servicePanels(input: { space: string; service: string }): Promise<ServicePanelInfo[]> {
+    const space = this.h.space(input.space);
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    if (profile?.origin.kind !== 'shipped' || profile.origin.checked !== 'verified') return [];
+    const s = shippedHere(this.h).get(profile.origin.name);
+    if (!s?.panel) return [];
+    const state = this.h.state(space);
+    return (s.manifest.wasm?.panels ?? []).map((p) => ({
+      name: p.name,
+      title: p.title,
+      who: p.who,
+      key: `shipped-${s.name}`,
+      page: p.page,
+      mine: mayAct(p.who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)),
+    }));
   }
 
   /** The services this Weave ships, as the app offers them. */

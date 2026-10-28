@@ -37,13 +37,22 @@ const sync = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
 
-const MANIFEST = { app: 'ticker', name: 'Ticker', service: { reads: 'addressed', writes: [], version: '1.0' }, wasm: { component: 'ticker.wasm' }, env: [{ name: 'KEY', label: 'Signing key', signing: true, optional: true }] };
+const MANIFEST = {
+  app: 'ticker',
+  name: 'Ticker',
+  service: { reads: 'addressed', writes: [], version: '1.0' },
+  wasm: { component: 'ticker.wasm', panel: 'panel', panels: [{ name: 'overview', title: 'Overview', who: 'members', page: 'index.html' }, { name: 'admin', title: 'Admin', who: 'maintainers', page: 'admin.html' }] },
+  env: [{ name: 'KEY', label: 'Signing key', signing: true, optional: true }],
+};
 
 /** A folder of shipped services, as Weave's build makes it. */
 function shippedFolder(component: string): string {
   const dir = temp('weave-shipped-dir-');
   copyFileSync(component, join(dir, 'ticker.wasm'));
-  writeFileSync(join(dir, 'shipped.json'), JSON.stringify({ ticker: { component: 'ticker.wasm', digest: digestOf(component), manifest: MANIFEST } }));
+  mkdirSync(join(dir, 'ticker-panel'));
+  writeFileSync(join(dir, 'ticker-panel', 'index.html'), '<h1>Overview</h1>');
+  writeFileSync(join(dir, 'ticker-panel', 'admin.html'), '<h1>Admin</h1>');
+  writeFileSync(join(dir, 'shipped.json'), JSON.stringify({ ticker: { component: 'ticker.wasm', digest: digestOf(component), manifest: MANIFEST, panel: 'ticker-panel' } }));
   return dir;
 }
 
@@ -77,6 +86,14 @@ describe('services Weave ships', { timeout: 120_000 }, () => {
       // Lena's Weave ships the same component: verified. Kofi's ships another under that name: not the same.
       expect((await lena.servicesIn('Weave'))[0]).toMatchObject({ name: 'ticker', origin: { kind: 'shipped', name: 'ticker', checked: 'verified' }, settings: [{ name: 'KEY', signing: true }] });
       expect((await kofi.servicesIn('Weave'))[0].origin).toEqual({ kind: 'shipped', name: 'ticker', checked: 'other' });
+
+      // Its panels: its own pages, each for whoever may see it, served from each member's own Weave.
+      expect((await lena.servicePanels({ space: 'Weave', service: added.did })).map((p) => [p.name, p.who, p.mine])).toEqual([['overview', 'members', true], ['admin', 'maintainers', false]]);
+      expect((await martl.servicePanels({ space: 'Weave', service: added.did })).map((p) => p.mine)).toEqual([true, true]);
+      expect(await kofi.servicePanels({ space: 'Weave', service: added.did })).toEqual([]);
+      const page = await lena.lensFile({ release: 'shipped-ticker', path: 'index.html' });
+      expect([page.type, Buffer.from(page.data, 'base64').toString()]).toEqual(['text/html; charset=utf-8', '<h1>Overview</h1>']);
+      await expect(lena.lensFile({ release: 'shipped-ticker', path: '../shipped.json' })).rejects.toThrow(/not in ticker's view/);
 
       // Changed on disk: it doesn't start again, and says why.
       await martl.setService({ name: 'ticker', enabled: false });

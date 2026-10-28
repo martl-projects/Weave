@@ -407,6 +407,16 @@ export interface ServiceGate {
 }
 
 /** A request to a service in a space, and what the service answered. */
+/** One of a service's own pages for its card in a space: where its files are (lensBase(key) + page), who sees it, and you. */
+export interface ServicePanelInfo {
+  name: string;
+  title: string;
+  who: ActionWho;
+  key: string;
+  page: string;
+  mine: boolean;
+}
+
 /** One of a service's actions in a space: who may use it there (its contract's, or tighter), and whether you may. */
 export interface ServiceActionInfo {
   name: string;
@@ -1745,6 +1755,8 @@ export interface Backend {
   askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo>;
   /** What you may ask a service to do in a space: its actions, who may use each there, and whether you may. */
   serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]>;
+  /** A service's own pages for its card in a space (a shipped service's), each for whoever may see it. */
+  servicePanels(input: { space: string; service: string }): Promise<ServicePanelInfo[]>;
   /** Maintainers: tighten who may use one of a service's actions in a space (null: as its contract says). */
   setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Requests to services in a space, with their answers (optionally for one service). */
@@ -2118,7 +2130,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'setServicePolicy', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
-import type { KeyInfo, ServiceActionInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import { useEffect, useRef, useState } from 'react';
+import type { KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
 import type { ActionWho, ServiceContract } from '@weave/core';
+import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
@@ -542,17 +543,25 @@ export interface ScopedAction {
  */
 export function ActionScopes({ space, service, groups, extras }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[] }) {
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
   const all: ScopedAction[] = [...(actions ?? []).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
-  if (!all.length) return null;
+  // Its own pages: in their section, only for who may see them.
+  const shown = (panels ?? []).filter((p) => p.mine);
+  if (!all.length && !shown.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
-  const sections = [...new Map(all.map((a) => [JSON.stringify(a.who), a.who])).values()].sort((a, b) => rank(a) - rank(b));
+  const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
   const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
   return (
     <div className="action-scopes">
       {sections.map((who) => (
         <div className="action-scope" key={JSON.stringify(who)}>
           <div className="action-scope-title small">{title(who)}</div>
+          {shown
+            .filter((p) => JSON.stringify(p.who) === JSON.stringify(who))
+            .map((p) => (
+              <ServicePanel key={p.name} space={space} service={service} panel={p} actions={actions ?? []} />
+            ))}
           <div className="action-row">
             {all
               .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
@@ -656,3 +665,51 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
   );
 }
 
+
+/**
+ * A service's own page in its card: its panel, sandboxed with no network (like a board's view). It learns where it is
+ * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
+ * and gets the service's answer back; it may say how tall it is.
+ *
+ *   to it:    {weave: 'view', panel, space, me, actions}   {weave: 'acted', id, text?, data?, error?}
+ *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}
+ */
+function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(160);
+  const { data: base } = useApi(async () => bridge.lensBase(panel.key), [panel.key]);
+  const latest = useRef(actions);
+  latest.current = actions;
+  const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
+  const sendView = () =>
+    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })) });
+  useEffect(sendView, [actions]);
+  useEffect(() => {
+    const listen = (event: MessageEvent) => {
+      if (!frame.current || event.source !== frame.current.contentWindow) return;
+      const m = event.data as { weave?: string; id?: unknown; name?: unknown; input?: unknown; px?: unknown };
+      if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
+      if (m?.weave === 'act' && typeof m.name === 'string') {
+        const action = latest.current.find((a) => a.name === m.name);
+        void (async () => {
+          try {
+            const asked = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action?.label ?? String(m.name), action: m.name, ...(m.input !== undefined && m.input !== null ? { data: m.input } : {}) });
+            // Its answer comes from the node that runs it: wait for it (half a minute at most).
+            for (let i = 0; i < 60; i++) {
+              const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did })).find((r) => r.id === asked.id)?.results[0];
+              if (answer) return send({ weave: 'acted', id: m.id, ...(answer.error ? { error: answer.error } : { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) }) });
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            send({ weave: 'acted', id: m.id, error: `${service.name} didn't answer in time` });
+          } catch (error) {
+            send({ weave: 'acted', id: m.id, error: (error as Error).message });
+          }
+        })();
+      }
+    };
+    window.addEventListener('message', listen);
+    return () => window.removeEventListener('message', listen);
+  }, [space.id, service.did]);
+  if (!base) return null;
+  return <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />;
+}
