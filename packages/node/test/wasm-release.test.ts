@@ -10,6 +10,7 @@ import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
 import { untar } from '../src/untar.ts';
 import { buildComponent } from './helpers/components.ts';
 import { registry } from './helpers/registry.ts';
+import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
 
 /*
  * WebAssembly services as releases (W3): an OCI image for wasi/wasm, its manifest in its label, released and listed
@@ -149,20 +150,15 @@ describe('WebAssembly services as releases', { timeout: 120_000 }, () => {
     if (spawnSync(tar, ['-czf', 'Bot-wasm.tar.gz', 'Bot'], { cwd: dir }).status !== 0) throw new Error('tar failed');
     const archive = readFileSync(join(dir, 'Bot-wasm.tar.gz'));
     const manifest = { app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: [], version: '1.0' }, wasm: { component: 'bot.wasm' } };
-    const github = (async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
-      if (url.pathname === '/repos/martl/bot/releases/tags/v1.0') return json({ tag_name: 'v1.0', assets: [{ id: 5, name: 'Bot-wasm.tar.gz', size: archive.length }] });
-      if (url.pathname === '/repos/martl/bot/contents/weave.app.json') return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(manifest)).toString('base64') });
-      if (url.pathname === '/repos/martl/bot/releases/assets/5') return new Response(new Uint8Array(archive), { status: 200, headers: { 'content-length': String(archive.length) } });
-      return new Response('{"message":"Not Found"}', { status: 404 });
-    }) as Fetch;
+    const file = { name: 'Bot-wasm.tar.gz', bytes: archive };
+    const github = new PublicGitHub().add('martl/bot', 'v1.0', file);
+    const githubPort = await github.serve();
     const martl = person('martl', registry({}));
     const lena = person('Lena', registry({}));
-    for (const node of [martl, lena]) node.githubSetup = { clientId: 'Iv1.test', fetch: github, sleep: async () => {} };
+    await fetchesFrom(lena, githubPort);
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
-    const released = await martl.releaseApp({ project: 'Bots', tag: 'v1.0', repo: 'martl/bot', assets: { wasm: 'Bot-wasm.tar.gz' } });
+    const released = await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest, files: { wasm: file } });
     expect(released.install?.assets?.wasm).toMatchObject({ file: 'Bot-wasm.tar.gz', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     sync([martl, lena]);
 

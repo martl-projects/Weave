@@ -4,12 +4,12 @@ import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
-import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
-import { prepareWasm, releaseApproval } from './runtime.ts';
-import { imageLabels } from './registry.ts';
+import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
+import { imageDigest, imageLabels } from './registry.ts';
 import { GitHubAppAuth, type GitHub } from './github.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
@@ -68,6 +68,9 @@ function signWith(key: string | undefined, name: string, algorithm: string, data
 
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
+
+/** The fetcher for an open artifact of a source, when no provider there names one. */
+const DIRECT_FETCHERS: Record<string, string> = { github: 'github-checkout' };
 
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
 export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
@@ -897,6 +900,8 @@ export class Services {
       if (!takesRequests(stored.contract) || body?.to !== did) return false;
       // Refused once (Weave answered no): it stays that, even if who may changes later.
       if (this.#refused.has(d.id)) return false;
+      // Answered already (before a restart, say): never handed to it again.
+      if (this.h.entries(d.space).some((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did && (e.body as { request?: unknown } | null)?.request === d.id)) return false;
       // Older than it counts (the service was off): Weave says so, and the service never sees it.
       const deadline = this.requestDeadline(stored.contract, body as Record<string, Json>, d.event.time);
       if (deadline !== undefined && this.h.clock() > deadline) return (this.#refuse(stored, d.id, `it expired before ${stored.name} got to it: ask again`), false);
@@ -955,6 +960,35 @@ export class Services {
     const added = await this.addService({ name, artifact: { project: from.id, tag: a.id }, spaces: [project.id], ...(input.approve ? { approve: true } : {}) });
     this.saveServices(this.storedServices().map((s) => (s.name === added.name ? { ...s, launched: true as const } : s)));
     return (await this.services()).find((s) => s.name === added.name) ?? added;
+  }
+
+  /**
+   * A file's SHA-256 and size at an HTTPS address, for a provider pinning a release: downloaded here, nothing of it
+   * kept. Never from this computer's networks; redirects followed only to HTTPS addresses that aren't either.
+   */
+  async fingerprint(address: string): Promise<{ sha256: string; size: number }> {
+    let url = new URL(address);
+    for (let hop = 0; ; hop++) {
+      if (url.protocol !== 'https:') throw new Error('only an HTTPS address');
+      await publicHost(url.hostname, this.h.testHosts());
+      const res = await this.h.githubFetch()(url.href, { redirect: 'manual', headers: { 'user-agent': 'weave' } });
+      const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+      if (next && hop < 5) {
+        url = new URL(next, url);
+        continue;
+      }
+      if (!res.ok || !res.body) throw new Error(`${url.hostname} said ${res.status}`);
+      const hash = createHash('sha256');
+      let size = 0;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        hash.update(value);
+        size += value.byteLength;
+      }
+      return { sha256: hash.digest('hex'), size };
+    }
   }
 
   /** Why someone may not get a project's artifact (its maintainers narrowed who may), or undefined: they may. */
@@ -1050,7 +1084,8 @@ export class Services {
           const decoded = this.h.decode(event);
           if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.itemFor(decoded));
         });
-        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        // Stopped already (before it got going): it watches nothing.
+        if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         unsubscribe();
       },
       publish: async ({ space, kind, body }) => {
@@ -1168,12 +1203,42 @@ export class Services {
   /** How long to wait for a provider's answer (it has to reach the node the provider runs on, and back). */
   locateWait = 60_000;
 
+  /** How long publishing through a provider may take: it fingerprints every file of the release. */
+  publishWait = 10 * 60_000;
+
+  /**
+   * Ask the project's provider of GitHub releases to do something (publish, releases) and wait for its answer: what
+   * it answered (data), or why not. It acts with its own GitHub access.
+   */
+  async askProvider(project: StoredSpace, action: string, data: Json, as?: string): Promise<Json> {
+    const providers = (await this.servicesIn(project.id)).filter((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || p.contract.sources.includes('github')));
+    const provider = providers.find((p) => p.contract.actions?.some((a) => a.name === action));
+    if (!provider) throw new Error(`${this.h.spaceName(project)} has no GitHub releases service to ${action === 'publish' ? 'publish' : 'list'} releases: add it (Services, Add a service)`);
+    const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
+    const wait = action === 'publish' ? this.publishWait : this.locateWait;
+    const asked = await this.askService({ space: project.id, service: provider.did, text: action === 'publish' ? `publish ${String((data as { tag?: unknown }).tag ?? '')}` : action, action, data, ...(as ? { as } : {}), within: Math.ceil(wait / 1000) });
+    const until = Date.now() + wait;
+    for (;;) {
+      const result = (await this.serviceRequests({ space: project.id })).find((r) => r.id === asked.id)?.results[0];
+      if (result?.error) throw new Error(`${by}: ${result.error}`);
+      if (result) return result.data ?? null;
+      if (Date.now() > until) throw new Error(`${by} didn't answer in time: is the node it runs on online?`);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
   async locateArtifact(a: StoredArtifact, platform = platformKey()): Promise<Located | undefined> {
     if (!this.h.spaces.has(a.project)) return undefined;
     // One that hands out artifacts from where this one's files are (any source, if its contract names none).
     const source = artifactSourceOf(a.manifest)?.provider;
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
+    // Open code: the fetcher gets it as it is, with nobody's grant (the provider needn't be there).
+    const asset = a.manifest.install?.assets?.[platform];
+    if (a.manifest.install?.access === 'direct' && a.manifest.install.github && asset) {
+      const fetcher = provider?.contract.fetcher ?? DIRECT_FETCHERS[source ?? ''];
+      if (fetcher) return { grant: { repo: a.manifest.install.github, tag: a.tag, file: asset.file }, fetcher, by: 'GitHub, directly' };
+    }
     if (!provider) return undefined;
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
     // Only worth answering while this node waits for it.
@@ -1641,6 +1706,9 @@ export class Services {
    * Run a WebAssembly service: transpiled once, then in a worker of its own, answered through its gate, and handed
    * what it may read, one item at a time: first what came while it was off (from where it got to), then as it comes.
    */
+  /** What each running WebAssembly service watches with, by its key. */
+  #watchers = new Map<string, AbortController>();
+
   async spawnWasm(stored: StoredService, component: string, site = stored.site): Promise<void> {
     const name = stored.name;
     const key = `service:${name}`;
@@ -1664,6 +1732,9 @@ export class Services {
     let cursor = existsSync(cursorFile) ? readFileSync(cursorFile, 'utf8').trim() : (stored.since ?? new Date(this.h.clock()).toISOString());
     if (!existsSync(cursorFile)) writeFileSync(cursorFile, cursor);
     const watching = new AbortController();
+    // One watcher per service: one of a run that was stopped (not crashed) would hand the new one everything twice.
+    this.#watchers.get(key)?.abort();
+    this.#watchers.set(key, watching);
     this.#watching.get(name)?.abort();
     this.#watching.set(name, watching);
     const handed = new Set<string>();
@@ -1671,7 +1742,8 @@ export class Services {
     const ticking: { timer?: ReturnType<typeof setInterval>; pending: boolean } = { pending: false };
     watching.signal.addEventListener('abort', () => clearInterval(ticking.timer));
     const hand = (item: FeedItem) => {
-      if (handed.has(item.id)) return;
+      // A run that was replaced hands nothing on.
+      if (watching.signal.aborted || handed.has(item.id)) return;
       handed.add(item.id);
       this.h.runtime.deliver(key, JSON.stringify(item));
     };
@@ -1723,6 +1795,15 @@ export class Services {
             if (!space || !current.spaces.includes(space.id)) return undefined;
             const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
             return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
+          }
+          if (call === 'fingerprint' || call === 'pinImage') {
+            // For a provider publishing what it hands out: only what it needs to pin a release, never more.
+            if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it publishes no releases`);
+            if (call === 'pinImage') {
+              const tags = (Array.isArray(args[1]) ? args[1] : []).map(String).slice(0, 5);
+              return JSON.stringify(await imageDigest(String(args[0]), tags, { fetch: this.h.registryFetch() }));
+            }
+            return JSON.stringify(await this.fingerprint(String(args[0])));
           }
           if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (call === 'tickEvery') {

@@ -1,24 +1,28 @@
-// GitHub releases: hands a project's release files to its participants (artifact.fetch), through their own fetcher
-// (github-checkout, its contract says). Asked for a release and a platform, it grants a download address of GitHub's
-// file store for that file, reached with its own GitHub access: a token, or its person's GitHub App (Weave signs the
-// App's JWT; the key never reaches this code). Without access of its own to the repository, it grants the release
-// and leaves it to the asker's own GitHub access. Weave seals the grant to the asker. Only releases its projects'
-// maintainers published count (release() in the WIT), whatever a request names, and the asker's Weave checks the
-// file against the release's digest, so nobody has to trust what it grants.
-import { answer, release, setting, sign } from 'weave:service/host@0.1.0';
+// GitHub releases: publishes a project's GitHub releases as its artifacts, and hands their files to its participants
+// (artifact.fetch), through their own fetcher (github-checkout, its contract says). All of it with its own GitHub
+// access: a token, or its person's GitHub App (Weave signs the App's JWT; the key never reaches this code). Nobody
+// else needs GitHub access, or Weave's.
+//
+// Publishing (maintainers, action publish): it reads the release at a tag and its weave.app.json, matches its files
+// to platforms, has Weave fingerprint each (fingerprint() in the WIT) and publishes the artifact. A public repository's
+// files are fetched directly by the fetcher; a private one's only through a grant of this service: a download address
+// of GitHub's file store for that one file, for a few minutes, sealed to the asker. Its code stays closed.
+//
+// Only releases its projects' maintainers published count (release() in the WIT), whatever a request names, and the
+// asker's Weave checks the file against the release's digest, so nobody has to trust what it grants.
+import { answer, fingerprint, me, pinImage, publish, release, setting, sign } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
 const PROTOCOL = 'artifact.fetch';
 const encode = (text) => new TextEncoder().encode(text);
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-/** A GitHub API call: JSON back, or why not. */
-async function github(path, token, init = {}) {
-  const res = await fetch(`${API}${path}`, {
+/** A GitHub API call: its response. */
+function github(path, token, init = {}) {
+  return fetch(`${API}${path}`, {
     ...init,
     headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-releases', 'x-github-api-version': '2022-11-28', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) },
   });
-  return res;
 }
 
 /** Installation tokens of its GitHub App, by account: kept until a few minutes before they run out. */
@@ -45,9 +49,118 @@ async function appToken(repo) {
   return token;
 }
 
-/** What it grants for a release's file for a platform: GitHub's address for it (it works for a while without access), or the release. */
-async function locate(space, data) {
-  if (data?.protocol !== PROTOCOL) throw new Error(`it answers ${PROTOCOL} only`);
+/** Its access to a repository: its App's, or its token; none for public repositories only. */
+const accessTo = async (repo) => (await appToken(repo)) ?? setting('GITHUB_TOKEN');
+
+/** A release by its tag, as GitHub has it: its files and whether its repository is public. */
+async function releaseAt(repo, tag, token) {
+  const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
+  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': for a private repository, give it a GitHub token (or your App)'}`);
+  if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
+  return res.json();
+}
+
+/** GitHub's download address of a release file: a redirect to its file store, which works for a while without access. */
+async function downloadAddress(repo, id, token) {
+  const res = await github(`/repos/${repo}/releases/assets/${id}`, token, { headers: { accept: 'application/octet-stream' }, redirect: 'manual' });
+  const url = res.headers.get('location');
+  if (res.status < 300 || res.status >= 400 || !url) throw new Error(`GitHub said ${res.status} instead of a download address`);
+  return url;
+}
+
+/** Which platform a release file is for, from its name (Gameshow-1.4-win-x64.zip → win32-x64), as Weave guesses it. */
+function guessPlatform(name) {
+  const n = name.toLowerCase();
+  if (/(^|[^a-z0-9])wasm([^a-z0-9]|$)/.test(n)) return 'wasm';
+  const parts = new Set(n.split(/[^a-z0-9]+/));
+  const has = (...words) => words.some((w) => parts.has(w));
+  const os = has('mac', 'macos', 'darwin', 'osx', 'dmg') ? 'darwin' : has('win', 'windows', 'win32', 'win64', 'exe', 'msi') ? 'win32' : has('linux', 'appimage', 'deb') ? 'linux' : undefined;
+  if (!os) return undefined;
+  const arch = has('arm64', 'aarch64') ? 'arm64' : has('x64', 'amd64', 'win64') || /x86_64/.test(n) ? 'x64' : has('ia32', 'x86', 'i386') ? 'ia32' : os === 'darwin' && has('universal') ? 'arm64' : 'x64';
+  return `${os}-${arch}`;
+}
+
+/** Publish a release as the project's artifact: its app (weave.app.json at the tag), or one of its files. */
+async function publishRelease(space, input) {
+  const repo = String(input?.repo ?? '');
+  const tag = String(input?.tag ?? '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository holds the release? (owner/name: Weave says it when you publish from the project)');
+  if (!tag) throw new Error('which release? (its tag, like v1.0)');
+  const token = await accessTo(repo);
+  const info = await github(`/repos/${repo}`, token);
+  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, give it a GitHub token (or your App)'}` : `GitHub said ${info.status} for ${repo}`);
+  // Public: its files are anyone's, so fetchers get them directly. Private: only through a grant of this service.
+  const access = (await info.json()).private ? 'grant' : 'direct';
+  const found = await releaseAt(repo, tag, token);
+  const pin = async (file) => {
+    const { sha256, size } = JSON.parse(fingerprint(await downloadAddress(repo, file.id, token)));
+    return { file: file.name, sha256, size };
+  };
+
+  // A file of the release, handed out as it is.
+  if (input.file) {
+    const file = found.assets.find((a) => a.name === input.file);
+    if (!file) throw new Error(`the release ${found.tag_name} has no file ${input.file}`);
+    const name = String(input.name ?? file.name).slice(0, 40);
+    const app = name.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'file';
+    const manifest = { app, name, version: 1, services: [], file: input.type ? { type: String(input.type) } : {}, install: { github: repo, tag: found.tag_name, access, assets: { file: await pin(file) } } };
+    const item = JSON.parse(publish(space, 'weave.artifact', JSON.stringify(manifest)));
+    return { text: `${name} ${found.tag_name} is available`, data: { id: item.id, manifest } };
+  }
+
+  // The app: as weave.app.json says at the tag, or as published before.
+  const content = await github(`/repos/${repo}/contents/weave.app.json?ref=${encodeURIComponent(found.tag_name)}`, token);
+  let app;
+  if (content.ok) {
+    const body = await content.json();
+    app = JSON.parse(atob(String(body.content ?? '').replace(/\s/g, '')));
+  } else if (input.previous) app = input.previous;
+  else throw new Error(`${repo} has no weave.app.json at ${found.tag_name}: add one (app, name, services, start), tag again, and publish`);
+  if (input.previous && input.previous.app !== app.app) throw new Error(`${repo} at ${found.tag_name} holds the app "${app.app}", but the project's app is "${input.previous.app}"`);
+
+  // Which file is for which platform: as given, or guessed from the names.
+  const chosen = new Map();
+  if (input.assets && Object.keys(input.assets).length) {
+    for (const [platform, name] of Object.entries(input.assets)) {
+      const file = found.assets.find((a) => a.name === name);
+      if (!file) throw new Error(`the release ${found.tag_name} has no file ${name}`);
+      chosen.set(platform, file);
+    }
+  } else for (const file of found.assets) {
+    const platform = guessPlatform(file.name);
+    if (platform && !chosen.has(platform)) chosen.set(platform, file);
+  }
+  // Its container image, pinned by its digest: tagged like the release (v1.2.0, or 1.2.0).
+  let image;
+  if (app.start?.image) {
+    try {
+      image = { ref: app.start.image, ...JSON.parse(pinImage(app.start.image, [...new Set([found.tag_name, found.tag_name.replace(/^v(?=\d)/, '')])])) };
+    } catch (error) {
+      if (!chosen.size) throw error;
+    }
+  }
+  if (!chosen.size && !image) throw new Error(found.assets.length ? `no file in ${found.tag_name} says which computer it's for (win, mac, linux or wasm in its name): name them in assets` : `${found.tag_name} in ${repo} has no build files attached: Weave installs build files from a release (GitHub's source archives don't count)`);
+  const assets = {};
+  for (const [platform, file] of chosen) assets[platform] = await pin(file);
+  const { image: _image, assets: _assets, ...kept } = { ...(input.previous?.install ?? {}), ...(app.install ?? {}) };
+  const manifest = { ...app, install: { ...kept, github: repo, tag: found.tag_name, access, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}) } };
+  const item = JSON.parse(publish(space, 'weave.app', JSON.stringify(manifest)));
+  return { text: `${app.name} ${found.tag_name} is available`, data: { id: item.id, manifest } };
+}
+
+/** The releases of a repository on GitHub, newest first: for picking one to publish. */
+async function releasesOf(input) {
+  const repo = String(input?.repo ?? '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository? (owner/name)');
+  const token = await accessTo(repo);
+  const res = await github(`/repos/${repo}/releases?per_page=30`, token);
+  if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo}'s releases`);
+  const all = await res.json();
+  return { data: { repo, releases: all.filter((r) => !r.draft).map((r) => ({ tag: r.tag_name, name: r.name || r.tag_name, ...(r.published_at ? { published: r.published_at } : {}), files: r.assets.length, prerelease: !!r.prerelease })) } };
+}
+
+/** What it grants for a release's file for a platform: GitHub's address for it, or the release when it's public. */
+async function grant(space, data) {
   const found = release(space, String(data.artifact ?? ''));
   if (!found) throw new Error('no such release in this project');
   const { tag, name, manifest } = JSON.parse(found);
@@ -55,27 +168,28 @@ async function locate(space, data) {
   if (!asset) throw new Error(`${name} ${tag} has no file for ${data.platform}`);
   const repo = manifest.install?.github;
   if (!repo) throw new Error(`${name} ${tag} isn't released on GitHub`);
-  const token = (await appToken(repo)) ?? setting('GITHUB_TOKEN');
-  // The release, for the asker's own access: what it grants without access of its own.
-  const theirs = { repo, tag, file: asset.file };
-  if (!token) return theirs;
-  const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
-  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo} that it may see`);
-  if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
-  const file = (await res.json()).assets.find((a) => a.name === asset.file);
+  const release_ = { repo, tag, file: asset.file };
+  // Its code is open: the fetcher gets it as it is.
+  if (manifest.install.access === 'direct') return release_;
+  // Closed: only this service reaches it, and grants one file, for a few minutes. Never the asker's own access.
+  const token = await accessTo(repo);
+  if (!token) throw new Error(`it has no GitHub access for ${repo}: its maintainers give it a token (or an App)`);
+  const file = (await releaseAt(repo, tag, token)).assets.find((a) => a.name === asset.file);
   if (!file) throw new Error(`the release ${tag} on GitHub has no file ${asset.file}`);
-  // GitHub answers with a redirect to its file store: that address is the answer.
-  const download = await github(`/repos/${repo}/releases/assets/${file.id}`, token, { headers: { accept: 'application/octet-stream' }, redirect: 'manual' });
-  const url = download.headers.get('location');
-  if (download.status < 300 || download.status >= 400 || !url) throw new Error(`GitHub said ${download.status} instead of a download address`);
-  return { ...theirs, url };
+  return { ...release_, url: await downloadAddress(repo, file.id, token) };
 }
 
 export async function onEvent(text) {
   const item = JSON.parse(text);
   if (item.kind !== 'weave.service.request') return;
+  const body = item.body ?? {};
   try {
-    answer(item.id, undefined, JSON.stringify(await locate(item.space.id, item.body?.data)), undefined);
+    let said;
+    if (body.action === 'publish') said = await publishRelease(item.space.id, body.data);
+    else if (body.action === 'releases') said = await releasesOf(body.data);
+    else if (body.data?.protocol === PROTOCOL) said = { data: await grant(item.space.id, body.data) };
+    else throw new Error(`it answers ${PROTOCOL}, publish and releases only`);
+    answer(item.id, said.text, said.data === undefined ? undefined : JSON.stringify(said.data), undefined);
   } catch (error) {
     answer(item.id, undefined, undefined, error?.message ?? String(error));
   }

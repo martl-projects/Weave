@@ -128,6 +128,7 @@ import {
   KIND_ADMIT,
   KIND_APP,
   KIND_ARTIFACT,
+  KIND_SERVICE_REQUEST,
   artifactsOf,
   KIND_BOARD,
   KIND_CURATE,
@@ -949,7 +950,7 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
   /** Services: code you run under keys of their own (see services.ts). */
@@ -3824,104 +3825,39 @@ export class WeaveNode implements Backend {
     return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
   }
 
+  /** The repository a project's releases come from: as given, where its app is released, or its one linked repository. */
+  #releaseRepo(project: StoredSpace, given?: string): string {
+    const state = this.#state(project);
+    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
+    const repo = given?.trim() || this.#app(project)?.install?.github || (linked.length === 1 ? linked[0].repo : '');
+    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
+    return repo;
+  }
+
+  /** The releases on GitHub a project could publish: as its provider sees them, with its access. */
   async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
     const project = this.#project(ref);
-    const app = this.#app(project);
-    const repo = app ? this.#releaseInfo(project, app).repo : undefined;
-    if (!repo) throw new Error(`${project.name} has no GitHub repository to take releases from: link one in its settings`);
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const [releases, releaseWorkflow] = await Promise.all([client.releases(repo), client.hasReleaseWorkflow(repo)]);
-    return { repo, releases, ...(releaseWorkflow !== undefined ? { releaseWorkflow } : {}) };
+    const repo = this.#releaseRepo(project);
+    return (await this.#services.askProvider(project, 'releases', { repo })) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
   }
 
   // ---------------------------------------------------------------- app API
 
   // ---------------------------------------------------------------- fetching a release
 
+  /**
+   * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
+   * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
+   */
   async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
-    if (input.as) this.#agentMay(input.as, KIND_APP);
+    if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
+    this.#maintainerState(project);
     const published = this.#app(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = input.repo?.trim() || published?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const release = await client.release(repo, input.tag.trim());
-    // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
-    const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
-    let app: AppManifest;
-    if (atTag) {
-      try {
-        app = parseManifest(JSON.parse(atTag));
-      } catch (error) {
-        throw new Error(`weave.app.json in ${repo} at ${release.tag} isn't right: ${(error as Error).message}`);
-      }
-      if (published && published.app !== app.app) throw new Error(`${repo} at ${release.tag} holds the app "${app.app}", but ${project.name}'s app is "${published.app}"`);
-    } else if (published) app = published;
-    else throw new Error(`${repo} has no weave.app.json at ${release.tag}: add one (app, name, services, start), tag again, and release`);
-    if (!release.assets.length && !app.start?.image)
-      throw new Error(
-        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com (or name a container image in weave.app.json: start.image)`,
-      );
-    // The release's container image, pinned by its digest: tagged like the release (v1.2.0, or 1.2.0).
-    let image: AppImage | undefined;
-    if (app.start?.image) {
-      const ref = app.start.image;
-      const tags = [...new Set([release.tag, release.tag.replace(/^v(?=\d)/, '')])];
-      const credentials = auth && imageLocation(ref).host === 'ghcr.io' ? { user: auth.login, token: auth.token } : undefined;
-      try {
-        const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
-        image = { ref, tag: found.tag, digest: found.digest };
-      } catch (error) {
-        // With build files, the release doesn't need its image: hosts run the files (the CLI says it's left out).
-        if (!release.assets.length) throw error;
-      }
-    }
-    // Which file is for which platform: as given, or guessed from the names.
-    const chosen = new Map<string, ReleaseAsset>();
-    if (input.assets && Object.keys(input.assets).length) {
-      for (const [platform, name] of Object.entries(input.assets)) {
-        const asset = release.assets.find((a) => a.name === name);
-        if (!asset) throw new Error(`the release ${release.tag} has no file ${name}`);
-        chosen.set(platform, asset);
-      }
-    } else {
-      for (const asset of release.assets) {
-        const platform = guessPlatform(asset.name);
-        if (platform && !chosen.has(platform)) chosen.set(platform, asset);
-      }
-    }
-    if (!chosen.size && release.assets.length && !image) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
-    // Fingerprint each file once, so every host's node can check what it downloads.
-    const assets: Record<string, AppAsset> = {};
-    for (const [platform, asset] of chosen) {
-      const download = await client.download(repo, asset.id);
-      const hash = createHash('sha256');
-      const reader = download.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        hash.update(value);
-      }
-      assets[platform] = { file: asset.name, sha256: hash.digest('hex'), size: asset.size };
-    }
-    // Members download through the app the maintainer uses, when it's their own.
-    const own = this.config.githubApp?.slug;
-    const { app: _app, ...before } = { ...published?.install, ...app.install };
-    const { image: _image, assets: _assets, ...kept } = before as AppInstall;
-    const manifest = parseManifest({ ...app, install: { ...kept, github: repo, tag: release.tag, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}), ...(own ? { app: own } : {}) } });
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
-    return manifest;
+    const data = (await this.#services.askProvider(project, 'publish', { repo: this.#releaseRepo(project, input.repo), tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(published ? { previous: published as unknown as Json } : {}) }, input.as)) as { manifest?: unknown };
+    return parseManifest(data.manifest);
   }
 
-
-  /**
-   * Release a Weave service: an image (ref:tag) whose config carries its manifest (SERVICE_LABEL). The tag is pinned
-   * to its digest, and the manifest is read from the image at that digest, so what people approve is what runs.
-   */
   async releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
@@ -9083,6 +9019,8 @@ export class WeaveNode implements Backend {
       oauthFetch: () => n.oauthSetup.fetch,
       /** Where the services Weave ships are (tests give their own). */
       shippedDir: () => n.wasmSetup.shippedDir,
+      /** Hosts a test stands in for (none in use). */
+      testHosts: () => n.wasmSetup.testHosts,
       clock: () => n.clock(),
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
@@ -9271,30 +9209,13 @@ export class WeaveNode implements Backend {
   }
 
   async releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo> {
-    if (input.as) this.#agentMay(input.as, KIND_ARTIFACT);
+    if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    // As given, or where the project's app is released, or its one linked repository.
-    const repo = input.repo?.trim() || this.#app(project)?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
-    const client = new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch);
-    const release = await client.release(repo, input.tag.trim());
-    const asset = release.assets.find((a) => a.name === input.file);
-    if (!asset) throw new Error(`the release ${release.tag} in ${repo} has no file ${input.file}${release.assets.length ? ` (it has ${release.assets.slice(0, 8).map((a) => a.name).join(', ')})` : ''}`);
-    // Fingerprinted once, so whoever gets it can check it.
-    const download = await client.download(repo, asset.id);
-    const hash = createHash('sha256');
-    const reader = download.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      hash.update(value);
-    }
-    const app = (input.name ?? asset.name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'file';
-    const manifest = parseManifest({ app, name: (input.name ?? asset.name).slice(0, 40), version: 1, services: [], file: input.type ? { type: input.type } : {}, install: { github: repo, tag: release.tag, assets: { file: { file: asset.name, sha256: hash.digest('hex'), size: asset.size } } } });
-    const item = await this.publish({ kind: KIND_ARTIFACT, body: manifest as unknown as Json, space: project.id, as: input.as });
-    return (await this.artifacts(project.id)).find((a) => a.id === item.id)!;
+    this.#maintainerState(project);
+    const data = (await this.#services.askProvider(project, 'publish', { repo: this.#releaseRepo(project, input.repo), tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as)) as { id?: string };
+    const found = (await this.artifacts(project.id)).find((a) => a.id === data.id);
+    if (!found) throw new Error(`${input.file} was published, but isn't an artifact of ${project.name} here: is its provider's person a maintainer?`);
+    return found;
   }
 
   async getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }> {

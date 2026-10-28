@@ -4,15 +4,14 @@ import { join } from 'node:path';
 import type { AppAsset, AppManifest, Json } from '@weave/core';
 import type { Fetchers } from './fetchers.ts';
 import { platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
-import type { GitHub } from './github.ts';
 import { writeJson } from './home.ts';
 import type { Runtime } from './runtime.ts';
 import { imageLocation, pullImage } from './registry.ts';
 
 /*
  * Releases on this node: fetched, refused unless they match the fingerprint their project published, and
- * unpacked, once per release and service. A release is fetched from a provider in its project (a service that
- * offers artifact.fetch, like the GitHub service), or else straight from GitHub with this node's sign-in. Who
+ * unpacked, once per release and service. A release is fetched by a fetcher of its person's, with what a provider in
+ * its project grants (or directly, when its code is open); this node never downloads with an access of its own. Who
  * delivers doesn't matter: the file has to match. Whoever needs one asks with a job name; the job says how far it
  * got, or why it failed, until the release is here.
  */
@@ -50,7 +49,6 @@ export class Releases {
   /** Fetches going on, by folder: two jobs for the same release wait for the same download. */
   #fetching = new Map<string, Promise<void>>();
   readonly #services: () => string;
-  readonly #github: () => GitHub;
   readonly #runtime: Runtime;
   readonly #changed: () => void;
   readonly #locate: (a: ArtifactRef, platform: string) => Promise<Located | undefined>;
@@ -60,56 +58,36 @@ export class Releases {
   fetchers?: Fetchers;
 
   /**
-   * `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any;
-   * `locate`: asks a provider in the release's project; `fetchFile`: downloads what a provider points at.
+   * `services`: the folder services keep their files in; `locate`: asks a provider in the release's project;
+   * `fetchFile`: downloads what a provider points at.
    */
-  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef, platform: string) => Promise<Located | undefined>, fetchFile: () => typeof fetch, registryFetch: () => typeof fetch) {
+  constructor(services: () => string, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef, platform: string) => Promise<Located | undefined>, fetchFile: () => typeof fetch, registryFetch: () => typeof fetch) {
     this.#registryFetch = registryFetch;
     this.#services = services;
-    this.#github = github;
     this.#runtime = runtime;
     this.#changed = changed;
     this.#locate = locate;
     this.#fetchFile = fetchFile;
   }
 
-  /** The release file, from a provider in its project, or straight from GitHub when there's none (or it can't). */
+  /** The release file: fetched by the fetcher its provider names, with what it granted, or at the address it gave. */
   async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string }> {
-    let refused: string | undefined;
-    try {
-      // Asked for the file it is: this computer's build, the wasm one, or the file itself.
-      const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
-      const located = await this.#locate(a, platform);
-      if (located?.fetcher) {
-        // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
-        if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);
-        const found = this.fetchers.forProject(located.fetcher, a.project);
-        if ('missing' in found) throw new Error(`${located.by} hands it out through a fetcher: this needs ${found.missing}`);
-        const run = await this.fetchers.run(found, { grant: located.grant ?? null, artifact: { project: a.project, id: a.id, tag: a.tag, name: a.manifest.name }, asset: { file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
-        return { body: run.body, ...(asset.size ? { size: asset.size } : {}), from: `${found.shipped.manifest.name}, with what ${located.by} granted` };
-      }
-      if (located?.url) {
-        const res = await this.#fetchFile()(located.url);
-        if (res.ok && res.body) {
-          const size = Number(res.headers.get('content-length'));
-          return { body: res.body, ...(size > 0 ? { size } : {}), from: located.by };
-        }
-        refused = `${located.by} pointed at a download that answered ${res.status}`;
-      }
-    } catch (error) {
-      refused = (error as Error).message;
+    // Asked for the file it is: this computer's build, the wasm one, or the file itself.
+    const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
+    const located = await this.#locate(a, platform);
+    if (!located) throw new Error(`nothing in its project hands out ${a.manifest.name} ${a.tag}: its maintainers add a provider (GitHub releases)`);
+    if (located.fetcher) {
+      // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
+      if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);
+      const found = this.fetchers.forProject(located.fetcher, a.project);
+      if ('missing' in found) throw new Error(`${located.by} hands it out through a fetcher: this needs ${found.missing}`);
+      const run = await this.fetchers.run(found, { grant: located.grant ?? null, artifact: { project: a.project, id: a.id, tag: a.tag, name: a.manifest.name }, asset: { file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
+      return { body: run.body, ...(asset.size ? { size: asset.size } : {}), from: `${found.shipped.manifest.name}, ${located.grant && (located.grant as { url?: unknown }).url ? `with what ${located.by} granted` : `from ${located.by}`}` };
     }
-    const github = a.manifest.install?.github;
-    if (!github) throw new Error(refused ?? `${a.manifest.name} ${a.tag} says nowhere to fetch it from`);
-    try {
-      const client = this.#github();
-      const found = (await client.release(github, a.tag)).assets.find((x) => x.name === asset.file);
-      if (!found) throw new Error(`the release ${a.tag} on GitHub has no file ${asset.file}`);
-      const download = await client.download(github, found.id);
-      return { ...download, ...(download.size ? {} : { size: found.size }), from: "GitHub, with this node's sign-in" };
-    } catch (error) {
-      throw new Error(refused ? `${refused}; and straight from GitHub: ${(error as Error).message}` : (error as Error).message);
-    }
+    const res = await this.#fetchFile()(located.url!);
+    if (!res.ok || !res.body) throw new Error(`${located.by} pointed at a download that answered ${res.status}`);
+    const size = Number(res.headers.get('content-length'));
+    return { body: res.body, ...(size > 0 ? { size } : {}), from: located.by };
   }
 
   /** Download a release file into dir/<tag>, refuse it unless it matches the fingerprint published, unpack it: its folder. */

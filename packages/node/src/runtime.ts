@@ -85,6 +85,13 @@ export const nearby = (address: string): boolean => {
   return v4 ? NEARBY.check(v4, 'ipv4') : NEARBY.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4');
 };
 
+/** Whether a host is reachable from here without touching this computer's networks (a test's stand-in host is). */
+export async function publicHost(host: string, testHosts: Record<string, number>): Promise<void> {
+  if (testHosts[host]) return;
+  const addresses = await lookup(host, { all: true });
+  if (!addresses.length || addresses.some((a) => nearby(a.address))) throw new Error(`${host} is on this computer's networks`);
+}
+
 /** What a component handles, one at a time: an event, or what its website's players do. */
 type WasmTask =
   | { type: 'event'; item: string }

@@ -36,6 +36,13 @@ interface host {
   /// manifest} as JSON, or nothing. Only for a service that offers artifact.fetch: it hands those releases' files out,
   /// and only theirs, whatever a request names.
   release: func(space: string, id: string) -> option<string>;
+  /// The SHA-256 and size of a file at an HTTPS address (a release file's download address): Weave downloads it to
+  /// fingerprint it, and hands back only {sha256, size} as JSON. Only for a service that offers artifact.fetch, to
+  /// publish what it hands out; never an address on this computer's networks.
+  fingerprint: func(url: string) -> result<string, string>;
+  /// A container image's digest at the first of these tags that exists ({tag, digest} as JSON), read from its public
+  /// registry: to pin a release's image. Only for a service that offers artifact.fetch.
+  pin-image: func(image: string, tags: list<string>) -> result<string, string>;
   /// The websites it hosts in one of its projects: [{id, name, host, by?, visitors, open, time}] as JSON. Only for a
   /// service that hosts websites (websites: host in its contract), as Weave's website service does.
   websites: func(space: string) -> result<string, string>;

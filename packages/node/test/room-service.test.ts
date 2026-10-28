@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { platformKey } from '../src/appinstall.ts';
-import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { closeOpenStores, WeaveNode } from '../src/index.ts';
+import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
 import { readSecretJson, writeSecretJson } from '../src/vault.ts';
 
 /*
@@ -57,33 +58,8 @@ function buildArchive(version: string): Buffer {
   return readFileSync(join(dir, 'Horses.tar.gz'));
 }
 
-/** GitHub as far as releases go: releases by tag, each with its files and weave.app.json. */
-class FakeReleases {
-  releases = new Map<string, { files: Map<number, { name: string; bytes: Buffer }>; manifest: unknown }>();
-  downloads = 0;
-  fetch: Fetch = (async (input: string | URL | Request) => {
-    const url = new URL(String(input));
-    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
-    const tagged = url.pathname.match(/^\/repos\/martl\/horses\/releases\/tags\/(.+)$/);
-    if (tagged) {
-      const release = this.releases.get(tagged[1]);
-      return release ? json(200, { tag_name: tagged[1], assets: [...release.files].map(([id, f]) => ({ id, name: f.name, size: f.bytes.length })) }) : json(404, { message: 'Not Found' });
-    }
-    if (url.pathname === '/repos/martl/horses/contents/weave.app.json') {
-      const release = this.releases.get(url.searchParams.get('ref') ?? '');
-      return release ? json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(release.manifest)).toString('base64') }) : json(404, { message: 'Not Found' });
-    }
-    const asset = url.pathname.match(/^\/repos\/martl\/horses\/releases\/assets\/(\d+)$/);
-    const file = asset && [...this.releases.values()].map((r) => r.files.get(Number(asset[1]))).find(Boolean);
-    if (!file) return json(404, { message: 'Not Found' });
-    this.downloads++;
-    return new Response(new Uint8Array(file.bytes), { status: 200, headers: { 'content-length': String(file.bytes.length) } });
-  }) as Fetch;
-}
-
-function person(name: string, github: FakeReleases): WeaveNode {
+function person(name: string): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-room-service-'));
-  node.githubSetup = { clientId: 'Iv1.test', fetch: github.fetch, sleep: async () => {} };
   nodes.push(node);
   return node;
 }
@@ -101,16 +77,19 @@ const answers = (port: number) => vi.waitFor(() => getJson(port), { timeout: 15_
 
 describe('the website service', { timeout: 60_000 }, () => {
   it('makes ports reachable in its projects: services serve their web pages, and programs of yours get a website by port', async () => {
-    const github = new FakeReleases();
+    const github = new PublicGitHub();
     const racePort = await freePort();
     const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
-    github.releases.set('v1.0', { files: new Map([[21, { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') }]]), manifest });
+    const horses = { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
+    github.add('martl/horses', 'v1.0', horses);
+    const githubPort = await github.serve();
 
-    const martl = person('martl', github);
-    const lena = person('Lena', github);
+    const martl = person('martl');
+    const lena = person('Lena');
+    await fetchesFrom(lena, githubPort);
     await martl.createProject({ name: 'Horses' });
     await lena.joinSpace(await martl.invite('Horses'));
-    await martl.releaseApp({ project: 'Horses', tag: 'v1.0', repo: 'martl/horses', assets: { [platformKey()]: `Horses-1.0-${platformKey()}.tar.gz` } });
+    await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest, files: { [platformKey()]: horses } });
     syncAll([martl, lena]);
     await lena.createProject({ name: 'Party' });
 
@@ -155,12 +134,12 @@ describe('the website service', { timeout: 60_000 }, () => {
         await lena.setService({ name: 'horses', enabled: false });
         expect(await sites()).toEqual([['Board', 'Party', 'address', true]]);
         await vi.waitFor(async () => expect(await getJson(racePort).then(() => 'up', () => 'down')).toBe('down'), { timeout: 10_000, interval: 200 });
-        const downloads = github.downloads;
+        const downloads = github.delivered.length;
         await lena.setService({ name: 'horses', enabled: true });
         await lena.serviceReady('horses');
         await answers(racePort);
         await vi.waitFor(async () => expect(await sites()).toEqual([['Board', 'Party', 'address', true], ['Horse race', 'Party', 'horses', true]]), { timeout: 10_000, interval: 200 });
-        expect(github.downloads).toBe(downloads);
+        expect(github.delivered.length).toBe(downloads);
 
         // In a project without a website service it serves nothing there, and says why; once one comes, it does.
         await lena.setService({ name: 'horses', spaces: ['Party', 'Horses'] });
@@ -190,15 +169,18 @@ describe('the website service', { timeout: 60_000 }, () => {
 
 describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
   it('keeps a release running as a service of its own, at the same website; a command is yours to start now', async () => {
-    const github = new FakeReleases();
+    const github = new PublicGitHub();
     const racePort = await freePort();
     const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
-    github.releases.set('v1.0', { files: new Map([[21, { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') }]]), manifest });
-    const martl = person('martl', github);
-    const lena = person('Lena', github);
+    const horses = { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
+    github.add('martl/horses', 'v1.0', horses);
+    const githubPort = await github.serve();
+    const martl = person('martl');
+    const lena = person('Lena');
+    await fetchesFrom(lena, githubPort);
     await martl.createProject({ name: 'Horses' });
     await lena.joinSpace(await martl.invite('Horses'));
-    const released = await martl.releaseApp({ project: 'Horses', tag: 'v1.0', repo: 'martl/horses', assets: { [platformKey()]: `Horses-1.0-${platformKey()}.tar.gz` } });
+    const released = await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest, files: { [platformKey()]: horses } });
     syncAll([martl, lena]);
     const party = await lena.createProject({ name: 'Party' });
     await lena.addService({ builtin: 'website', spaces: ['Party'] });

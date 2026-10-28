@@ -246,6 +246,12 @@ export interface AppInstall {
    * "<what that provider understands>"}. Without, a GitHub release (github) or the image is its source.
    */
   source?: ArtifactSource;
+  /**
+   * How one gets at its files: only through a grant of its provider (closed code: the provider holds the only
+   * access, and must be there when someone fetches), or directly, by the fetcher alone (public, or open to the
+   * project's members through their own access). Without, through a grant.
+   */
+  access?: 'grant' | 'direct';
 }
 
 /** Where an artifact's files are: a kind of place (github, oci, s3…) and what a provider of it understands. */
@@ -333,6 +339,7 @@ export function parseInstall(input: unknown): AppInstall | undefined {
   return {
     ...(has || image ? { ...(isRepoName(github) ? { github } : {}), tag } : {}),
     ...(source ? { source } : {}),
+    ...(has && (i.access === 'grant' || i.access === 'direct') ? { access: i.access } : {}),
     ...(has ? { assets } : {}),
     ...(image ? { image } : {}),
     ...(steps.length ? { steps } : {}),

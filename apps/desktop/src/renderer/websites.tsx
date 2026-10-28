@@ -713,7 +713,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
     ...(service.builtin === 'github' && repos?.repos.length
       ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories', who: 'members' as const, mine: true, run: () => void attempt(() => api('shareGithub', { space: project.id, on: !repos.shared }).then(reloadRepos), repos.shared ? 'Your access goes' : `Your GitHub account is shared with p/${project.name}: you'll get an invitation`) }]
       : []),
-    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true) }] : []),
+    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true), replaces: ['publish', 'releases'] }] : []),
     ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
     ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
     ...(own && mine

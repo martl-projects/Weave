@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { platformKey } from '../src/appinstall.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { publishRelease } from './helpers/releases.ts';
 import { writeSecretJson } from '../src/vault.ts';
 
 /*
@@ -86,7 +87,7 @@ describe('providers', { timeout: 60_000 }, () => {
     writeSecretJson(martl.home, join(martl.home.dir, 'github.json'), { token: 'gho_martl', login: 'martl' });
     await martl.createProject({ name: 'Bot' });
     await lena.joinSpace(await martl.invite('Bot'));
-    await martl.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' });
+    await publishRelease(martl, { project: 'Bot', tag: 'v1.0', repo: 'martl/bot', manifest: github.manifest, files: { [platformKey()]: { name: `Bot-${platformKey()}.tar.gz`, bytes: github.bytes } }, access: 'grant' });
     sync([martl, lena]);
 
     const martlApi = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
@@ -97,10 +98,10 @@ describe('providers', { timeout: 60_000 }, () => {
     // The two nodes reach each other while this runs (the network, in a test).
     const syncing = setInterval(() => sync([martl, lena]), 100);
     try {
-      // Without a provider, Lena's node goes to GitHub itself: no access.
+      // Without a provider, nothing hands it out: Lena's node never goes to GitHub with an access of its own.
       await lena.addService({ artifact: { project: 'Bot' }, spaces: ['Bot'], approve: true });
       await lena.serviceReady('bot');
-      expect((await lena.services())[0].artifact?.error).toMatch(/GitHub shows no release v1\.0 in martl\/bot/);
+      expect((await lena.services())[0].artifact?.error).toMatch(/nothing in its project hands out Bot v1\.0/);
 
       // martl adds Weave's GitHub service to the project: it offers artifact.fetch, and Lena sees it there.
       const provider = await martl.addService({ builtin: 'github', spaces: ['Bot'] });

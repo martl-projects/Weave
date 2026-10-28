@@ -640,6 +640,8 @@ export interface ScopedAction {
   who: ActionWho | 'runner';
   mine: boolean;
   run(): void;
+  /** Its contract's actions this stands in for. */
+  replaces?: string[];
 }
 
 /**
@@ -651,7 +653,9 @@ export function ActionScopes({ space, service, groups, extras }: { space: { id: 
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
-  const all: ScopedAction[] = [...(actions ?? []).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
+  // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say).
+  const replaced = new Set(extras.flatMap((e) => e.replaces ?? []));
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
   if (!all.length && !shown.length) return null;
