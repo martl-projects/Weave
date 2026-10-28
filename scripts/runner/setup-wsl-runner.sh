@@ -20,6 +20,9 @@ echo 'Packages'
 apt-get update -q
 # build-essential and python3 for native modules without a prebuilt binary; gh for the release job.
 apt-get install -yq git curl ca-certificates tar gzip unzip xz-utils jq build-essential python3
+# Rootless Podman for the server image: builds without Docker, whose group would give jobs root
+# (runner's subordinate ids come from useradd).
+apt-get install -yq --no-install-recommends podman uidmap slirp4netns passt fuse-overlayfs
 install -d -m 755 /etc/apt/keyrings
 curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
