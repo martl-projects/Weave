@@ -332,6 +332,10 @@ export interface ArtifactInfo {
   runs?: 'release' | 'container' | 'wasm';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
+  /** Where its files are: a GitHub release (handed out by a service that offers artifact.fetch), or an image. */
+  from?: { github: string } | { image: string };
+  /** A board's view (a client service), pinned to boards rather than run. */
+  lens?: true;
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */

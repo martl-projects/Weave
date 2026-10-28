@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
-import { Icon } from './icons.tsx';
+import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
@@ -222,7 +222,50 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 }
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
-function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[] }) {
+/** What a release is, in a word or two. */
+const releaseKind = (a: ArtifactInfo): string => (a.lens ? 'a board view' : a.packaged ? 'a Weave service' : a.website && a.applet ? 'a website and service' : a.website ? 'a website' : a.applet ? 'a service' : 'a program');
+const releaseIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.website ? 'globe' : a.packaged ? 'store' : 'plug');
+
+/** A service that hands out a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
+export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
+
+/** The releases a service hands out: each with what it is, who released it, when; maintainers release more here. */
+function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
+  const [picking, setPicking] = useState(false);
+  const [describing, setDescribing] = useState(false);
+  return (
+    <div className="service-releases">
+      <div className="small"><b>Releases it hands out</b></div>
+      {artifacts.length ? (
+        artifacts.slice(0, 8).map((a) => (
+          <div className="service-release" key={a.id}>
+            <Icon name={releaseIcon(a)} />
+            <span className="grow">
+              {a.name} <b>{a.tag}</b> <span className="muted small">· {releaseKind(a)} · {a.released.name ?? shortDid(a.released.did)}, {ago(a.time)}</span>
+            </span>
+          </div>
+        ))
+      ) : (
+        <p className="small muted">Nothing released here yet.</p>
+      )}
+      {maintainer && app === null && !describing && (
+        <p className="small muted">
+          Release this project's code: describe what it is first.{' '}
+          <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Describe it…</a>
+        </p>
+      )}
+      {describing && <PublishApp project={project} />}
+      {maintainer && app && (
+        <div className="buttons">
+          <button onClick={() => setPicking(true)}>Release from GitHub…</button>
+        </div>
+      )}
+      {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
+    </div>
+  );
+}
+
+function ProjectArtifacts({ project, app, artifacts, covered }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[]; covered: boolean }) {
   const [picking, setPicking] = useState(false);
   const [describing, setDescribing] = useState(false);
   if (app === undefined) return null;
@@ -245,7 +288,12 @@ function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app
     );
   return (
     <fieldset>
-      <legend>{project.name}'s artifacts</legend>
+      <legend>{covered ? 'Releases from container images' : 'Releases'}</legend>
+      <p className="small muted">
+        {covered
+          ? 'Their images come from a registry: Weave fetches them itself, checked against their digest.'
+          : `No service here hands out ${project.name}'s GitHub releases yet: add GitHub releases (Add a service), so participants without access to the repository get them too.`}
+      </p>
       {artifacts.length ? (
         <p className="small">
           {artifacts
@@ -256,9 +304,11 @@ function ProjectArtifacts({ project, app, artifacts }: { project: SpaceInfo; app
       ) : (
         <p className="small">Nothing released yet: release {app.name} from one of its repository's GitHub releases, and everyone in {project.name} can start it.</p>
       )}
-      <div className="buttons">
-        <button onClick={() => setPicking(true)}>Release from GitHub…</button>
-      </div>
+      {!covered && (
+        <div className="buttons">
+          <button onClick={() => setPicking(true)}>Release from GitHub…</button>
+        </div>
+      )}
       {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
     </fieldset>
   );
@@ -438,7 +488,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Hands the project's release files to its participants" : s.description || `A service: it ${contractText(s.contract)}`);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
-function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean }) {
+function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined }) {
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const [setting, setSetting] = useState(false);
@@ -459,6 +509,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
         </div>
       ))}
       {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
+      {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
       <div className="buttons">
         {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
         {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
@@ -588,9 +639,9 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
     >
       {profiles && !list.length && <p className="empty">No services in p/{project.name} yet. Add websites, and everyone here can join in.</p>}
       {list.map((s) => (
-        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} />
+        <ServiceSection key={s.did} project={project} service={s} rooms={rooms ?? []} shows={shows ?? []} mine={(services ?? []).find((x) => x.did === s.did)} meDid={meDid} members={members} groups={info?.groups ?? []} maintainer={!!info?.maintainer} artifacts={artifacts ?? []} app={app} />
       ))}
-      {!focus && info?.maintainer && <ProjectArtifacts project={project} app={app} artifacts={artifacts ?? []} />}
+      {!focus && info?.maintainer && (!all.some(handsOutGitHub) || (artifacts ?? []).some((a) => a.from && 'image' in a.from)) && <ProjectArtifacts project={project} app={app} artifacts={all.some(handsOutGitHub) ? (artifacts ?? []).filter((a) => a.from && 'image' in a.from) : (artifacts ?? [])} covered={all.some(handsOutGitHub)} />}
       {!focus && <ShowsSection rooms={rooms ?? []} shows={shows ?? []} members={members} />}
       {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
     </Page>

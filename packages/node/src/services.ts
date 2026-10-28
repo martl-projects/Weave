@@ -195,6 +195,8 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
+        ...(a.manifest.install?.github ? { from: { github: a.manifest.install.github } } : a.manifest.install?.image ? { from: { image: a.manifest.install.image.ref } } : {}),
+        ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
   }
@@ -865,6 +867,7 @@ export class Services {
       ...(m.service ? { applet: m.service } : {}),
       packaged: true,
       ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${m.app}`, m) } : {}),
+      ...(m.install?.image ? { from: { image: m.install.image.ref } } : {}),
     };
   }
 
