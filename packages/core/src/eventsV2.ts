@@ -102,7 +102,6 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.board.access',
   'weave.board.key',
   'weave.board.rule',
-  'weave.github.repo',
   'weave.vote.delegate',
 ]);
 

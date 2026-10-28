@@ -65,9 +65,6 @@ function signWith(key: string | undefined, name: string, algorithm: string, data
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin]?.settings : s.asks);
 
-/** The fetcher for an open artifact of a source, when no provider there names one. */
-const DIRECT_FETCHERS: Record<string, string> = { github: 'github-checkout' };
-
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
 export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
@@ -206,7 +203,6 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
-        ...(a.manifest.install?.github ? { from: { github: a.manifest.install.github } } : a.manifest.install?.image ? { from: { image: a.manifest.install.image.ref } } : {}),
         ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
@@ -1205,10 +1201,11 @@ export class Services {
    * Ask the project's provider of GitHub releases to do something (publish, releases) and wait for its answer: what
    * it answered (data), or why not. It acts with its own GitHub access.
    */
-  async askProvider(project: StoredSpace, action: string, data: Json, as?: string): Promise<Json> {
-    const providers = (await this.servicesIn(project.id)).filter((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || p.contract.sources.includes('github')));
-    const provider = providers.find((p) => p.contract.actions?.some((a) => a.name === action));
-    if (!provider) throw new Error(`${this.h.spaceName(project)} has no GitHub releases service to ${action === 'publish' ? 'publish' : 'list'} releases: add it (Services, Add a service)`);
+  async askProvider(project: StoredSpace, action: string, data: Json, as?: string, source?: string): Promise<Json> {
+    // One that hands out artifacts and takes this action: for the source its releases come from, if one says.
+    const providers = (await this.servicesIn(project.id)).filter((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && p.contract.actions?.some((a) => a.name === action));
+    const provider = providers.find((p) => !source || !p.contract.sources || p.contract.sources.includes(source)) ?? (source ? undefined : providers[0]);
+    if (!provider) throw new Error(`${this.h.spaceName(project)} has no service that ${action === 'publish' ? 'publishes' : 'lists'} releases${source ? ` from ${source}` : ''}: add one (GitHub releases, say: Services, Add a service)`);
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
     const wait = action === 'publish' ? this.publishWait : this.locateWait;
     const asked = await this.askService({ space: project.id, service: provider.did, text: action === 'publish' ? `publish ${String((data as { tag?: unknown }).tag ?? '')}` : action, action, data, ...(as ? { as } : {}), within: Math.ceil(wait / 1000) });
@@ -1230,9 +1227,11 @@ export class Services {
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
     // Open code: the fetcher gets it as it is, with nobody's grant (the provider needn't be there).
     const asset = a.manifest.install?.assets?.[platform];
-    if (a.manifest.install?.access === 'direct' && a.manifest.install.github && asset) {
-      const fetcher = provider?.contract.fetcher ?? DIRECT_FETCHERS[source ?? ''];
-      if (fetcher) return { grant: { repo: a.manifest.install.github, tag: a.tag, file: asset.file }, fetcher, by: 'GitHub, directly' };
+    const where = a.manifest.install?.source;
+    if (a.manifest.install?.access === 'direct' && where && asset) {
+      // The fetcher its provider names, or (the provider away) the one the artifact names.
+      const fetcher = provider?.contract.fetcher ?? a.manifest.install.fetcher;
+      if (fetcher) return { grant: { source: where.provider, ref: where.ref, tag: a.tag, file: asset.file }, fetcher, by: `${where.provider}, directly` };
     }
     if (!provider) return undefined;
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;

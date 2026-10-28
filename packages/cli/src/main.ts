@@ -2514,7 +2514,7 @@ ${postLine(p)}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
-        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.github ? ` (${app.install.github})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
+        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.source ? ` (${app.install.source.provider}: ${app.install.source.ref})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
       }
       if (sub === 'check') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1] ?? values.file ?? 'weave.app.json');
@@ -2547,7 +2547,7 @@ ${postLine(p)}`);
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
         const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
-        return out(app, () => `${app.name} ${app.install?.tag} is released from github.com/${app.install?.github}: it installs as a service\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}${app.start?.image && !app.install?.image ? `\n  its image ${app.start.image} is left out: it's private or not tagged ${app.install?.tag} (hosts run the build files)` : app.install?.image ? `\n  image         ${app.install.image.ref}@${app.install.image.digest.slice(0, 19)}…` : ''}`);
+        return out(app, () => `${app.name} ${app.install?.tag} is released from ${app.install?.source ? `${app.install.source.provider}: ${app.install.source.ref}` : 'its image'}: it installs as a service\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}${app.start?.image && !app.install?.image ? `\n  its image ${app.start.image} is left out: it's private or not tagged ${app.install?.tag} (hosts run the build files)` : app.install?.image ? `\n  image         ${app.install.image.ref}@${app.install.image.digest.slice(0, 19)}…` : ''}`);
       }
       throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
     }

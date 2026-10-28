@@ -73,7 +73,9 @@ describe('applets', { timeout: 60_000 }, () => {
   });
 
   it("installs another project's applet as your service, with its contract, pinned to its release", async () => {
-    const github = new PublicGitHub().add('martl/bot', 'v1.0', { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') });
+    // One archive: what GitHub serves is what was fingerprinted (two builds differ in their timestamps).
+    const v10 = { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
+    const github = new PublicGitHub().add('martl/bot', 'v1.0', v10);
     const port = await github.serve();
     const manifest = (writes: string[]) => ({
       app: 'echo-bot',
@@ -88,7 +90,7 @@ describe('applets', { timeout: 60_000 }, () => {
     await fetchesFrom(lena, port);
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
-    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest: manifest([]), files: { [platformKey()]: { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') } } });
+    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest: manifest([]), files: { [platformKey()]: v10 } });
     syncAll([martl, lena]);
 
     // Lena sees an applet: a service that reads only what's asked of it.
@@ -105,7 +107,9 @@ describe('applets', { timeout: 60_000 }, () => {
       const bot = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } });
       expect(bot).toMatchObject({ name: 'echo-bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, artifact: { tag: 'v1.0', project: { name: 'Bots' } } });
       expect(lena.replica.authority.grant(bot.did)?.permissions.sort()).toEqual(['weave.service.profile', 'weave.service.result']);
-      expect((await lena.serviceReady('echo-bot')).artifact).toMatchObject({ installed: true });
+      const ready = (await lena.serviceReady('echo-bot')).artifact;
+      expect(ready?.error).toBeUndefined();
+      expect(ready).toMatchObject({ installed: true });
 
       // It answers in Friends, as "Lena · echo-bot".
       await lena.askService({ space: 'Friends', service: bot.did, text: 'are you there?' });

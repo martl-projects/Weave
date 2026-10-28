@@ -1,7 +1,6 @@
 import {
   accessOf,
   canManage as mayManageSpace,
-  isRepoName,
   b64u,
   BLOB_TYPES,
   boardKeyFor,
@@ -812,10 +811,6 @@ mine now, change it as you learn how I work.)
 - When you mention a post, link it with its url.
 `;
 }
-/** Why a person's repository can't follow a space, and what to do about it. */
-const personalRepo = (repo: string) =>
-  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Link it without access (access: none), give write access to people you pick one by one (access: write), or move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again for read access for all members`;
-
 /** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
 const ONCHAIN_RECORD = 'tx:';
 
@@ -3432,7 +3427,7 @@ export class WeaveNode implements Backend {
   /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
   #releaseInfo(project: StoredSpace, app: AppManifest): { canRelease: boolean; repo?: string } {
     const state = this.#state(project);
-    const repo = app.install?.github;
+    const repo = app.install?.source?.ref;
     return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
   }
 
@@ -3472,18 +3467,22 @@ export class WeaveNode implements Backend {
     return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
   }
 
-  /** The repository a project's releases come from: as given, or where its app is released. */
-  #releaseRepo(project: StoredSpace, given?: string): string {
-    const repo = given?.trim() || this.#app(project)?.install?.github || '';
-    if (!isRepoName(repo)) throw new Error('which repository holds the release? (owner/name)');
-    return repo;
+  /**
+   * Where a project's releases come from: as given, or where its app was released from (what its provider
+   * understands: a repository, for GitHub releases). Its source's provider, when that's known.
+   */
+  #releaseSource(project: StoredSpace, given?: string): { ref: string; provider?: string } {
+    const before = this.#app(project)?.install?.source;
+    const ref = given?.trim() || before?.ref || '';
+    if (!ref) throw new Error('where does the release come from? (a repository, owner/name, for GitHub releases)');
+    return { ref, ...(before && (!given || given.trim() === before.ref) ? { provider: before.provider } : {}) };
   }
 
   /** The releases on GitHub a project could publish: as its provider sees them, with its access. */
   async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
     const project = this.#project(ref);
-    const repo = this.#releaseRepo(project);
-    return (await this.#services.askProvider(project, 'releases', { repo })) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
+    const from = this.#releaseSource(project);
+    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
   }
 
   // ---------------------------------------------------------------- app API
@@ -3499,7 +3498,8 @@ export class WeaveNode implements Backend {
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const published = this.#app(project);
-    const data = (await this.#services.askProvider(project, 'publish', { repo: this.#releaseRepo(project, input.repo), tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(published ? { previous: published as unknown as Json } : {}) }, input.as)) as { manifest?: unknown };
+    const from = this.#releaseSource(project, input.repo);
+    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(published ? { previous: published as unknown as Json } : {}) }, input.as, from.provider)) as { manifest?: unknown };
     return parseManifest(data.manifest);
   }
 
@@ -8846,7 +8846,8 @@ export class WeaveNode implements Backend {
     if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
     this.#maintainerState(project);
-    const data = (await this.#services.askProvider(project, 'publish', { repo: this.#releaseRepo(project, input.repo), tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as)) as { id?: string };
+    const from = this.#releaseSource(project, input.repo);
+    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as, from.provider)) as { id?: string };
     const found = (await this.artifacts(project.id)).find((a) => a.id === data.id);
     if (!found) throw new Error(`${input.file} was published, but isn't an artifact of ${project.name} here: is its provider's person a maintainer?`);
     return found;

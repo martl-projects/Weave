@@ -238,29 +238,27 @@ const ENV_RESERVED = /^(WEAVE_|NODE_|LD_|DYLD_|PATH$|PATHEXT$|COMSPEC$|SYSTEMROO
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 /**
- * Getting the app: release files on GitHub, one per platform, each with the
- * SHA-256 a maintainer published here (Weave refuses a file that doesn't
- * match, whatever GitHub serves), and steps for an agent where there's no
- * file for your computer (building from source and the like).
+ * Getting the app: release files where its source says (a provider of that source hands them out), one per platform,
+ * each with the SHA-256 a maintainer published here (Weave refuses a file that doesn't match, whoever delivers it),
+ * and steps for an agent where there's no file for your computer (building from source and the like).
  */
 export interface AppInstall {
-  /** owner/name of the repository whose release holds the files. */
-  github?: string;
   /** The release's tag, like v1.4: also the version people see. */
   tag?: string;
   /** By platform, as Node names it (win32-x64, darwin-arm64, linux-x64…): the release file. */
   assets?: Record<string, AppAsset>;
   /** For an agent installing it by hand. */
   steps?: string[];
-  /** The GitHub App (its slug) the release is reached through, when not Weave's default: a private repo's files only download through an app installed on it. */
-  app?: string;
   /** The release's container image, pinned by its digest (weave app release reads it from the registry). */
   image?: AppImage;
   /**
-   * Where its files are, for a provider that knows that source (its contract's sources): {"provider": "s3", "ref":
-   * "<what that provider understands>"}. Without, a GitHub release (github) or the image is its source.
+   * Where its files are, for a provider that knows that source (its contract's sources): {"provider": "github", "ref":
+   * "owner/name"}, {"provider": "s3", "ref": "…"}: what that provider understands, nothing Weave reads. An image is
+   * its own source.
    */
   source?: ArtifactSource;
+  /** The fetcher that gets its files directly (access: direct), when its provider isn't asked: as a contract names one. */
+  fetcher?: string;
   /**
    * How one gets at its files: only through a grant of its provider (closed code: the provider holds the only
    * access, and must be there when someone fetches), or directly, by the fetcher alone (public, or open to the
@@ -306,8 +304,6 @@ export interface AppAsset {
 }
 
 const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm|file)$/;
-/** owner/name, as GitHub allows them: where a release on GitHub is (install.github). */
-export const isRepoName = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value) && !value.endsWith('/.') && !value.endsWith('/..');
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
 const SOURCE = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -337,9 +333,11 @@ export function parseInstall(input: unknown): AppInstall | undefined {
     image = { ref, tag: imageTag, digest, ...(raw.packaged === true ? { packaged: true as const } : {}) };
   }
   const has = Object.keys(assets).length > 0;
-  const github = text(i.github, 140);
   const tag = text(i.tag, 100);
   let source: ArtifactSource | undefined;
+  // From before sources: a GitHub repository.
+  const legacy = text(i.github, 140);
+  if (i.source === undefined && legacy) source = { provider: 'github', ref: legacy };
   if (i.source !== undefined) {
     const raw = (i.source && typeof i.source === 'object' ? i.source : {}) as Record<string, unknown>;
     const provider = text(raw.provider, 40);
@@ -347,20 +345,19 @@ export function parseInstall(input: unknown): AppInstall | undefined {
     if (!SOURCE.test(provider) || !ref) throw new Error('"install.source" is {"provider": "s3", "ref": "…"}: a kind of place, and what its provider understands');
     source = { provider, ref };
   }
-  // A Weave service is its image: it needs no repository to come from (provenance says more, later). Files come from a
-  // GitHub release, or from another source.
-  if ((has || (image && !image.packaged)) && !isRepoName(github) && !source) throw new Error('"install.github" is the repository, owner/name (or "install.source" says where its files are)');
+  // A Weave service is its image: it needs no source to come from (provenance says more, later). Files do.
+  if ((has || (image && !image.packaged)) && !source) throw new Error('"install.source" says where its files are: {"provider": "github", "ref": "owner/name"}, or another provider\'s');
+  const fetcher = typeof i.fetcher === 'string' && /^([a-z][a-z0-9-]{0,39}|sha256:[0-9a-f]{64})$/.test(i.fetcher) ? i.fetcher : undefined;
   if ((has || image) && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
   if (!has && !image && !steps.length) return undefined;
-  const app = text(i.app, 100);
   return {
-    ...(has || image ? { ...(isRepoName(github) ? { github } : {}), tag } : {}),
+    ...(has || image ? { tag } : {}),
     ...(source ? { source } : {}),
+    ...(has && fetcher ? { fetcher } : {}),
     ...(has && (i.access === 'grant' || i.access === 'direct') ? { access: i.access } : {}),
     ...(has ? { assets } : {}),
     ...(image ? { image } : {}),
     ...(steps.length ? { steps } : {}),
-    ...((has || image) && /^[a-z0-9][a-z0-9-]{0,99}$/.test(app) ? { app } : {}),
   };
 }
 
@@ -625,7 +622,7 @@ export const MANIFEST_RULES = [
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
-  'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
+  'install.steps: how to install it by hand, for agents (where there is no release build). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
 ];
@@ -653,13 +650,11 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   return 'app';
 }
 
-/** Where an artifact's files are: its own source, a GitHub release, or its image. */
+/** Where an artifact's files are: its source, or its image (pulled by Weave itself). */
 export function artifactSourceOf(m: AppManifest): ArtifactSource | undefined {
-  if (m.install?.source) return m.install.source;
-  if (m.install?.github && m.install.assets) return { provider: 'github', ref: m.install.github };
+  if (m.install?.source && m.install.assets) return m.install.source;
   if (m.install?.image) return { provider: 'oci', ref: `${m.install.image.ref}@${m.install.image.digest}` };
-  if (m.install?.github) return { provider: 'github', ref: m.install.github };
-  return undefined;
+  return m.install?.source;
 }
 
 /**

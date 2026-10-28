@@ -376,7 +376,7 @@ function ArtifactAccessDialog({ artifact, onClose }: { artifact: ArtifactInfo; o
         </select>
       </div>
       <p className="small muted">
-        {artifact.from && 'image' in artifact.from
+        {artifact.source?.provider === 'oci'
           ? `Only they see it here. Its image comes from its registry, though: whoever can reach it there still can.`
           : `Its providers' nodes hand it only to them: nobody else gets its files through p/${project.name}, nor sees it here.`}
       </p>

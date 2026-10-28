@@ -50,7 +50,9 @@ export async function fetch(text) {
     log(`${asset.file}: ${bytes} bytes, as granted`);
     return 'GitHub, as its provider granted';
   }
-  const { repo, tag, file } = grant ?? {};
+  // The release (its repository is the ref of its source, github).
+  const { tag, file } = grant ?? {};
+  const repo = grant?.repo ?? grant?.ref;
   if (typeof repo !== 'string' || typeof tag !== 'string') throw new Error('the grant names no repository and release');
   const bytes = await stream(await locate(repo, tag, typeof file === 'string' ? file : asset.file));
   log(`${asset.file}: ${bytes} bytes, with your own access`);

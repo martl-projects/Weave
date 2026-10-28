@@ -67,7 +67,8 @@ describe('Weave over MCP', () => {
   it('says accounts elsewhere and publishes apps only with the permissions for it', async () => {
     const { node, call, close } = await setup();
     // Without its proof, it says what the proof holds; saying one is the person's needs weave.account.
-    expect((await call('weave_link_account', { platform: 'github' })).error ?? '').toMatch(/nothing here checks accounts on github|proofText/);
+    const how = await call('weave_link_account', { platform: 'github' });
+    expect(how.data?.proofText?.text ?? how.error).toMatch(/My Weave id: did:key:|nothing here checks accounts on github/);
     const refused = await call('weave_link_account', { platform: 'github', handle: 'martl', proof: '0123456789abcdef0123' });
     expect(refused.error).toMatch(/may not sign weave\.account; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.account/);
     writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));

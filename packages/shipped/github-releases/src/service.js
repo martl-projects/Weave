@@ -82,7 +82,7 @@ function guessPlatform(name) {
 
 /** Publish a release as the project's artifact: its app (weave.app.json at the tag), or one of its files. */
 async function publishRelease(space, input) {
-  const repo = String(input?.repo ?? '');
+  const repo = String(input?.source ?? input?.repo ?? '');
   const tag = String(input?.tag ?? '').trim();
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository holds the release? (owner/name: Weave says it when you publish from the project)');
   if (!tag) throw new Error('which release? (its tag, like v1.0)');
@@ -103,7 +103,7 @@ async function publishRelease(space, input) {
     if (!file) throw new Error(`the release ${found.tag_name} has no file ${input.file}`);
     const name = String(input.name ?? file.name).slice(0, 40);
     const app = name.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'file';
-    const manifest = { app, name, version: 1, services: [], file: input.type ? { type: String(input.type) } : {}, install: { github: repo, tag: found.tag_name, access, assets: { file: await pin(file) } } };
+    const manifest = { app, name, version: 1, services: [], file: input.type ? { type: String(input.type) } : {}, install: { source: { provider: 'github', ref: repo }, fetcher: 'github-checkout', tag: found.tag_name, access, assets: { file: await pin(file) } } };
     const item = JSON.parse(publish(space, 'weave.artifact', JSON.stringify(manifest)));
     return { text: `${name} ${found.tag_name} is available`, data: { id: item.id, manifest } };
   }
@@ -142,15 +142,15 @@ async function publishRelease(space, input) {
   if (!chosen.size && !image) throw new Error(found.assets.length ? `no file in ${found.tag_name} says which computer it's for (win, mac, linux or wasm in its name): name them in assets` : `${found.tag_name} in ${repo} has no build files attached: Weave installs build files from a release (GitHub's source archives don't count)`);
   const assets = {};
   for (const [platform, file] of chosen) assets[platform] = await pin(file);
-  const { image: _image, assets: _assets, ...kept } = { ...(input.previous?.install ?? {}), ...(app.install ?? {}) };
-  const manifest = { ...app, install: { ...kept, github: repo, tag: found.tag_name, access, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}) } };
+  const { image: _image, assets: _assets, github: _github, ...kept } = { ...(input.previous?.install ?? {}), ...(app.install ?? {}) };
+  const manifest = { ...app, install: { ...kept, source: { provider: 'github', ref: repo }, fetcher: 'github-checkout', tag: found.tag_name, access, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}) } };
   const item = JSON.parse(publish(space, 'weave.app', JSON.stringify(manifest)));
   return { text: `${app.name} ${found.tag_name} is available`, data: { id: item.id, manifest } };
 }
 
 /** The releases of a repository on GitHub, newest first: for picking one to publish. */
 async function releasesOf(input) {
-  const repo = String(input?.repo ?? '');
+  const repo = String(input?.source ?? input?.repo ?? '');
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository? (owner/name)');
   const token = await accessTo(repo);
   const res = await github(`/repos/${repo}/releases?per_page=30`, token);
@@ -166,7 +166,7 @@ async function grant(space, data) {
   const { tag, name, manifest } = JSON.parse(found);
   const asset = manifest.install?.assets?.[String(data.platform)];
   if (!asset) throw new Error(`${name} ${tag} has no file for ${data.platform}`);
-  const repo = manifest.install?.github;
+  const repo = manifest.install?.source?.provider === 'github' ? manifest.install.source.ref : undefined;
   if (!repo) throw new Error(`${name} ${tag} isn't released on GitHub`);
   const release_ = { repo, tag, file: asset.file };
   // Its code is open: the fetcher gets it as it is.

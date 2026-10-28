@@ -22,7 +22,7 @@ export interface ReleaseFile {
 /** Publish a release as its project's maintainer: the manifest with its files' fingerprints, open (direct) unless said. */
 export async function publishRelease(node: WeaveNode, input: { project: string; repo: string; tag: string; manifest: Record<string, unknown>; files?: Record<string, ReleaseFile>; access?: 'grant' | 'direct' }): Promise<AppManifest> {
   const assets = Object.fromEntries(Object.entries(input.files ?? {}).map(([platform, f]) => [platform, { file: f.name, sha256: createHash('sha256').update(f.bytes).digest('hex'), size: f.bytes.length }]));
-  const install = { ...((input.manifest.install as Record<string, unknown> | undefined) ?? {}), github: input.repo, tag: input.tag, ...(Object.keys(assets).length ? { assets, access: input.access ?? 'direct' } : {}) };
+  const install = { ...((input.manifest.install as Record<string, unknown> | undefined) ?? {}), source: { provider: 'github', ref: input.repo }, tag: input.tag, ...(Object.keys(assets).length ? { assets, access: input.access ?? 'direct', fetcher: 'github-checkout' } : {}) };
   const manifest = parseManifest({ ...input.manifest, install });
   await node.publish({ kind: 'weave.app', body: manifest as unknown as Json, space: input.project });
   return manifest;

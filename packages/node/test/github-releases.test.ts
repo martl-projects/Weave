@@ -165,7 +165,7 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       // martl publishes v1.0: the service reads it with its own token and fingerprints its files. Nobody signs in to GitHub.
       await expect(lena.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' })).rejects.toThrow(/maintainer/);
       const published = await martl.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' });
-      expect(published.install).toMatchObject({ github: 'martl/bot', tag: 'v1.0', access: 'grant', assets: { [platformKey()]: { file: `Bot-${platformKey()}.tar.gz`, sha256: createHash('sha256').update(github.bytes).digest('hex'), size: github.bytes.length } } });
+      expect(published.install).toMatchObject({ source: { provider: 'github', ref: 'martl/bot' }, fetcher: 'github-checkout', tag: 'v1.0', access: 'grant', assets: { [platformKey()]: { file: `Bot-${platformKey()}.tar.gz`, sha256: createHash('sha256').update(github.bytes).digest('hex'), size: github.bytes.length } } });
       expect(((await martl.releaseApp({ project: 'Bot', tag: 'v9', repo: 'martl/bot' }).catch((e: Error) => e)) as Error).message).toMatch(/github-releases \(martl\): GitHub shows no release v9/);
       expect((await martl.appReleases('Bot')).releases.map((r) => r.tag)).toEqual(['v1.0']);
       github.delivered = 0;
@@ -280,7 +280,7 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       await lena.serviceReady('bot');
       const direct = (await lena.services()).find((s) => s.name === 'bot')?.artifact;
       expect(direct?.error).toBeUndefined();
-      expect(direct).toMatchObject({ installed: true, deliveredBy: 'GitHub checkout, from GitHub, directly' });
+      expect(direct).toMatchObject({ installed: true, deliveredBy: 'GitHub checkout, from github, directly' });
       expect(github.delivered).toBe(1);
       expect((await lena.serviceRequests({ space: 'Open' })).filter((r) => r.from.did === lena.identity.author)).toEqual([]);
     } finally {
