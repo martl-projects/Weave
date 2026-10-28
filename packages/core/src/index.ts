@@ -365,7 +365,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ARTIFACT, KIND_ROOM, artifactsOf, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppClient, type AppFetcher, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_ARTIFACT, KIND_ROOM, artifactsOf, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppClient, type AppFetcher, type AppVerifier, parsePages, type RoomPages, checkManifest, checkServiceLabel, isRepoName, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -392,27 +392,6 @@ export {
   type Grantee,
 } from './access.ts';
 export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
-export {
-  accountsOf,
-  sharedAccountsOf,
-  isGistId,
-  type SharedAccount,
-  githubProofText,
-  isLogin,
-  isRepoName,
-  KIND_GITHUB_ACCOUNT,
-  KIND_GITHUB_ADDED,
-  KIND_GITHUB_PUBLIC,
-  KIND_GITHUB_REPO,
-  planSync,
-  reposOf,
-  type RepoAccess,
-  type RepoCollaborators,
-  REPO_ACCESS,
-  MAX_WRITERS,
-  type RepoLink,
-  type SyncPlan,
-} from './github.ts';
 export { KIND_SESSION, MAX_STACK, pushOnto, reorder, SESSION_ROLES, sessionKey, sessionsOf, takeOff, type SessionRecord, type SessionRole, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
 export {
@@ -448,3 +427,4 @@ export {
 export { KIND_CATALOG_ENTRY, catalogOf, parseCatalogEntry, type CatalogEntry } from './catalog.ts';
 export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type SpaceServiceSetting } from './servicesettings.ts';
 export { KIND_SERVICE_POLICY, KIND_ARTIFACT_ACCESS, artifactAccessOf, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';
+export { KIND_ACCOUNT, accountProofText, accountClaimsOf, isPlatform, type AccountClaim } from './accounts.ts';

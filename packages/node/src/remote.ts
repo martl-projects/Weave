@@ -76,8 +76,6 @@ export const PHONE_METHODS: readonly RpcMethod[] = [
   'issues', 'openIssue', 'claimIssue', 'setIssueStatus', 'proposals', 'propose', 'vote', 'delegateVote', 'votingDelegate',
   // Rooms and project apps (joining; hosting needs the computer)
   'websites', 'visitWebsite', 'leaveWebsite', 'closeWebsite', 'websiteChat', 'sayOnWebsite', 'projectApp', 'appReleases',
-  // GitHub, to look only
-  'spaceRepos',
 ];
 
 export { decodePhoneLink, encodePhoneLink, type PhoneLink } from './phone-link.ts';

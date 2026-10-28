@@ -8,7 +8,7 @@ import type { ComponentizeOptions } from '@bytecodealliance/componentize-js';
  * A test's JavaScript built into a WebAssembly component of a world of Weave's WIT (componentize-js). It takes a few
  * seconds, so it's kept per machine by the source's and the WIT's hash.
  */
-export async function buildComponent(source: string, world: 'service' | 'website' | 'board' | 'fetcher', features: { http?: boolean } = {}): Promise<string> {
+export async function buildComponent(source: string, world: 'service' | 'website' | 'board' | 'fetcher' | 'verifier', features: { http?: boolean } = {}): Promise<string> {
   const wit = join(import.meta.dirname, '..', '..', '..', 'sdk', 'wit', 'service.wit');
   const hash = createHash('sha256').update(readFileSync(source)).update(readFileSync(wit)).update(world).update(features.http ? 'http' : '').digest('hex').slice(0, 16);
   const cache = join(tmpdir(), 'weave-test-components');

@@ -1,7 +1,6 @@
 import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
-import { isRepoName } from './github.ts';
 import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
 import { parseWho, type ActionWho } from './serviceactions.ts';
 
@@ -92,6 +91,11 @@ export interface AppManifest {
   fetcher?: AppFetcher;
   /** A file: something to get, not to run (a document, a dataset, a model). Its one release file is install.assets.file. */
   file?: AppFile;
+  /**
+   * A verifier: a client app that checks people's accounts on platforms (weave.account), run by whoever looks, so
+   * nobody has to trust anyone's word that an account is theirs.
+   */
+  verifier?: AppVerifier;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -102,6 +106,17 @@ export interface AppClient {
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppVerifier {
+  /** The platforms it checks accounts on (github, x…). */
+  platforms: string[];
+  /** Hosts it may reach over HTTPS, as a service's contract names them. */
+  net?: string[];
+  /** How to make a proof there, for people (where, and that it holds your Weave id). */
+  howto?: string;
+  /** An account's page there, with {handle} in it: https://github.com/{handle}. */
+  page?: string;
+}
+
 export interface AppFile {
   /** What it is, as a media type (application/pdf), if known. */
   type?: string;
@@ -291,6 +306,8 @@ export interface AppAsset {
 }
 
 const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm|file)$/;
+/** owner/name, as GitHub allows them: where a release on GitHub is (install.github). */
+export const isRepoName = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value) && !value.endsWith('/.') && !value.endsWith('/..');
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
 const SOURCE = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -361,7 +378,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -391,7 +408,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -480,6 +497,17 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (!m.wasm) problems.push('a fetcher is a WebAssembly component: say where it is ("wasm": {"component": "fetcher.wasm"})');
     else fetcher = { ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}) };
   }
+  // A verifier: the platforms it checks, where it may reach, and how people make a proof.
+  let verifier: AppVerifier | undefined;
+  if (m.verifier !== undefined) {
+    const raw = (m.verifier && typeof m.verifier === 'object' && !Array.isArray(m.verifier) ? m.verifier : {}) as Record<string, unknown>;
+    const platforms = Array.isArray(raw.platforms) ? raw.platforms.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(p)).slice(0, 10) : [];
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost).filter(isNetHost) : [];
+    const page = text(raw.page, 200);
+    if (!platforms.length) problems.push('"verifier.platforms" names the platforms it checks accounts on, like ["github"]');
+    else if (!m.wasm) problems.push('a verifier is a WebAssembly component: say where it is ("wasm": {"component": "verifier.wasm"})');
+    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}) };
+  }
   // A file: its media type, if it says.
   let file: AppFile | undefined;
   if (m.file !== undefined) {
@@ -537,7 +565,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}) } };
 }
 
 /**

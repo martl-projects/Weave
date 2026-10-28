@@ -1,8 +1,22 @@
 {
   "app": "github-access",
   "name": "GitHub access",
-  "service": { "reads": { "kinds": ["weave.github.repo", "weave.github.account"] }, "writes": ["weave.github.added"], "repos": "access", "net": ["api.github.com"], "version": "1.0" },
-  "wasm": { "component": "github-access.wasm" },
+  "service": {
+    "reads": { "kinds": ["weave.account"] },
+    "writes": ["github.added"],
+    "net": ["api.github.com"],
+    "actions": [
+      { "name": "repos", "label": "See the repositories", "who": "members" },
+      { "name": "link", "label": "Link a repository", "who": "maintainers", "input": [{ "name": "repo", "label": "Repository (owner/name)" }, { "name": "board", "label": "Only readers of board (optional)" }] },
+      { "name": "unlink", "label": "Unlink a repository", "who": "maintainers", "input": [{ "name": "repo", "label": "Repository (owner/name)" }] }
+    ],
+    "version": "1.0"
+  },
+  "wasm": {
+    "component": "github-access.wasm",
+    "panel": "panel",
+    "panels": [{ "name": "repos", "title": "Repositories", "who": "members", "page": "index.html" }]
+  },
   "env": [
     { "name": "GITHUB_TOKEN", "label": "GitHub token", "secret": true, "hint": "A token of an admin of the repositories: github.com → Settings → Developer settings → Fine-grained tokens, the organization's repositories, Administration read and write" }
   ]

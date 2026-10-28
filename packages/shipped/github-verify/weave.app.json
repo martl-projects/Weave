@@ -1,0 +1,6 @@
+{
+  "app": "github-verify",
+  "name": "GitHub",
+  "verifier": { "platforms": ["github"], "net": ["api.github.com"], "howto": "On gist.github.com, signed in as that account, make a gist (secret is fine) holding the line Weave gives you; its address is the proof.", "page": "https://github.com/{handle}" },
+  "wasm": { "component": "github-verify.wasm" }
+}

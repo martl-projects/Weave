@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, BoardInfo, SpaceRepos, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
@@ -8,7 +8,6 @@ import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { ActionScopes, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
-import { GitHubProofDialog } from './github.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -696,7 +695,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
 const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.contract.repos === 'access' ? "Gives the project's members access to its repositories" : s.description);
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app, boards }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; boards: string[] }) {
@@ -707,15 +706,8 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const own = service.person.did === meDid;
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
-  // Getting access to the repositories a GitHub access service keeps in step: your GitHub account, proven, shared with this project.
-  const keepsRepos = service.contract.repos === 'access';
-  const { data: repos, reload: reloadRepos } = useApi(() => (keepsRepos ? api<SpaceRepos>('spaceRepos', project.id).catch(() => undefined) : Promise.resolve(undefined)), [project.id, keepsRepos]);
-  const [proving, setProving] = useState(false);
   const extras: ScopedAction[] = [
     ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
-    ...(keepsRepos && repos?.repos.length
-      ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories…', who: 'members' as const, mine: true, run: () => (repos.shared ? void attempt(() => api('shareGithub', { space: project.id, on: false }).then(reloadRepos), 'Your access goes') : setProving(true)) }]
-      : []),
     ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true), replaces: ['publish', 'releases'] }] : []),
     ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
     ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
@@ -760,14 +752,6 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
       {publishing && app && <ReleasePicker project={project} app={app} onClose={() => setPublishing(false)} />}
-      {proving && (
-        <GitHubProofDialog
-          title={`Get access to p/${project.name}'s repositories`}
-          about={`${service.name} invites this account while you're in p/${project.name}, and takes it back when you leave.`}
-          onProve={(login, gist) => api('shareGithub', { space: project.id, on: true, login, gist }).then(reloadRepos)}
-          onClose={() => setProving(false)}
-        />
-      )}
     </fieldset>
   );
 }

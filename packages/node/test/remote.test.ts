@@ -195,8 +195,7 @@ describe('what a phone may call', () => {
       'moveHomeKey', 'keystores', 'destroyCompanyKey', 'escrowRecovery', 'openEscrow', 'manageSpace', 'unlockSpace', 'link', 'signIn', 'companySignIn',
       'backup', 'exportSpace', 'createCompany', 'companyAction', 'enrollLink', 'inviteByEmail', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'consoleOperatorLink',
       'addAuditStream', 'removeAuditStream', 'auditStreams', 'setHold', 'linkNode', 'publishApp', 'releaseApp', 'websiteEnv', 'openWebsite', 'addService',
-      'setService', 'removeService', 'openInApp', 'linkRepo', 'shareGithub',
-      'showGithubOnHub', 'pairPhone', 'phones', 'unpairPhone',
+      'setService', 'removeService', 'openInApp', 'linkAccount', 'pairPhone', 'phones', 'unpairPhone',
     ];
     for (const method of computerOnly) expect(PHONE_METHODS).not.toContain(method);
   });

@@ -1,4 +1,4 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -328,6 +328,7 @@ export class Services {
     if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
     if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
+    if (shipped?.manifest.verifier) throw new Error(`${shipped.manifest.name} is a verifier: every Weave runs it when it checks accounts, nobody's service`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
@@ -766,7 +767,7 @@ export class Services {
 
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
-    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.verifier).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */
@@ -1640,13 +1641,12 @@ export class Services {
             const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
             return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
           }
-          if (call === 'repoAccess' || call === 'repoSynced') {
-            // Only one that keeps repositories in step, only in its spaces.
-            if (current.contract.repos !== 'access') throw new Error(`${name} keeps no repositories in step in its contract`);
-            if (call === 'repoSynced') return void this.h.repoSynced(String(args[0]), args[1] ? String(args[1]).slice(0, 300) : undefined);
+          if (call === 'readers' || call === 'accounts') {
+            // Only its spaces: who is in one (or reads one of its boards), and the accounts elsewhere said there.
             const space = this.h.spaces.get(String(args[0]));
             if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
-            return JSON.stringify(await this.h.repoAccess(space, this.serviceKey(name).did));
+            if (call === 'readers') return JSON.stringify(this.h.readers(space, args[1] ? String(args[1]) : undefined));
+            return JSON.stringify((await this.h.accounts(space, String(args[1]))).map((a) => ({ did: a.who.did, name: a.who.name, handle: a.handle, ...(a.verified !== undefined ? { verified: a.verified } : {}) })));
           }
           if (call === 'fingerprint' || call === 'pinImage') {
             // For a provider publishing what it hands out: only what it needs to pin a release, never more.

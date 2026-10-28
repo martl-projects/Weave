@@ -43,13 +43,11 @@ interface host {
   /// A container image's digest at the first of these tags that exists ({tag, digest} as JSON), read from its public
   /// registry: to pin a release's image. Only for a service that offers artifact.fetch.
   pin-image: func(image: string, tags: list<string>) -> result<string, string>;
-  /// Who should have access to the repositories linked in one of its spaces: [{repo, write, want, keep, gave}] as JSON,
-  /// GitHub logins each. want: members who proved their account (a gist); keep: unproven ones who keep what was given
-  /// before proofs; gave: whom it gave access (its weave.github.added there). Only for a service whose contract says
-  /// repos: access.
-  repo-access: func(space: string) -> result<string, string>;
-  /// How keeping a repository in step went: no problem, or what's wrong (shown with the repository).
-  repo-synced: func(repo: string, problem: option<string>);
+  /// Who is in one of its spaces, or reads one of a project's boards: their dids, as JSON.
+  readers: func(space: string, board: option<string>) -> result<string, string>;
+  /// The accounts on a platform (github, x…) people said are theirs in one of its spaces, as its node's verifier finds
+  /// them: [{did, name?, handle, verified?}] as JSON (verified missing: it couldn't tell yet).
+  accounts: func(space: string, platform: string) -> result<string, string>;
   /// The websites it hosts in one of its projects: [{id, name, host, by?, visitors, open, time}] as JSON. Only for a
   /// service that hosts websites (websites: host in its contract), as Weave's website service does.
   websites: func(space: string) -> result<string, string>;
@@ -112,6 +110,21 @@ world fetcher {
   /// Fetch one file: {grant, artifact: {project, id, tag, name}, asset: {file, sha256, size?}}, as JSON. It writes
   /// the file's bytes (write) and says where they came from, or why it couldn't.
   export fetch: func(input: string) -> result<string, string>;
+}
+
+/// What Weave offers a verifier: a log.
+interface verifying {
+  /// A line for its log.
+  log: func(message: string);
+}
+
+/// A verifier: a client app that checks whether an account on a platform is a person's, run by whoever looks (no key,
+/// no requests). It reaches the hosts its manifest names (verifier.net) over HTTPS; nothing else.
+world verifier {
+  import verifying;
+  /// Whether a claim holds: {platform, handle, proof, subject (the person's did), text (what the proof must hold)},
+  /// as JSON. True or false; an error when it couldn't tell (the platform didn't answer).
+  export verify: func(claim: string) -> result<bool, string>;
 }
 
 /// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's

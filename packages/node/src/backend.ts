@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
-import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -190,26 +190,6 @@ export interface GumroadInfo {
   pending?: { url: string };
   /** Why the last connection didn't work. */
   error?: string;
-}
-
-export interface RepoInfo {
-  /** owner/name */
-  repo: string;
-  url: string;
-  /** Only readers of this board, not the whole project. */
-  board?: string;
-  /** read: members get read access; none: just linked; write: the people picked (writers) can write. */
-  access: RepoAccess;
-  writers?: Actor[];
-  /** It gives you access, once you give the space your GitHub account. */
-  forYou?: true;
-  /** Who linked it; their node invites and removes people. */
-  by: Actor;
-  /** You linked it: your GitHub sign-in keeps it in step. */
-  mine?: true;
-  /** For your own: when it was last brought in step, and what went wrong if it didn't. */
-  synced?: string;
-  problem?: string;
 }
 
 /** A service this node runs (yours): code under a key of its own, with exactly its contract's rights. */
@@ -457,21 +437,6 @@ export interface ServiceRequestInfo {
   results: Array<{ id: string; text: string; data?: Json; error?: string; private?: true; time: string }>;
   /** Asked of the service alone (and you, if you asked): you see that it was asked, not what. */
   private?: true;
-}
-
-export interface SpaceRepos {
-  repos: RepoInfo[];
-  /** You may link repos here (owner or maintainer). */
-  canLink: boolean;
-  /** The GitHub account you gave this space. */
-  shared?: string;
-  /** For whoever linked a repo: people it should include who haven't given their GitHub account. */
-  missing?: Actor[];
-  /** For whoever linked a repo: members and the accounts they gave. */
-  /** proven: a gist of that account names them (unproven accounts aren't invited). */
-  accounts?: Array<{ who: Actor; login: string; proven: boolean }>;
-  /** For those who may link: the members who may be picked to write (in personally, not through a group or tier). */
-  mayWrite?: Actor[];
 }
 
 /** What to say when someone acts as an agent this node doesn't have (often an MCP server started with an old --as). */
@@ -1004,14 +969,12 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'link-repo' | 'space' | 'inbox' | 'post' | 'person';
+  what: 'space' | 'inbox' | 'post' | 'person';
   space?: SpaceRef;
   /** For post: the post to show. */
   post?: { id: string; title: string };
   /** For person: whose hub to show. */
   person?: { did: Did; name?: string };
-  /** For link-repo: the repository to have chosen (owner/name). */
-  repo?: string;
 }
 
 /**
@@ -1278,8 +1241,8 @@ export interface Profile {
   posts: number;
   /** Projects they show publicly. */
   projects: PublicProject[];
-  /** The GitHub account they show on their hub. */
-  github?: HubGitHub;
+  /** Accounts elsewhere they show on their hub, checked (one whose proof doesn't hold isn't shown). */
+  accounts?: Array<{ platform: string; handle: string; url?: string; verified?: true }>;
   /** A company-owned identity: the company that holds it. */
   company?: { did: Did; name?: string; frozen?: true };
   /** Their other identities, where both sides say so. */
@@ -1439,13 +1402,20 @@ export interface CompanyDeviceInfo {
   problemTime?: string;
 }
 
-export interface HubGitHub {
-  login: string;
-  url: string;
-  /** A gist of that account names their did. False when it doesn't (then it isn't shown); undefined when GitHub couldn't be asked. */
+/** An account elsewhere someone said is theirs, as its platform's verifier finds it. */
+export interface AccountInfo {
+  who: Actor;
+  platform: string;
+  handle: string;
+  proof: string;
+  /** Its page there, if its verifier says where. */
+  url?: string;
+  /** The proof holds (true) or doesn't (false); missing when it couldn't be checked (yet). */
   verified?: boolean;
 }
 
+import type { PlatformInfo } from './verifiers.ts';
+export type { PlatformInfo };
 export interface ProfileInput {
   name?: string;
   theme?: Partial<Theme>;
@@ -1786,20 +1756,15 @@ export interface Backend {
   removeFetcher(name: string): Promise<void>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
-  /** A space's repositories, and whether you gave it your GitHub account. */
-  spaceRepos(space: string): Promise<SpaceRepos>;
-  /** Owner or maintainers: let a repo follow a space (or, in a project, the readers of one board); on: false unlinks it. Uses your GitHub sign-in. */
-  /**
-   * Let a repository follow a space (on: false unlinks it). An organization's: members get read access. A person's:
-   * access none (just linked) or write (writers: people in the space personally, picked one by one).
-   */
-  linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos>;
-  /** What a gist proving your GitHub account holds (you make it on github.com: nobody signs in to Weave). */
-  githubProof(input: { login: string }): Promise<{ text: string; url: string }>;
-  /** Give a space your GitHub account, with a gist of yours that proves it, so its repos invite you; on: false takes it back. */
-  shareGithub(input: { space: string; on: boolean; login?: string; gist?: string; as?: string }): Promise<SpaceRepos>;
-  /** Show your GitHub account on your hub, with a gist of yours that proves it, or (on: false) stop. */
-  showGithubOnHub(input: { on: boolean; login?: string; gist?: string }): Promise<Profile>;
+  // accounts elsewhere: yours on other platforms, proven, checked by each platform's verifier
+  /** The platforms accounts can be proven on here (a verifier checks each), and how. */
+  platforms(): Promise<PlatformInfo[]>;
+  /** What a proof of an account must hold (your Weave id), and how to make one there. */
+  accountProof(input: { platform: string }): Promise<{ text: string; howto?: string }>;
+  /** Say an account elsewhere is yours, with its proof (on: false takes it back): on your hub, or in a space for its members. Checked first. */
+  linkAccount(input: { platform: string; handle?: string; proof?: string; space?: string; on?: boolean; as?: string }): Promise<AccountInfo[]>;
+  /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
+  accounts(input?: { space?: string; who?: string }): Promise<AccountInfo[]>;
 
   // communities
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
@@ -2154,8 +2119,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'githubProof', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'accounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

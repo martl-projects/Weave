@@ -3,6 +3,7 @@ import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, Service
 import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
+import { AccountProofDialog } from './accounts.tsx';
 import { ago, api, bump, shortDid, useApi, useTick } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
@@ -725,6 +726,7 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(160);
+  const [proving, setProving] = useState<string>();
   const { data: base } = useApi(async () => bridge.lensBase(panel.key), [panel.key]);
   const latest = useRef(actions);
   latest.current = actions;
@@ -741,6 +743,8 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
       if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
       // A running website it shows: its window is in the project's Live.
       if (m?.weave === 'visit') location.hash = `#/p/${space.id}/live`;
+      // Proving an account elsewhere here (its services give access by it): Weave asks for it, never the page.
+      if (m?.weave === 'account' && typeof (m as { platform?: unknown }).platform === 'string') setProving(String((m as { platform: string }).platform));
       if (m?.weave === 'act' && typeof m.name === 'string') {
         const action = latest.current.find((a) => a.name === m.name);
         void (async () => {
@@ -763,5 +767,10 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
     return () => window.removeEventListener('message', listen);
   }, [space.id, service.did]);
   if (!base) return null;
-  return <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />;
+  return (
+    <>
+      <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />
+      {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => setProving(undefined)} />}
+    </>
+  );
 }

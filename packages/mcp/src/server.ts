@@ -95,10 +95,9 @@ Linking to posts: every post has a url (http://weave.localhost:7710/project~id/b
 
 Linking to people: people have urls too (http://weave.localhost:7710/@phil~fP5Q3XPCFjz1, the url in weave_people). Your person may paste one, often as a Markdown link like [Phil](…), from Weave's picker: it names exactly one person even where several share a name, so pass it as it is wherever a tool takes a person, and link people that way when you mention them.
 
-GitHub repositories that follow a space (repo access for members). Nobody signs in to GitHub in Weave: services do it with their own access.
-1. The space needs the GitHub access service (shipped with Weave), with a token of an admin of the repositories in its settings: your person adds it (Services, Add a service) and types the token; never ask for or handle a token yourself.
-2. Link the repository with weave_link_repo (needs weave.github.repo): to a group, tier or project (owners and maintainers only; in a project optionally only the readers of one board). Or call weave_open_in_app with what "link-repo" to show your person the Link a repository dialog.
-3. Members give the space their GitHub account, proven by a gist they make themselves (weave_github_proof says what it holds; weave_share_github with their username and the gist's address, or in the app) and get read access; leaving takes it back. Only an organization's repositories give read-only access: a personal account's can't. If the repository belongs to your person, tell them to move it to an organization (free; the repository's Settings → Transfer on GitHub) and link it again.
+Accounts elsewhere (GitHub, X…): your person says an account is theirs with a proof that names their Weave id there (a gist on GitHub), made by them as that account; weave_accounts shows them, each checked by that platform's verifier (a client app every Weave runs itself). weave_link_account adds one, on their hub or in a space; Weave knows no platform, only its verifier does.
+
+GitHub repositories that follow a space (repo access for members) are the GitHub access service's (shipped with Weave), not Weave's: it acts with its own token (an admin's of the repositories, which your person types into its settings; never ask for or handle a token yourself). Maintainers link repositories in its panel in the app (its card under the project's Services), or with weave service ask github-access link -p <project> --action link --input '{"repo": "owner/name"}'; members who proved their GitHub account in the space get read access, and lose it when they leave. Only an organization's repositories give read-only access.
 
 A project's artifact, which websites run with one click (prefer this to asking people to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
@@ -655,17 +654,16 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'link-repo' opens a space's settings with Link a repository, the repository already chosen (and, if Weave can't manage it yet, the link to add it on GitHub); 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub. Tell them what to do there.",
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub. Tell them what to do there.",
       inputSchema: {
-        what: z.enum(['link-repo', 'space', 'inbox', 'post', 'person']),
+        what: z.enum(['space', 'inbox', 'post', 'person']),
         space: z.string().optional().describe('Group, tier or project name or id'),
-        repo: z.string().optional().describe('For link-repo: owner/name'),
         post: z.string().optional().describe('For post: its id or url'),
         who: z.string().optional().describe('For person: name, did:key or person url'),
       },
     },
-    run(async ({ what, space, repo, post, who }: { what: 'link-repo' | 'space' | 'inbox' | 'post' | 'person'; space?: string; repo?: string; post?: string; who?: string }) => ({
-      ...(await backend.openInApp({ what, space, repo, post, who })),
+    run(async ({ what, space, post, who }: { what: 'space' | 'inbox' | 'post' | 'person'; space?: string; post?: string; who?: string }) => ({
+      ...(await backend.openInApp({ what, space, post, who })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
   );
@@ -835,56 +833,27 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   // ---------------------------------------------------------------- GitHub and project apps
 
   server.registerTool(
-    'weave_space_repos',
+    'weave_accounts',
     {
-      title: "A space's repositories",
-      description: 'Repositories linked to a group, tier or project, who linked them, whether you gave it your GitHub account, and (for whoever linked them) members who have not yet.',
-      inputSchema: { space: z.string().describe('Group, tier or project name or id') },
+      title: 'Accounts elsewhere',
+      description: "Accounts on other platforms (GitHub, X…) people said are theirs: on hubs (who), or in a space; each checked by that platform's verifier (verified true or false; missing when it couldn't tell yet). With no arguments: everyone's on hubs, and the platforms this Weave checks.",
+      inputSchema: { space: z.string().optional(), who: z.string().optional().describe('Name, did:key or person url') },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ space }: { space: string }) => backend.spaceRepos(space)),
+    run(async ({ space, who }: { space?: string; who?: string }) => ({ platforms: await backend.platforms(), accounts: await backend.accounts({ ...(space ? { space } : {}), ...(who ? { who } : {}) }) })),
   );
 
   server.registerTool(
-    'weave_link_repo',
+    'weave_link_account',
     {
-      title: 'Link a repository',
+      title: 'Say an account elsewhere is yours',
       description:
-        "Owners and maintainers: let a GitHub repository follow a group, tier or project (on: false unlinks it and takes back access Weave gave). An organization's repository: members who give the space their GitHub account get read access. A personal account's repository can't give read-only access: link it with access none (just linked, nobody gets anything) or write (writers: people in the space personally, never through a group or tier, picked one by one; ask your person whom), or suggest moving it to an organization. Needs the weave.github.repo permission. The space's GitHub access service (a service Weave ships, with an admin's token in its settings) gives and takes the access: nobody signs in to GitHub in Weave.",
-      inputSchema: {
-        space: z.string(),
-        repo: z.string().describe('owner/name or its github.com link'),
-        board: z.string().optional().describe('In a project: only the readers of this board (read access only)'),
-        access: z.enum(['read', 'none', 'write']).optional().describe("read for an organization's repository (the default there); none or write for a personal one"),
-        writers: z.array(z.string()).optional().describe('With access write: the people who may write, by name or did'),
-        on: z.boolean().default(true),
-      },
+        "Say an account on a platform (github…) is your person's, with its proof: on their hub (everyone sees it), or in a space (its members do, and its services may give access by it). on: false takes it back. The proof is something your person makes there as that account, holding the line from proofText (their Weave id): call without handle and proof to get it and how. Weave checks it first. Needs the weave.account permission.",
+      inputSchema: { platform: z.string(), handle: z.string().optional(), proof: z.string().optional().describe("The proof's address"), space: z.string().optional(), on: z.boolean().default(true) },
     },
-    run(async ({ space, repo, board, access, writers, on }: { space: string; repo: string; board?: string; access?: 'read' | 'none' | 'write'; writers?: string[]; on: boolean }) =>
-      backend.linkRepo({ space, repo, board, access, writers, on, as }),
+    run(async ({ platform, handle, proof, space, on }: { platform: string; handle?: string; proof?: string; space?: string; on: boolean }) =>
+      on && (!handle || !proof) ? { proofText: await backend.accountProof({ platform }) } : backend.linkAccount({ platform, ...(handle ? { handle } : {}), ...(proof ? { proof } : {}), ...(space ? { space } : {}), on, as }),
     ),
-  );
-
-  server.registerTool(
-    'weave_share_github',
-    {
-      title: 'Give a space your GitHub account',
-      description:
-        "Give a space your person's GitHub account, proven by a gist of theirs, so its linked repositories invite it (on: false takes it back). Nobody signs in to GitHub in Weave: weave_github_proof gives the line the gist holds; your person makes the gist on gist.github.com as that account (only they can) and gives you its address. Needs the weave.github.account permission.",
-      inputSchema: { space: z.string(), on: z.boolean().default(true), login: z.string().optional().describe('Their GitHub username'), gist: z.string().optional().describe("The gist's address (or id)") },
-    },
-    run(async ({ space, on, login, gist }: { space: string; on: boolean; login?: string; gist?: string }) => backend.shareGithub({ space, on, login, gist, as })),
-  );
-
-  server.registerTool(
-    'weave_github_proof',
-    {
-      title: 'What proves a GitHub account',
-      description: "The line a gist must hold to prove a GitHub account is your person's, and where to make it: they make it themselves, as that account.",
-      inputSchema: { login: z.string().describe('Their GitHub username') },
-      annotations: { readOnlyHint: true },
-    },
-    run(async ({ login }: { login: string }) => backend.githubProof({ login })),
   );
 
   server.registerTool(

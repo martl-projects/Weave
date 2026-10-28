@@ -1,23 +1,7 @@
 import {
   accessOf,
-  accountsOf,
-  sharedAccountsOf,
-  type SharedAccount,
   canManage as mayManageSpace,
-  isLogin,
-  isGistId,
   isRepoName,
-  KIND_GITHUB_ACCOUNT,
-  KIND_GITHUB_ADDED,
-  KIND_GITHUB_PUBLIC,
-  githubProofText,
-  KIND_GITHUB_REPO,
-  planSync,
-  reposOf,
-  REPO_ACCESS,
-  MAX_WRITERS,
-  type RepoAccess,
-  type RepoLink,
   b64u,
   BLOB_TYPES,
   boardKeyFor,
@@ -129,6 +113,10 @@ import {
   KIND_ADMIT,
   KIND_APP,
   KIND_ARTIFACT,
+  KIND_ACCOUNT,
+  accountClaimsOf,
+  accountProofText,
+  isPlatform,
   KIND_SERVICE_REQUEST,
   artifactsOf,
   KIND_BOARD,
@@ -418,8 +406,6 @@ import {
   type WorkTarget,
   type DeskInfo,
   type RoutineInfo,
-  type RepoInfo,
-  type SpaceRepos,
   type MembershipRequestInfo,
   type BadgeInfo,
   type BadgeSeriesInfo,
@@ -488,6 +474,7 @@ import {
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
   type ArtifactInfo,
+  type AccountInfo,
   type FetcherInfo,
   noAgent,
 } from './backend.ts';
@@ -500,7 +487,7 @@ import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, t
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform } from './appinstall.ts';
-import { checkGistProof, GitHub, type Fetch } from './github.ts';
+import { publicReleases, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
@@ -538,6 +525,7 @@ import { BlobStore } from './blobstore.ts';
 import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
+import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -945,6 +933,8 @@ export class WeaveNode implements Backend {
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
+  /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
+  #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
@@ -2238,7 +2228,7 @@ export class WeaveNode implements Backend {
   }
 
   async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is link-repo, space, inbox, post or person');
+    if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
     if (input.what === 'person') {
       if (!input.who) throw new Error('say who');
       const did = this.resolve(input.who);
@@ -2256,9 +2246,7 @@ export class WeaveNode implements Backend {
     }
     const space = input.space ? this.#space(input.space) : undefined;
     if (input.what !== 'inbox' && !space) throw new Error('say which space');
-    const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
-    if (repo && !isRepoName(repo)) throw new Error('a repository looks like owner/name');
-    const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}), ...(repo ? { repo } : {}) };
+    const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}) };
     for (const listener of this.#openListeners) listener(open);
     return open;
   }
@@ -3201,217 +3189,68 @@ export class WeaveNode implements Backend {
     return changed;
   }
 
-  // ---------------------------------------------------------------- GitHub: repos that follow a space
-
-  async spaceRepos(ref: string): Promise<SpaceRepos> {
-    const space = this.#space(ref);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    const state = this.#state(space);
-    const entries = this.#entries(space);
-    const me = this.identity.author;
-    const repos = reposOf(entries, (did) => mayManageSpace(state, did));
-    const accounts = accountsOf(entries);
-    const out: SpaceRepos = {
-      repos: repos.map((r): RepoInfo => {
-        // As its GitHub access service reported it, where that runs here.
-        const synced = this.#githubSynced.get(r.repo.toLowerCase());
-        return {
-          repo: r.repo,
-          url: `https://github.com/${r.repo}`,
-          ...(r.board ? { board: r.board } : {}),
-          access: r.access,
-          ...(r.writers ? { writers: r.writers.map((did) => this.#actor(did, did)) } : {}),
-          ...(r.by !== me && this.#repoPeople(space, state, entries, r).includes(me) ? { forYou: true as const } : {}),
-          by: this.#actor(r.by, r.by),
-          ...(r.by === me ? { mine: true as const } : {}),
-          ...(synced ? { synced: new Date(synced.at).toISOString() } : {}),
-          ...(synced?.problem ? { problem: synced.problem } : {}),
-        };
-      }),
-      canLink: mayManageSpace(state, me),
-      ...(accounts.has(me) ? { shared: accounts.get(me)! } : {}),
-    };
-    if (out.canLink) out.mayWrite = [...state.members.keys()].filter((did) => did !== me && this.#mayWrite(state, did)).map((did) => this.#actor(did, did));
-    const mine = repos.filter((r) => r.by === me);
-    if (mine.length) {
-      const wanted = new Set(mine.flatMap((r) => this.#repoPeople(space, state, entries, r)));
-      wanted.delete(me);
-      out.missing = [...wanted].filter((did) => !accounts.has(did)).map((did) => this.#actor(did, did));
-      const shared = sharedAccountsOf(entries);
-      out.accounts = await Promise.all([...shared].filter(([did]) => wanted.has(did)).map(async ([did, account]) => ({ who: this.#actor(did, did), login: account.login, proven: (await this.#githubProven(did, account)) === true })));
-    }
-    return out;
-  }
-
-  async linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos> {
-    if (input.as) this.#agentMay(input.as, KIND_GITHUB_REPO);
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    const state = this.#state(space);
-    if (!mayManageSpace(state, this.identity.author)) throw new Error(`only the ${space.kind === 'group' ? 'owner' : space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can link repositories`);
-    const repo = input.repo.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
-    if (!isRepoName(repo)) throw new Error('a repository looks like owner/name');
-    const body: Record<string, Json> = { repo, on: input.on };
-    if (input.on) {
-      const board = input.board?.trim();
-      if (board) {
-        if (space.kind !== 'project') throw new Error('only projects have boards');
-        if (!boardsOf('project', this.#entries(space), state.maintainers).some((b) => b.name === board)) throw new Error(`${space.name} has no board "${board}"`);
-        body.board = board;
-      }
-      // Its GitHub access service gives the access, with its own token: it says when a repository can't take it (a
-      // person's repository has no read-only collaborators).
-      if (input.access !== undefined && !REPO_ACCESS.includes(input.access)) throw new Error('access is read, none or write');
-      const access = input.access ?? 'read';
-      if (access !== 'read') body.access = access;
-      if (access === 'write') {
-        if (body.board) throw new Error('write access goes to the people you pick, not to the readers of a board');
-        const writers = [...new Set((input.writers ?? []).map((who) => this.resolve(who)))].filter((did) => did !== this.identity.author);
-        if (!writers.length) throw new Error('pick the people who may write (writers)');
-        if (writers.length > MAX_WRITERS) throw new Error(`at most ${MAX_WRITERS} people can be picked to write`);
-        for (const did of writers) if (!this.#mayWrite(state, did)) throw new Error(`${this.nameOf(did) ?? did} can't be picked to write: only people in ${space.name} personally, not through a group or tier`);
-        body.writers = writers;
-      }
-    }
-    await this.publish({ kind: KIND_GITHUB_REPO, body, space: space.id, as: input.as });
-    this.#githubSynced.delete(repo.toLowerCase());
-    return this.spaceRepos(space.id);
-  }
-
-  /** The text a gist proving a GitHub account is yours holds: made by you on github.com, nobody signs in to Weave. */
-  async githubProof(input: { login: string }): Promise<{ text: string; url: string }> {
-    if (!isLogin(input.login)) throw new Error('a GitHub username: letters, digits and single hyphens');
-    return { text: githubProofText(this.identity.author, input.login), url: 'https://gist.github.com/' };
-  }
+  // ---------------------------------------------------------------- accounts elsewhere
 
   /**
-   * A gist that proves a GitHub account is yours (its owner is that account, and it names you): checked here before
-   * it's shared, as everyone's Weave checks it again. Its id, from its address or as it is.
+   * Who reads a space: its members, or in a project the readers of one of its boards (everyone, for a board nobody
+   * limited).
    */
-  async #provenGist(login: string, gist: string): Promise<string> {
-    if (!isLogin(login)) throw new Error('a GitHub username: letters, digits and single hyphens');
-    const id = gist.trim().replace(/\/+$/, '').split('/').pop() ?? '';
-    if (!isGistId(id)) throw new Error('the gist: its address (https://gist.github.com/<you>/<id>) or its id');
-    const proven = await checkGistProof(id, login, this.identity.author, this.githubSetup.fetch);
-    if (proven === undefined) throw new Error("GitHub can't be asked right now: try again in a moment");
-    if (!proven) throw new Error(`that gist doesn't prove it: it has to belong to ${login} and hold "${githubProofText(this.identity.author, login).trim()}"`);
-    return id;
-  }
-
-  /** Give a space your GitHub account, with a gist of yours that proves it (or take it back): its repositories' access follows. */
-  async shareGithub(input: { space: string; on: boolean; login?: string; gist?: string; as?: string }): Promise<SpaceRepos> {
-    if (input.as) this.#agentMay(input.as, KIND_GITHUB_ACCOUNT);
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
-    if (!input.on) {
-      await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: { on: false }, space: space.id, as: input.as });
-      return this.spaceRepos(space.id);
-    }
-    if (!input.login || !input.gist) throw new Error('your GitHub username, and a gist of yours that proves it (weave github proof <username>)');
-    const gist = await this.#provenGist(input.login, input.gist);
-    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: { login: input.login, gist, on: true }, space: space.id, as: input.as });
-    return this.spaceRepos(space.id);
-  }
-
-  /**
-   * Whether a member's gist proves the GitHub account is theirs: asked again every hour, so a gist taken down takes
-   * the access with it. GitHub unreachable: undefined (asked again next time).
-   */
-  async #githubProven(did: Did, account: SharedAccount): Promise<boolean | undefined> {
-    if (!account.gist) return false;
-    const key = `${account.gist}:${account.login}:${did}`;
-    const known = this.#accessProofs.get(key);
-    if (known && this.clock() - known.at < 60 * 60_000) return known.proven;
-    const proven = await checkGistProof(account.gist, account.login, did, this.githubSetup.fetch);
-    if (proven === undefined) this.#accessProofs.delete(key);
-    else this.#accessProofs.set(key, { at: this.clock(), proven });
-    return proven;
-  }
-
-  /** Show your GitHub account on your hub, with a gist of yours that proves it (or stop showing it). */
-  async showGithubOnHub(input: { on: boolean; login?: string; gist?: string }): Promise<Profile> {
-    const before = this.#hubGithub(this.identity.author);
-    if (!input.on) {
-      if (before) this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { on: false } });
-      return this.profile();
-    }
-    if (!input.login || !input.gist) throw new Error('your GitHub username, and a gist of yours that proves it (weave github proof <username>)');
-    const gist = await this.#provenGist(input.login, input.gist);
-    if (before?.gist === gist && before.login === input.login) return this.profile();
-    this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: input.login, gist, on: true } });
-    return this.profile();
-  }
-
-  /** The GitHub account someone shows on their hub (latest word), not checked yet. */
-  #hubGithub(did: Did): { login: string; gist: string } | undefined {
-    const last = this.replica.events((e) => e.author === did && e.kind === KIND_GITHUB_PUBLIC).sort((a, b) => a.time.localeCompare(b.time)).at(-1);
-    const body = (last?.body ?? {}) as Record<string, unknown>;
-    if (!last || body.on === false || !isLogin(body.login) || typeof body.gist !== 'string' || !/^[A-Za-z0-9]{1,64}$/.test(body.gist)) return undefined;
-    return { login: body.login, gist: body.gist };
-  }
-
-  /** Who a repo linked to a space should include: its members, or in a project the readers of one board. */
-  /**
-   * Who may be picked to write to a person's repository: members in personally, never through a group (a project's
-   * participants who came with one) nor a tier's membership, so nobody gets write access by joining something.
-   */
-  #mayWrite(state: SpaceState, did: Did): boolean {
-    const member = state.members.get(did);
-    return !!member && !member.via && !member.until;
-  }
-
-  /** Who a link gives access: its readers (read), nobody (none), or the people picked who still may write (write). */
-  #repoPeople(space: StoredSpace, state: SpaceState, entries: Entry[], link: RepoLink): Did[] {
-    if (link.access === 'none') return [];
-    if (link.access === 'write') return (link.writers ?? []).filter((did) => this.#mayWrite(state, did));
-    return this.#repoReaders(space, state, entries, link.board);
-  }
-
-  #repoReaders(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
+  #readersOf(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
     if (!board || space.kind !== 'project') return [...state.members.keys()];
     return readersOf(board, state, this.#access(space, state, entries));
   }
 
+  /** The platforms accounts can be proven on here (a verifier checks each), and how. */
+  async platforms(): Promise<PlatformInfo[]> {
+    return this.#verifiers.platforms();
+  }
+
+  /** What a proof of an account must hold (your Weave id), and how to make one on that platform. */
+  async accountProof(input: { platform: string }): Promise<{ text: string; howto?: string }> {
+    const p = this.#verifiers.platforms().find((x) => x.platform === input.platform);
+    if (!p) throw new Error(`nothing here checks accounts on ${input.platform}${this.#verifiers.platforms().length ? ` (only on ${this.#verifiers.platforms().map((x) => x.platform).join(', ')})` : ''}`);
+    return { text: accountProofText(this.identity.author), ...(p.howto ? { howto: p.howto } : {}) };
+  }
+
   /**
-   * Who should have access to a space's linked repositories, for the service that keeps them in step (repos: access):
-   * per repository, members who proved their GitHub account (want), unproven ones who keep what was given before
-   * proofs (keep), and whom it gave access (gave: its own records there, and, on its person's node, what Weave gave
-   * as them before services did). Its person is never in it: the repository is theirs.
+   * Say an account elsewhere is yours, with its proof (or take it back, on: false): on your hub for everyone, or in a
+   * space for its members (whose services may give access by it). Checked here first, by its platform's verifier.
    */
-  async #repoAccess(space: StoredSpace, service: Did): Promise<Array<{ repo: string; write: boolean; want: string[]; keep: string[]; gave: string[] }>> {
-    const state = this.#state(space);
-    const entries = this.#entries(space);
-    const person = this.replica.authority.grant(service)?.author;
-    const accounts = sharedAccountsOf(entries);
-    const theirs = person ? accounts.get(person)?.login.toLowerCase() : undefined;
-    // Whom it gave access: the latest word per repository and login.
-    const gave = new Map<string, { repo: string; people: Map<string, boolean> }>();
-    const record = (b: Record<string, unknown>) => {
-      if (!isRepoName(b.repo) || typeof b.login !== 'string') return;
-      const key = b.repo.toLowerCase();
-      if (!gave.has(key)) gave.set(key, { repo: b.repo, people: new Map() });
-      gave.get(key)!.people.set(b.login.toLowerCase(), b.on === true);
-    };
-    if (person === this.identity.author) for (const b of this.#selfBodies(KIND_GITHUB_ADDED)) record(b);
-    for (const e of entries) if (e.kind === KIND_GITHUB_ADDED && e.event.signer === service) record((e.body ?? {}) as Record<string, unknown>);
-    const out = new Map<string, { repo: string; write: boolean; want: string[]; keep: string[]; gave: string[] }>();
-    for (const link of reposOf(entries, (did) => mayManageSpace(state, did))) {
-      const want = new Set<string>();
-      const keep = new Set<string>();
-      for (const did of this.#repoPeople(space, state, entries, link)) {
-        const account = accounts.get(did);
-        if (!account || account.login.toLowerCase() === theirs) continue;
-        // Proven: in. A share from before proofs, or GitHub not answering: kept if given. Disproven: out.
-        const proven = account.gist ? await this.#githubProven(did, account) : undefined;
-        if (proven !== false) (proven ? want : keep).add(account.login.toLowerCase());
-      }
-      const key = link.repo.toLowerCase();
-      out.set(key, { repo: link.repo, write: link.access === 'write', want: [...want].sort(), keep: [...keep].sort(), gave: [...(gave.get(key)?.people ?? [])].filter(([, on]) => on).map(([l]) => l).sort() });
+  async linkAccount(input: { platform: string; handle?: string; proof?: string; space?: string; on?: boolean; as?: string }): Promise<AccountInfo[]> {
+    if (input.as) this.#agentMay(input.as, KIND_ACCOUNT);
+    const space = input.space ? this.#space(input.space) : undefined;
+    if (space && (space.kind === 'direct' || !this.#state(space).members.has(this.identity.author))) throw new Error(`you are not a member of ${space.name}`);
+    if (!isPlatform(input.platform)) throw new Error('a platform: lowercase letters, digits and dashes, like github');
+    let body: Json = { platform: input.platform, on: false };
+    if (input.on !== false) {
+      const handle = input.handle?.trim().replace(/^@/, '');
+      const proof = input.proof?.trim();
+      if (!handle || !proof) throw new Error(`your account on ${input.platform}, and where its proof is (weave account proof ${input.platform})`);
+      const claim = { platform: input.platform, handle, proof };
+      const ok = await this.#verifiers.verify(claim, this.identity.author);
+      if (ok === undefined) throw new Error(this.#verifiers.platforms().some((p) => p.platform === input.platform) ? `${input.platform} can't be asked right now: try again in a moment` : `nothing here checks accounts on ${input.platform}`);
+      if (!ok) throw new Error(`that proof doesn't hold: it has to be ${handle}'s, on ${input.platform}, and hold "${accountProofText(this.identity.author)}"`);
+      body = { ...claim, on: true };
     }
-    // Unlinked, with access still given: taken back.
-    for (const [key, g] of gave) if (!out.has(key) && [...g.people.values()].some(Boolean)) out.set(key, { repo: g.repo, write: false, want: [], keep: [], gave: [...g.people].filter(([, on]) => on).map(([l]) => l).sort() });
-    return [...out.values()];
+    if (space) await this.publish({ kind: KIND_ACCOUNT, body, space: space.id, as: input.as });
+    else this.replica.write(this.identity, { kind: KIND_ACCOUNT, body });
+    return this.accounts({ ...(space ? { space: space.id } : {}) });
+  }
+
+  /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
+  async accounts(input: { space?: string; who?: string } = {}): Promise<AccountInfo[]> {
+    // On hubs: public events, signed by the person. In a space: sealed for its members.
+    const claims = input.space ? accountClaimsOf(this.#entries(this.#space(input.space))) : accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } })));
+    const only = input.who ? this.resolve(input.who) : undefined;
+    // Each checked by its verifier, all at once (known ones aren't asked again for an hour).
+    const all = [...claims].filter(([did]) => !only || did === only).flatMap(([did, mine]) => [...mine.values()].map((claim) => ({ did, claim })));
+    return Promise.all(
+      all.map(async ({ did, claim }): Promise<AccountInfo> => {
+        const verified = await this.#verifiers.verify(claim, did);
+        const page = this.#verifiers.page(claim);
+        return { who: this.#actor(did, did), platform: claim.platform, handle: claim.handle, proof: claim.proof, ...(page ? { url: page } : {}), ...(verified !== undefined ? { verified } : {}) };
+      }),
+    );
   }
 
   // ---------------------------------------------------------------- people
@@ -3440,16 +3279,9 @@ export class WeaveNode implements Backend {
 
   async profile(who?: string): Promise<Profile> {
     const did = who ? this.resolve(who) : this.identity.author;
-    const github = this.#hubGithub(did);
-    if (github) {
-      // Check the proof (once per run) before showing it; a false proof isn't shown at all.
-      const key = `${github.gist}:${github.login}:${did}`;
-      if (!this.#gistProofs.has(key)) this.#gistProofs.set(key, checkGistProof(github.gist, github.login, did, this.githubSetup.fetch));
-      const verified = await this.#gistProofs.get(key)!;
-      if (verified === undefined) this.#gistProofs.delete(key); // GitHub unreachable: ask again next time
-      return { ...this.#profile(did), ...(verified === false ? {} : { github: { login: github.login, url: `https://github.com/${github.login}`, ...(verified ? { verified } : {}) } }) };
-    }
-    return this.#profile(did);
+    // The accounts elsewhere on their hub, those that hold (a false proof isn't shown at all).
+    const accounts = (await this.accounts({ who: did })).filter((a) => a.verified !== false).map(({ platform, handle, url, verified }) => ({ platform, handle, ...(url ? { url } : {}), ...(verified ? { verified } : {}) }));
+    return { ...this.#profile(did), ...(accounts.length ? { accounts } : {}) };
   }
 
   #profile(did: Did): Profile {
@@ -3600,8 +3432,7 @@ export class WeaveNode implements Backend {
   /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
   #releaseInfo(project: StoredSpace, app: AppManifest): { canRelease: boolean; repo?: string } {
     const state = this.#state(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = app.install?.github ?? (linked.length === 1 ? linked[0].repo : undefined);
+    const repo = app.install?.github;
     return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
   }
 
@@ -3627,7 +3458,7 @@ export class WeaveNode implements Backend {
     }
     // The repository's releases, as anyone sees them (a private repository's: its release posts are enough).
     try {
-      const releases = await withTimeout(new GitHub('', this.githubSetup.fetch).releases(source.repo), 8000);
+      const releases = await withTimeout(publicReleases(source.repo, this.githubSetup.fetch), 8000);
       for (const r of releases) {
         const version = parseVersion(r.tag);
         if (version) found.push({ version: formatVersion(version), url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(r.tag)}`, ...(r.published ? { published: r.published } : {}), source: 'github' });
@@ -3641,12 +3472,10 @@ export class WeaveNode implements Backend {
     return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
   }
 
-  /** The repository a project's releases come from: as given, where its app is released, or its one linked repository. */
+  /** The repository a project's releases come from: as given, or where its app is released. */
   #releaseRepo(project: StoredSpace, given?: string): string {
-    const state = this.#state(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = given?.trim() || this.#app(project)?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
+    const repo = given?.trim() || this.#app(project)?.install?.github || '';
+    if (!isRepoName(repo)) throw new Error('which repository holds the release? (owner/name)');
     return repo;
   }
 
@@ -8860,11 +8689,12 @@ export class WeaveNode implements Backend {
       },
       state: n.#state.bind(n),
       toItem: n.#toItem.bind(n),
-      /** Who should have access to a space's linked repositories, for the service that keeps them in step. */
-      repoAccess: (space: StoredSpace, service: Did) => n.#repoAccess(space, service),
-      repoSynced: (repo: string, problem?: string) => void n.#githubSynced.set(repo.toLowerCase(), { at: n.clock(), shape: '', ...(problem ? { problem } : {}) }),
+      /** Accounts elsewhere said in a space, checked. */
+      accounts: (space: StoredSpace, platform: string) => n.accounts({ space: space.id }).then((all) => all.filter((a) => a.platform === platform)),
       /** Who reads a board of a project (everyone, for a board nobody limited). */
-      boardReaders: (space: StoredSpace, board: string) => n.#repoReaders(space, n.#state(space), n.#entries(space), board),
+      boardReaders: (space: StoredSpace, board: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
+      /** Who reads a space (or one of its boards). */
+      readers: (space: StoredSpace, board?: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
     };
   }
 

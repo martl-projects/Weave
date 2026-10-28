@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; font: 12px 'Pixelated MS Sans Serif', Tahoma, Arial, sans-serif; color: #000; background: transparent; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: bold; padding: 3px 6px; border-bottom: 1px solid #808080; }
+  td { padding: 3px 6px; border-bottom: 1px solid #dfdfdf; vertical-align: middle; }
+  .muted { color: #555; }
+  .problem { color: #a00000; }
+  a { color: #000080; }
+  input { font: inherit; }
+  button { font: inherit; padding: 2px 8px; background: #c0c0c0; border: 1px solid; border-color: #fff #000 #000 #fff; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  .grow { flex: 1; }
+  .empty { padding: 6px; color: #555; }
+</style>
+<div id="list" class="empty">Looking for repositories…</div>
+<div id="mine" class="row"></div>
+<form id="link" class="row" hidden>
+  <input id="repo" class="grow" placeholder="owner/name of a repository" required />
+  <input id="board" placeholder="only readers of board (optional)" />
+  <button>Link</button>
+</form>
+<div id="error" class="problem"></div>
+<script>
+  // Talks only to Weave: asks the service (its actions, checked by Weave) and shows the answer.
+  let view;
+  let soon;
+  let next = 1;
+  const waiting = new Map();
+  const act = (name, input) =>
+    new Promise((resolve, reject) => {
+      const id = next++;
+      waiting.set(id, { resolve, reject });
+      parent.postMessage({ weave: 'act', id, name, input }, '*');
+    });
+  const tall = () => parent.postMessage({ weave: 'height', px: document.body.scrollHeight + 4 }, '*');
+  const may = (name) => !!view?.actions.find((a) => a.name === name && a.mine);
+  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const who = (r) => (r.access === 'write' ? 'people picked, to write' : r.access === 'none' ? 'nobody (linked only)' : r.board ? `readers of ${r.board}` : 'everyone here');
+
+  async function show() {
+    const list = document.getElementById('list');
+    document.getElementById('link').hidden = !may('link');
+    // Getting access: a GitHub account proven here (Weave asks for it).
+    document.getElementById('mine').innerHTML = `<span class="grow muted">Access goes to members who proved their GitHub account here.</span><button data-account="github">Prove my GitHub account here…</button>`;
+    try {
+      const repos = (await act('repos')).data ?? [];
+      if (!repos.length) {
+        list.className = 'empty';
+        list.textContent = may('link') ? 'No repositories yet: link one below.' : 'No repositories linked here yet.';
+      } else {
+        list.className = '';
+        list.innerHTML = `<table><tr><th>Repository</th><th>Who gets access</th><th>Given</th><th></th></tr>${repos
+          .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td class="muted">${esc(who(r))}</td><td class="muted">${r.given ?? 0}</td><td>${may('unlink') ? `<button data-unlink="${esc(r.repo)}">Unlink</button>` : ''}</td></tr>`)
+          .join('')}</table>`;
+      }
+    } catch (error) {
+      list.className = 'empty';
+      list.textContent = String(error);
+    }
+    tall();
+  }
+
+  addEventListener('click', async (event) => {
+    const platform = event.target?.dataset?.account;
+    if (platform) return parent.postMessage({ weave: 'account', platform }, '*');
+    const repo = event.target?.dataset?.unlink;
+    if (!repo) return;
+    event.target.disabled = true;
+    try {
+      await act('unlink', { repo });
+    } catch (error) {
+      document.getElementById('error').textContent = String(error);
+    } finally {
+      show();
+    }
+  });
+
+  document.getElementById('link').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = document.getElementById('error');
+    error.textContent = '';
+    try {
+      await act('link', { repo: document.getElementById('repo').value, ...(document.getElementById('board').value ? { board: document.getElementById('board').value } : {}) });
+      document.getElementById('repo').value = '';
+    } catch (e) {
+      error.textContent = String(e);
+    }
+    show();
+  });
+
+  addEventListener('message', (event) => {
+    const m = event.data;
+    // Each view (again when something changed): show what's current, a moment later if views come in a burst.
+    if (m?.weave === 'view') {
+      view = m;
+      clearTimeout(soon);
+      soon = setTimeout(show, 150);
+    }
+    if (m?.weave === 'acted' && waiting.has(m.id)) {
+      const { resolve, reject } = waiting.get(m.id);
+      waiting.delete(m.id);
+      m.error ? reject(m.error) : resolve(m);
+    }
+  });
+</script>

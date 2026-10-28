@@ -83,8 +83,8 @@ const weave: Record<string, unknown> = {
     sign: (setting: string, algorithm: string, data: Uint8Array) => call('sign', [setting, algorithm, data]),
     release: (space: string, id: string) => call('release', [space, id]),
     fingerprint: (url: string) => call('fingerprint', [url]),
-    repoAccess: (space: string) => call('repoAccess', [space]),
-    repoSynced: (repo: string, problem?: string) => call('repoSynced', [repo, problem]),
+    readers: (space: string, board?: string) => call('readers', [space, board]),
+    accounts: (space: string, platform: string) => call('accounts', [space, platform]),
     pinImage: (image: string, tags: string[]) => call('pinImage', [image, tags]),
     websites: (space: string) => call('websites', [space]),
     closeWebsite: (id: string) => call('closeWebsite', [id]),
@@ -94,6 +94,10 @@ const weave: Record<string, unknown> = {
     setting: (name: string) => call('setting', [name]),
     log: (message: string) => call('log', [message]),
     write: (bytes: Uint8Array) => call('write', [bytes]),
+  },
+  // A verifier's: a log.
+  'service/verifying': {
+    log: (message: string) => call('log', [message]),
   },
   // Its website's players: Weave holds their connections; what it says to them goes out without waiting.
   'service/players': {

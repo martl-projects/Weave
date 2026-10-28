@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, whoWords, type Json, type RepoAccess, type ServiceContract, type VisitorRule } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, whoWords, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -34,10 +34,10 @@ import {
   type CommunityInfo,
   type FeedItem,
   type GumroadInfo,
-  type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
   type FetcherInfo,
+  type AccountInfo,
   type ServiceSettingsInfo,
   type ServiceOriginInfo,
   type HostedWebsiteInfo,
@@ -193,10 +193,12 @@ github — repositories that follow a group, tier or project (members who give t
   gumroad                    your Gumroad connection on this device (for tier … --gumroad new)
   gumroad connect            connect Gumroad in the browser (through the Weave application on Gumroad)
   gumroad disconnect         forget the connection on this device
-  github proof <login>       what a gist proving your GitHub account holds: make it on gist.github.com (nobody signs in to Weave)
-  github share <space> --login <you> --gist <its address>   give a space your GitHub account, proven: its repos invite you
-  github unshare <space>     take it back
-  github hub --login <you> --gist <its address>   show your GitHub account on your hub; hub off to stop
+  account platforms          where accounts can be proven here (a verifier checks each: github…)
+  account proof <platform>   what a proof there holds (your Weave id), and how to make one
+  account link <platform> <handle> <proof>   say an account there is yours: on your hub, or with -p/-g in a space
+                             (its members see it, and its services may give you access by it: GitHub access, say)
+  account unlink <platform>  take it back (on your hub, or with -p/-g in a space)
+  account list [--who <someone>]   accounts elsewhere on hubs (or in a space with -p/-g), each checked
   service new <folder> [--website] [--rust] [--lens]   start a WebAssembly service of your own from a starter: a bot
                              (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), or a client service that shows a
                              board its own way (a Kanban in JavaScript); Weave runs it itself, nothing to install
@@ -244,10 +246,6 @@ github — repositories that follow a group, tier or project (members who give t
   fetcher add <name>         add one Weave ships, for the projects that need it   --spaces <a,b> | --all
   fetcher set <name>         what it fetches for (--spaces <a,b> | --all), your settings for it (--setting KEY=VALUE, KEY= removes)
   fetcher remove <name>      take it out: it fetches for no project any more
-  repo list <space>          a space's repositories
-  repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
-                             a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
-  repo unlink <space> <owner/name>   stop it (access Weave gave is taken back)
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
@@ -410,8 +408,7 @@ const { values, positionals } = parseArgs({
     out: { type: 'string' },
     open: { type: 'boolean', default: false },
     org: { type: 'string' },
-    login: { type: 'string' },
-    gist: { type: 'string' },
+    who: { type: 'string' },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -1477,23 +1474,32 @@ async function main(): Promise<void> {
       throw new Error('usage: weave gumroad [connect|disconnect]');
     }
 
-    case 'github': {
-      const [sub, ref] = args;
+    case 'account': {
+      const [sub, platform, handle, proof] = args;
       const b = await backend();
-      if (sub === 'proof' && ref) {
-        const { text, url } = await b.githubProof({ login: ref });
-        return out({ text, url }, () => `Make a gist (secret is fine) as ${ref} on ${url}, holding:\n\n  ${text.trim()}\n\nthen: weave github share <space> --login ${ref} --gist <its address>`);
+      const space = values.project ?? values.group ?? values.community;
+      const line = (a: AccountInfo) => `${a.who.name ?? a.who.did}  ${a.platform}: ${a.handle}${a.verified ? ' ✓' : a.verified === false ? "  (its proof doesn't hold)" : "  (couldn't be checked yet)"}${a.url ? `  ${a.url}` : ''}`;
+      if (sub === 'platforms') {
+        const all = await b.platforms();
+        return out(all, () => all.map((p) => `${p.platform}  ${p.title}${p.howto ? `\n  ${p.howto}` : ''}`).join('\n') || '(this Weave checks accounts on no platform)');
       }
-      if (sub === 'hub') {
-        const off = ref === 'off';
-        const p = await b.showGithubOnHub({ on: !off, ...(values.login ? { login: values.login } : {}), ...(values.gist ? { gist: values.gist } : {}) });
-        return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login} (${p.github.url})` : 'your hub no longer shows GitHub'));
+      if (sub === 'proof' && platform) {
+        const p = await b.accountProof({ platform });
+        return out(p, () => `${p.howto ?? 'Make a proof there, as that account, holding:'}\n\n  ${p.text}\n\nthen: weave account link ${platform} <your account> <its address>`);
       }
-      if ((sub === 'share' || sub === 'unshare') && ref) {
-        const r = await b.shareGithub({ space: ref, on: sub === 'share', ...(values.login ? { login: values.login } : {}), ...(values.gist ? { gist: values.gist } : {}) });
-        return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
+      if (sub === 'link' && platform && handle && proof) {
+        const all = await b.linkAccount({ platform, handle, proof, ...(space ? { space } : {}) });
+        return out(all, () => `${handle} on ${platform} is proven yours${space ? ` in ${space}` : ' on your hub'}\n${all.map(line).join('\n')}`);
       }
-      throw new Error('usage: weave github proof <login> | share <space> --login <you> --gist <address> | unshare <space> | hub --login <you> --gist <address> | hub off');
+      if (sub === 'unlink' && platform) {
+        const all = await b.linkAccount({ platform, on: false, ...(space ? { space } : {}) });
+        return out(all, () => `your ${platform} account is taken back${space ? ` in ${space}` : ' from your hub'}`);
+      }
+      if (sub === 'list' || !sub) {
+        const all = await b.accounts({ ...(space ? { space } : {}), ...(values.who ? { who: values.who } : {}) });
+        return out(all, () => all.map(line).join('\n') || '(none)');
+      }
+      throw new Error('usage: weave account platforms | proof <platform> | link <platform> <handle> <proof> [-p <space>] | unlink <platform> [-p <space>] | list [--who <someone>] [-p <space>]');
     }
 
     case 'service': {
@@ -1698,31 +1704,6 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out({ removed: ref }, () => `removed ${ref}: it fetches for no project any more`);
       }
       throw new Error('usage: weave fetcher list|add <name>|set <name>|remove <name> — see "weave --help"');
-    }
-
-    case 'repo': {
-      const [sub, ref, repo] = args;
-      const b = await backend();
-      const show = (r: SpaceRepos) =>
-        [
-          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}${x.access === 'none' ? ' (linked only)' : x.access === 'write' ? ` (can write: ${(x.writers ?? []).map(actor).join(', ')})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
-          r.repos.length ? '' : '(no repositories)',
-          r.shared ? `you gave it your GitHub account ${r.shared}` : r.repos.length ? 'you haven\'t given it your GitHub account (weave github share)' : '',
-          r.missing?.length ? `without a GitHub account here: ${r.missing.map(actor).join(', ')}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-      if (sub === 'list' && ref) {
-        const r = await b.spaceRepos(ref);
-        return out(r, () => show(r));
-      }
-      if ((sub === 'link' || sub === 'unlink') && ref && repo) {
-        const access = values.access as RepoAccess | undefined;
-        const writers = values.writers?.split(',').map((w) => w.trim()).filter(Boolean);
-        const r = await b.linkRepo({ space: ref, repo, board: values.board, ...(access ? { access } : {}), ...(writers ? { writers } : {}), on: sub === 'link' });
-        return out(r, () => show(r));
-      }
-      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] [--access none|write --writers <who,…>] | repo unlink <space> <owner/name>');
     }
 
     case 'home': {

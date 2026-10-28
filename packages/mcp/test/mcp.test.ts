@@ -58,27 +58,22 @@ describe('Weave over MCP', () => {
   it('tells the harness how Weave works, including what only the person can do', async () => {
     const { client, close } = await setup();
     const instructions = client.getInstructions() ?? '';
-    expect(instructions).toContain('weave_github_proof');
+    expect(instructions).toContain('weave_link_account');
     expect(instructions).toContain('GitHub access service');
     expect(instructions).toMatch(/Things only the person does/);
     close();
   });
 
-  it('links repositories and publishes apps only with the permissions for it', async () => {
+  it('says accounts elsewhere and publishes apps only with the permissions for it', async () => {
     const { node, call, close } = await setup();
-    // Linking is Weave's alone: no GitHub sign-in, no call to GitHub.
-    const refused = await call('weave_link_repo', { space: 'Weave', repo: 'martl/weave' });
-    expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.github\.repo/);
+    // Without its proof, it says what the proof holds; saying one is the person's needs weave.account.
+    expect((await call('weave_link_account', { platform: 'github' })).error ?? '').toMatch(/nothing here checks accounts on github|proofText/);
+    const refused = await call('weave_link_account', { platform: 'github', handle: 'martl', proof: '0123456789abcdef0123' });
+    expect(refused.error).toMatch(/may not sign weave\.account; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.account/);
     writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));
     const app = await call('weave_app_publish', { project: 'Weave', file: join(node.home.dir, 'weave.app.json') });
     expect(app.error).toMatch(/may not sign weave\.app/);
 
-    await node.updateAgent({ name: 'forge', permissions: ['weave.post', 'weave.github.repo'] });
-    const linked = await call('weave_link_repo', { space: 'Weave', repo: 'https://github.com/martl/weave' });
-    expect(linked.data.repos).toMatchObject([{ repo: 'martl/weave', by: { name: 'Martin' } }]);
-    // Signed by the agent, on the person's behalf.
-    const event = (await node.feed({ space: 'Weave', kinds: ['weave.github.repo'] })).at(-1)!;
-    expect(event.signerName).toBe('forge');
     close();
   });
 
@@ -108,19 +103,19 @@ describe('Weave over MCP', () => {
     close();
   });
 
-  it('brings the app to the front at the link dialog, without it landing in the agent inbox', async () => {
+  it('brings the app to the front at a space, without it landing in the agent inbox', async () => {
     const { node, call, close } = await setup();
     const seen: Array<{ kind: string; body: unknown }> = [];
     const watching = new AbortController();
     void node.watch((item) => seen.push(item), watching.signal);
     await new Promise((r) => setTimeout(r, 30));
-    const opened = await call('weave_open_in_app', { what: 'link-repo', space: 'Weave', repo: 'https://github.com/martldennl/gameshow' });
-    expect(opened.data).toMatchObject({ what: 'link-repo', space: { kind: 'project', name: 'Weave' }, repo: 'martldennl/gameshow' });
+    const opened = await call('weave_open_in_app', { what: 'space', space: 'Weave' });
+    expect(opened.data).toMatchObject({ what: 'space', space: { kind: 'project', name: 'Weave' } });
     await new Promise((r) => setTimeout(r, 30));
     watching.abort();
-    expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'link-repo', repo: 'martldennl/gameshow' });
+    expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'space' });
     expect((await call('weave_inbox', {})).data.items ?? []).toEqual([]);
-    expect((await call('weave_open_in_app', { what: 'link-repo' })).error).toMatch(/say which space/);
+    expect((await call('weave_open_in_app', { what: 'space' })).error).toMatch(/say which space/);
     close();
   });
 
