@@ -43,13 +43,9 @@ jobs:
           test -s notes.md || { echo "no CHANGELOG.md section for $GITHUB_REF_NAME"; exit 1; }
       - name: Draft
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Run again: the draft is there already, with what was attached so far.
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then gh release edit "$GITHUB_REF_NAME" --notes-file notes.md; exit 0; fi
-          prerelease=""
-          case "$GITHUB_REF_NAME" in v0.*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --draft --title "Weave $GITHUB_REF_NAME" --notes-file notes.md --verify-tag $prerelease
+          GITHUB_TOKEN: ${{ github.token }}
+        # Run again: the draft is there already, with what was attached so far (its notes are updated).
+        run: node scripts/release-draft.ts draft "$GITHUB_REF_NAME" notes.md
 
   installers:
     needs: draft
@@ -97,8 +93,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Publish
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-draft.ts publish "$GITHUB_REF_NAME"
