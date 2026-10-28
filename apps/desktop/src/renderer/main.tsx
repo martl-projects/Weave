@@ -708,7 +708,7 @@ function App() {
       ) : !state.hasIdentity ? (
         <Onboarding onDone={refresh} />
       ) : !state.connected ? (
-        <NotConnected home={state.home} onRetry={refresh} />
+        <NotConnected home={state.home} error={state.error} onRetry={refresh} />
       ) : location.hash.startsWith('#/overlay') ? (
         <MentionsPanel />
       ) : location.hash.startsWith('#/picker') ? (

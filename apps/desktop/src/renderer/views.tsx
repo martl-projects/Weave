@@ -1440,7 +1440,17 @@ export function LonePost({ post, meDid, spaces }: { post: PostInfo; meDid: strin
   );
 }
 
-export function NotConnected({ home, onRetry }: { home: string; onRetry(): void }) {
+export function NotConnected({ home, error, onRetry }: { home: string; error?: string; onRetry(): void }) {
+  const [busy, setBusy] = useState<'retry' | 'restart'>();
+  const again = async (restart: boolean) => {
+    setBusy(restart ? 'restart' : 'retry');
+    try {
+      await bridge.reconnect?.(restart);
+    } finally {
+      setBusy(undefined);
+      onRetry();
+    }
+  };
   return (
     <div className="desktop">
       <div className="window welcome">
@@ -1449,10 +1459,16 @@ export function NotConnected({ home, onRetry }: { home: string; onRetry(): void 
         </div>
         <div className="window-body">
           <p>⚠ Can't reach your node. The Weave daemon for {home} isn't running and couldn't be started.</p>
+          {error && <p className="note">{error}</p>}
           <div className="buttons">
-            <button className="default" onClick={onRetry}>
-              Try again
+            <button className="default" disabled={!!busy} onClick={() => void again(false)}>
+              {busy === 'retry' ? 'Trying…' : 'Try again'}
             </button>
+            {bridge.reconnect && (
+              <button disabled={!!busy} title="Stops the Weave daemon holding this home, even one that doesn't answer, and starts it again" onClick={() => void again(true)}>
+                {busy === 'restart' ? 'Restarting…' : 'Restart the daemon'}
+              </button>
+            )}
           </div>
         </div>
       </div>

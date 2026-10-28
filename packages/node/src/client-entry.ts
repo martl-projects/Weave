@@ -3,6 +3,7 @@
 export type * from './backend.ts';
 export { ApiClient, connectDaemon, daemonInfo, followDaemon, stopDaemon, type DaemonInfo } from './client.ts';
 export { resolveHome, type Home } from './home.ts';
+export { lockHolder } from './lock.ts';
 export { HOME_SOURCES, LENS_CSP, PROJECT_STATUSES, RPC_METHODS, TEXT_LIMITS } from './backend.ts';
 export { DEFAULT_THEME, FONTS, PATTERNS, type Theme } from './theme.ts';
 export type { CompanyAction, CompanyPolicy } from './company.ts';

@@ -5,6 +5,8 @@ export interface AppState {
   home: string;
   hasIdentity: boolean;
   connected: boolean;
+  /** Why the daemon couldn't be started or reached. */
+  error?: string;
   /** The company's enrollment link, from this computer's managed settings. */
   enrollLink?: string;
   /** Managed by a company: only company accounts here. */
@@ -13,6 +15,8 @@ export interface AppState {
 
 interface Bridge {
   state(): Promise<AppState>;
+  /** Start the daemon again; restart also ends one that holds the home but doesn't answer. Not in the browser preview. */
+  reconnect?(restart: boolean): Promise<void>;
   /** Create the identity; resolves to the recovery words, shown once. */
   init(name: string): Promise<string | undefined>;
   restore(words: string): Promise<void>;

@@ -4,6 +4,7 @@ import type { FeedItem } from '@weave/node/client';
 /** The only bridge between the sandboxed renderer and the main process. */
 contextBridge.exposeInMainWorld('weave', {
   state: () => ipcRenderer.invoke('weave:state'),
+  reconnect: (restart: boolean) => ipcRenderer.invoke('weave:reconnect', restart),
   init: (name: string) => ipcRenderer.invoke('weave:init', name),
   restore: (words: string) => ipcRenderer.invoke('weave:restore', words),
   enroll: (link: string) => ipcRenderer.invoke('weave:enroll', link),

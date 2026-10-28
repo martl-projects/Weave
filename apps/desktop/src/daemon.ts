@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { connectDaemon, daemonInfo, stopDaemon, type ApiClient, type Home } from '@weave/node/client';
+import { connectDaemon, daemonInfo, lockHolder, stopDaemon, type ApiClient, type Home } from '@weave/node/client';
 
 /*
  * The desktop app never loads the node itself: it talks to a daemon over the
@@ -71,16 +71,44 @@ export async function ensureDaemon(home: Home, version: string): Promise<Running
     await stopDaemon(home, { force: true });
   }
 
-  const child = spawn(NODE, [CLI, '--home', home.dir, 'daemon'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, env: { ...ENV, WEAVE_DAEMON_STARTED_BY: 'app' } });
+  const child = spawn(NODE, [CLI, '--home', home.dir, 'daemon'], { stdio: ['ignore', 'inherit', 'pipe'], windowsHide: true, env: { ...ENV, WEAVE_DAEMON_STARTED_BY: 'app' } });
+  // Passed on as before, and the last "weave: …" line kept: it says why a daemon that exits didn't start.
+  let reason: string | undefined;
+  child.stderr!.on('data', (chunk: Buffer) => {
+    process.stderr.write(chunk);
+    const line = String(chunk).split('\n').findLast((l) => l.startsWith('weave: '));
+    if (line) reason = line.slice(7).trim();
+  });
   const started = Date.now();
   while (Date.now() - started < 20_000) {
-    if (child.exitCode !== null) throw new Error(`the Weave daemon exited (code ${child.exitCode})`);
+    if (child.exitCode !== null) {
+      await new Promise((resolve) => setTimeout(resolve, 100)); // the last of its output
+      throw new Error(reason ?? `the Weave daemon exited (code ${child.exitCode})`);
+    }
     const client = await connectDaemon(home);
     if (client) return { client, child };
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   child.kill();
   throw new Error('the Weave daemon did not start within 20 seconds');
+}
+
+/**
+ * Start this home's daemon again, also when the one holding the home doesn't answer: asked to stop if it answers,
+ * otherwise ended, but only a process that is Weave's (lockHolder checks its command line). A lock left by another
+ * program's pid isn't in the way: the new daemon takes it over.
+ */
+export async function restartDaemon(home: Home, version: string): Promise<RunningDaemon> {
+  await stopDaemon(home, { force: true });
+  const pid = lockHolder(home);
+  if (pid && pid !== process.pid) {
+    try {
+      process.kill(pid);
+    } catch {}
+    const until = Date.now() + 10_000;
+    while (lockHolder(home) === pid && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return ensureDaemon(home, version);
 }
 
 /**

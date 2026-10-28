@@ -5,7 +5,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage,
 import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, type Delivered } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
-import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
+import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
@@ -23,6 +23,8 @@ const homeArg = values.home as string | undefined;
 const home = resolveHome(homeArg && resolve(process.env.INIT_CWD ?? process.cwd(), homeArg));
 
 let daemon: RunningDaemon | undefined;
+/** Why the daemon couldn't be started or reached, for the window to say. */
+let connectError: string | undefined;
 let window: BrowserWindow | undefined;
 let watching = new AbortController();
 let quitting = false;
@@ -58,11 +60,17 @@ app.on('open-url', (event, url) => {
   if (LINK.test(url)) openLink(url);
 });
 
-async function connect(): Promise<void> {
+async function connect(restart = false): Promise<void> {
   watching.abort();
   watching = new AbortController();
   const signal = watching.signal;
-  daemon = await ensureDaemon(home, app.getVersion());
+  try {
+    daemon = await (restart ? restartDaemon : ensureDaemon)(home, app.getVersion());
+    connectError = undefined;
+  } catch (error) {
+    connectError = (error as Error).message;
+    throw error;
+  }
   daemon.client
     .watch((item) => {
       window?.webContents.send('weave:event', item);
@@ -91,7 +99,16 @@ const unreachable = (error: unknown) => /ECONNREFUSED|ECONNRESET|socket hang up/
 ipcMain.handle('weave:state', () => {
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const managed = machinePolicy();
-  return { home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined, ...(managed.enroll ? { enrollLink: managed.enroll } : {}), ...(managed.companyOnly ? { companyOnly: true } : {}) };
+  return { home: home.dir, hasIdentity: hasIdentity(home), connected: daemon !== undefined, ...(connectError && !daemon ? { error: connectError } : {}), ...(managed.enroll ? { enrollLink: managed.enroll } : {}), ...(managed.companyOnly ? { companyOnly: true } : {}) };
+});
+
+// The window's Try again (and Restart, for a daemon that holds the home but doesn't answer).
+ipcMain.handle('weave:reconnect', async (_event, restart: boolean) => {
+  try {
+    await connect(restart === true);
+  } catch {
+    // connectError says why; the window shows it.
+  }
 });
 
 ipcMain.handle('weave:enroll', async (_event, link: string) => {

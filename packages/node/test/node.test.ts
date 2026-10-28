@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
@@ -50,15 +51,31 @@ describe('WeaveNode', () => {
     await node.close();
     const lock = join(dir, 'node.lock');
 
-    writeFileSync(lock, String(process.ppid)); // a live process that isn't us
-    expect(() => WeaveNode.open(dir)).toThrow(/in use by another process/);
+    // Live processes that aren't us: one of Weave's (weave on its command line) keeps the home ...
+    const idle = 'setInterval(() => {}, 1000)';
+    const weave = spawn(process.execPath, ['-e', idle, 'weave-daemon'], { cwd: tmpdir(), stdio: 'ignore' });
+    const other = spawn(process.execPath, ['-e', idle], { cwd: tmpdir(), stdio: 'ignore' });
+    try {
+      writeFileSync(lock, String(weave.pid));
+      expect(() => WeaveNode.open(dir)).toThrow(/in use by another process/);
 
-    // From before the computer last started: the pid belongs to another program by now.
-    const beforeBoot = new Date(Date.now() - uptime() * 1000 - 3_600_000);
-    utimesSync(lock, beforeBoot, beforeBoot);
-    const afterReboot = WeaveNode.open(dir);
-    expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
-    await afterReboot.close();
+      // ... another program, which got the pid of a daemon that is gone, doesn't.
+      writeFileSync(lock, String(other.pid));
+      const takenOver = WeaveNode.open(dir);
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+      await takenOver.close();
+
+      // From before the computer last started: the pid may be anyone's by now.
+      writeFileSync(lock, String(weave.pid));
+      const beforeBoot = new Date(Date.now() - uptime() * 1000 - 3_600_000);
+      utimesSync(lock, beforeBoot, beforeBoot);
+      const afterReboot = WeaveNode.open(dir);
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+      await afterReboot.close();
+    } finally {
+      weave.kill();
+      other.kill();
+    }
 
     writeFileSync(lock, '999999'); // a process that is gone
     const reopened = WeaveNode.open(dir);
