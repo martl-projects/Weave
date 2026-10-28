@@ -98,6 +98,8 @@ export interface ServiceProfile {
   origin?: ServiceOrigin;
   /** The settings it asks for (its manifest's env): what its space's maintainers can fill in. */
   settings?: AppSetting[];
+  /** A service Weave ships: its name, and its component's digest (each member's Weave checks it against its own). */
+  shipped?: { name: string; digest: string };
   time: string;
 }
 
@@ -107,6 +109,12 @@ export interface ServiceOrigin {
   release: string;
   tag: string;
   fingerprint: string;
+}
+
+/** A shipped service's claim from untrusted input: its name and digest, or undefined. */
+export function parseShipped(value: unknown): { name: string; digest: string } | undefined {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  return serviceName(o.name) && typeof o.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(o.digest) ? { name: o.name as string, digest: o.digest } : undefined;
 }
 
 /** An origin from untrusted input, or undefined. */
@@ -224,6 +232,7 @@ export function profilesOf(events: Array<{ kind: string; body: unknown; author: 
       contract,
       ...(parseOrigin(body.origin) ? { origin: parseOrigin(body.origin) } : {}),
       ...(appSettingsOf(body.settings).length ? { settings: appSettingsOf(body.settings) } : {}),
+      ...(parseShipped(body.shipped) ? { shipped: parseShipped(body.shipped) } : {}),
       time: e.time,
     });
   }

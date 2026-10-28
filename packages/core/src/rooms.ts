@@ -123,6 +123,8 @@ export interface AppSetting {
   hint?: string;
   /** A sign-in rather than something typed: Weave opens the provider's page, and the service gets an access token. */
   oauth?: AppOAuth;
+  /** A key the service signs with (sign, in the WIT) but never reads: setting() doesn't return it. */
+  signing?: true;
 }
 
 /**
@@ -153,7 +155,7 @@ export function appSettingsOf(value: unknown): AppSetting[] {
     const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim().slice(0, 60) : name;
     const hint = typeof e.hint === 'string' ? e.hint.trim().slice(0, 200) : '';
     const oauth = e.oauth === undefined ? undefined : parseOAuth(e.oauth).oauth;
-    out.push({ name, label, ...(e.secret === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}) });
+    out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}) });
   }
   return out;
 }
@@ -438,7 +440,7 @@ export function checkManifest(input: unknown): ManifestCheck {
         const hint = text(e.hint, 200);
         const oauth = e.oauth === undefined ? {} : parseOAuth(e.oauth);
         if (oauth.problem) { problems.push(`${where}: ${oauth.problem}`); continue; }
-        env.push({ name, label, ...(e.secret === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}) });
+        env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}) });
       }
     }
   }

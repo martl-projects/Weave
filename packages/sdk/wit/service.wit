@@ -24,6 +24,13 @@ interface host {
   save: func(name: string, value: string) -> result<_, string>;
   /// A line for its log (weave service log).
   log: func(message: string);
+  /// Every this many milliseconds (at least 1000; 0 stops it), on-event gets {"kind": "weave.tick", "time"}: for work
+  /// nobody asked for (keeping something in step). A tick waits while the last one is still being handled.
+  tick-every: func(ms: u32);
+  /// Sign data with a key among its settings, the key never reaching it: "RS256" (an RSA key, PEM), "ES256" (a P-256
+  /// key, PEM) or "HS256" (any secret). A setting its manifest marks "signing" is only usable this way: setting()
+  /// doesn't return it. The signature (ES256 as r||s, as JWTs have it), or why not.
+  sign: func(setting: string, algorithm: string, data: list<u8>) -> result<list<u8>, string>;
 }
 
 world service {

@@ -252,6 +252,8 @@ export interface ServiceInfo {
   settings: string[];
   enabled: boolean;
   running: boolean;
+  /** Why it doesn't run, when something stops it (a release says so in its artifact). */
+  problem?: string;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
 }
@@ -367,7 +369,9 @@ export interface ServiceSettingsInfo {
 export type ServiceOriginInfo =
   | { kind: 'weave' }
   | { kind: 'release'; project: { id: string; name?: string }; tag: string; release: string; checked: 'verified' | 'unmatched' | 'unknown'; publisher?: Actor; packaged?: true }
-  | { kind: 'unreleased' };
+  | { kind: 'unreleased' }
+  /** Weave ships it: the same component as this Weave's (its digest matches), or another (another version's, or changed). */
+  | { kind: 'shipped'; name: string; checked: 'verified' | 'other' };
 
 /**
  * What a running service may do, through its own token on the node that runs it: who it is, what it reads (only
@@ -1667,7 +1671,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string; shipped?: string }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
