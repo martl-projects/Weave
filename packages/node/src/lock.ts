@@ -1,14 +1,24 @@
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { uptime } from 'node:os';
 import type { Home } from './home.ts';
 
 /*
  * One process at a time may write to a home: two writers appending to the same
  * log can produce two different events with the same sequence number. The lock
- * file holds the owner's pid; a lock whose process is gone is taken over.
+ * file holds the owner's pid; a lock whose process is gone is taken over, and
+ * so is one from before the computer last started (its pid may belong to
+ * another program by now).
  * Within one process the lock is shared (tests open the same home twice).
  */
 
 const held = new Map<string, number>();
+
+// A few seconds' slack: the boot time is worked out from the uptime, and a daemon may start right at boot.
+const BOOT_SLACK = 30_000;
+
+function fromBeforeBoot(path: string): boolean {
+  return statSync(path).mtimeMs < Date.now() - uptime() * 1000 - BOOT_SLACK;
+}
 
 function alive(pid: number): boolean {
   try {
@@ -57,10 +67,10 @@ export function acquireLock(home: Home): () => void {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const pid = Number(readFileSync(path, 'utf8'));
-      if (pid && pid !== process.pid && alive(pid)) {
+      if (pid && pid !== process.pid && alive(pid) && !fromBeforeBoot(path)) {
         throw new Error(`this Weave home is in use by another process (pid ${pid}), probably its daemon starting up; try again in a moment`);
       }
-      unlinkSync(path); // stale: its process is gone
+      unlinkSync(path); // stale: its process is gone, or the computer has restarted since
     }
   }
   throw new Error(`could not lock ${home.dir}`);

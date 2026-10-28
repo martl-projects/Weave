@@ -1,5 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
@@ -52,6 +52,13 @@ describe('WeaveNode', () => {
 
     writeFileSync(lock, String(process.ppid)); // a live process that isn't us
     expect(() => WeaveNode.open(dir)).toThrow(/in use by another process/);
+
+    // From before the computer last started: the pid belongs to another program by now.
+    const beforeBoot = new Date(Date.now() - uptime() * 1000 - 3_600_000);
+    utimesSync(lock, beforeBoot, beforeBoot);
+    const afterReboot = WeaveNode.open(dir);
+    expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+    await afterReboot.close();
 
     writeFileSync(lock, '999999'); // a process that is gone
     const reopened = WeaveNode.open(dir);
