@@ -161,6 +161,16 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
         expect(all.find((r) => r.id === other.id)?.results[0]?.error).toMatch(/answers artifact\.fetch only/);
       }, { timeout: 20_000, interval: 200 });
 
+      // Only maintainers may get it now: Lena's fetch is refused before the service sees it, and she doesn't see it.
+      const release = ((await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0].data as { artifact: string }).artifact;
+      await expect(lena.setArtifactAccess({ project: 'Bot', artifact: release, who: 'maintainers' })).rejects.toThrow(/only the maintainers/);
+      const narrowed = await martl.setArtifactAccess({ project: 'Bot', artifact: release, who: 'maintainers' });
+      expect(narrowed[0]).toMatchObject({ who: 'maintainers', mine: true });
+      await vi.waitFor(async () => expect((await lena.artifacts('Bot'))[0]).toMatchObject({ who: 'maintainers', mine: false }), { timeout: 10_000, interval: 100 });
+      const refused = await lena.askService({ space: 'Bot', service: provider.did, text: 'mine?', data: { protocol: 'artifact.fetch', artifact: release, platform: platformKey() } });
+      await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === refused.id)?.results[0]?.error).toMatch(/only maintainers may get that in Bot/), { timeout: 20_000, interval: 200 });
+      await martl.setArtifactAccess({ project: 'Bot', artifact: release, who: null });
+
       // As martl's own GitHub App instead: Weave signs its JWT, the key never reaching the component.
       await martl.setServiceSetting({ space: 'Bot', service: provider.did, name: 'GITHUB_TOKEN', value: null });
       await martl.setServiceSetting({ space: 'Bot', service: provider.did, name: 'GITHUB_APP_ID', value: APP_ID });
@@ -168,7 +178,6 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       expect((await martl.serviceSettings({ space: 'Bot', service: provider.did })).settings.find((s) => s.name === 'GITHUB_APP_KEY')).toMatchObject({ secret: true });
       github.seen = [];
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
-      const release = ((await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0].data as { artifact: string }).artifact;
       const again = await lena.askService({ space: 'Bot', service: provider.did, text: 'again', data: { protocol: 'artifact.fetch', artifact: release, platform: platformKey() } });
       await vi.waitFor(async () => {
         const answer = (await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === again.id)?.results[0];

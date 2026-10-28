@@ -446,4 +446,4 @@ export {
 } from './services.ts';
 export { KIND_CATALOG_ENTRY, catalogOf, parseCatalogEntry, type CatalogEntry } from './catalog.ts';
 export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type SpaceServiceSetting } from './servicesettings.ts';
-export { KIND_SERVICE_POLICY, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';
+export { KIND_SERVICE_POLICY, KIND_ARTIFACT_ACCESS, artifactAccessOf, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';

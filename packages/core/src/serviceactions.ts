@@ -107,3 +107,26 @@ export function mayAct(who: ActionWho, person: Did, roles: { owner: Did; maintai
   if ('board' in who) return !!readers?.(who.board).includes(person);
   return !!inGroup?.(who.group, person);
 }
+
+/*
+ * Who may get an artifact of a project (a release's files, a file): everyone there unless its maintainers say
+ * otherwise. The node a provider runs on refuses a fetch from anyone else before the provider sees it.
+ *
+ *   weave.artifact.access  {artifact, who}   maintainers; the latest per artifact counts (who: members is everyone)
+ */
+export const KIND_ARTIFACT_ACCESS = 'weave.artifact.access';
+
+/** A project's rules for who may get its artifacts, by artifact: only those narrower than everyone. */
+export function artifactAccessOf(entries: Entry[], maintainers: Set<Did>): Map<string, ActionWho> {
+  const out = new Map<string, ActionWho>();
+  const field = (body: Json, key: string): unknown => (body && typeof body === 'object' && !Array.isArray(body) ? body[key] : undefined);
+  const sorted = entries.filter((e) => e.kind === KIND_ARTIFACT_ACCESS && maintainers.has(e.event.author)).sort((a, b) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq);
+  for (const e of sorted) {
+    const artifact = field(e.body, 'artifact');
+    if (typeof artifact !== 'string' || !artifact) continue;
+    const who = parseWho(field(e.body, 'who'));
+    if (!who || who === 'members') out.delete(artifact);
+    else out.set(artifact, who);
+  }
+  return out;
+}

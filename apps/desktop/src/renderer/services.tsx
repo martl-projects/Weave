@@ -511,10 +511,10 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
 }
 
 /** A group of people, as a section's title. */
-const whoLabel = (who: ActionWho, space: string, groups: Array<{ id: string; name: string }>): string =>
+export const whoLabel = (who: ActionWho, space: string, groups: Array<{ id: string; name: string }>): string =>
   who === 'members' ? `Everyone in ${space}` : who === 'maintainers' ? 'Maintainers' : who === 'owner' ? 'The owner' : 'board' in who ? `Readers of ${who.board}` : `Members of ${groups.find((g) => g.id === who.group)?.name ?? 'a group'}`;
 
-const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+export const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
 /** Broadest first: everyone, then a board's readers or a group, then maintainers, then the owner. */
 const breadth = (who: ActionWho): number => (who === 'members' ? 0 : who === 'maintainers' ? 2 : who === 'owner' ? 3 : 1);

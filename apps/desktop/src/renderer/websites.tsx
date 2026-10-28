@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AppManifest, ArtifactInfo, BoardInfo, SpaceRepos, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, contractText, OriginText, ServiceCard, KeptSettingsDialog, type ScopedAction } from './services.tsx';
+import { ActionScopes, contractText, lowerFirst, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -230,21 +231,69 @@ const artifactIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.w
 export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
 
 /** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
-function ArtifactList({ artifacts }: { artifacts: ArtifactInfo[] }) {
+function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; maintainer: boolean }) {
   const [adding, setAdding] = useState<ArtifactInfo>();
+  const [access, setAccess] = useState<ArtifactInfo>();
+  // Yours to get; maintainers see them all, and set who may get each.
+  const shown = artifacts.filter((a) => a.mine || maintainer);
+  if (!shown.length) return <p className="small muted">Nothing yet.</p>;
   return (
     <div className="service-releases">
-      {artifacts.map((a) => (
+      {shown.map((a) => (
         <div className="service-release" key={a.id}>
           <Icon name={artifactIcon(a)} />
           <span className="grow">
-            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}</span>
+            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
           </span>
-          <button onClick={() => setAdding(a)}>Add to…</button>
+          {a.mine && <button onClick={() => setAdding(a)}>Add to…</button>}
+          {maintainer && (
+            <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
+              <Icon name="gear" />
+            </button>
+          )}
         </div>
       ))}
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
+      {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
     </div>
+  );
+}
+
+/** Who may get an artifact of the project (maintainers): everyone there, a board's readers, a group's members, maintainers, the owner. */
+function ArtifactAccessDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+  const project = artifact.project;
+  const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
+  const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
+  const groups = info?.groups ?? [];
+  const options: ActionWho[] = ['members', ...(boards ?? []).map((b) => ({ board: b.name })), ...groups.map((g) => ({ group: g.id })), 'maintainers', 'owner'];
+  const [who, setWho] = useState(JSON.stringify(artifact.who));
+  return (
+    <Modal title={`${artifact.name} ${artifact.tag}: who may get it`} onClose={onClose}>
+      <div className="field-row">
+        <label htmlFor="artifact-who">Who</label>
+        <select id="artifact-who" className="grow" value={who} onChange={(e) => setWho(e.target.value)}>
+          {options.map((w) => (
+            <option key={JSON.stringify(w)} value={JSON.stringify(w)}>
+              {whoLabel(w, `p/${project.name}`, groups)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="small muted">
+        {artifact.from && 'image' in artifact.from
+          ? `Only they see it here. Its image comes from its registry, though: whoever can reach it there still can.`
+          : `Its providers' nodes hand it only to them: nobody else gets its files through p/${project.name}, nor sees it here.`}
+      </p>
+      <div className="buttons">
+        <AsyncButton
+          className="default"
+          onClick={() => attempt(() => api('setArtifactAccess', { project: project.id, artifact: artifact.id, who: who === '"members"' ? null : JSON.parse(who) }).then(() => (bump(), onClose())), `Who may get ${artifact.name} is set`)}
+        >
+          Save
+        </AsyncButton>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -308,7 +357,7 @@ function ServiceReleases({ project, artifacts, app, maintainer }: { project: Spa
   return (
     <>
       <div className="small"><b>Available</b></div>
-      {artifacts.length ? <ArtifactList artifacts={artifacts} /> : <p className="small muted">Nothing yet.</p>}
+      <ArtifactList artifacts={artifacts} maintainer={maintainer} />
       {maintainer && app === null && !describing && (
         <p className="small muted">
           <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Make this project's code available…</a>
@@ -326,7 +375,7 @@ function ProjectArtifacts({ project, app, artifacts, covered }: { project: Space
   return (
     <fieldset>
       <legend>Available</legend>
-      {artifacts.length ? <ArtifactList artifacts={artifacts} /> : <p className="small muted">Nothing yet.</p>}
+      <ArtifactList artifacts={artifacts} maintainer />
       {!covered && app && (
         <div className="buttons">
           <button onClick={() => setPicking(true)}>Publish from GitHub…</button>

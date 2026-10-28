@@ -9248,6 +9248,10 @@ export class WeaveNode implements Backend {
     return this.#services.serviceProfiles(...args);
   }
 
+  setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {
+    return this.#services.setArtifactAccess(...args);
+  }
+
   servicePanels(...args: Parameters<Services['servicePanels']>): ReturnType<Services['servicePanels']> {
     return this.#services.servicePanels(...args);
   }

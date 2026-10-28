@@ -1,4 +1,4 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho } from '@weave/core';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -184,9 +184,13 @@ export class Services {
 
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.h.project(ref);
+    const access = artifactAccessOf(this.h.entries(project), this.h.state(project).maintainers);
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
       const runs = this.h.runtime.runs(a.manifest);
+      const who = access.get(a.id) ?? 'members';
       return {
+        who,
+        mine: !this.artifactRefusal(project, a.id, this.h.identity.author),
         id: a.id,
         project: { id: project.id, kind: 'project', name: this.h.spaceName(project) },
         tag: a.tag,
@@ -824,6 +828,13 @@ export class Services {
     if (d.inner.kind === KIND_SERVICE_REQUEST) {
       const body = d.inner.body as { to?: unknown; action?: unknown } | null;
       if (!takesRequests(stored.contract) || body?.to !== did) return false;
+      // Refused once (Weave answered no): it stays that, even if who may changes later.
+      if (this.#refused.has(d.id)) return false;
+      const fetching = (body as { data?: { protocol?: unknown; artifact?: unknown } }).data;
+      if (fetching?.protocol === PROTOCOL_ARTIFACT_FETCH && typeof fetching.artifact === 'string') {
+        const no = this.artifactRefusal(d.space, fetching.artifact, d.event.author);
+        if (no) return (this.#refuse(stored, d.id, no), false);
+      }
       if (body.action === undefined) return true;
       // An action: only from someone who may use it here. Anyone else gets Weave's no, and the service never sees it.
       const why = this.refusal(stored.contract, did, d.space, d.event.author, String(body.action));
@@ -846,6 +857,24 @@ export class Services {
   inGroup(group: string, person: Did): boolean {
     const space = this.h.spaces.get(group);
     return !!space && this.h.state(space).members.has(person);
+  }
+
+  /** Why someone may not get a project's artifact (its maintainers narrowed who may), or undefined: they may. */
+  artifactRefusal(project: StoredSpace, artifact: string, person: Did): string | undefined {
+    const state = this.h.state(project);
+    const who = artifactAccessOf(this.h.entries(project), state.maintainers).get(artifact) ?? 'members';
+    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(project, board), (group, p) => this.inGroup(group, p)) ? undefined : `only ${whoWords(who)} may get that in ${this.h.spaceName(project)}`;
+  }
+
+  /** Maintainers: who may get one of a project's artifacts (null: everyone there). */
+  async setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]> {
+    const project = this.h.project(input.project);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such artifact`);
+    const who = input.who === null ? 'members' : parseWho(input.who);
+    if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_ACCESS, body: { artifact: input.artifact, who: who as unknown as Json } }));
+    return this.artifacts(project.id);
   }
 
   /** Requests refused already, so each is answered once. */
@@ -952,6 +981,9 @@ export class Services {
     const m = artifact.manifest;
     const runs = this.h.runtime.runs(m);
     return {
+      // A catalog lists it for anyone in its space to install.
+      who: 'members',
+      mine: true,
       id: artifact.id,
       project: { id: project.id, kind: 'project', name: project.name },
       tag: artifact.tag,
@@ -1173,7 +1205,7 @@ export class Services {
   }
 
   /** The GitHub service answers artifact.fetch: the release must be its space's, and the file its maintainer fingerprinted. */
-  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; data?: unknown }): Promise<void> {
+  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; from: Did; data?: unknown }): Promise<void> {
     const gate = this.serviceGate(stored.token);
     if (!gate) return;
     const data = (r.data && typeof r.data === 'object' ? r.data : {}) as { protocol?: unknown; artifact?: unknown; platform?: unknown };
@@ -1181,6 +1213,8 @@ export class Services {
       if (data.protocol !== PROTOCOL_ARTIFACT_FETCH) throw new Error(`${stored.name} answers ${PROTOCOL_ARTIFACT_FETCH} only`);
       const artifact = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === data.artifact);
       if (!artifact) throw new Error(`${this.h.spaceName(space)} has no such release`);
+      const no = this.artifactRefusal(space, artifact.id, r.from);
+      if (no) throw new Error(no);
       const asset = typeof data.platform === 'string' ? artifact.manifest.install?.assets?.[data.platform] : undefined;
       if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
       const repo = artifact.manifest.install?.github;
