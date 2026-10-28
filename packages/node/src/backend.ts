@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { ActionWho, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
+import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -339,6 +339,13 @@ export interface ArtifactInfo {
   /** Who may get it in its project (everyone there, unless its maintainers narrowed it), and whether you may. */
   who: ActionWho;
   mine: boolean;
+  /** What it is: a service, a website, a board view, a fetcher, an app, or a file. */
+  kind: ArtifactKind;
+  /** Where its files are: github, oci, or another source a provider knows. */
+  source?: ArtifactSource;
+  /** A file's name, size and media type. */
+  file?: { name: string; size?: number };
+  type?: string;
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -1784,6 +1791,10 @@ export interface Backend {
   setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Maintainers: who may get one of the project's artifacts (null: everyone there). Providers' nodes refuse the rest. */
   setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]>;
+  /** Maintainers: hand out a file of a GitHub release as an artifact of the project (a document, a dataset), fingerprinted. */
+  releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
+  /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */
+  getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }>;
   /** Your fetchers, and those this Weave ships that you haven't added. */
   fetchers(): Promise<FetcherInfo[]>;
   /** Add a fetcher Weave ships, for these projects (names or ids) or all; added again, for more of them. */
@@ -2162,7 +2173,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

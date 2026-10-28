@@ -225,7 +225,10 @@ github — repositories that follow a group, tier or project (members who give t
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
-  service artifacts <project>  a project's releases: what you can install as a service
+  service artifacts <project>  a project's artifacts: services, websites, board views, files (what each is, where it's from)
+  file release <tag> <file> -p <p>   maintainers: hand out a file of a GitHub release as the project's artifact (fingerprinted)
+                             [--repo owner/name] [--name <shown name>] [--type application/pdf]
+  file get <artifact> -p <p>   get a file artifact: from the project's provider (and your fetcher), checked; prints where it is
   service release <image:tag> -p <p>   release a Weave service (maintainers): an image with its manifest in its
                              "dev.weave.service" label; Weave pins the tag to its digest and runs it in its sandbox (Docker)
   service list               the services this computer runs; service profiles: everyone's you know
@@ -1557,7 +1560,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         }));
       if (sub === 'artifacts') {
         const all = await b.artifacts(ref ?? needSpace());
-        return out(all, () => all.map((a) => `${a.name} ${a.tag}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
+        return out(all, () => all.map((a) => `${a.name} ${a.tag}  ${a.kind.replace('-', ' ')}${a.source ? ` from ${a.source.provider}` : ''}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.mine ? '' : '  (not for you)'}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.kind === 'file' ? `${a.file?.name ?? 'a file'}${a.type ? ` (${a.type})` : ''}: weave file get ${a.id} -p ${a.project.name}` : a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
       if (sub === 'github-app') {
         const { url } = await b.githubAppSetup({ ...(ref ? { service: ref } : {}), ...(values.org ? { org: values.org } : {}) });
@@ -1679,6 +1682,24 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out(s, () => `signed ${s.service.name} in: ${args[2]}\n${settingsText(s)}`);
       }
       throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests|settings|setting|sign-in — see "weave --help"');
+    }
+
+    case 'file': {
+      const [sub, a1, a2] = args;
+      const b = await backend();
+      if (sub === 'release' && a1 && a2) {
+        const a = await b.releaseFile({ project: needProject(), tag: a1, file: a2, ...(values.repo ? { repo: values.repo } : {}), ...(values.name ? { name: values.name } : {}), ...(values.type ? { type: values.type } : {}) });
+        return out(a, () => `${a.name} ${a.tag} is an artifact of ${a.project.name}: ${a.file?.name}${a.file?.size ? ` (${a.file.size} bytes)` : ''}, from ${a.source?.provider ?? 'its release'}\n  ${a.id}`);
+      }
+      if (sub === 'get' && a1) {
+        const project = needProject();
+        const all = await b.artifacts(project);
+        const found = all.find((a) => a.id === a1) ?? all.find((a) => a.kind === 'file' && (a.app === a1 || a.name === a1 || a.file?.name === a1));
+        if (!found) throw new Error(`${project} has no file ${a1}`);
+        const got = await b.getArtifactFile({ project, artifact: found.id });
+        return out(got, () => `${got.path}\n  delivered by ${got.by}, checked`);
+      }
+      throw new Error('usage: weave file release <tag> <file> -p <project> | weave file get <artifact> -p <project>');
     }
 
     case 'fetcher': {

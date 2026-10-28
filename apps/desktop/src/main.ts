@@ -1,5 +1,5 @@
-import { writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
 import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
@@ -415,6 +415,13 @@ ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
   const options = { title: String(title ?? 'Choose a folder').slice(0, 80), properties: ['openDirectory' as const] };
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
+});
+
+// A file Weave got for the person (an artifact's), shown in its folder: only those, in the home's files folder.
+ipcMain.handle('weave:reveal', (_event, path: string) => {
+  const files = join(home.dir, 'files');
+  const target = resolve(String(path ?? ''));
+  if (target.startsWith(files + sep) && existsSync(target)) shell.showItemInFolder(target);
 });
 
 /** Only the apps rooms share: the host's own port, or a room tunnel on this computer. */

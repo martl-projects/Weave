@@ -90,6 +90,8 @@ export interface AppManifest {
    * to be fetched, in the projects its person allows, and checks what it hands over against the artifact's digest.
    */
   fetcher?: AppFetcher;
+  /** A file: something to get, not to run (a document, a dataset, a model). Its one release file is install.assets.file. */
+  file?: AppFile;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -100,6 +102,11 @@ export interface AppClient {
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppFile {
+  /** What it is, as a media type (application/pdf), if known. */
+  type?: string;
+}
+
 export interface AppFetcher {
   /** Hosts it may reach over HTTPS, as a service's contract names them. */
   net?: string[];
@@ -234,6 +241,17 @@ export interface AppInstall {
   app?: string;
   /** The release's container image, pinned by its digest (weave app release reads it from the registry). */
   image?: AppImage;
+  /**
+   * Where its files are, for a provider that knows that source (its contract's sources): {"provider": "s3", "ref":
+   * "<what that provider understands>"}. Without, a GitHub release (github) or the image is its source.
+   */
+  source?: ArtifactSource;
+}
+
+/** Where an artifact's files are: a kind of place (github, oci, s3…) and what a provider of it understands. */
+export interface ArtifactSource {
+  provider: string;
+  ref: string;
 }
 
 export interface AppImage {
@@ -266,8 +284,9 @@ export interface AppAsset {
   size?: number;
 }
 
-const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm)$/;
+const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm|file)$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
+const SOURCE = /^[a-z][a-z0-9-]{0,39}$/;
 
 /** An install block from untrusted input; undefined when it says nothing usable. */
 export function parseInstall(input: unknown): AppInstall | undefined {
@@ -297,13 +316,23 @@ export function parseInstall(input: unknown): AppInstall | undefined {
   const has = Object.keys(assets).length > 0;
   const github = text(i.github, 140);
   const tag = text(i.tag, 100);
-  // A Weave service is its image: it needs no repository to come from (provenance says more, later).
-  if ((has || (image && !image.packaged)) && !isRepoName(github)) throw new Error('"install.github" is the repository, owner/name');
+  let source: ArtifactSource | undefined;
+  if (i.source !== undefined) {
+    const raw = (i.source && typeof i.source === 'object' ? i.source : {}) as Record<string, unknown>;
+    const provider = text(raw.provider, 40);
+    const ref = text(raw.ref, 500);
+    if (!SOURCE.test(provider) || !ref) throw new Error('"install.source" is {"provider": "s3", "ref": "…"}: a kind of place, and what its provider understands');
+    source = { provider, ref };
+  }
+  // A Weave service is its image: it needs no repository to come from (provenance says more, later). Files come from a
+  // GitHub release, or from another source.
+  if ((has || (image && !image.packaged)) && !isRepoName(github) && !source) throw new Error('"install.github" is the repository, owner/name (or "install.source" says where its files are)');
   if ((has || image) && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
   if (!has && !image && !steps.length) return undefined;
   const app = text(i.app, 100);
   return {
     ...(has || image ? { ...(isRepoName(github) ? { github } : {}), tag } : {}),
+    ...(source ? { source } : {}),
     ...(has ? { assets } : {}),
     ...(image ? { image } : {}),
     ...(steps.length ? { steps } : {}),
@@ -325,7 +354,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -355,7 +384,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -444,6 +473,13 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (!m.wasm) problems.push('a fetcher is a WebAssembly component: say where it is ("wasm": {"component": "fetcher.wasm"})');
     else fetcher = { ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}) };
   }
+  // A file: its media type, if it says.
+  let file: AppFile | undefined;
+  if (m.file !== undefined) {
+    const raw = (m.file && typeof m.file === 'object' && !Array.isArray(m.file) ? m.file : {}) as Record<string, unknown>;
+    const type = text(raw.type, 100);
+    file = type && /^[a-z]+\/[a-z0-9.+-]+$/i.test(type) ? { type: type.toLowerCase() } : {};
+  }
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;
   if (m.client !== undefined) {
@@ -494,7 +530,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}) } };
 }
 
 /**
@@ -564,13 +600,40 @@ export const startCommand = (app: AppManifest | undefined, platform: string, rel
   (releaseBuild ? app?.start?.release?.[platform] : undefined) ?? app?.start?.command;
 
 /**
- * An artifact: one release a project published (a weave.app with a tag and its files or image, by a maintainer).
- * Anyone in the project can start it as a service, pinned to exactly this release, in any space of theirs.
+ * What an artifact is, which says who can use it: a service (Weave runs it, with its contract), a website (the
+ * website service launches it), a board view (pinned to boards), a fetcher (a client app that fetches artifacts), an
+ * app (its person runs it on their computer, in a room), or a file (something to get).
+ */
+export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'app' | 'file';
+
+export function artifactKindOf(m: AppManifest): ArtifactKind {
+  if (m.file) return 'file';
+  if (m.fetcher) return 'fetcher';
+  if (m.client) return 'board-view';
+  if (m.service || m.install?.image?.packaged) return 'service';
+  if (m.wasm?.site || m.services.some((s) => s.protocol === 'http')) return 'website';
+  return 'app';
+}
+
+/** Where an artifact's files are: its own source, a GitHub release, or its image. */
+export function artifactSourceOf(m: AppManifest): ArtifactSource | undefined {
+  if (m.install?.source) return m.install.source;
+  if (m.install?.github && m.install.assets) return { provider: 'github', ref: m.install.github };
+  if (m.install?.image) return { provider: 'oci', ref: `${m.install.image.ref}@${m.install.image.digest}` };
+  if (m.install?.github) return { provider: 'github', ref: m.install.github };
+  return undefined;
+}
+
+/**
+ * An artifact: one release a project published (a weave.app with a tag and its files or image, by a maintainer), or
+ * a file (weave.artifact). Anyone in the project can use it as its kind says, pinned to exactly this release.
  */
 export interface Artifact {
-  /** The weave.app event that published it. */
+  /** The event that published it. */
   id: string;
   tag: string;
+  kind: ArtifactKind;
+  source?: ArtifactSource;
   manifest: AppManifest;
   /** Who released it (a maintainer), and the key that signed (theirs, or their agent's). */
   author: Did;
@@ -578,10 +641,16 @@ export interface Artifact {
   time: string;
 }
 
-/** A project's artifacts, newest first: each tag once (its latest release), only by maintainers, only with something to start. */
+/**
+ * A file a project hands out, as its manifest (a file, with its one release file): published by a maintainer, from a
+ * GitHub release or another source. The project's app (weave.app) stays what it is.
+ */
+export const KIND_ARTIFACT = 'weave.artifact';
+
+/** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get. */
 export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
   const byTag = new Map<string, Artifact>();
-  for (const e of [...entries].filter((x) => x.kind === KIND_APP).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+  for (const e of [...entries].filter((x) => x.kind === KIND_APP || x.kind === KIND_ARTIFACT).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
     if (!maintainers.has(e.event.author)) continue;
     let manifest: AppManifest;
     try {
@@ -591,7 +660,11 @@ export function artifactsOf(entries: Array<{ id: string; kind: string; body: Jso
     }
     const tag = manifest.install?.tag;
     if (!tag || !(manifest.install?.assets || manifest.install?.image)) continue;
-    byTag.set(tag, { id: e.id, tag, manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
+    // A weave.artifact is a file, and only that: never something to run.
+    if (e.kind === KIND_ARTIFACT && (!manifest.file || !manifest.install?.assets?.file)) continue;
+    if (e.kind === KIND_APP && manifest.file) continue;
+    const source = artifactSourceOf(manifest);
+    byTag.set(`${manifest.app}\0${tag}`, { id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
   }
   return [...byTag.values()].sort((a, b) => b.time.localeCompare(a.time));
 }

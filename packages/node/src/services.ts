@@ -1,4 +1,4 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf } from '@weave/core';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -39,7 +39,7 @@ const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string;
   // Reads what's asked of it and answers where to download a release's files; with a GitHub App of the person's own,
   // it also keeps linked repositories' access in step with their spaces, and records whom it gave access.
   github: {
-    contract: { reads: 'addressed', writes: [KIND_GITHUB_ADDED], offers: [PROTOCOL_ARTIFACT_FETCH], version: '1.0' },
+    contract: { reads: 'addressed', writes: [KIND_GITHUB_ADDED], offers: [PROTOCOL_ARTIFACT_FETCH], sources: ['github'], version: '1.0' },
     description: 'GitHub: hands the project’s release files to its participants, and keeps linked repositories’ access in step with their spaces',
     settings: [
       { name: 'GITHUB_APP_ID', label: 'GitHub App ID', optional: true, hint: 'Your own GitHub App, installed on the organization: it acts without anyone signing in' },
@@ -189,6 +189,10 @@ export class Services {
       const runs = this.h.runtime.runs(a.manifest);
       const who = access.get(a.id) ?? 'members';
       return {
+        kind: a.kind,
+        ...(a.source ? { source: a.source } : {}),
+        ...(a.manifest.file?.type ? { type: a.manifest.file.type } : {}),
+        ...(a.manifest.install?.assets?.file ? { file: { name: a.manifest.install.assets.file.file, ...(a.manifest.install.assets.file.size ? { size: a.manifest.install.assets.file.size } : {}) } } : {}),
         who,
         mine: !this.artifactRefusal(project, a.id, this.h.identity.author),
         id: a.id,
@@ -212,7 +216,7 @@ export class Services {
   /** One release of a project: the one with this tag, or the latest. */
   artifact(ref: string, tag?: string): { project: StoredSpace; artifact: Artifact } {
     const project = this.h.project(ref);
-    const all = artifactsOf(this.h.entries(project), this.h.state(project).maintainers);
+    const all = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).filter((a) => a.kind !== 'file');
     const artifact = tag ? all.find((a) => a.tag === tag) : all[0];
     if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
     return { project, artifact };
@@ -1005,6 +1009,7 @@ export class Services {
     const runs = this.h.runtime.runs(m);
     return {
       // A catalog lists it for anyone in its space to install.
+      kind: artifactKindOf(m),
       who: 'members',
       mine: true,
       id: artifact.id,
@@ -1090,12 +1095,14 @@ export class Services {
   locateWait = 60_000;
 
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
-  async locateArtifact(a: StoredArtifact): Promise<Located | undefined> {
+  async locateArtifact(a: StoredArtifact, platform = platformKey()): Promise<Located | undefined> {
     if (!this.h.spaces.has(a.project)) return undefined;
-    const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH));
+    // One that hands out artifacts from where this one's files are (any source, if its contract names none).
+    const source = artifactSourceOf(a.manifest)?.provider;
+    const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
     if (!provider) return undefined;
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
-    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag} for ${platformKey()}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform: platformKey() } });
+    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag}${platform === 'file' ? '' : ` for ${platform}`}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform } });
     const until = Date.now() + this.locateWait;
     for (;;) {
       const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];

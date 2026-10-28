@@ -224,8 +224,10 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
 /** What an artifact is, in a word. */
-const artifactKind = (a: ArtifactInfo): string => (a.lens ? 'Board view' : a.website && a.applet ? 'Website and service' : a.website ? 'Website' : a.applet || a.packaged ? 'Service' : 'App');
-const artifactIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.website ? 'globe' : a.packaged ? 'store' : 'plug');
+const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', app: 'App', file: 'File' };
+const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.website ? 'Website and service' : KIND_WORDS[a.kind]);
+const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.packaged ? 'store' : 'plug');
+const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
 
 /** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
 export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
@@ -243,9 +245,10 @@ function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; ma
         <div className="service-release" key={a.id}>
           <Icon name={artifactIcon(a)} />
           <span className="grow">
-            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
+            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
           </span>
-          {a.mine && <button onClick={() => setAdding(a)}>Add to…</button>}
+          {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
+          {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && <button onClick={() => setAdding(a)}>Add to…</button>}
           {maintainer && (
             <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
               <Icon name="gear" />
@@ -256,6 +259,24 @@ function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; ma
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
       {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
     </div>
+  );
+}
+
+/** Get a file artifact: its project's provider grants it, your fetcher gets it, Weave checks it; then show where it is. */
+function GetFileButton({ artifact }: { artifact: ArtifactInfo }) {
+  const [got, setGot] = useState<string>();
+  if (got && bridge.reveal) return <button onClick={() => void bridge.reveal!(got)}>Show in folder</button>;
+  return (
+    <AsyncButton
+      onClick={() =>
+        attempt(async () => {
+          const { path } = await api<{ path: string; by: string }>('getArtifactFile', { project: artifact.project.id, artifact: artifact.id });
+          setGot(path);
+        }, `${artifact.name} is here, checked`)
+      }
+    >
+      Get
+    </AsyncButton>
   );
 }
 
