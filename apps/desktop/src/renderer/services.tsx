@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
 import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
@@ -282,6 +282,109 @@ function GitHubAppSettings({ service, set, onChange }: { service: string; set: b
 }
 
 /** In Keys & devices: the services you run, here and on your always-on nodes. */
+/**
+ * Your fetchers: client apps that fetch what a project's provider grants you (its contract names which), on this
+ * node. Yours, not a project's: each fetches only for the projects you allow, with your own settings.
+ */
+export function FetchersBox() {
+  const { data: fetchers } = useApi(() => api<FetcherInfo[]>('fetchers'), []);
+  const [editing, setEditing] = useState<FetcherInfo>();
+  if (!fetchers?.length) return null;
+  return (
+    <fieldset>
+      <legend>Fetchers</legend>
+      <p className="small">
+        A project's provider can hand out its artifacts through a fetcher: it grants you access, and your fetcher gets the files with it, here. Each file is checked against
+        what the project released. A fetcher only works for the projects you allow.
+      </p>
+      {fetchers.map((f) => (
+        <div className="service-row" key={f.name}>
+          <Icon name="download" />
+          <div className="grow">
+            <b>{f.title}</b>{' '}
+            <span className="small muted">
+              {!f.added ? 'not added' : f.projects === 'all' ? 'for all your projects' : f.projects.length ? `for ${f.projects.map((p) => `p/${p.name}`).join(', ')}` : 'for no project'}
+            </span>
+            {f.about && <div className="small">{f.about}</div>}
+            {f.net.length > 0 && <div className="small muted">Reaches {f.net.join(', ')} only.</div>}
+            {f.problem && <div className="small error-text">{f.problem}</div>}
+          </div>
+          <div className="service-actions">
+            <button onClick={() => setEditing(f)}>{f.added ? 'Settings…' : 'Add…'}</button>
+            {f.added && (
+              <AsyncButton onClick={async () => (await ask(`Remove ${f.title}? It fetches for no project any more, and your settings for it are gone.`, 'Remove')) && attempt(() => api('removeFetcher', f.name).then(bump), `${f.title} is removed`)}>
+                Remove
+              </AsyncButton>
+            )}
+          </div>
+        </div>
+      ))}
+      {editing && <FetcherDialog fetcher={editing} onClose={() => setEditing(undefined)} />}
+    </fieldset>
+  );
+}
+
+/** Which projects a fetcher fetches for, and your settings for it (a secret only as set, never shown). */
+function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): void }) {
+  const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
+  const projects = (spaces ?? []).filter((s) => s.kind === 'project');
+  const [all, setAll] = useState(fetcher.projects === 'all');
+  const [picked, setPicked] = useState<string[]>(fetcher.projects === 'all' ? [] : fetcher.projects.map((p) => p.id));
+  const [values, setValues] = useState<Record<string, string>>({});
+  const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
+  return (
+    <Modal title={`${fetcher.title}: ${fetcher.added ? 'settings' : 'add it'}`} onClose={onClose}>
+      <p className="small">It fetches for these projects only. Their providers' grants never reach it anywhere else.</p>
+      <div className="field-row">
+        <input type="checkbox" id="fetcher-all" checked={all} onChange={(e) => setAll(e.target.checked)} />
+        <label htmlFor="fetcher-all">All my projects</label>
+      </div>
+      {!all &&
+        projects.map((p) => (
+          <div className="field-row" key={p.id}>
+            <input type="checkbox" id={`fetcher-${p.id}`} checked={picked.includes(p.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, p.id] : picked.filter((x) => x !== p.id))} />
+            <label htmlFor={`fetcher-${p.id}`}>p/{p.name}</label>
+          </div>
+        ))}
+      {fetcher.settings.map((s) => (
+        <div className="field-row" key={s.name}>
+          <label htmlFor={`fetcher-setting-${s.name}`}>{s.label ?? s.name}</label>
+          <input
+            id={`fetcher-setting-${s.name}`}
+            className="grow"
+            type={s.secret ? 'password' : 'text'}
+            placeholder={fetcher.filled.includes(s.name) ? 'set (type to replace)' : s.optional ? 'optional' : ''}
+            value={values[s.name] ?? ''}
+            onChange={(e) => setValues({ ...values, [s.name]: e.target.value })}
+          />
+        </div>
+      ))}
+      {fetcher.settings.some((s) => s.hint) && <p className="small muted">{fetcher.settings.map((s) => s.hint).filter(Boolean).join(' · ')}</p>}
+      <p className="small muted">Your settings stay sealed on this computer: never in a project.</p>
+      <div className="buttons">
+        <AsyncButton
+          className="default"
+          onClick={() =>
+            attempt(async () => {
+              const to = all ? 'all' : picked;
+              if (!fetcher.added) {
+                if (!all && !picked.length) throw new Error('pick the projects it fetches for');
+                await api('addFetcher', { shipped: fetcher.name, projects: to });
+              }
+              await api('setFetcher', { name: fetcher.name, projects: to, ...(Object.keys(settings).length ? { settings } : {}) });
+              bump();
+              onClose();
+            }, fetcher.added ? `${fetcher.title} is set` : `${fetcher.title} is added`)
+          }
+        >
+          {fetcher.added ? 'Save' : 'Add'}
+        </AsyncButton>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
+  );
+}
+
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
   const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
@@ -388,8 +491,8 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
               </div>
               {r.results.length ? (
                 r.results.map((x) => (
-                  <div className={`small service-answer${x.error ? ' error-text' : ''}`} key={x.id}>
-                    {x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
+                  <div className={`small service-answer${x.error ? ' error-text' : ''}${x.private ? ' muted' : ''}`} key={x.id}>
+                    {x.private ? `answered, for ${r.from.name ?? 'them'} only` : x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
                   </div>
                 ))
               ) : (

@@ -87,6 +87,11 @@ export interface ServiceContract {
    * port itself.
    */
   websites?: 'host';
+  /**
+   * Who fetches what it hands out (artifact.fetch): its answer is a grant only that fetcher understands, run by the
+   * asker's own node. A fetcher Weave ships, by name ("github-checkout"), or exactly this component ("sha256:…").
+   */
+  fetcher?: string;
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -173,6 +178,9 @@ export function resolveNet(net: string[] | undefined, settings: Record<string, s
 export const netAllows = (net: string[] | undefined, host: string): boolean =>
   !!net?.some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : host === h));
 
+/** A fetcher a contract names: one Weave ships ("github-checkout"), or a component by its digest ("sha256:…"). */
+export const isFetcherRef = (value: string): boolean => /^[a-z][a-z0-9-]{0,39}$/.test(value) || /^sha256:[0-9a-f]{64}$/.test(value);
+
 export function parseContract(value: unknown): ServiceContract | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
@@ -191,7 +199,8 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   const net = Array.isArray(c.net) ? [...new Set(c.net.map(lowerHost).filter(isNetHost))].slice(0, 20) : [];
   // Actions are requests: a service that reads nothing takes none.
   const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
+  const fetcher = offers.length && typeof c.fetcher === 'string' && isFetcherRef(c.fetcher) ? c.fetcher : undefined;
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**
@@ -209,7 +218,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */

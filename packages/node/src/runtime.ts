@@ -72,6 +72,8 @@ export interface WasmRun {
   site?: { folder?: string; who(req: IncomingMessage): Record<string, unknown> | undefined; listening(port: number): void };
   /** Hosts it may reach over HTTPS (its contract's net); without, it reaches none. */
   net?: string[];
+  /** How long one task may take, if not WASM_LIMITS.eventMs: a fetcher's download takes longer. */
+  taskMs?: number;
 }
 
 /** Addresses a service's requests out never reach, whatever a host's name says: this computer and its networks. */
@@ -307,11 +309,11 @@ export class Runtime {
       if (task === undefined) return;
       // Too long on one task: it's given up, and the worker ends (and starts again).
       const timer = setTimeout(() => {
-        log.write(`weave: ${run.name} took longer than ${WASM_LIMITS.eventMs / 1000}s on ${task.type === 'event' ? 'an event' : task.type === 'call' ? task.fn : `a player's ${task.type}`}: stopped\n`);
+        log.write(`weave: ${run.name} took longer than ${(run.taskMs ?? WASM_LIMITS.eventMs) / 1000}s on ${task.type === 'event' ? 'an event' : task.type === 'call' ? task.fn : `a player's ${task.type}`}: stopped\n`);
         if (task.type === 'event') run.handled?.(task.item, 'took too long');
         if (task.type === 'call') task.reply(undefined, `${run.name} took too long`);
         void worker.terminate();
-      }, WASM_LIMITS.eventMs);
+      }, run.taskMs ?? WASM_LIMITS.eventMs);
       entry.busy = { task, timer };
       worker.postMessage(task.type === 'call' ? { type: 'call', fn: task.fn, args: task.args } : task);
     };

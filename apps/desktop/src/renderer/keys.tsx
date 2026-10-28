@@ -8,7 +8,7 @@ import { LinkedAccountsBox } from './github.tsx';
 import { AgentAppsBox } from './agents.tsx';
 import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
-import { ServicesBox } from './services.tsx';
+import { FetchersBox, ServicesBox } from './services.tsx';
 
 /*
  * Identity and keys. The 24 recovery words are the identity: every root key
@@ -596,6 +596,7 @@ export function KeysView() {
       {!bridge.phone && <PhonesBox />}
       <AlwaysOnNodes keys={keys} />
       <ServicesBox keys={keys} />
+      <FetchersBox />
       <AgentAppsBox />
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (

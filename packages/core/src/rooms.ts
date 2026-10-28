@@ -84,6 +84,12 @@ export interface AppManifest {
    * shows it. It has no key of its own: what it proposes, a member signs, if they may.
    */
   client?: AppClient;
+  /**
+   * A fetcher: a client app that fetches artifacts for its person, on their node, with what a provider grants them
+   * (artifact.fetch) and their own access. It answers no requests and has no key: Weave runs it when something is
+   * to be fetched, in the projects its person allows, and checks what it hands over against the artifact's digest.
+   */
+  fetcher?: AppFetcher;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -94,6 +100,11 @@ export interface AppClient {
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppFetcher {
+  /** Hosts it may reach over HTTPS, as a service's contract names them. */
+  net?: string[];
+}
+
 export interface AppWasm {
   component: string;
   site?: string;
@@ -314,7 +325,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -344,7 +355,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -423,6 +434,16 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
     else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
   }
+  // A fetcher: a component (wasm) that fetches artifacts for its person, reaching only the hosts it names.
+  let fetcher: AppFetcher | undefined;
+  if (m.fetcher !== undefined) {
+    const raw = (m.fetcher && typeof m.fetcher === 'object' && !Array.isArray(m.fetcher) ? m.fetcher : {}) as Record<string, unknown>;
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost) : [];
+    const bad = net.filter((h) => !isNetHost(h));
+    if (raw.net !== undefined && (!Array.isArray(raw.net) || bad.length)) problems.push('"fetcher.net" lists the hosts it reaches over HTTPS, by name: like ["api.github.com", "*.githubusercontent.com"]');
+    else if (!m.wasm) problems.push('a fetcher is a WebAssembly component: say where it is ("wasm": {"component": "fetcher.wasm"})');
+    else fetcher = { ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}) };
+  }
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;
   if (m.client !== undefined) {
@@ -473,7 +494,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}) } };
 }
 
 /**

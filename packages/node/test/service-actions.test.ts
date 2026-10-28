@@ -84,9 +84,10 @@ describe('a service’s actions', { timeout: 120_000 }, () => {
       const bot = await martl.addService({ name: 'bot', contract: CONTRACT as never, spaces: ['Weave'], wasm: component });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena]);
-      const answers = async () => {
+      // Answers as someone sees them: each is for who asked (and martl, whose service it is).
+      const answers = async (node = lena) => {
         sync([martl, lena]);
-        return Object.fromEntries((await lena.serviceRequests({ space: 'Weave', service: bot.did })).map((r) => [r.text, r.results[0]]));
+        return Object.fromEntries((await node.serviceRequests({ space: 'Weave', service: bot.did })).map((r) => [r.text, r.results[0]]));
       };
 
       // What Lena may do there: say hello, not wipe.
@@ -106,7 +107,9 @@ describe('a service’s actions', { timeout: 120_000 }, () => {
 
       // martl may.
       await martl.askService({ space: 'Weave', service: bot.did, text: 'wipe, really', data: { reason: 'tests' }, action: 'wipe' });
-      await vi.waitFor(async () => expect((await answers())['wipe, really']?.text).toMatch(/from bot \(#2\)/), { timeout: 30_000, interval: 200 });
+      await vi.waitFor(async () => expect((await answers(martl))['wipe, really']?.text).toMatch(/from bot \(#2\)/), { timeout: 30_000, interval: 200 });
+      // Lena sees that it was answered, not what.
+      expect((await answers())['wipe, really']).toMatchObject({ text: '', private: true });
 
       // The project makes hello maintainers only: Lena's hello goes no further. Wider than the contract: refused.
       await expect(lena.setServicePolicy({ space: 'Weave', service: bot.did, action: 'hello', who: 'maintainers' })).rejects.toThrow(/only the maintainers/);

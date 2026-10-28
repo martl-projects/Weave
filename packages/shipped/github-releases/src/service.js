@@ -1,8 +1,10 @@
-// GitHub releases: hands a project's release files to its participants (artifact.fetch). Asked for a release and a
-// platform, it answers with GitHub's download address for that file, reached with its own GitHub access: a token, or
-// its person's GitHub App (Weave signs the App's JWT; the key never reaches this code). Only releases its projects'
-// maintainers published count (release() in the WIT), whatever a request names, and whoever downloads checks the file
-// against the release's digest, so nobody has to trust the address it hands out.
+// GitHub releases: hands a project's release files to its participants (artifact.fetch), through their own fetcher
+// (github-checkout, its contract says). Asked for a release and a platform, it grants a download address of GitHub's
+// file store for that file, reached with its own GitHub access: a token, or its person's GitHub App (Weave signs the
+// App's JWT; the key never reaches this code). Without access of its own to the repository, it grants the release
+// and leaves it to the asker's own GitHub access. Weave seals the grant to the asker. Only releases its projects'
+// maintainers published count (release() in the WIT), whatever a request names, and the asker's Weave checks the
+// file against the release's digest, so nobody has to trust what it grants.
 import { answer, release, setting, sign } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
@@ -43,7 +45,7 @@ async function appToken(repo) {
   return token;
 }
 
-/** Where to download a release's file for a platform: GitHub's address for it, which works for a while without access. */
+/** What it grants for a release's file for a platform: GitHub's address for it (it works for a while without access), or the release. */
 async function locate(space, data) {
   if (data?.protocol !== PROTOCOL) throw new Error(`it answers ${PROTOCOL} only`);
   const found = release(space, String(data.artifact ?? ''));
@@ -54,8 +56,11 @@ async function locate(space, data) {
   const repo = manifest.install?.github;
   if (!repo) throw new Error(`${name} ${tag} isn't released on GitHub`);
   const token = (await appToken(repo)) ?? setting('GITHUB_TOKEN');
+  // The release, for the asker's own access: what it grants without access of its own.
+  const theirs = { repo, tag, file: asset.file };
+  if (!token) return theirs;
   const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
-  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': it has no GitHub access (a token, or an App) for a private repository'}`);
+  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo} that it may see`);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
   const file = (await res.json()).assets.find((a) => a.name === asset.file);
   if (!file) throw new Error(`the release ${tag} on GitHub has no file ${asset.file}`);
@@ -63,7 +68,7 @@ async function locate(space, data) {
   const download = await github(`/repos/${repo}/releases/assets/${file.id}`, token, { headers: { accept: 'application/octet-stream' }, redirect: 'manual' });
   const url = download.headers.get('location');
   if (download.status < 300 || download.status >= 400 || !url) throw new Error(`GitHub said ${download.status} instead of a download address`);
-  return { url, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) };
+  return { ...theirs, url };
 }
 
 export async function onEvent(text) {

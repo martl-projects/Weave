@@ -367,6 +367,25 @@ export interface ShippedServiceInfo {
   digest: string;
 }
 
+/**
+ * A fetcher of yours: a client app that fetches artifacts for you, with what providers grant you, in the projects
+ * you allow (or all). Its settings are yours (your own sign-in), kept sealed on your node: only which are filled in.
+ */
+export interface FetcherInfo {
+  name: string;
+  title: string;
+  about?: string;
+  digest: string;
+  projects: Array<{ id: string; name: string }> | 'all';
+  settings: AppSetting[];
+  filled: string[];
+  net: string[];
+  /** Why it can't run here, if it can't. */
+  problem?: string;
+  /** Not added yet: one this Weave ships. */
+  added: boolean;
+}
+
 /** A service's settings in a space, as its maintainers keep them there (secrets only as set: never their value). */
 export interface ServiceSettingsInfo {
   space: { id: string; name: string };
@@ -442,7 +461,8 @@ export interface ServiceRequestInfo {
   data?: Json;
   action?: string;
   time: string;
-  results: Array<{ id: string; text: string; data?: Json; error?: string; time: string }>;
+  /** Its answers: one for someone else shows only that it came (private). */
+  results: Array<{ id: string; text: string; data?: Json; error?: string; private?: true; time: string }>;
 }
 
 export interface SpaceRepos {
@@ -1764,6 +1784,13 @@ export interface Backend {
   setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Maintainers: who may get one of the project's artifacts (null: everyone there). Providers' nodes refuse the rest. */
   setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]>;
+  /** Your fetchers, and those this Weave ships that you haven't added. */
+  fetchers(): Promise<FetcherInfo[]>;
+  /** Add a fetcher Weave ships, for these projects (names or ids) or all; added again, for more of them. */
+  addFetcher(input: { shipped: string; projects: string[] | 'all' }): Promise<FetcherInfo>;
+  /** Change what a fetcher of yours fetches for, or your settings for it (null: take one out). */
+  setFetcher(input: { name: string; projects?: string[] | 'all'; settings?: Record<string, string | null> }): Promise<FetcherInfo>;
+  removeFetcher(name: string): Promise<void>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
   /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
@@ -2135,7 +2162,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

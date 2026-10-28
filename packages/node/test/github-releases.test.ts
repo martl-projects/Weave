@@ -15,7 +15,8 @@ import { buildComponent } from './helpers/components.ts';
 /*
  * GitHub releases, the first service Weave ships (packages/shipped/github-releases): a WebAssembly component that hands
  * a project's private release files to its participants, with a token or its person's GitHub App (whose key Weave
- * signs with for it), reaching api.github.com only, and only for releases the project's maintainers published.
+ * signs with for it), reaching api.github.com only, and only for releases the project's maintainers published. What it
+ * grants is sealed to the asker, and their own fetcher (github-checkout, a client app of theirs) fetches with it.
  */
 
 const dirs: string[] = [];
@@ -70,8 +71,8 @@ class PrivateGitHub {
       if (url.pathname === '/app/installations/9/access_tokens' && init?.method === 'POST') return json(201, { token: 'ghs_app9', expires_at: new Date(Date.now() + 3600_000).toISOString() });
       return json(404, { message: 'Not Found' });
     }
-    if (auth !== 'gho_martl' && auth !== 'ghs_app9') return json(404, { message: 'Not Found' });
-    this.seen.push(auth === 'ghs_app9' ? 'app' : 'token');
+    if (auth !== 'gho_martl' && auth !== 'ghs_app9' && auth !== 'gho_lena') return json(404, { message: 'Not Found' });
+    this.seen.push(auth === 'ghs_app9' ? 'app' : auth === 'gho_lena' ? 'lena' : 'token');
     if (url.pathname === '/repos/martl/bot/releases/tags/v1.0') return json(200, { tag_name: 'v1.0', assets: [{ id: 21, name: `Bot-${platformKey()}.tar.gz`, size: this.bytes.length }] });
     if (url.pathname === '/repos/martl/bot/contents/weave.app.json') return json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(this.manifest)).toString('base64') });
     if (url.pathname === '/repos/martl/bot/releases/assets/21') {
@@ -87,7 +88,8 @@ class PrivateGitHub {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
       const headers = Object.fromEntries(Object.entries(req.headers).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
-      const answer = await this.fetch(`https://api.github.com${req.url}`, { method: req.method, headers, redirect: 'manual', ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) });
+      const host = req.url?.startsWith('/github-production-release-asset/') ? 'objects.githubusercontent.com' : 'api.github.com';
+      const answer = await this.fetch(`https://${host}${req.url}`, { method: req.method, headers, redirect: 'manual', ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) });
       res.writeHead(answer.status, Object.fromEntries(answer.headers));
       res.end(Buffer.from(await answer.arrayBuffer()));
     });
@@ -108,15 +110,19 @@ const sync = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
 
-/** Weave's shipped services, as its build makes them: github-releases, built from its source. */
+/** Weave's shipped services, as its build makes them: github-releases and its fetcher, built from their source. */
 let shipped: string;
 beforeAll(async () => {
-  const source = join(import.meta.dirname, '..', '..', 'shipped', 'github-releases');
-  const component = await buildComponent(join(source, 'src', 'service.js'), 'service', { http: true });
   shipped = tempDir('weave-shipped-');
-  copyFileSync(component, join(shipped, 'github-releases.wasm'));
-  writeFileSync(join(shipped, 'shipped.json'), JSON.stringify({ 'github-releases': { component: 'github-releases.wasm', digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) } }));
-}, 180_000);
+  const listed: Record<string, unknown> = {};
+  for (const [name, world] of [['github-releases', 'service'], ['github-checkout', 'fetcher']] as const) {
+    const source = join(import.meta.dirname, '..', '..', 'shipped', name);
+    const component = await buildComponent(join(source, 'src', 'service.js'), world, { http: true });
+    copyFileSync(component, join(shipped, `${name}.wasm`));
+    listed[name] = { component: `${name}.wasm`, digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) };
+  }
+  writeFileSync(join(shipped, 'shipped.json'), JSON.stringify(listed));
+}, 300_000);
 
 describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
   it("hands a private repository's release to participants: with a token, or as the person's App", async () => {
@@ -124,33 +130,51 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
     const server = await github.serve();
     const martl = person('martl', github, shipped);
     const lena = person('Lena', github, shipped);
+    const ben = person('Ben', github, shipped);
     writeSecretJson(martl.home, join(martl.home.dir, 'github.json'), { token: 'gho_martl', login: 'martl' });
     await martl.createProject({ name: 'Bot' });
     await lena.joinSpace(await martl.invite('Bot'));
+    await ben.joinSpace(await martl.invite('Bot'));
     await martl.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' });
-    sync([martl, lena]);
+    sync([martl, lena, ben]);
     martl.wasmSetup.testHosts = { 'api.github.com': server.port };
+    lena.wasmSetup.testHosts = { 'api.github.com': server.port, 'objects.githubusercontent.com': server.port };
     const martlApi = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     const lenaApi = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     martl.runServices({ port: martlApi.port });
     lena.runServices({ port: lenaApi.port });
     lena.locateWait = 20_000;
-    const syncing = setInterval(() => sync([martl, lena]), 100);
+    const syncing = setInterval(() => sync([martl, lena, ben]), 100);
     try {
       // martl adds it, its token kept in the project for its maintainers.
       const provider = await martl.addService({ shipped: 'github-releases', spaces: ['Bot'], settingsIn: 'Bot', settings: { GITHUB_TOKEN: 'gho_martl' } });
-      expect(provider.contract).toMatchObject({ reads: 'addressed', writes: [], offers: ['artifact.fetch'], net: ['api.github.com'] });
+      expect(provider.contract).toMatchObject({ reads: 'addressed', writes: [], offers: ['artifact.fetch'], fetcher: 'github-checkout', net: ['api.github.com'] });
+      // Its fetcher is a client app, nobody's service: not in the catalog of services, not addable as one.
+      expect((await martl.shippedServices()).map((s) => s.name)).toEqual(['github-releases']);
+      await expect(martl.addService({ shipped: 'github-checkout', spaces: ['Bot'] })).rejects.toThrow(/is a fetcher/);
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       await vi.waitFor(async () => expect((await lena.servicesIn('Bot')).map((p) => [p.name, p.origin])).toEqual([['github-releases', { kind: 'shipped', name: 'github-releases', checked: 'verified' }]]), { timeout: 10_000, interval: 100 });
 
-      // Lena installs the release: her node asks it, and fetches the file at the address it hands out.
+      // Lena adds the fetcher it names, for this project only: hers, not the project's.
+      expect((await lena.fetchers()).map((f) => [f.name, f.added])).toEqual([['github-checkout', false]]);
+      const fetcher = await lena.addFetcher({ shipped: 'github-checkout', projects: ['Bot'] });
+      expect(fetcher).toMatchObject({ name: 'github-checkout', projects: [{ name: 'Bot' }], net: ['api.github.com', '*.githubusercontent.com'], added: true });
+
+      // Lena installs the release: her node asks it, and her fetcher fetches with what it grants.
       await lena.addService({ artifact: { project: 'Bot' }, spaces: ['Bot'], approve: true });
       await lena.serviceReady('bot');
       const installed = (await lena.services()).find((s) => s.name === 'bot')!;
       expect(installed.artifact?.error).toBeUndefined();
-      expect(installed.artifact).toMatchObject({ installed: true, deliveredBy: 'github-releases (martl)' });
+      expect(installed.artifact).toMatchObject({ installed: true, deliveredBy: 'GitHub checkout, with what github-releases (martl) granted' });
       expect(github.delivered).toBe(1);
       expect(github.seen).toContain('token');
+
+      // The grant is Lena's (and martl's, whose service it is): Ben sees that it was answered, not what.
+      const granted = (await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0];
+      expect(granted.results[0].data).toMatchObject({ repo: 'martl/bot', tag: 'v1.0', url: expect.stringMatching(/^https:\/\/objects\.githubusercontent\.com\//) });
+      expect((await martl.serviceRequests({ space: 'Bot', service: provider.did }))[0].results[0].data).toMatchObject({ repo: 'martl/bot' });
+      await vi.waitFor(async () => expect((await ben.serviceRequests({ space: 'Bot', service: provider.did }))[0]?.results[0]).toMatchObject({ text: '', private: true }), { timeout: 10_000, interval: 100 });
+      expect((await ben.serviceRequests({ space: 'Bot', service: provider.did }))[0].results[0].data).toBeUndefined();
 
       // Only releases its maintainers published, only its protocol.
       const wrong = await lena.askService({ space: 'Bot', service: provider.did, text: 'that one', data: { protocol: 'artifact.fetch', artifact: 'not-a-release', platform: platformKey() } });
@@ -171,8 +195,24 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === refused.id)?.results[0]?.error).toMatch(/only maintainers may get that in Bot/), { timeout: 20_000, interval: 200 });
       await martl.setArtifactAccess({ project: 'Bot', artifact: release, who: null });
 
-      // As martl's own GitHub App instead: Weave signs its JWT, the key never reaching the component.
+      // Without access of its own, it grants the release, and Lena's fetcher fetches with her own GitHub access.
       await martl.setServiceSetting({ space: 'Bot', service: provider.did, name: 'GITHUB_TOKEN', value: null });
+      await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
+      const theirs = await lena.askService({ space: 'Bot', service: provider.did, text: 'yours?', data: { protocol: 'artifact.fetch', artifact: release, platform: platformKey() } });
+      await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === theirs.id)?.results[0]?.data).toEqual({ repo: 'martl/bot', tag: 'v1.0', file: `Bot-${platformKey()}.tar.gz` }), { timeout: 20_000, interval: 200 });
+      await lena.setFetcher({ name: 'github-checkout', settings: { GITHUB_TOKEN: 'gho_lena' } });
+      expect((await lena.fetchers())[0].filled).toEqual(['GITHUB_TOKEN']);
+      await lena.removeService('bot');
+      // Fetched again, not from what's kept here.
+      rmSync(join(lena.home.dir, 'services', 'bot'), { recursive: true, force: true });
+      github.seen = [];
+      await lena.addService({ artifact: { project: 'Bot' }, spaces: ['Bot'], approve: true });
+      await lena.serviceReady('bot');
+      expect((await lena.services()).find((s) => s.name === 'bot')?.artifact).toMatchObject({ installed: true, deliveredBy: 'GitHub checkout, with what github-releases (martl) granted' });
+      expect(github.seen).toEqual(['lena', 'lena']);
+      expect(github.delivered).toBe(2);
+
+      // As martl's own GitHub App instead: Weave signs its JWT, the key never reaching the component.
       await martl.setServiceSetting({ space: 'Bot', service: provider.did, name: 'GITHUB_APP_ID', value: APP_ID });
       await martl.setServiceSetting({ space: 'Bot', service: provider.did, name: 'GITHUB_APP_KEY', value: APP_KEY });
       expect((await martl.serviceSettings({ space: 'Bot', service: provider.did })).settings.find((s) => s.name === 'GITHUB_APP_KEY')).toMatchObject({ secret: true });

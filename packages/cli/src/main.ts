@@ -38,6 +38,7 @@ import {
   type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
+  type FetcherInfo,
   type ServiceSettingsInfo,
   type ServiceOriginInfo,
   type HostedWebsiteInfo,
@@ -241,6 +242,10 @@ github — repositories that follow a group, tier or project (members who give t
   service setting <service> KEY=VALUE   maintainers: keep a setting for it in the space (KEY= removes it); one it asks for as secret,
                              or with --blind, is boxed to the service: readable by it alone, you included
   service sign-in <service> KEY    maintainers: sign it in with its provider (a setting that is a sign-in): opens the browser
+  fetcher list               your fetchers: client apps that fetch what a project's provider grants you, on your node
+  fetcher add <name>         add one Weave ships, for the projects that need it   --spaces <a,b> | --all
+  fetcher set <name>         what it fetches for (--spaces <a,b> | --all), your settings for it (--setting KEY=VALUE, KEY= removes)
+  fetcher remove <name>      take it out: it fetches for no project any more
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
                              a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
@@ -1652,7 +1657,7 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
       }
       if (sub === 'requests') {
         const all = await b.serviceRequests({ space: needSpace(), ...(ref ? { service: ref } : {}) });
-        return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
+        return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.private ? '(answered, for them only)' : x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
       }
       if (sub === 'settings' && ref) {
         const s = await b.serviceSettings({ space: needSpace(), service: ref });
@@ -1674,6 +1679,46 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out(s, () => `signed ${s.service.name} in: ${args[2]}\n${settingsText(s)}`);
       }
       throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests|settings|setting|sign-in — see "weave --help"');
+    }
+
+    case 'fetcher': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const line = (f: FetcherInfo) =>
+        [
+          `${f.name}  ${f.title}${f.added ? '' : '  (not added)'}`,
+          f.added ? `  fetches for: ${f.projects === 'all' ? 'all your projects' : f.projects.map((p) => p.name).join(', ') || 'no project'}` : '',
+          f.net.length ? `  reaches: ${f.net.join(', ')}` : '',
+          f.settings.length ? `  settings: ${f.settings.map((x) => `${x.name}${f.filled.includes(x.name) ? ' (set)' : x.optional ? '' : ' (needed)'}`).join(', ')}` : '',
+          f.problem ? `  ⚠ ${f.problem}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      const projects = (): string[] | 'all' | undefined => (values.all ? 'all' : values.spaces?.split(',').map((x) => x.trim()).filter(Boolean));
+      if (sub === 'list' || !sub) {
+        const all = await b.fetchers();
+        return out(all, () => all.map(line).join('\n\n') || '(this Weave ships no fetchers)');
+      }
+      if (sub === 'add' && ref) {
+        const to = projects();
+        if (!to?.length) throw new Error('say which projects it fetches for: --spaces <a,b>, or --all');
+        const f = await b.addFetcher({ shipped: ref, projects: to });
+        return out(f, () => line(f));
+      }
+      if (sub === 'set' && ref) {
+        const settings = Object.fromEntries((values.setting ?? []).map((x) => {
+          const [name, ...rest] = x.split('=');
+          return [name, rest.join('=') || null];
+        }));
+        const to = projects();
+        const f = await b.setFetcher({ name: ref, ...(to ? { projects: to } : {}), ...(Object.keys(settings).length ? { settings } : {}) });
+        return out(f, () => line(f));
+      }
+      if (sub === 'remove' && ref) {
+        await b.removeFetcher(ref);
+        return out({ removed: ref }, () => `removed ${ref}: it fetches for no project any more`);
+      }
+      throw new Error('usage: weave fetcher list|add <name>|set <name>|remove <name> — see "weave --help"');
     }
 
     case 'repo': {

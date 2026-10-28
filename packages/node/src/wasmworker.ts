@@ -85,6 +85,12 @@ const weave: Record<string, unknown> = {
     websites: (space: string) => call('websites', [space]),
     closeWebsite: (id: string) => call('closeWebsite', [id]),
   },
+  // A fetcher's: its settings, its log, and the bytes it fetches.
+  'service/fetching': {
+    setting: (name: string) => call('setting', [name]),
+    log: (message: string) => call('log', [message]),
+    write: (bytes: Uint8Array) => call('write', [bytes]),
+  },
   // Its website's players: Weave holds their connections; what it says to them goes out without waiting.
   'service/players': {
     send: (player: string, message: string) => parentPort!.postMessage({ type: 'players', op: 'send', player, message }),

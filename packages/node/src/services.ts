@@ -6,7 +6,7 @@ import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
 import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath } from 'node:path';
+import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, releaseApproval } from './runtime.ts';
 import { imageLabels } from './registry.ts';
@@ -323,6 +323,7 @@ export class Services {
     if (input.shipped && !shipped) throw new Error(`this Weave ships no service named ${input.shipped}${shippedHere(this.h).size ? ` (it ships ${[...shippedHere(this.h).keys()].join(', ')})` : ''}`);
     if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
+    if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
@@ -763,7 +764,7 @@ export class Services {
 
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
-    return [...shippedHere(this.h).values()].map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */
@@ -813,10 +814,29 @@ export class Services {
       results: results
         .filter((e) => (e.body as { request?: unknown } | null)?.request === r.id && e.event.signer === r.to)
         .map((e) => {
-          const body = (e.body ?? {}) as Record<string, Json>;
+          const sealed = (e.body ?? {}) as Record<string, Json>;
+          // An answer for who asked: opened if that's me (or my service's), else only that it came.
+          const boxes = Array.isArray(sealed.for) ? (sealed.for as unknown as Box[]) : undefined;
+          const body = (boxes ? this.#openAnswer(boxes) : sealed) as Record<string, Json> | undefined;
+          if (!body) return { id: e.id, text: '', private: true as const, time: e.event.time };
           return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
         }),
     }));
+  }
+
+  /** An answer sealed for who asked: its content, if one of the boxes is mine. */
+  #openAnswer(boxes: Box[]): Json | undefined {
+    for (const box of boxes) {
+      const opened = this.h.tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, box);
+        } catch {
+          return undefined;
+        }
+      });
+      if (opened !== undefined) return opened;
+    }
+    return undefined;
   }
 
   /**
@@ -965,7 +985,10 @@ export class Services {
         const found = this.h.find(request, [KIND_SERVICE_REQUEST]);
         if (!found.space || (found.inner.body as { to?: unknown } | null)?.to !== key.did) throw new Error('that request isn\'t addressed to this service');
         inSpace(found.space.id);
-        return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) }, space: found.space.id, as: name });
+        // For who asked alone (and the service's person): the others in the project see that it was answered, not what.
+        const said: Json = { ...(text ? { text: String(text).slice(0, 4000) } : {}), ...(data !== undefined ? { data } : {}), ...(error ? { error: String(error).slice(0, 1000) } : {}) };
+        const sealed = [...new Set([found.event.author, this.h.identity.author])].map((person) => boxTo(this.h.encryptionKeyOf(person), said) as unknown as Json);
+        return this.h.publish({ kind: KIND_SERVICE_RESULT, body: { request: found.id, for: sealed }, space: found.space.id, as: name });
       },
       serve: (input) => this.web.serve(name, input),
     };
@@ -1078,6 +1101,11 @@ export class Services {
       const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];
       if (result?.error) throw new Error(`${by}: ${result.error}`);
       if (result) {
+        // Its fetcher's grant: whatever it answered, for that fetcher alone (which runs here, with my own access).
+        if (provider.contract.fetcher) {
+          if (result.data === undefined) throw new Error(`${by} answered without a grant`);
+          return { grant: result.data, fetcher: provider.contract.fetcher, by };
+        }
         const url = (result.data as { url?: unknown } | undefined)?.url;
         if (typeof url === 'string' && url.startsWith('https://')) return { url, by };
         throw new Error(`${by} answered without a download address`);
@@ -1662,7 +1690,8 @@ export class Services {
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {
             cursor = time;
-            writeFileSync(cursorFile, cursor);
+            // Taken out meanwhile (its folder with it): nothing left to keep.
+            if (existsSync(dirname(cursorFile))) writeFileSync(cursorFile, cursor);
           }
         },
       },

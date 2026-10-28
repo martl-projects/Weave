@@ -94,6 +94,7 @@ export type {
   ServiceActionInfo,
   ServicePanelInfo,
   ShippedServiceInfo,
+  FetcherInfo,
   ServiceOriginInfo,
   ServiceRequestInfo,
   Status,

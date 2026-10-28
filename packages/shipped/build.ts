@@ -21,12 +21,12 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
   const raw = JSON.parse(readFileSync(join(here, name, 'weave.app.json'), 'utf8')) as unknown;
   const { manifest, problems } = checkManifest(raw);
   if (!manifest?.wasm) throw new Error(`${name}/weave.app.json: ${problems.join('; ') || 'a shipped service is a WebAssembly component (wasm)'}`);
-  // Its website's world when it has a site; it reaches out (wasi:http) only when its contract names hosts.
+  // A fetcher's world, or its website's when it has a site; it reaches out (wasi:http) only when its contract names hosts.
   const { component } = await componentize({
     sourcePath: join(here, name, 'src', 'service.js'),
     witWorld: wit,
-    worldName: manifest.wasm.site ? 'website' : 'service',
-    disableFeatures: manifest.service?.net?.length ? ['fetch-event'] : ['http', 'fetch-event'],
+    worldName: manifest.fetcher ? 'fetcher' : manifest.wasm.site ? 'website' : 'service',
+    disableFeatures: (manifest.service?.net ?? manifest.fetcher?.net)?.length ? ['fetch-event'] : ['http', 'fetch-event'],
   } as Parameters<typeof componentize>[0]);
   writeFileSync(join(dist, manifest.wasm.component), component);
   if (manifest.wasm.site) cpSync(join(here, name, manifest.wasm.site), join(dist, `${name}-site`), { recursive: true });

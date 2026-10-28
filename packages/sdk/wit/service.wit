@@ -15,7 +15,8 @@ interface host {
   /// Sign and publish an event in one of its spaces (by id or name), of a kind its contract writes, with a JSON body:
   /// the new item (JSON), or why not.
   publish: func(space: string, kind: string, body: string) -> result<string, string>;
-  /// Answer a request addressed to it (text, data as JSON, or an error): the answer (JSON), or why not.
+  /// Answer a request addressed to it (text, data as JSON, or an error): the answer (JSON), or why not. Weave seals
+  /// it to who asked (and its own person): the others in the space see that it was answered, not what.
   answer: func(request: string, text: option<string>, data: option<string>, error: option<string>) -> result<string, string>;
   /// What it saved under this name in its /data folder (a-z, 0-9, ., _ and -), if anything: for languages without
   /// file access (JavaScript); others can use /data directly.
@@ -76,6 +77,26 @@ world website {
   export on-leave: func(player: string);
   /// Its timer (tick-every).
   export on-tick: func();
+}
+
+/// What Weave offers a fetcher: its person's settings for it, a log, and where the bytes go.
+interface fetching {
+  /// A setting its person gave it (kept sealed on their node), if there is one.
+  setting: func(name: string) -> option<string>;
+  /// A line for its log.
+  log: func(message: string);
+  /// The next bytes of the file it fetches, in order. Weave checks the whole against the artifact's digest.
+  write: func(bytes: list<u8>) -> result<_, string>;
+}
+
+/// A fetcher: a client app that fetches an artifact for its person, on their node, in the projects they allow. It
+/// gets what a provider granted them (artifact.fetch) and reaches the hosts its manifest names (fetcher.net) over
+/// HTTPS; nothing else. It has no key and answers no requests.
+world fetcher {
+  import fetching;
+  /// Fetch one file: {grant, artifact: {project, id, tag, name}, asset: {file, sha256, size?}}, as JSON. It writes
+  /// the file's bytes (write) and says where they came from, or why it couldn't.
+  export fetch: func(input: string) -> result<string, string>;
 }
 
 /// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's

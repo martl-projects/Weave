@@ -484,6 +484,7 @@ import {
   type ExportLine,
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
+  type FetcherInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -533,6 +534,7 @@ import {
 import { BlobStore } from './blobstore.ts';
 import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -941,6 +943,8 @@ export class WeaveNode implements Backend {
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
+  #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
@@ -9086,6 +9090,9 @@ export class WeaveNode implements Backend {
         return n.#runtime;
       },
       sealForSelf: n.#sealForSelf.bind(n),
+      /** The key to seal something to a person with, and opening what was sealed to me. */
+      encryptionKeyOf: (person: Did) => n.#encryptionKeyOf(person),
+      tryOpen: n.#tryOpen.bind(n),
       space: n.#space.bind(n),
       spaceName: n.#spaceName.bind(n),
       get spaces() {
@@ -9250,6 +9257,38 @@ export class WeaveNode implements Backend {
 
   setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {
     return this.#services.setArtifactAccess(...args);
+  }
+
+  /** My fetchers: client apps that fetch artifacts for me (fetchers.ts). */
+  get #fetchers(): Fetchers {
+    return this.#releases.fetchers!;
+  }
+
+  #fetcherInfo(f: StoredFetcherInfo, added = true): FetcherInfo {
+    const projects = f.projects === 'all' ? ('all' as const) : f.projects.flatMap((id) => (this.#spaces.has(id) ? [{ id, name: this.#spaceName(this.#spaces.get(id)!) }] : []));
+    return { ...f, projects, added };
+  }
+
+  async fetchers(): Promise<FetcherInfo[]> {
+    const mine = this.#fetchers.list();
+    const more = this.#fetchers.shipped().filter((s) => !mine.some((f) => f.name === s.name));
+    return [...mine.map((f) => this.#fetcherInfo(f)), ...more.map((s) => this.#fetcherInfo({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), digest: s.digest, projects: [], settings: s.manifest.env ?? [], filled: [], net: s.manifest.fetcher?.net ?? [] }, false))];
+  }
+
+  #projectIds(projects: string[] | 'all'): string[] | 'all' {
+    return projects === 'all' ? 'all' : projects.map((p) => this.#project(p).id);
+  }
+
+  async addFetcher(input: { shipped: string; projects: string[] | 'all' }): Promise<FetcherInfo> {
+    return this.#fetcherInfo(this.#fetchers.add({ shipped: input.shipped, projects: this.#projectIds(input.projects) }));
+  }
+
+  async setFetcher(input: { name: string; projects?: string[] | 'all'; settings?: Record<string, string | null> }): Promise<FetcherInfo> {
+    return this.#fetcherInfo(this.#fetchers.set({ name: input.name, ...(input.projects !== undefined ? { projects: this.#projectIds(input.projects) } : {}), ...(input.settings ? { settings: input.settings } : {}) }));
+  }
+
+  async removeFetcher(name: string): Promise<void> {
+    this.#fetchers.remove(name);
   }
 
   servicePanels(...args: Parameters<Services['servicePanels']>): ReturnType<Services['servicePanels']> {
