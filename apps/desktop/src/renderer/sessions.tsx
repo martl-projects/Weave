@@ -36,41 +36,54 @@ const doingIn = (s: SessionInfo) => {
   return top && !('missing' in top) ? top.space?.id : undefined;
 };
 
-/** One session: its job and whether it takes work now. Its projects are the links on the right. */
+/** One session, in two lines: what it is and what it's on, and its job. Its projects are the links on the right. */
 function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode }) {
   const key = sessionKey(session).replace(':', '-');
+  const [top, ...waiting] = session.stack;
+  const title = (p: SessionInfo['stack'][number]['post']) => ('missing' in p ? 'a post you can’t see' : p.title);
+  const meta = [folderName(session.folder), !running(session) && status(session), top && `on: ${title(top.post)}`, waiting.length && `${waiting.length} waiting`].filter(Boolean).join(' · ');
+  const show = session.host && bridge.showSession ? () => void attempt(() => bridge.showSession!(session.host!)) : undefined;
   return (
-    <fieldset className={`session-card${session.role ? ` ${session.role}` : ''}${running(session) ? ' running' : ''}`}>
-      <div className="session-head">
-        <b className="grow">{session.title ?? 'Untitled session'}</b>
-        {session.host && bridge.showSession && (
-          <button onClick={() => void attempt(() => bridge.showSession!(session.host!))} title="Bring it to the front in the Claude app">
-            Open in Claude
+    <div className={`session-row${session.role ? ` is-${session.role}` : ''}${running(session) ? ' running' : ''}`}>
+      <span className="session-dot" title={running(session) ? 'Running' : status(session)} />
+      <div className="session-text">
+        {show ? (
+          <button className="session-title" onClick={show} title="Open in the Claude app">
+            {session.title ?? 'Untitled session'}
           </button>
+        ) : (
+          <b className="session-title">{session.title ?? 'Untitled session'}</b>
         )}
+        <span className="session-meta" title={session.last ? `Last finished: ${title(session.last.post)} (${ago(session.last.time)})` : undefined}>
+          {meta || 'free'}
+        </span>
       </div>
-      <span className="small">{[folderName(session.folder), status(session)].filter(Boolean).join(' · ')}</span>
-      <Doing session={session} />
-      <div className="session-job">
-        <label htmlFor={`role-${key}`}>Job:</label>
-        <select id={`role-${key}`} value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
-          <option value="">none</option>
-          <option value="worker">Worker</option>
-          <option value="driver">Daily driver</option>
-        </select>
-        {session.role && (
-          <>
-            <input type="checkbox" id={`available-${key}`} checked={!!session.available} onChange={() => void setRole(session, { available: !session.available })} />
-            <label htmlFor={`available-${key}`}>Takes new work items</label>
-          </>
-        )}
-      </div>
+      <select aria-label="Job" value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
+        <option value="">No job</option>
+        <option value="worker">Worker</option>
+        <option value="driver">Driver</option>
+      </select>
+      <input
+        type="checkbox"
+        id={`available-${key}`}
+        checked={!!session.available}
+        disabled={!session.role}
+        onChange={() => void setRole(session, { available: !session.available })}
+        title="Takes new work items"
+        aria-label="Takes new work items"
+      />
+      <label htmlFor={`available-${key}`} title="Takes new work items" />
       {port}
-    </fieldset>
+    </div>
   );
 }
 
 const ANY = 'any';
+const GROUPS = [
+  ['driver', 'Daily driver'],
+  ['worker', 'Workers'],
+  ['', 'Other sessions'],
+] as const;
 
 interface Link {
   session: SessionInfo;
@@ -189,12 +202,22 @@ function SessionMap({ sessions, projects }: { sessions: SessionInfo[]; projects:
     <div className={`session-map${hold ? ' holding' : ''}`} ref={box}>
       <div className="map-side">
         <div className="map-head">Claude sessions</div>
-        {sessions.map((s) => {
-          const id = `s:${sessionKey(s)}`;
+        {GROUPS.map(([role, heading]) => {
+          const group = sessions.filter((s) => (s.role ?? '') === role);
           return (
-            <div key={id} className="map-session" {...ends(id)}>
-              <SessionCard session={s} port={port(id)} />
-            </div>
+            group.length > 0 && (
+              <div key={role} className="map-group">
+                <div className="map-group-head">{heading}</div>
+                {group.map((s) => {
+                  const id = `s:${sessionKey(s)}`;
+                  return (
+                    <div key={id} className="map-session" {...ends(id)}>
+                      <SessionCard session={s} port={port(id)} />
+                    </div>
+                  );
+                })}
+              </div>
+            )
           );
         })}
       </div>
