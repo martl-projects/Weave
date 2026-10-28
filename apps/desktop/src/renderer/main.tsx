@@ -5,7 +5,7 @@ import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionReque
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
-import { NotificationSettings, startNotifications } from './notify.tsx';
+import { countIn, NotificationSettings, startNotifications } from './notify.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
@@ -69,11 +69,11 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const [view, arg] = [route[2], route[3]];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting + countIn(space.id)} />
       {open && (
         <>
           {space.kind === 'project' &&
-            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} />)}
+            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} badge={countIn(space.id, { board: b.name })} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
               key={c.name}
@@ -83,6 +83,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               label={c.name}
               on={space.kind === 'project' && c.name === 'general' ? false : view === 'c' && (arg ?? 'general') === c.name}
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
+              badge={countIn(space.id, { channel: c.name })}
             />
           ))}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={`Services${rooms?.length ? ` (${rooms.length} live)` : ''}`} on={view === 'services' || view === 'live'} unread={!!rooms?.length} />}
@@ -138,6 +139,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
             label={c.peer.name ?? shortDid(c.peer.did)}
             on={route[0] === 'd' && route[1] === c.space.id}
             unread={!!c.last && !c.last.mine && route[1] !== c.space.id && isUnread(`${c.space.id}/general`, c.last.time)}
+            badge={countIn(c.space.id)}
           />
         ))}
         {chats.length === 0 && <li className="tree-none">friends show up here</li>}

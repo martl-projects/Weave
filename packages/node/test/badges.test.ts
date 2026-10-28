@@ -254,7 +254,7 @@ describe('badges', () => {
     await vi.waitFor(() => expect(items.some((i) => i.notice)).toBe(true));
     const notices = items.filter((i) => i.notice).map((i) => i.notice);
     // Only hers: Ada's badge is no news to Lena.
-    expect(notices).toEqual([{ type: 'badge', category: 'activity', title: 'Martin gave you 🌟 Super Supporter #1 of 3', text: '“One of the first” With a personal note for you.', open: { hub: lena.identity.author } }]);
+    expect(notices).toEqual([{ type: 'badge', category: 'activity', title: 'Martin gave you 🌟 Super Supporter #1 of 3', text: '“One of the first” With a personal note for you.', open: { hub: lena.identity.author }, from: martin.identity.author }]);
     expect(badge.n).toBe(1);
     stop.abort();
     await watching;

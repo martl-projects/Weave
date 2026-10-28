@@ -113,5 +113,10 @@ describe('following boards', () => {
     stop.abort();
     await watching;
     expect(items.filter((i) => i.notice).map((i) => i.notice!.text)).toEqual(['Lena: Crash on start', 'Lena: v0.3']);
+    // Who and where, for the app's rules on what counts.
+    expect(items.filter((i) => i.notice).map((i) => [i.notice!.from, i.notice!.board])).toEqual([
+      [lena.identity.author, 'issues'],
+      [lena.identity.author, 'releases'],
+    ]);
   });
 });

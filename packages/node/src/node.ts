@@ -5837,6 +5837,15 @@ export class WeaveNode implements Backend {
    * neither do older ones arriving while catching up (over a day old).
    */
   async #noticeFor(item: FeedItem): Promise<Notice | undefined> {
+    const notice = await this.#noticeOf(item);
+    if (!notice) return undefined;
+    // Who and which board, for the rules that say what counts where (see the app's notify.tsx).
+    const stored = notice.open.space && this.#spaces.get(notice.open.space.id);
+    const board = stored && notice.open.post ? this.#spacePosts(stored).posts.find((p) => p.id === notice.open.post)?.board : undefined;
+    return { ...notice, from: item.author, ...(board ? { board } : {}) };
+  }
+
+  async #noticeOf(item: FeedItem): Promise<Notice | undefined> {
     const me = this.identity.author;
     if (item.author === me || item.private || Date.now() - Date.parse(item.time) > 86_400_000) return undefined;
     const body = (item.body && typeof item.body === 'object' && !Array.isArray(item.body) ? item.body : {}) as Record<string, Json>;

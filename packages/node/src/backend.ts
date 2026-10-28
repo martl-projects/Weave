@@ -41,6 +41,10 @@ export interface Notice {
   text: string;
   /** Where it leads: the Inbox, a space's channel, a post (by id), or someone's hub. */
   open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string; hub?: Did };
+  /** Who it's from. */
+  from?: Did;
+  /** The board of the post it's about, when it's about one. */
+  board?: string;
 }
 
 export type NoticeCategory = 'messages' | 'requests' | 'activity';
