@@ -7,8 +7,6 @@ export interface Config {
   bootstrap: Array<{ host: string; port: number }>;
   /** Tiers to ask to join once the creator's node has been reached (e.g. from the app's bundle). */
   pendingMemberships: Array<{ tier: string; creator: string; note?: string }>;
-  /** Mark services the app's bundle names, taken into your own domain once their project and release are here. */
-  pendingMarks?: Array<{ project: string; app: string }>;
   /** You've been asked once whether to tell your agent harnesses about Weave. */
   agentsOffered?: boolean;
   /** Your own GitHub App to sign in through, instead of Weave Connect. */
@@ -39,7 +37,6 @@ export function loadConfig(home: Home): Config {
     topics: stored.topics ?? [],
     bootstrap: stored.bootstrap ?? [],
     pendingMemberships: stored.pendingMemberships ?? [],
-    ...(Array.isArray(stored.pendingMarks) && stored.pendingMarks.length ? { pendingMarks: stored.pendingMarks.filter((m) => typeof m?.project === 'string' && typeof m?.app === 'string') } : {}),
     ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
     // A company's node (stages 6 and 12): written by weave company create and friends, read back here.

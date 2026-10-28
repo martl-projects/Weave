@@ -1,17 +1,18 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { checkMarkAnswer, SERVICE_LABEL } from '@weave/core';
 import { closeOpenStores, MARKS_TIMING, WeaveNode, type Fetch } from '../src/index.ts';
+import { digestOf } from '../src/shipped.ts';
 import { buildComponent } from './helpers/components.ts';
 import { registry } from './helpers/registry.ts';
 
 /*
- * Mark services (stage 19): Weave's own Badges and From Weave, each released in a project of its own as a wasi/wasm
- * image. Taken into your own domain (by hand, or through the app's bundle once you're in their project), or pinned to
- * a space by its maintainers; every node runs them over what it holds, and checks what they answer.
+ * Mark services (stage 19): a project's, released as a wasi/wasm image and taken into your own domain or pinned to a
+ * space by its maintainers; and Weave's own (Badges, From Weave), shipped with Weave and everyone's until turned off.
+ * Every node runs them over what it holds, and checks what they answer.
  */
 
 const dirs: string[] = [];
@@ -27,7 +28,7 @@ afterAll(async () => {
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 
-const MARKS = join(import.meta.dirname, '..', '..', 'marks');
+const MARKS = join(import.meta.dirname, '..', '..', 'shipped');
 
 const STARTER = join(import.meta.dirname, '..', '..', 'sdk', 'starters', 'js-marks');
 
@@ -44,14 +45,34 @@ async function image(folder: string, source = join(folder, 'src', 'service.js'))
 }
 
 let fetchImpl: Fetch;
+/** Folders of mark services Weave ships, as its build makes them: none, Badges and From Weave, and one tampered with. */
+let NONE: string;
+let SHIPPED: string;
+function shippedFolder(components: Record<string, string>, digest = digestOf): string {
+  const dir = tempDir('weave-marks-shipped-');
+  const listed: Record<string, unknown> = {};
+  for (const [name, component] of Object.entries(components)) {
+    const manifest = JSON.parse(readFileSync(join(MARKS, name, 'weave.app.json'), 'utf8')) as { marks: { component: string } };
+    copyFileSync(component, join(dir, manifest.marks.component));
+    listed[name] = { component: manifest.marks.component, digest: digest(component), manifest };
+  }
+  writeFileSync(join(dir, 'shipped.json'), JSON.stringify(listed));
+  return dir;
+}
+let built: Record<string, string>;
+const tamperedShipped = () => shippedFolder(built, (file) => (file === built['from-weave'] ? `sha256:${'0'.repeat(64)}` : digestOf(file)));
 beforeAll(async () => {
   MARKS_TIMING.askMs = 20_000;
   MARKS_TIMING.foldWaitMs = 60_000;
+  built = { badges: await buildComponent(join(MARKS, 'badges', 'src', 'service.js'), 'marks', { bundle: true }), 'from-weave': await buildComponent(join(MARKS, 'from-weave', 'src', 'service.js'), 'marks', { bundle: true }) };
+  NONE = shippedFolder({});
+  SHIPPED = shippedFolder(built);
   fetchImpl = registry({ 'badges:1.0': await image(join(MARKS, 'badges')), 'from-weave:1.0': await image(join(MARKS, 'from-weave')), 'labels:1.0': await image(STARTER, join(STARTER, 'src', 'marks.js')) });
 }, 300_000);
 
-function person(name: string): WeaveNode {
+function person(name: string, shipped = NONE): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-marks-'));
+  node.wasmSetup.shippedDir = shipped;
   node.containerSetup = { fetch: fetchImpl, docker: [process.execPath, join(import.meta.dirname, 'helpers', 'fake-docker.mjs')] };
   nodes.push(node);
   return node;
@@ -110,40 +131,51 @@ describe('mark services', { timeout: 240_000 }, () => {
     expect((await nic.markServices({ space: 'Snake Flight' })).map((s) => s.name)).toEqual(['Badges']);
   });
 
-  it('takes From Weave in through the bundle once its project is here, and checks only what its project says', async () => {
-    const martl = person('martl');
-    const nic = person('Nic');
-    const weave = await martl.createProject({ name: 'From Weave' });
-    await martl.releaseService({ project: 'From Weave', image: 'ghcr.io/martl/from-weave:1.0' });
-    await martl.setOfficial({ project: 'From Weave', subject: { did: martl.identity.author }, note: 'runs Weave' });
+  it('shows the mark services Weave ships without taking them in, checked by their digest; From Weave hears only the Weave project', async () => {
+    const martl = person('martl', SHIPPED);
+    const nic = person('Nic', SHIPPED);
+    const weave = await martl.createProject({ name: 'Weave' });
+    for (const node of [martl, nic]) node.config = { ...node.config, updates: { project: weave.id } };
 
-    // The bundle names it before Nic is in its project: it waits.
-    await nic.applyBundle({ marks: [{ project: weave.id, app: 'from-weave' }] });
-    expect(await nic.markServices()).toEqual([]);
-    await nic.joinSpace(await martl.invite('From Weave'));
+    // Everyone's own from the start, Weave's: no project, a bare check.
+    expect(await nic.markServices()).toMatchObject([
+      { service: 'weave-badges', name: 'Badges', shipped: true, domain: { kind: 'user' } },
+      { service: 'from-weave', name: 'From Weave', shipped: true, domain: { kind: 'user' } },
+    ]);
+    expect((await nic.markServices())[0]).not.toHaveProperty('project');
+
+    await martl.setOfficial({ subject: { did: martl.identity.author }, note: 'runs Weave' });
+    await nic.joinSpace(await martl.invite('Weave'));
     sync([martl, nic]);
-    await nic.reconcile();
-    expect(await nic.markServices()).toMatchObject([{ service: 'from-weave', name: 'From Weave', via: 'bundle', follow: true }]);
-
     const [m] = await nic.marks({ slot: 'author', subjects: [{ did: martl.identity.author }] });
-    expect(m.marks).toEqual([{ kind: 'check', tooltip: 'From Weave: runs Weave', issuer: expect.objectContaining({ service: 'from-weave', weave: true }) }]);
+    expect(m.marks).toEqual([{ kind: 'check', tooltip: 'From Weave: runs Weave', issuer: expect.objectContaining({ service: 'from-weave', weave: true, digest: expect.stringMatching(/^sha256:/) }) }]);
 
-    // A look-alike project saying the same about Nic gets nothing: only the service's own project counts.
+    // A look-alike saying the same about Nic gets nothing: only the Weave project's maintainers count.
     await nic.createProject({ name: 'Weave (real)' });
     await nic.publish({ kind: 'weave.official', body: { subject: { did: nic.identity.author }, on: true }, space: 'Weave (real)' });
     expect((await nic.marks({ slot: 'author', subjects: [{ did: nic.identity.author }] }))[0].marks).toEqual([]);
-    await expect(nic.setOfficial({ project: 'From Weave', subject: { did: nic.identity.author } })).rejects.toThrow(/only the maintainers/);
+    await expect(nic.setOfficial({ subject: { did: nic.identity.author } })).rejects.toThrow(/only the maintainers/);
+    // Nor can a project's service take the name of one Weave ships.
+    await nic.releaseService({ project: 'Weave (real)', image: 'ghcr.io/martl/from-weave:1.0' });
+    await expect(nic.addMarks({ project: 'Weave (real)' })).rejects.toThrow(/Weave ships/);
 
     // Taken back: no longer from Weave.
-    await martl.setOfficial({ project: 'From Weave', subject: { did: martl.identity.author }, on: false });
+    await martl.setOfficial({ subject: { did: martl.identity.author }, on: false });
     sync([martl, nic]);
     expect((await nic.marks({ slot: 'author', subjects: [{ did: martl.identity.author }] }))[0].marks).toEqual([]);
 
-    // Removed, it stays removed: the bundle doesn't bring it back.
+    // Turned off, it stays off until turned on again.
     await nic.removeMarks({ service: 'from-weave' });
-    await nic.applyBundle({ marks: [{ project: weave.id, app: 'from-weave' }] });
-    await nic.reconcile();
-    expect(await nic.markServices()).toEqual([]);
+    expect((await nic.markServices()).map((s) => s.service)).toEqual(['weave-badges']);
+    expect(await nic.markServices({ off: true })).toMatchObject([{ service: 'weave-badges' }, { service: 'from-weave', off: true }]);
+    await nic.addMarks({ shipped: 'from-weave' });
+    expect((await nic.markServices()).map((s) => s.service)).toEqual(['weave-badges', 'from-weave']);
+
+    // A component that isn't exactly what this Weave ships shows nothing, and says why.
+    const tampered = person('Tam', tamperedShipped());
+    const [none] = await tampered.marks({ slot: 'author', subjects: [{ did: martl.identity.author }] });
+    expect(none.marks).toEqual([]);
+    expect((await tampered.markServices()).find((s) => s.service === 'from-weave')?.problem).toMatch(/isn't what this Weave ships/);
   });
 
   it('runs the starter: labels from its settings, folded again when they change', async () => {

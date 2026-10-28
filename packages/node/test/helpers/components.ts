@@ -7,7 +7,7 @@ import type { ComponentizeOptions } from '@bytecodealliance/componentize-js';
 /**
  * A test's JavaScript built into a WebAssembly component of a world of Weave's WIT (componentize-js). It takes a few
  * seconds, so it's kept per machine by the source's and the WIT's hash. `bundle`: what it imports goes in with it
- * (esbuild), as packages/marks/build.ts does.
+ * (esbuild), as packages/shipped/build.ts does for mark services.
  */
 export async function buildComponent(source: string, world: 'service' | 'website' | 'board' | 'fetcher' | 'marks', features: { http?: boolean; bundle?: boolean } = {}): Promise<string> {
   const wit = join(import.meta.dirname, '..', '..', '..', 'sdk', 'wit', 'service.wit');

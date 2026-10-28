@@ -5,7 +5,6 @@ node_modules/
 # build output and local tooling
 apps/*/dist/
 packages/shipped/dist/
-packages/marks/dist/
 .claude/
 apps/*/pack/
 apps/*/release/

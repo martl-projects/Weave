@@ -3172,7 +3172,6 @@ export class WeaveNode implements Backend {
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
-    await this.#takeInBundleMarks();
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
@@ -4416,39 +4415,7 @@ export class WeaveNode implements Backend {
   async applyBundle(bundle: Bundle): Promise<void> {
     for (const link of bundle.contacts ?? []) await this.addContact(link);
     for (const tier of bundle.tiers ?? []) this.queueMembershipRequest(tier);
-    const marks = (bundle.marks ?? []).filter((m) => typeof m?.project === 'string' && typeof m?.app === 'string');
-    if (marks.length) {
-      const pending = this.config.pendingMarks ?? [];
-      this.config = { ...this.config, pendingMarks: [...pending, ...marks.filter((m) => !pending.some((p) => p.project === m.project && p.app === m.app))] };
-      saveConfig(this.home, this.config);
-    }
     await this.#sendQueuedRequests();
-    await this.#takeInBundleMarks();
-  }
-
-  /**
-   * The bundle's mark services: once the tier brought you into their project and it has released them, each is
-   * taken into your own domain, following its project's newest release. One you removed stays removed.
-   */
-  async #takeInBundleMarks(): Promise<void> {
-    const pending = this.config.pendingMarks ?? [];
-    if (!pending.length) return;
-    const left = [];
-    for (const m of pending) {
-      if (this.#marks.hadMine(m.app)) continue;
-      if (!this.#spaces.has(m.project) || !this.#marks.released(m.project, m.app)) {
-        left.push(m);
-        continue;
-      }
-      try {
-        await this.#marks.addMarks({ project: m.project, app: m.app, follow: true, via: 'bundle' });
-      } catch {
-        left.push(m);
-      }
-    }
-    if (left.length === pending.length) return;
-    this.config = { ...this.config, pendingMarks: left };
-    saveConfig(this.home, this.config);
   }
 
   async #sendQueuedRequests(): Promise<number> {
@@ -9143,6 +9110,8 @@ export class WeaveNode implements Backend {
       oauthFetch: () => n.oauthSetup.fetch,
       /** Where the services Weave ships are (tests give their own). */
       shippedDir: () => n.wasmSetup.shippedDir,
+      /** The Weave project: where Weave announces itself (and its new versions); its maintainers speak for Weave. */
+      weaveProject: () => n.config.updates?.project ?? UPDATE_SOURCE.project,
       clock: () => n.clock(),
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
@@ -9298,7 +9267,7 @@ export class WeaveNode implements Backend {
     return this.#marks.markServices(...args);
   }
 
-  addMarks(input: Omit<Parameters<Marks['addMarks']>[0], 'via'>): ReturnType<Marks['addMarks']> {
+  addMarks(input: Parameters<Marks['addMarks']>[0]): ReturnType<Marks['addMarks']> {
     if (input.as) this.#agentMay(input.as, KIND_MARKS_PIN);
     return this.#marks.addMarks(input);
   }
@@ -9477,8 +9446,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export interface Bundle {
   contacts?: string[];
   tiers?: Array<{ tier: string; creator: Did; note?: string }>;
-  /** Mark services to take into your own domain: a project (one of the tiers brings you in) and its service's app id. */
-  marks?: Array<{ project: string; app: string }>;
 }
 
 /** The start of a Markdown text as one plain line, for shares and older clients. */

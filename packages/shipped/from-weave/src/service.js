@@ -1,7 +1,7 @@
 // From Weave: a check next to what really comes from Weave (its people, projects, services and agents), as a Weave
-// mark service. It folds weave.official events, but only those in the project it comes from, by its maintainers
+// mark service Weave ships. It folds weave.official events, but only those in the Weave project, by its maintainers
 // ("home", as Weave tells it): a look-alike project saying the same gets nothing. The latest per subject counts, so
-// Weave's list changes without a new release, and everyone holding the project holds the whole list and its history.
+// Weave's list changes without a new Weave, and everyone in the Weave project holds the whole list and its history.
 
 const key = (s) => (s.did ? s.did : s.space ? `space:${s.space}` : s.post ? `post:${s.post}` : undefined);
 

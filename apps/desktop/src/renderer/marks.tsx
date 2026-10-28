@@ -9,7 +9,7 @@ import { AsyncButton, attempt, Modal } from './ui.tsx';
  * Marks next to names (stage 19): what the mark services you and the space chose say, each with who says so on
  * hover. A view asks once for all the names it shows (batched per slot and space); answers are kept until the node
  * says the marks may have changed, so navigating back and forth asks nothing again.
- * A bare check is Weave's own (a service your app's bundle brought); every other check carries its issuer's initial.
+ * A bare check is Weave's own (a mark service Weave ships); every other check carries its issuer's initial.
  */
 
 type Slot = 'author' | 'member' | 'chat' | 'profile';
@@ -88,7 +88,7 @@ function useMarks(slot: Slot, did: string, space?: string): MarkInfo[] {
 }
 
 const issuerText = (m: MarkInfo) => `${m.issuer.weave ? 'Weave' : m.issuer.name}${m.issuer.domain.kind === 'user' ? '' : ` · ${m.issuer.domain.name}`}`;
-export const markTitle = (m: MarkInfo) => `${m.tooltip ? `${m.tooltip}\n` : ''}— says ${issuerText(m)} (${m.issuer.name} ${m.issuer.tag})`;
+export const markTitle = (m: MarkInfo) => `${m.tooltip ? `${m.tooltip}\n` : ''}— says ${issuerText(m)} (${m.issuer.weave ? `${m.issuer.name}, shipped with Weave` : `${m.issuer.name} ${m.issuer.tag}`})`;
 
 /** One mark: as its kind shows; a click on one about something (a badge) opens it. */
 function MarkView({ mark, did, size }: { mark: MarkInfo; did: string; size: number }) {
@@ -172,11 +172,12 @@ export function Marks({ did, slot, space, size = 16 }: { did: string; slot: Slot
 
 /** View → Marks…: your own mark services (shown everywhere you look), and taking one in from a project you're in. */
 export function MarksSettings({ onClose }: { onClose(): void }) {
-  const mine = useApi(() => api<MarkServiceInfo[]>('markServices', {}), []);
+  const mine = useApi(() => api<MarkServiceInfo[]>('markServices', { off: true }), []);
   const spaces = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const [project, setProject] = useState('');
   const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
-  const remove = (s: MarkServiceInfo) => attempt(() => api('removeMarks', { service: s.service }), s.via === 'bundle' ? `${s.name} removed: your app won't bring it back` : `${s.name} removed`).then(mine.reload);
+  const remove = (s: MarkServiceInfo) => attempt(() => api('removeMarks', { service: s.service }), `${s.name} removed`).then(mine.reload);
+  const turnOn = (s: MarkServiceInfo) => attempt(() => api('addMarks', { shipped: s.service }), `${s.name} is back`).then(mine.reload);
   const add = () => attempt(() => api('addMarks', { project, follow: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
   return (
     <Modal title="Marks" onClose={onClose}>
@@ -188,11 +189,11 @@ export function MarksSettings({ onClose }: { onClose(): void }) {
       {(mine.data ?? []).map((s) => (
         <div className="marks-row" key={s.service}>
           <div>
-            <b>{s.name}</b> <span className="small muted">{s.tag} · from {s.project.name ?? 'a project you’re not in'}{s.via === 'bundle' ? ' · from your Weave app' : ''}{s.follow ? ' · follows its newest release' : ''}</span>
+            <b>{s.name}</b> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : `${s.tag} · from ${s.project?.name ?? 'a project you’re not in'}`}{s.follow ? ' · follows its newest release' : ''}</span>
             {s.problem && <div className="small error">Shows nothing: {s.problem}</div>}
-            {s.via === 'bundle' && s.service === 'from-weave' && <div className="small muted">Without it, a look-alike of Weave can’t be told apart at a glance.</div>}
+            {s.shipped && s.service === 'from-weave' && <div className="small muted">Without it, a look-alike of Weave can’t be told apart at a glance.</div>}
           </div>
-          <AsyncButton onClick={() => remove(s)}>Remove</AsyncButton>
+          {s.off ? <AsyncButton onClick={() => turnOn(s)}>Turn on</AsyncButton> : <AsyncButton onClick={() => remove(s)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>}
         </div>
       ))}
       {mine.data && !mine.data.length && <p className="small muted">None yet.</p>}

@@ -311,15 +311,17 @@ badges: lasting recognition from a project, signed and checkable by anyone, neve
   badge pass <badge> <who>   pass a badge you hold on, e.g. to your other account; it keeps its number
   badges [who]               the badges someone holds (default: yours)
 
-marks: what shows next to names, from mark services you or a space chose (each says who says so):
+marks: what shows next to names, from mark services you or a space chose (each says who says so); Weave's own (Badges,
+From Weave) are yours until you remove them:
   marks [who]                what they say about someone (default: you)   [--slot author|member|chat|profile] [--space <project>]
   marks list                 your mark services (shown everywhere you look); --space <project>: the ones pinned there
   marks add <project>        take a project's mark service into your own domain   [--app <id>] [--tag 1.0]
                              [--follow: its newest release] [--settings <json>]; --space <project>: pin it there instead
                              (maintainers), shown in that project only   [--gate: the one its gates ask]
+  marks add --shipped <name> take one Weave ships back after removing it
   marks remove <service>     take it out of your own domain; --space <project>: unpin it there
-  official <who> -p <project>   say a person (did), space (id) or post (--post) comes from Weave (maintainers of From
-                             Weave's project)   [--text <note>] [--off: no longer]
+  official <who>             say a person (did), space (id) or post (--post) comes from Weave (maintainers of the Weave
+                             project)   [--text <note>] [--off: no longer]
 
 treasuries: a project's own wallet (a Safe its maintainers own) and how its income is split; Weave holds no keys or money:
   wallet message <address>   what your wallet signs (personal_sign) to show it's yours
@@ -857,7 +859,7 @@ const markLine = (m: MarkInfo): string => {
 /** A mark service as text. */
 const markServiceLine = (s: MarkServiceInfo): string =>
   [
-    `${s.name} (${s.service}) ${s.tag}  from ${s.project.name ?? s.project.id}${s.follow ? ', follows its newest release' : ''}${s.via === 'bundle' ? ', from your app' : ''}${s.gate ? ', the gate service' : ''}`,
+    `${s.name} (${s.service}) ${s.shipped ? `Weave ships it${s.off ? ', turned off' : ''}` : `${s.tag}  from ${s.project?.name ?? s.project?.id}`}${s.follow ? ', follows its newest release' : ''}${s.gate ? ', the gate service' : ''}`,
     `  shows at ${s.slots.join(', ')}; reads ${s.reads.join(', ') || 'nothing'}`,
     `  ${s.digest}`,
     ...(s.newer ? [`  newer: ${s.newer}`] : []),
@@ -2472,18 +2474,18 @@ ${postLine(p)}`);
       const b = await backend();
       const settings = values.settings === undefined ? undefined : (JSON.parse(values.settings) as MarkServiceInfo['settings']);
       if (sub === 'list') {
-        const list = await b.markServices({ space: values.space });
+        const list = await b.markServices({ space: values.space, off: !values.space });
         return out(list, () => list.map(markServiceLine).join('\n\n') || (values.space ? '(no mark services pinned there)' : '(no mark services: weave marks add <project>)'));
       }
-      if (sub === 'add' && ref) {
-        const s = await b.addMarks({ project: ref, app: values.app, tag: values.tag, space: values.space, settings, follow: values.follow, gate: values.gate, as: values.as });
+      if (sub === 'add' && (ref || values.shipped)) {
+        const s = await b.addMarks({ ...(values.shipped ? { shipped: values.shipped } : { project: ref }), app: values.app, tag: values.tag, space: values.space, settings, follow: values.follow, gate: values.gate, as: values.as });
         return out(s, () => `${values.space ? `pinned to ${values.space}` : 'yours now'}: ${markServiceLine(s)}`);
       }
       if (sub === 'remove' && ref) {
         await b.removeMarks({ service: ref, space: values.space, as: values.as });
         return out({ removed: ref }, () => `${ref}: ${values.space ? `no longer pinned to ${values.space}` : 'no longer yours'}`);
       }
-      if (sub === 'add' || sub === 'remove') throw new Error('usage: weave marks add <project> | weave marks remove <service> [--space <project>]');
+      if (sub === 'add' || sub === 'remove') throw new Error('usage: weave marks add <project> | weave marks add --shipped <name> | weave marks remove <service> [--space <project>]');
       const who = (await b.profile(sub)).did;
       const [answer] = await b.marks({ slot: values.slot ?? 'profile', space: values.space, subjects: [{ did: who }] });
       return out(answer ?? { marks: [] }, () => answer?.marks.map(markLine).join('\n') || '(no marks)');
@@ -2491,10 +2493,10 @@ ${postLine(p)}`);
 
     case 'official': {
       const [ref] = args;
-      if (!ref) throw new Error('usage: weave official <did|space id|post id> -p <project> [--text <note>] [--off]');
+      if (!ref) throw new Error('usage: weave official <did|space id|post id> [--text <note>] [--off]');
       const b = await backend();
       const subject = ref.startsWith('did:') ? { did: ref } : values.post ? { post: ref } : (await b.spaces()).some((s) => s.id === ref) ? { space: ref } : { post: ref };
-      const item = await b.setOfficial({ project: needProject(), subject, note: values.text, on: !values.off, as: values.as });
+      const item = await b.setOfficial({ subject, note: values.text, on: !values.off, as: values.as });
       return out(item, () => `${values.off ? 'no longer' : 'now'} from Weave: ${ref}`);
     }
 

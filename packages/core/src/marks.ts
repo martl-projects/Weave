@@ -11,12 +11,13 @@ import { parseManifest, type AppManifest } from './rooms.ts';
  *   weave.marks.pin   {service, origin: {project, release}, manifest, settings, gate, on}
  *                     in a project or community, by its maintainers: the space's own mark service, shown only in
  *                     its views; `gate`: the one its gates ask (stage 18). The latest per service counts.
- *   weave.marks.mine  {service, origin, manifest, settings, follow, via, on}
+ *   weave.marks.mine  {service, origin, manifest, settings, follow, on} or {service, shipped: true, on}
  *                     sealed for yourself: a service in your own domain, shown everywhere you look. `follow`: the
- *                     newest release of its project runs; `via: "bundle"`: your app's bundle brought it (Weave's own).
+ *                     newest release of its project runs. The mark services Weave ships (packages/shipped) are
+ *                     yours without one, until you turn one off ({service, on: false}).
  *   weave.official    {subject, on, note}
- *                     in the From Weave project, by its maintainers: something that really comes from Weave
- *                     (a person, a project, a service). From Weave folds them; the latest per subject counts.
+ *                     in the Weave project, by its maintainers: something that really comes from Weave (a person,
+ *                     a project, a service). From Weave folds them; the latest per subject counts.
  */
 export const KIND_MARKS_PIN = 'weave.marks.pin';
 export const KIND_MARKS_MINE = 'weave.marks.mine';
@@ -77,6 +78,7 @@ export interface MarkService {
   service: string;
   name: string;
   tag: string;
+  /** Shipped with Weave: no project, and its release is its component's digest. */
   origin: { project: string; release: string };
   manifest: AppManifest;
   settings: Json;
@@ -84,8 +86,8 @@ export interface MarkService {
   gate?: true;
   /** Yours only: the newest release of its project runs. */
   follow?: true;
-  /** Yours only: your app's bundle brought it. */
-  via?: 'bundle';
+  /** Weave ships it (packages/shipped): Weave's own, the only kind that shows a bare check. */
+  shipped?: true;
   by: Did;
   time: string;
 }
@@ -133,7 +135,6 @@ export function parseMarkService(body: Json, by: Did, time: string): MarkService
     settings: settings && typeof settings === 'object' && !Array.isArray(settings) ? (settings as Json) : {},
     ...(field(body, 'gate') === true ? { gate: true as const } : {}),
     ...(field(body, 'follow') === true ? { follow: true as const } : {}),
-    ...(field(body, 'via') === 'bundle' ? { via: 'bundle' as const } : {}),
     by,
     time,
   };

@@ -605,7 +605,7 @@ export interface MarkIssuerInfo {
   /** What runs: the image's digest, or the release file's SHA-256. */
   digest: string;
   domain: { kind: 'user' } | { kind: 'project' | 'community'; id: string; name: string };
-  /** Brought by your app's bundle: Weave's own. Only these may show a bare check. */
+  /** Weave ships it, exactly as this Weave has it: Weave's own. Only these may show a bare check. */
   weave?: true;
 }
 
@@ -624,15 +624,18 @@ export interface MarkServiceInfo {
   tag: string;
   release: string;
   digest: string;
-  project: { id: string; name?: string };
+  /** The project it comes from; none when Weave ships it. */
+  project?: { id: string; name?: string };
   domain: MarkIssuerInfo['domain'];
   settings: Json;
   reads: string[];
   slots: MarkSlot[];
   /** Yours: the newest release of its project runs. */
   follow?: true;
-  /** Yours: your app's bundle brought it. */
-  via?: 'bundle';
+  /** Weave ships it: yours unless you turn it off. */
+  shipped?: true;
+  /** One Weave ships that you turned off (markServices with off). */
+  off?: true;
   /** A space's: the one its gates ask. */
   gate?: true;
   /** A newer release of it, when it doesn't follow its project. */
@@ -1996,13 +1999,13 @@ export interface Backend {
   /** What the mark services you and the space chose say about these subjects ({did}, {space} or {post}) at a slot, with who says so. */
   marks(input: { slot: string; space?: string; subjects: unknown[] }): Promise<MarksAnswer[]>;
   /** Your own mark services, or (space) the ones a project or community pinned. */
-  markServices(input?: { space?: string }): Promise<MarkServiceInfo[]>;
-  /** Take a project's mark service into your own domain (follow: its newest release), or as a maintainer pin it to a space. */
-  addMarks(input: { project: string; app?: string; tag?: string; space?: string; settings?: Json; follow?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo>;
+  markServices(input?: { space?: string; off?: boolean }): Promise<MarkServiceInfo[]>;
+  /** Take a project's mark service into your own domain (follow: its newest release), or one Weave ships back after turning it off (shipped), or as a maintainer pin a project's to a space. */
+  addMarks(input: { project?: string; shipped?: string; app?: string; tag?: string; space?: string; settings?: Json; follow?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo>;
   /** Take a mark service out of your own domain, or unpin it from a space. */
   removeMarks(input: { service: string; space?: string; as?: string }): Promise<void>;
-  /** Maintainers of the project From Weave comes from: say that something comes from Weave (on: false, no longer). */
-  setOfficial(input: { project: string; subject: unknown; note?: string; on?: boolean; as?: string }): Promise<FeedItem>;
+  /** Maintainers of the Weave project: say that something comes from Weave (on: false, no longer). From Weave shows it. */
+  setOfficial(input: { subject: unknown; note?: string; on?: boolean; as?: string }): Promise<FeedItem>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;

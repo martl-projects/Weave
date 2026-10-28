@@ -324,6 +324,7 @@ export class Services {
     if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
     if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
+    if (shipped?.manifest.marks) throw new Error(`${shipped.manifest.name} is a mark service: everyone's own already, not a project's`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
@@ -764,7 +765,7 @@ export class Services {
 
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
-    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.marks).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */

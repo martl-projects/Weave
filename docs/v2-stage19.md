@@ -86,6 +86,8 @@ A fixed slot, `gate`, asked of the service a space pinned for it (`weave.marks.p
 
 ### Weave's own, through the app's bundle
 
+(Superseded: they ship with Weave instead; see "As built".)
+
 From Weave and Weave trusted don't ship inside the app: a new account gets them the way it already gets its start, through the app's bundle (weave.bundle.json: contacts, and free tiers to join).
 
 - **A project per official service:** besides the Weave project, Weave's free tier takes newcomers into a project for each service that comes from Weave: From Weave, Weave Badges, later Weave trusted, Websites, Kanban and others. A project has one app, so each service gets its own project and releases there, as any project does.
@@ -132,26 +134,23 @@ From Weave and Weave trusted don't ship inside the app: a new account gets them 
   - **Folding** is incremental. It refolds from the start when an item comes in older than the last one folded, or when the settings change. The state is capped at 1 MB. It is not yet kept across restarts.
   - **Answers** are cached per fold version, slot and subject.
   - **Timing:** a fold the app waits on longer than 1.5 s shows nothing, and the app is told when it's ready (live update). An ask has 200 ms (`MARKS_TIMING`), not 50 ms: a component parses its state on every ask.
-- **Weave's own:** `issuer.weave` is true for services the app's bundle brought (`via: "bundle"`). The bundle (or the machine's) is the root of trust, like its contacts. Only these show a bare ✓; every other check carries its issuer's initial.
-- **Bundle:** `weave.bundle.json` takes `marks: [{project, app}]`. They're kept in the config (`pendingMarks`) and taken in on `reconcile` once the project and its release are here, following the newest release. One you ever removed stays removed.
-- **One project per service:** a project has one app, so From Weave and Badges each get a project of their own (not one "Weave Marks" project).
-- **The services** are in `packages/marks`: `from-weave` and `badges`. `node packages/marks/build.ts` bundles each with esbuild (Badges takes `badgesOf` from core) and builds it into a component.
+- **Weave's own, shipped with Weave** (changed from the bundle plan in 7, once main's services Weave ships were there): Badges and From Weave are in `packages/shipped` (`badges`, `from-weave`), built by its `build.ts` (bundled with esbuild, as Badges takes `badgesOf` from core) and checked by their digest like every service Weave ships.
+  - They're everyone's own, in the user domain, without any event; `weave.marks.mine {service, on: false}` turns one off, `{service, shipped: true, on: true}` back on (`weave marks add --shipped <name>`, View → Marks… "Turn on").
+  - `issuer.weave` (a bare ✓) is true only for these, and a component that isn't exactly what this Weave ships doesn't run (the service shows its problem). No project's service may take their app ids, in your domain or a space's.
+  - From Weave's `home` is the Weave project (where Weave announces its versions, `config.updates.project`): `weave official <who>` is said there by its maintainers. No From Weave or Weave Badges projects, no bundle entries, no `pendingMarks`.
+  - Updates come with Weave's own updates; a new Weave's components fold again from the start.
   - **Badges** keeps the badge events in its state and refolds them with `badgesOf`. Its tooltip names the issuer, not the project: the node's own check that a series' project is really the issuer's (`#allBadges`) needs the project's maintainers, which a pure service doesn't get. The badge card a click opens is the node's checked view.
 - **Starter:** `packages/sdk/starters/js-marks` (labels from its settings), made with `weave service new --marks`.
-- **CLI:** `weave marks [who]`, `marks list`, `marks add <project>`, `marks remove <service>`, `weave official <who> -p <project>`.
+- **CLI:** `weave marks [who]`, `marks list`, `marks add <project>`, `marks add --shipped <name>`, `marks remove <service>`, `weave official <who>`.
 - **MCP:** `weave_marks`.
-- **Node API:** `marks`, `markServices`, `addMarks`, `removeMarks`, `setOfficial`.
-- **Desktop:** `<Marks>` (batched per slot and space, asked again on every update) replaces `NameBadges` in chat and posts; a click on a badge mark opens the badge card. View → Marks… lists your services and takes one in from a project.
+- **Node API:** `marks`, `markServices` (`off`: Weave's own you turned off, too), `addMarks`, `removeMarks`, `setOfficial`.
+- **Live signal `weave.marks`:** the node says the marks may have changed (debounced, 150 ms) when an event arrives of a kind some service here reads, when the services change (taken in, removed, pinned, a new release), or when a fold the app couldn't wait for finishes. A chat message changes no marks, so it asks nothing.
+- **Desktop:** `<Marks>` (batched per slot and space, asked again only on `weave.marks`, kept across navigation) replaces `NameBadges` in chat and posts; a click on a badge mark opens the badge card. View → Marks… lists your services, turns Weave's own off and on, and takes one in from a project.
 - **Not yet built:**
   - the member, chat (Places) and profile slots in the desktop;
   - a space's services in its settings;
   - the onboarding step;
   - the group domain;
   - the gate slot's use (stage 18).
-- **Still to do outside the code:**
-  - create the From Weave and Weave Badges projects;
-  - release the two services there;
-  - put both projects' entries into `weave.bundle.json` (and into Weave's free tier).
-
-  Until then, nobody has the Badges service, so badges show only on hubs, not next to names.
+- **Still to do outside the code:** `weave official` for what comes from Weave, by a maintainer of the Weave project. Badges show next to names as soon as people run a Weave with this in it.
 - **Tests:** `packages/node/test/marks.test.ts`.
