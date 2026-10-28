@@ -16,7 +16,7 @@ const wit = readFileSync(join(here, '..', 'sdk', 'wit', 'service.wit'), 'utf8');
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-const shipped: Record<string, { component: string; digest: string; manifest: unknown; site?: string }> = {};
+const shipped: Record<string, { component: string; digest: string; manifest: unknown; about?: string; site?: string }> = {};
 for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'weave.app.json')))) {
   const raw = JSON.parse(readFileSync(join(here, name, 'weave.app.json'), 'utf8')) as unknown;
   const { manifest, problems } = checkManifest(raw);
@@ -30,7 +30,10 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
   } as Parameters<typeof componentize>[0]);
   writeFileSync(join(dist, manifest.wasm.component), component);
   if (manifest.wasm.site) cpSync(join(here, name, manifest.wasm.site), join(dist, `${name}-site`), { recursive: true });
-  shipped[name] = { component: manifest.wasm.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(manifest.wasm.site ? { site: `${name}-site` } : {}) };
+  // What it's for, in the app: its README's first paragraph.
+  const readme = existsSync(join(here, name, 'README.md')) ? readFileSync(join(here, name, 'README.md'), 'utf8') : '';
+  const about = readme.split(/\r?\n\r?\n/).map((p) => p.trim()).find((p) => p && !p.startsWith('#'))?.replace(/\s+/g, ' ').slice(0, 400);
+  shipped[name] = { component: manifest.wasm.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}), ...(manifest.wasm.site ? { site: `${name}-site` } : {}) };
   console.log(`${name}: ${shipped[name].digest}`);
 }
 writeFileSync(join(dist, 'shipped.json'), `${JSON.stringify(shipped, null, 2)}\n`);

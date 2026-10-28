@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
@@ -482,6 +482,54 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
 }
 
 /**
+ * A service Weave ships, added to this project: what it's for and may do, and the settings it asks for, kept in the
+ * project for its maintainers when you are one (a secret sealed for the service alone; a sign-in from its Settings).
+ */
+function ShippedInstall({ project, shipped, maintainer, onDone }: { project: SpaceInfo; shipped: ShippedServiceInfo; maintainer: boolean; onDone(): void }) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [keep, setKeep] = useState(maintainer);
+  const missing = shipped.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim());
+  const install = () => {
+    const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
+    return attempt(
+      () => api<ServiceInfo>('addService', { shipped: shipped.name, spaces: [project.id], settings, ...(keep && maintainer ? { settingsIn: project.id } : {}) }).then(() => (bump(), onDone())),
+      `${shipped.title} runs in p/${project.name}`,
+    );
+  };
+  return (
+    <div className="install-box shipped-install">
+      <span className="grow">
+        <b>{shipped.title}</b> <span className="muted small">· ships with Weave</span>
+        <br />
+        <span className="small">{shipped.about ?? `It ${contractText(shipped.contract)}`}</span>
+        {open && (
+          <>
+            <p className="small muted">It {contractText(shipped.contract)}. Weave runs it only as exactly the component it ships.</p>
+            {shipped.settings.map((s) => (
+              <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />
+            ))}
+            {maintainer && shipped.settings.length > 0 && (
+              <div className="field-row small">
+                <input id={`keep-${shipped.name}`} type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
+                <label htmlFor={`keep-${shipped.name}`}>Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)</label>
+              </div>
+            )}
+            <div className="buttons">
+              <button onClick={() => setOpen(false)}>Cancel</button>
+              <AsyncButton className="default" disabled={missing.length > 0} onClick={install}>
+                Add to p/{project.name}
+              </AsyncButton>
+            </div>
+          </>
+        )}
+      </span>
+      {!open && <button onClick={() => setOpen(true)}>Add…</button>}
+    </div>
+  );
+}
+
+/**
  * Installing a project's release as a service in this project: what it runs is shown and approved here, once per
  * release. One with a web page serves it as a website here (by the website service); one with a contract does what it says.
  */
@@ -527,9 +575,10 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
         <>
           {chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
           {maintainer && chosen.settings.length > 0 && (
-            <label className="small">
-              <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} /> Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)
-            </label>
+            <div className="field-row small">
+              <input id={`keep-${project.id}`} type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
+              <label htmlFor={`keep-${project.id}`}>Keep its settings in p/{project.name}, for its maintainers to change (a secret sealed for the service alone)</label>
+            </div>
           )}
           <div className="approve-launch">
             <Icon name="warning" size={32} />
@@ -562,6 +611,9 @@ function InstallRelease({ project, maintainer, onDone }: { project: SpaceInfo; m
 function AddProjectService({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
   const away = services.filter((s) => !s.node && !s.spaces.some((x) => x.id === project.id));
   const rooms = services.filter((s) => s.builtin === 'website');
+  const { data: shipped } = useApi(() => api<ShippedServiceInfo[]>('shippedServices').catch(() => [] as ShippedServiceInfo[]), []);
+  // What Weave ships and you don't run yet (one you run elsewhere is among yours, below).
+  const offered = (shipped ?? []).filter((x) => !services.some((s) => s.shipped === x.name));
   const add = (s: ServiceInfo) => attempt(() => api('setService', { name: s.name, spaces: [...s.spaces.map((x) => x.id), project.id] }).then(() => (bump(), onClose())), `${s.name} is in p/${project.name}`);
   return (
     <Modal title={`Add a service · p/${project.name}`} onClose={onClose}>
@@ -578,7 +630,10 @@ function AddProjectService({ project, services, maintainer, onClose }: { project
             </AsyncButton>
           </div>
         )}
-        {!services.some((s) => s.builtin === 'github') && (
+        {offered.map((x) => (
+          <ShippedInstall key={x.name} project={project} shipped={x} maintainer={maintainer} onDone={onClose} />
+        ))}
+        {!services.some((s) => s.builtin === 'github') && !(shipped ?? []).some((x) => x.name === 'github-releases') && (
           <div className="install-box">
             <span className="grow">
               <b>Releases from GitHub</b>

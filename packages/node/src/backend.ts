@@ -254,6 +254,8 @@ export interface ServiceInfo {
   running: boolean;
   /** Why it doesn't run, when something stops it (a release says so in its artifact). */
   problem?: string;
+  /** One Weave ships: its name there. */
+  shipped?: string;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
 }
@@ -346,6 +348,16 @@ export interface ServiceProfileInfo {
   /** The settings it asks for (its manifest's env): what its spaces' maintainers can fill in. */
   settings?: AppSetting[];
   time: string;
+}
+
+/** A service Weave ships (packages/shipped): what it is, does and asks for, and the digest it runs as. */
+export interface ShippedServiceInfo {
+  name: string;
+  title: string;
+  about?: string;
+  contract: ServiceContract;
+  settings: AppSetting[];
+  digest: string;
 }
 
 /** A service's settings in a space, as its maintainers keep them there (secrets only as set: never their value). */
@@ -1700,6 +1712,8 @@ export interface Backend {
   serviceProfiles(): Promise<ServiceProfileInfo[]>;
   /** The services in a space: those whose people added them there. */
   servicesIn(space: string): Promise<ServiceProfileInfo[]>;
+  /** The services this Weave ships, to add with addService({shipped}). */
+  shippedServices(): Promise<ShippedServiceInfo[]>;
   /** A service's settings in a space, kept there by its maintainers. */
   serviceSettings(input: { space: string; service: string }): Promise<ServiceSettingsInfo>;
   /** Set (or with null remove) a service's setting in a space, as a maintainer; a secret is boxed to the service, readable by it alone. */
@@ -2081,7 +2095,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

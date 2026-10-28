@@ -20,6 +20,8 @@ export interface ShippedService {
   /** sha256:<hex> of its component. */
   digest: string;
   manifest: AppManifest;
+  /** What it's for, in a sentence or two (its README's first paragraph). */
+  about?: string;
   /** Its component, and its site's folder if it has one. */
   file: string;
   site?: string;
@@ -38,13 +40,13 @@ export const digestOf = (file: string): string => `sha256:${createHash('sha256')
 export function shippedServices(dir: string | undefined = SHIPPED_DIR): Map<string, ShippedService> {
   const out = new Map<string, ShippedService>();
   if (!dir || !existsSync(join(dir, 'shipped.json'))) return out;
-  const listed = JSON.parse(readFileSync(join(dir, 'shipped.json'), 'utf8')) as Record<string, { component?: unknown; digest?: unknown; manifest?: unknown; site?: unknown }>;
+  const listed = JSON.parse(readFileSync(join(dir, 'shipped.json'), 'utf8')) as Record<string, { component?: unknown; digest?: unknown; manifest?: unknown; about?: unknown; site?: unknown }>;
   const digests = builtIn();
   for (const [name, entry] of Object.entries(listed)) {
     const manifest = checkManifest(entry.manifest).manifest;
     const digest = digests ? digests[name] : entry.digest;
     if (!manifest || typeof entry.component !== 'string' || typeof digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(digest)) continue;
-    out.set(name, { name, digest, manifest, file: join(dir, entry.component), ...(typeof entry.site === 'string' ? { site: join(dir, entry.site) } : {}) });
+    out.set(name, { name, digest, manifest, ...(typeof entry.about === 'string' ? { about: entry.about.slice(0, 400) } : {}), file: join(dir, entry.component), ...(typeof entry.site === 'string' ? { site: join(dir, entry.site) } : {}) });
   }
   return out;
 }

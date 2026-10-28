@@ -1,5 +1,5 @@
 import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -172,6 +172,7 @@ export class Services {
       running: stored.builtin ? stored.enabled : this.h.runtime.running(`service:${stored.name}`),
       // Why it doesn't run (a shipped component that isn't what Weave ships, say); a release says so in its artifact.
       ...(!stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
+      ...(stored.shipped ? { shipped: stored.shipped.name } : {}),
     };
   }
 
@@ -721,6 +722,11 @@ export class Services {
     const found = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release);
     if (!found || releaseApproval(found) !== origin.fingerprint) return { ...base, checked: 'unmatched' };
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
+  }
+
+  /** The services this Weave ships, as the app offers them. */
+  shippedServices(): ShippedServiceInfo[] {
+    return [...shippedHere(this.h).values()].map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */

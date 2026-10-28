@@ -483,6 +483,7 @@ import {
   type AuditStreamInfo,
   type ExportLine,
   type ServiceSettingsInfo,
+  type ShippedServiceInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -9152,6 +9153,10 @@ export class WeaveNode implements Backend {
 
   servicesIn(...args: Parameters<Services['servicesIn']>): ReturnType<Services['servicesIn']> {
     return this.#services.servicesIn(...args);
+  }
+
+  async shippedServices(): Promise<ShippedServiceInfo[]> {
+    return this.#services.shippedServices();
   }
 
   serviceSettings(input: { space: string; service: string }): Promise<ServiceSettingsInfo> {

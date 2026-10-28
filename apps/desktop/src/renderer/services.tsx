@@ -499,9 +499,8 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
           <div className="field-row">
             <input placeholder="NAME" value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value.toUpperCase() })} />
             <input className="grow" type={extra.secret ? 'password' : 'text'} placeholder="value" value={extra.value} onChange={(e) => setExtra({ ...extra, value: e.target.value })} />
-            <label className="small">
-              <input type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} /> secret
-            </label>
+            <input id="extra-secret" type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} />
+            <label htmlFor="extra-secret" className="small">secret</label>
             <AsyncButton disabled={!extra.name || !extra.value} onClick={() => save(extra.name, extra.value, extra.secret).then(() => setExtra({ name: '', value: '', secret: true }))}>
               Set
             </AsyncButton>
