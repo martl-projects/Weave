@@ -394,6 +394,9 @@ export {
 export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
 export {
   accountsOf,
+  sharedAccountsOf,
+  isGistId,
+  type SharedAccount,
   githubProofText,
   isLogin,
   isRepoName,

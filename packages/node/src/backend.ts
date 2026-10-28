@@ -406,7 +406,8 @@ export interface SpaceRepos {
   /** For whoever linked a repo: people it should include who haven't given their GitHub account. */
   missing?: Actor[];
   /** For whoever linked a repo: members and the accounts they gave. */
-  accounts?: Array<{ who: Actor; login: string }>;
+  /** proven: a gist of that account names them (unproven accounts aren't invited). */
+  accounts?: Array<{ who: Actor; login: string; proven: boolean }>;
   /** For those who may link: the members who may be picked to write (in personally, not through a group or tier). */
   mayWrite?: Actor[];
 }

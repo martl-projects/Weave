@@ -25,7 +25,7 @@ class FakeGitHub {
   calls: string[] = [];
   /** The permission each invitation asked for: "repo login" → pull | push. */
   permissions = new Map<string, string>();
-  gists = new Map<string, { owner: string; content: string }>();
+  gists = new Map<string, { owner: string; content: string; public?: boolean }>();
 
   /** A repository, owned by an organization unless said otherwise (a person's can't take read-only collaborators). */
   addRepo(name: string, collaborators: string[] = [], owner: 'Organization' | 'User' = 'Organization'): void {
@@ -71,9 +71,9 @@ class FakeGitHub {
       this.calls.push(`${method} ${url.pathname}`);
       if (url.pathname === '/user') return json(200, { login: who, id: 1 });
       if (url.pathname === '/gists' && method === 'POST') {
-        const id = `g${this.#nextId++}`;
+        const id = (this.#nextId++).toString(16).padStart(32, '0');
         const files = JSON.parse(String(init?.body)).files as Record<string, { content: string }>;
-        this.gists.set(id, { owner: who, content: Object.values(files)[0].content });
+        this.gists.set(id, { owner: who, content: Object.values(files)[0].content, public: JSON.parse(String(init?.body)).public === true });
         return json(201, { id, html_url: `https://gist.github.com/${id}` });
       }
       if (url.pathname === '/user/installations') return json(200, { installations: [{ id: 7 }] });
@@ -171,6 +171,66 @@ describe('GitHub repos that follow a space', () => {
     const before = github.calls.length;
     await martl.reconcile();
     expect(github.calls.length).toBe(before);
+  });
+
+  it("invites only accounts a secret gist proves are the member's", async () => {
+    const github = new FakeGitHub();
+    github.addRepo('martl/weave', []);
+    const martl = person('martl', github, 'martl');
+    const lena = person('Lena', github, 'lena-gh');
+    const kofi = person('Kofi', github, 'kofi-gh');
+    const all = [martl, lena, kofi];
+    await martl.createProject({ name: 'Weave' });
+    await martl.createProject({ name: 'Docs' });
+    for (const p of ['Weave', 'Docs']) {
+      await lena.joinSpace(await martl.invite(p));
+      await kofi.joinSpace(await martl.invite(p));
+    }
+    syncAll(all);
+    await connect(martl);
+    await martl.linkRepo({ space: 'Weave', repo: 'martl/weave', on: true });
+    syncAll(all);
+
+    // Lena shares: a secret gist of her account naming her, one for all her spaces.
+    await connect(lena);
+    await lena.shareGithub({ space: 'Weave', on: true });
+    await lena.shareGithub({ space: 'Docs', on: true });
+    const gists = [...github.gists.values()].filter((g) => g.owner === 'lena-gh');
+    expect(gists).toHaveLength(1);
+    expect(gists[0]).toMatchObject({ public: false });
+    expect(gists[0].content).toContain(lena.identity.author);
+
+    // Kofi claims accounts that aren't his: without a gist, and with Lena's (which names her, not him).
+    await connect(kofi);
+    const lenaGist = [...github.gists.entries()].find(([, g]) => g.owner === 'lena-gh')![0];
+    await kofi.publish({ kind: 'weave.github.account', body: { login: 'stranger', on: true }, space: 'Weave' });
+    syncAll(all);
+    await martl.reconcile();
+    expect(github.invited('martl/weave')).toEqual(['lena-gh']);
+    await kofi.publish({ kind: 'weave.github.account', body: { login: 'lena-gh', gist: lenaGist, on: true }, space: 'Weave' });
+    syncAll(all);
+    await martl.reconcile();
+    expect((await martl.spaceRepos('Weave')).accounts?.map((a) => `${a.who.name}=${a.login}${a.proven ? '' : ' (unproven)'}`).sort()).toEqual(['Kofi=lena-gh (unproven)', 'Lena=lena-gh']);
+    expect(github.invited('martl/weave')).toEqual(['lena-gh']);
+
+    // Kofi's own share from before proofs: his node gives it one as soon as it can, and then he's invited.
+    await kofi.publish({ kind: 'weave.github.account', body: { login: 'kofi-gh', on: true }, space: 'Weave' });
+    syncAll(all);
+    await martl.reconcile();
+    expect(github.invited('martl/weave')).toEqual(['lena-gh']);
+    await kofi.reconcile();
+    syncAll(all);
+    await martl.reconcile();
+    expect(github.invited('martl/weave').sort()).toEqual(['kofi-gh', 'lena-gh']);
+
+    // Lena takes her gist down: within the hour (proofs are asked again hourly), what Weave gave her goes.
+    github.accept('martl/weave', 'lena-gh');
+    github.gists.delete(lenaGist);
+    const start = Date.now();
+    martl.clock = () => start + 61 * 60_000;
+    await martl.reconcile();
+    expect(github.collaborators('martl/weave')).toEqual([]);
+    expect(github.invited('martl/weave')).toEqual(['kofi-gh']);
   });
 
   it('follows the readers of one board, and unlinking takes back what it gave', async () => {

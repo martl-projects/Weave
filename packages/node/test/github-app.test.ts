@@ -37,6 +37,7 @@ class AppGitHub {
   /** Who acted on a repo: the App's installation token, or someone else. */
   actors: string[] = [];
   converted = 0;
+  gists = new Map<string, { owner: string; content: string }>();
   fetch: Fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
@@ -56,6 +57,14 @@ class AppGitHub {
       if (url.pathname.endsWith('/installation')) return json(404, { message: 'Not Found' });
       if (url.pathname === '/app/installations/99/access_tokens' && method === 'POST') return json(201, { token: 'ghs_installation99', expires_at: new Date(Date.now() + 3600_000).toISOString() });
       return json(404, { message: 'Not Found' });
+    }
+    // Members' proofs: a gist of their account (made with their own sign-in), read by anyone with its id.
+    const gist = url.pathname.match(/^\/gists\/([0-9a-f]+)$/);
+    if (gist && method === 'GET') return this.gists.has(gist[1]) ? json(200, { owner: { login: this.gists.get(gist[1])!.owner }, files: { 'weave.md': { content: this.gists.get(gist[1])!.content } } }) : json(404, { message: 'Not Found' });
+    if (url.pathname === '/gists' && method === 'POST' && auth.startsWith('gho_')) {
+      const id = (this.#next++).toString(16).padStart(32, '0');
+      this.gists.set(id, { owner: auth.slice(4), content: Object.values(JSON.parse(String(init?.body)).files as Record<string, { content: string }>)[0].content });
+      return json(201, { id, html_url: `https://gist.github.com/${id}` });
     }
     if (auth !== 'ghs_installation99') return json(401, { message: 'Bad credentials' });
     const whole = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);

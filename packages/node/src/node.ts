@@ -1,6 +1,8 @@
 import {
   accessOf,
   accountsOf,
+  sharedAccountsOf,
+  type SharedAccount,
   canManage as mayManageSpace,
   isLogin,
   isRepoName,
@@ -916,6 +918,10 @@ export class WeaveNode implements Backend {
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
   /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
   #gistProofs = new Map<string, Promise<boolean | undefined>>();
+  /** Members' GitHub proofs as checked for access: when, and whether it held. */
+  #accessProofs = new Map<string, { at: number; proven: boolean }>();
+  /** The GitHub login this device's earlier shares were given proofs for (once per run). */
+  #githubSharesProven?: string;
   /** The time, in milliseconds (tests move it forward to reach renewals). */
   clock: () => number = Date.now;
   /** Paired phones using this node remotely (see remote.ts). */
@@ -3297,7 +3303,8 @@ export class WeaveNode implements Backend {
       const wanted = new Set(mine.flatMap((r) => this.#repoPeople(space, state, entries, r)));
       wanted.delete(me);
       out.missing = [...wanted].filter((did) => !accounts.has(did)).map((did) => this.#actor(did, did));
-      out.accounts = [...accounts].filter(([did]) => wanted.has(did)).map(([did, login]) => ({ who: this.#actor(did, did), login }));
+      const shared = sharedAccountsOf(entries);
+      out.accounts = await Promise.all([...shared].filter(([did]) => wanted.has(did)).map(async ([did, account]) => ({ who: this.#actor(did, did), login: account.login, proven: (await this.#githubProven(did, account)) === true })));
     }
     return out;
   }
@@ -3355,8 +3362,52 @@ export class WeaveNode implements Backend {
     if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
     const auth = input.on ? this.#githubAuth() : undefined;
     if (input.on && !auth) throw new Error('connect GitHub first, so Weave knows your account');
-    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, on: true } : { on: false }, space: space.id, as: input.as });
+    // The proof it's yours: a secret gist of that account naming you (one for all your spaces).
+    const gist = auth ? await this.#githubProof(auth) : undefined;
+    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, gist: gist!, on: true } : { on: false }, space: space.id, as: input.as });
     return this.spaceRepos(space.id);
+  }
+
+  /**
+   * A gist of the signed-in GitHub account naming this person: the one shared before (in any space, or shown on the
+   * hub) while it still proves it, or a new secret one. Owners' nodes check it before inviting anyone.
+   */
+  async #githubProof(auth: { token: string; login: string }): Promise<string> {
+    const me = this.identity.author;
+    const login = auth.login.toLowerCase();
+    const known = [...this.#spaces.values()].flatMap((space) => (space.kind === 'direct' ? [] : [sharedAccountsOf(this.#entries(space)).get(me)])).filter((a) => a?.gist && a.login.toLowerCase() === login).map((a) => a!.gist!);
+    const hub = this.#hubGithub(me);
+    if (hub && hub.login.toLowerCase() === login) known.push(hub.gist);
+    for (const gist of new Set(known)) if ((await checkGistProof(gist, auth.login, me, this.githubSetup.fetch)) === true) return gist;
+    return (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login), false)).id;
+  }
+
+  /**
+   * Whether a member's gist proves the GitHub account is theirs: asked again every hour, so a gist taken down takes
+   * the access with it. GitHub unreachable: undefined (asked again next time).
+   */
+  async #githubProven(did: Did, account: SharedAccount): Promise<boolean | undefined> {
+    if (!account.gist) return false;
+    const key = `${account.gist}:${account.login}:${did}`;
+    const known = this.#accessProofs.get(key);
+    if (known && this.clock() - known.at < 60 * 60_000) return known.proven;
+    const proven = await checkGistProof(account.gist, account.login, did, this.githubSetup.fetch);
+    if (proven === undefined) this.#accessProofs.delete(key);
+    else this.#accessProofs.set(key, { at: this.clock(), proven });
+    return proven;
+  }
+
+  /** Your own shares from before proofs: shared again, with one, where this device is signed in to that account. */
+  async #proveGithubShares(): Promise<void> {
+    const auth = this.#githubAuth();
+    if (!auth || this.#githubSharesProven === auth.login) return;
+    const me = this.identity.author;
+    for (const space of this.#spaces.values()) {
+      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
+      const mine = sharedAccountsOf(this.#entries(space)).get(me);
+      if (mine && !mine.gist && mine.login.toLowerCase() === auth.login.toLowerCase()) await this.shareGithub({ space: space.id, on: true }).catch(() => {});
+    }
+    this.#githubSharesProven = auth.login;
   }
 
   async showGithubOnHub(input: { on: boolean }): Promise<Profile> {
@@ -3416,6 +3467,7 @@ export class WeaveNode implements Backend {
    * without one, the person's GitHub sign-in on this device does.
    */
   async #syncGithub(): Promise<number> {
+    await this.#proveGithubShares().catch(() => {});
     const auth = this.#githubAuth();
     const own = this.#services.githubApp();
     // The person's App runs on an always-on node: that node keeps access in step, not this device.
@@ -3423,7 +3475,9 @@ export class WeaveNode implements Backend {
     const me = this.identity.author;
     const mine = new Set<string>(auth ? [auth.login.toLowerCase()] : []);
     // Every repo this person linked, with everyone it should include.
-    const wanted = new Map<string, { repo: string; logins: Set<string>; write: boolean }>();
+    // Logins proven theirs (a gist of the account naming the member), and unproven ones: those keep what Weave gave
+    // them before proofs (or while GitHub can't be asked), but nobody unproven is invited.
+    const wanted = new Map<string, { repo: string; logins: Set<string>; unproven: Set<string>; write: boolean }>();
     for (const space of this.#spaces.values()) {
       if (space.kind === 'direct') continue;
       const state = this.#state(space);
@@ -3431,13 +3485,19 @@ export class WeaveNode implements Backend {
       const entries = this.#entries(space);
       const links = reposOf(entries, (did) => mayManageSpace(state, did)).filter((r) => r.by === me);
       if (!links.length) continue;
-      const accounts = accountsOf(entries);
-      if (accounts.has(me)) mine.add(accounts.get(me)!.toLowerCase());
+      const accounts = sharedAccountsOf(entries);
+      if (accounts.has(me)) mine.add(accounts.get(me)!.login.toLowerCase());
       for (const link of links) {
         const key = link.repo.toLowerCase();
-        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>(), write: false };
+        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>(), unproven: new Set<string>(), write: false };
         if (link.access === 'write') entry.write = true;
-        for (const did of this.#repoPeople(space, state, entries, link)) if (did !== me && accounts.has(did)) entry.logins.add(accounts.get(did)!.toLowerCase());
+        for (const did of this.#repoPeople(space, state, entries, link)) {
+          const account = did !== me ? accounts.get(did) : undefined;
+          if (!account) continue;
+          // Proven: in. A share from before proofs, or GitHub not answering: kept if given. Disproven: out.
+          const proven = account.gist ? await this.#githubProven(did, account) : undefined;
+          if (proven !== false) (proven ? entry.logins : entry.unproven).add(account.login.toLowerCase());
+        }
         wanted.set(key, entry);
       }
     }
@@ -3457,6 +3517,7 @@ export class WeaveNode implements Backend {
       const want = wanted.get(key)?.logins ?? new Set<string>();
       for (const login of mine) want.delete(login);
       const gave = [...(added.get(key)?.people ?? [])].filter(([, on]) => on).map(([login]) => login);
+      for (const login of wanted.get(key)?.unproven ?? []) if (gave.includes(login)) want.add(login);
       // What it acts with is part of it: new credentials (an App taken over, a sign-in) are tried at once.
       const via = own ? `app:${own.service.name}` : away ? `away:${away}` : auth ? `person:${auth.login}` : 'none';
       const shape = JSON.stringify([[...want].sort(), gave.sort(), via]);
