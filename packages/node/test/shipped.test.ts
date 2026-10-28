@@ -1,10 +1,11 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { digestOf } from '../src/shipped.ts';
+import { readSecretJson } from '../src/vault.ts';
 import { buildComponent } from './helpers/components.ts';
 
 /*
@@ -85,6 +86,15 @@ describe('services Weave ships', { timeout: 120_000 }, () => {
       const after = (await martl.services())[0];
       expect(after.running).toBe(false);
       expect(JSON.stringify(after)).toMatch(/isn't what this Weave ships/);
+
+      // Code from others serves only its own port: never another of this computer (a database's, say).
+      copyFileSync(component, join(mine, 'ticker.wasm'));
+      const site = (JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>).ticker;
+      writeFileSync(join(mine, 'shipped.json'), JSON.stringify({ ticker: { ...site, manifest: { ...site.manifest, app: 'paged', service: { reads: 'addressed', writes: [], website: true, version: '1.0' } } } }).replace('"ticker"', '"paged"'));
+      const paged = await martl.addService({ shipped: 'paged', spaces: ['Weave'] });
+      const token = (readSecretJson(martl.home, join(martl.home.dir, 'services.json')) as Array<{ name: string; token: string }>).find((x) => x.name === paged.name)!.token;
+      await expect(martl.serviceGate(token)!.serve({ space: 'Weave', port: 5432 })).rejects.toThrow(/may serve only its own ports, and has none, not 5432/);
+      await martl.removeService('paged').catch(() => {});
     } finally {
       await martl.removeService('ticker').catch(() => {});
       await api.close();

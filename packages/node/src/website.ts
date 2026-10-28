@@ -410,6 +410,10 @@ export class Website {
     const project = this.h.project(input.space);
     if (!serving.spaces.includes(project.id)) throw new Error(`service "${by}" wasn't added to ${project.name}`);
     const port = this.roomPortOf(input.port);
+    // Code from others serves only its own port: never another of this computer (a database, a router's page) for a
+    // project to reach. Your own code runs with all your rights anyway: it serves what you have it serve.
+    const own = this.svc.servesOn(serving);
+    if (own && !own.has(port)) throw new Error(`service "${by}" may serve only its own port${own.size ? ` (${[...own].join(', ')})` : 's, and has none'}, not ${port}`);
     const site = this.svc.storedServices().find((s) => s.builtin === 'website' && s.enabled && s.spaces.includes(project.id));
     if (!site) throw new Error(`p/${project.name} has no website service on this device: add it there, and ${by} shows up as a website`);
     const name = input.name?.trim().slice(0, 60) || serving.artifact?.manifest.name || by;

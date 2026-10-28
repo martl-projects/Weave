@@ -1418,8 +1418,26 @@ export class Services {
     }
   }
 
+  /** The ports Weave opened for WebAssembly services' websites, by service. */
+  #sitePorts = new Map<string, number>();
+
+  /**
+   * The ports a service of code from others may serve as a website: a release's, as its manifest names them (its
+   * process or its container listens there); a WebAssembly site's, as Weave opened it. Your own code (a command, or
+   * a component of yours): undefined, any (it runs with your rights).
+   */
+  servesOn(stored: StoredService): Set<number> | undefined {
+    if (!stored.artifact && !stored.shipped) return stored.wasm ? new Set([this.#sitePorts.get(stored.name)].filter((p): p is number => !!p)) : undefined;
+    const ports = new Set<number>();
+    for (const s of stored.artifact?.manifest.services ?? []) ports.add(s.port);
+    const site = this.#sitePorts.get(stored.name);
+    if (site) ports.add(site);
+    return ports;
+  }
+
   /** A WebAssembly service's website listens: it serves it in each of its projects (keeping a website's name there). */
   async serveWasmSite(stored: StoredService, port: number): Promise<void> {
+    this.#sitePorts.set(stored.name, port);
     const errors: string[] = [];
     for (const space of stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project')) {
       try {
