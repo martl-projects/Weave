@@ -84,6 +84,9 @@ const GROUPS = [
   ['worker', 'Workers'],
   ['', 'Other sessions'],
 ] as const;
+/** The harnesses sessions come from, by provider; Claude Code is one of them (others, like Codex or a local model, can follow). */
+const HARNESSES: Record<string, string> = { 'claude-code': 'Claude Code' };
+const harnessName = (provider: string) => HARNESSES[provider] ?? provider;
 
 interface Link {
   session: SessionInfo;
@@ -93,7 +96,7 @@ interface Link {
 }
 
 /**
- * Sessions and projects side by side: your Claude sessions on the left, your Weave projects on the right, and a line
+ * Sessions and projects side by side: your agents' sessions on the left (a section per harness: Claude Code, later others), your Weave projects on the right, and a line
  * for each project a session takes work from. Drag from one side's port to the other to link them; click a line to unlink.
  */
 function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; projects: SpaceInfo[]; onNew?(project?: string): void }) {
@@ -195,6 +198,8 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
     const dy = b.y > a.y ? r : -r;
     return `M${a.x},${a.y} H${mid - r} Q${mid},${a.y} ${mid},${a.y + dy} V${b.y - dy} Q${mid},${b.y} ${mid + r},${b.y} H${b.x}`;
   };
+  // One section per harness: Claude Code first (it's where new sessions start), then any other sessions come from.
+  const harnesses = [...new Set([...(onNew ? ['claude-code'] : []), ...sessions.map((s) => s.provider)])].sort((a, b) => Number(b === 'claude-code') - Number(a === 'claude-code') || harnessName(a).localeCompare(harnessName(b)));
   const lit = (l: Link) => !hover || hover === `s:${sessionKey(l.session)}` || hover === `p:${l.project}`;
   const port = (id: string) => <span className={`map-port${hold?.from === id ? ' held' : ''}`} data-port={id} onPointerDown={grab(id)} title="Drag to the other side to link" />;
   const count = (id: string) => links.filter((l) => l.project === id && l.now !== 'only').length;
@@ -208,36 +213,47 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
   return (
     <div className={`session-map${hold ? ' holding' : ''}`} ref={box}>
       <div className="map-side">
-        <div className="map-head">Claude sessions</div>
-        {GROUPS.map(([role, heading]) => {
-          const group = sessions.filter((s) => (s.role ?? '') === role);
+        <div className="map-head">Agent sessions</div>
+        {harnesses.map((provider) => {
+          const mine = sessions.filter((s) => s.provider === provider);
           return (
-            group.length > 0 && (
-              <div key={role} className="map-group">
-                <div className="map-group-head">{heading}</div>
-                {group.map((s) => {
-                  const id = `s:${sessionKey(s)}`;
-                  return (
-                    <div key={id} className="map-session" {...ends(id)}>
-                      <SessionCard session={s} port={port(id)} />
-                    </div>
-                  );
-                })}
+            <section key={provider} className="map-harness">
+              <div className="map-harness-head">
+                <span className="grow">{harnessName(provider)}</span>
+                {mine.length > 0 && <span className="small">{mine.length}</span>}
               </div>
-            )
+              {GROUPS.map(([role, heading]) => {
+                const group = mine.filter((s) => (s.role ?? '') === role);
+                return (
+                  group.length > 0 && (
+                    <div key={role} className="map-group">
+                      <div className="map-group-head">{heading}</div>
+                      {group.map((s) => {
+                        const id = `s:${sessionKey(s)}`;
+                        return (
+                          <div key={id} className="map-session" {...ends(id)}>
+                            <SessionCard session={s} port={port(id)} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                );
+              })}
+              {onNew && provider === 'claude-code' && (
+                <div className="map-session map-new" {...ends('n:new')} onClick={(e) => void (hold ? finish(e.currentTarget) : onNew())}>
+                  <div className="session-row">
+                    <span className="session-plus">+</span>
+                    <div className="session-text">
+                      <b className="session-title">New Claude Code session…</b>
+                      <span className="session-meta">In a folder, with a job; or drop a project here</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
           );
         })}
-        {onNew && (
-          <div className="map-session map-new" {...ends('n:new')} onClick={(e) => void (hold ? finish(e.currentTarget) : onNew())}>
-            <div className="session-row">
-              <span className="session-plus">+</span>
-              <div className="session-text">
-                <b className="session-title">New session…</b>
-                <span className="session-meta">In a folder, with a job; or drop a project here</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
       <div className="map-side">
         <div className="map-head">Weave projects</div>
