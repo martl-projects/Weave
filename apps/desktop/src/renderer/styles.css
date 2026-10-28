@@ -663,8 +663,33 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .session-head { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
 .session-doing { font-size: 12px; opacity: .8; }
 .session-job { display: flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
-.session-projects { font-size: 12px; }
-.session-projects summary { cursor: pointer; }
+.session-map { position: relative; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(170px, .6fr); column-gap: clamp(80px, 16%, 180px); align-items: start; font-family: var(--content-font); user-select: none; }
+.map-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; position: relative; z-index: 1; }
+.map-head { font-size: 11px; font-weight: 700; opacity: .6; }
+.map-side + .map-side .map-head { padding-left: 12px; }
+.map-session .session-card { position: relative; user-select: text; }
+.map-session .session-card > .map-port { position: absolute; right: -6px; top: 50%; margin-top: -5px; }
+.map-project { position: relative; display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 6px 3px 12px; font-size: 13px; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); }
+.map-project.any { font-style: italic; border-style: dashed; }
+.map-project > .map-port { position: absolute; left: -6px; top: 50%; margin-top: -5px; }
+.map-icon { width: 16px; height: 16px; object-fit: cover; }
+.map-port { width: 10px; height: 10px; background: color-mix(in srgb, currentColor 20%, transparent); border: 1px solid currentColor; cursor: crosshair; touch-action: none; z-index: 2; }
+.map-port:hover, .map-port.held { background: var(--cl-accent, var(--accent)); border-color: var(--cl-accent, var(--accent)); }
+.session-map.holding .map-project, .session-map.holding .map-session .session-card { cursor: copy; }
+.session-map.holding .map-project:hover, .session-map.holding .map-session:hover .session-card { outline: 1px dotted var(--text); }
+.map-links { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+.map-link path { fill: none; stroke: currentColor; }
+.map-link .line { stroke-width: 1.5; opacity: .7; }
+.map-link.driver { color: var(--cl-accent, var(--accent)); }
+.map-link.driver .line { stroke-width: 2.5; opacity: 1; }
+.map-link.any .line, .map-link.paused .line { stroke-dasharray: 5 4; }
+.map-link.paused .line { opacity: .35; }
+.map-link.now-only .line { stroke-dasharray: 1 3; opacity: .5; }
+.map-link .now { fill: currentColor; }
+.map-link .hit { stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+.map-link:has(.hit:hover) .line { stroke: #b00; stroke-dasharray: 4 3; opacity: 1; }
+.map-link.dim { opacity: .15; }
+.map-links path.drawing { fill: none; stroke: var(--cl-accent, var(--accent)); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .worker-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
 .worker { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 6px 8px; font-family: var(--content-font); }
 .role-badge { margin-left: 6px; padding: 0 4px; font-size: 10px; font-weight: normal; text-transform: uppercase; letter-spacing: .04em; border: 1px solid currentColor; opacity: .75; }
