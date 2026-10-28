@@ -82,6 +82,8 @@ const weave: Record<string, unknown> = {
     tickEvery: (ms: number) => call('tickEvery', [ms]),
     sign: (setting: string, algorithm: string, data: Uint8Array) => call('sign', [setting, algorithm, data]),
     release: (space: string, id: string) => call('release', [space, id]),
+    websites: (space: string) => call('websites', [space]),
+    closeWebsite: (id: string) => call('closeWebsite', [id]),
   },
   // Its website's players: Weave holds their connections; what it says to them goes out without waiting.
   'service/players': {

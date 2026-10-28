@@ -17,7 +17,7 @@ import { InstallRelease, SettingInput, useArtifacts } from './websites.tsx';
 /** An icon for a service, by what it is: its kind, or its name. */
 export function serviceIcon(s: { name: string; builtin?: string; contract?: ServiceContract }): IconName {
   const name = s.name.toLowerCase();
-  if (s.builtin === 'website' || s.contract?.website) return 'globe';
+  if (s.builtin === 'website' || s.contract?.website || s.contract?.websites === 'host') return 'globe';
   if (s.builtin === 'github' || name.includes('github')) return 'github';
   if (/s3|storage|bucket|backup/.test(name)) return 'database';
   if (/file|drive|docs/.test(name)) return 'folder';
@@ -62,10 +62,11 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
 
   const entries: Entry[] = [
     ...(shipped ?? [])
-      .filter((x) => !services.some((s) => s.shipped === x.name))
+      .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
       .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
     ...(['website', 'github'] as const)
-      .filter((b) => !services.some((s) => s.builtin === b))
+      // Websites ship with Weave now: the built-in one only where this Weave ships none.
+      .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
       .map((b): Entry => ({ key: `builtin:${b}`, icon: serviceIcon({ name: b, builtin: b }), title: BUILTINS[b].title, by: 'Weave', about: BUILTINS[b].about, badge: 'built into Weave', open: () => setPicked({ kind: 'builtin', builtin: b }) })),
     ...(listed ?? [])
       .filter(({ e }) => !e.installed)

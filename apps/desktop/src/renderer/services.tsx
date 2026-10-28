@@ -3,7 +3,7 @@ import type { KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, Service
 import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
-import { ago, api, bump, shortDid, useApi } from './lib.ts';
+import { ago, api, bump, shortDid, useApi, useTick } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /*
@@ -671,7 +671,7 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
  * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
  * and gets the service's answer back; it may say how tall it is.
  *
- *   to it:    {weave: 'view', panel, space, me, actions}   {weave: 'acted', id, text?, data?, error?}
+ *   to it:    {weave: 'view', panel, space, me, actions} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
  *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}
  */
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
@@ -683,7 +683,9 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () =>
     send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })) });
-  useEffect(sendView, [actions]);
+  // Again whenever something changed here (a website opened, a setting changed): it shows what's current.
+  const tick = useTick();
+  useEffect(sendView, [actions, tick]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;

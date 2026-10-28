@@ -69,6 +69,9 @@ function signWith(key: string | undefined, name: string, algorithm: string, data
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
 
+/** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
+export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
+
 /** The services this Weave ships (tests give their own folder). */
 const shippedHere = (h: ServicesHost) => shippedServices(h.shippedDir() ?? SHIPPED_DIR);
 
@@ -165,7 +168,8 @@ export class Services {
       ...(stored.command ? { command: stored.command } : {}),
       ...(stored.wasm ? { wasm: stored.wasm } : {}),
       ...(stored.site ? { site: stored.site } : {}),
-      ...(stored.builtin ? { builtin: stored.builtin, ...(stored.builtin === 'website' ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}) } : {}),
+      ...(stored.builtin ? { builtin: stored.builtin } : {}),
+      ...(hostsWebsites(stored) ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
@@ -378,7 +382,7 @@ export class Services {
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
-    if (builtin === 'website') this.serveRunning();
+    if (hostsWebsites(stored)) this.serveRunning();
     if (builtin === 'github') this.provide();
     return this.serviceInfo(this.storedService(name));
   }
@@ -1542,6 +1546,26 @@ export class Services {
             // A sign-in about to run out is renewed first: it always gets a current token.
             await this.settings.renew([current]);
             return this.settings.effective(current)[String(args[0])] ?? undefined;
+          }
+          if (call === 'websites' || call === 'closeWebsite') {
+            // Only one that hosts websites, only in its projects, only the websites it hosts.
+            if (!hostsWebsites(current)) throw new Error(`${name} doesn't host websites in its contract`);
+            if (call === 'websites') {
+              const space = this.h.spaces.get(String(args[0]));
+              if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that project`);
+              const hosted = new Set(Object.keys(current.hosted ?? {}));
+              return JSON.stringify(
+                (await this.web.websites(space.id))
+                  .filter((w) => hosted.has(w.id))
+                  .map((w) => {
+                    const room = current.hosted![w.id];
+                    return { id: w.id, name: w.name, host: w.host.name ?? w.host.did, ...(room.servedBy ? { by: room.servedBy } : {}), visitors: w.show ? 'ticket holders' : w.groups?.length ? 'members of tiers' : room.access?.invite ? 'invited people' : 'everyone here', open: w.open, time: w.time };
+                  }),
+              );
+            }
+            const id = String(args[0]);
+            if (!current.hosted?.[id]) throw new Error(`${name} doesn't host that website`);
+            return void (await this.web.closeWebsite(id));
           }
           if (call === 'release') {
             // Only a provider of releases' files, only its spaces' releases, only those its maintainers published.

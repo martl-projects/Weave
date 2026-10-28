@@ -508,6 +508,9 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 }
 
 /** What a service is there for, in a project. */
+/** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
+const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
+
 const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Gives the project's members access to its repositories" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
@@ -522,13 +525,13 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   // Getting access to a GitHub service's repositories: your GitHub account, shared with this project.
   const { data: repos, reload: reloadRepos } = useApi(() => (service.builtin === 'github' ? api<SpaceRepos>('spaceRepos', project.id).catch(() => undefined) : Promise.resolve(undefined)), [project.id, service.builtin]);
   const extras: ScopedAction[] = [
-    ...(service.builtin !== 'website' && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
+    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
     ...(service.builtin === 'github' && repos?.repos.length
       ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories', who: 'members' as const, mine: true, run: () => void attempt(() => api('shareGithub', { space: project.id, on: !repos.shared }).then(reloadRepos), repos.shared ? 'Your access goes' : `Your GitHub account is shared with p/${project.name}: you'll get an invitation`) }]
       : []),
     ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true) }] : []),
     ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
-    ...(service.builtin === 'website' && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
+    ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
     ...(own && mine
       ? [
           {
@@ -557,9 +560,9 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
           <HostedStatus hosted={mine?.websites?.find((r) => r.id === room.id)} />
         </div>
       ))}
-      {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
+      {hostsSites(service) && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
       {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
-      {service.builtin === 'website' && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
+      {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
       <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
@@ -662,7 +665,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
 
   // Room services first, then the rest.
-  const all = [...(profiles ?? [])].sort((a, b) => Number(b.builtin === 'website') - Number(a.builtin === 'website'));
+  const all = [...(profiles ?? [])].sort((a, b) => Number(hostsSites(b)) - Number(hostsSites(a)));
   // One picked in the sidebar: that one alone.
   const list = focus ? all.filter((s) => s.did === focus) : all;
   return (

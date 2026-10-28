@@ -1,3 +1,4 @@
+import { hostsWebsites } from './services.ts';
 import { b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
@@ -414,7 +415,7 @@ export class Website {
     // project to reach. Your own code runs with all your rights anyway: it serves what you have it serve.
     const own = this.svc.servesOn(serving);
     if (own && !own.has(port)) throw new Error(`service "${by}" may serve only its own port${own.size ? ` (${[...own].join(', ')})` : 's, and has none'}, not ${port}`);
-    const site = this.svc.storedServices().find((s) => s.builtin === 'website' && s.enabled && s.spaces.includes(project.id));
+    const site = this.svc.storedServices().find((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id));
     if (!site) throw new Error(`p/${project.name} has no website service on this device: add it there, and ${by} shows up as a website`);
     const name = input.name?.trim().slice(0, 60) || serving.artifact?.manifest.name || by;
     const pages = parsePages(input.pages);
@@ -430,7 +431,7 @@ export class Website {
 
   /** Close the websites a service serves (all of them, or those `keep` doesn't keep): it stopped, left a project, or went. */
   async unserve(by: string, keep: (room: StoredRoom) => boolean = () => false): Promise<void> {
-    for (const site of this.svc.storedServices().filter((s) => s.builtin === 'website')) await this.closeHostedRooms(site.name, (r) => r.servedBy !== by || keep(r));
+    for (const site of this.svc.storedServices().filter(hostsWebsites)) await this.closeHostedRooms(site.name, (r) => r.servedBy !== by || keep(r));
   }
 
   /** The websites the website services of this device serve, with the service each belongs to. */
@@ -474,7 +475,7 @@ export class Website {
   /** Your website service: the one named, or your only one; here, or on one of your always-on nodes (`away`). */
   roomServiceFor(name?: string): { name: string; spaces: string[]; hosted: Record<string, StoredRoom>; away?: Handover } {
     const here = this.svc.storedServices()
-      .filter((s) => s.builtin === 'website')
+      .filter(hostsWebsites)
       .map((s) => ({ name: s.name, spaces: s.spaces, hosted: s.hosted ?? {}, enabled: s.enabled, away: undefined as Handover | undefined }));
     const away = this.h.isLinkedNode ? [] : [...this.svc.handedOver().values()].filter((h) => h.builtin === 'website').map((h) => ({ name: h.service, spaces: h.spaces, hosted: h.hosted ?? {}, enabled: h.enabled !== false, away: h as Handover | undefined }));
     const all = [...here, ...away];

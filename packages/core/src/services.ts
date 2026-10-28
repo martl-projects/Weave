@@ -81,6 +81,12 @@ export interface ServiceContract {
   net?: string[];
   /** What people may ask it to do, each with who may (serviceactions.ts): checked before it sees a request. */
   actions?: ServiceAction[];
+  /**
+   * It hosts websites in its projects, as Weave's website service does: what its person's services serve, and what
+   * its person opens for a program of theirs, announced under its key; it lists and closes them. It never opens a
+   * port itself.
+   */
+  websites?: 'host';
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -185,7 +191,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   const net = Array.isArray(c.net) ? [...new Set(c.net.map(lowerHost).filter(isNetHost))].slice(0, 20) : [];
   // Actions are requests: a service that reads nothing takes none.
   const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), version };
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**
@@ -193,7 +199,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
  * writes (rooms, if it serves websites). A service that reads nothing and writes nothing signs its profile alone.
  */
 export const servicePermissions = (contract: ServiceContract): string[] =>
-  [...new Set([KIND_SERVICE_PROFILE, ...(contract.reads === 'nothing' ? [] : [KIND_SERVICE_RESULT]), ...contract.writes, ...(contract.website ? ['weave.room', 'weave.room.*'] : [])])];
+  [...new Set([KIND_SERVICE_PROFILE, ...(contract.reads === 'nothing' ? [] : [KIND_SERVICE_RESULT]), ...contract.writes, ...(contract.website || contract.websites === 'host' ? ['weave.room', 'weave.room.*'] : [])])];
 
 /** Whether a service takes requests (and may answer them). */
 export const takesRequests = (contract: ServiceContract): boolean => contract.reads !== 'nothing';
@@ -203,7 +209,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */

@@ -35,6 +35,11 @@ interface host {
   /// manifest} as JSON, or nothing. Only for a service that offers artifact.fetch: it hands those releases' files out,
   /// and only theirs, whatever a request names.
   release: func(space: string, id: string) -> option<string>;
+  /// The websites it hosts in one of its projects: [{id, name, host, by?, visitors, open, time}] as JSON. Only for a
+  /// service that hosts websites (websites: host in its contract), as Weave's website service does.
+  websites: func(space: string) -> result<string, string>;
+  /// Close a website it hosts. Opening one is its person's (a port of their computer) or a service's (its own page).
+  close-website: func(id: string) -> result<_, string>;
 }
 
 world service {
