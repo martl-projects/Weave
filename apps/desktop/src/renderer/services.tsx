@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import type { KeyInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
-import type { ServiceContract } from '@weave/core';
+import type { KeyInfo, ServiceActionInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import type { ActionWho, ServiceContract } from '@weave/core';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
@@ -442,6 +442,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
       </p>
       {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      <WhoCan space={space} service={service} maintainer={data.mayChange} />
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
         const set = data.settings.find((x) => x.name === name);
@@ -505,5 +506,105 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         <button onClick={onClose}>Close</button>
       </div>
     </Modal>
+  );
+}
+
+const whoLabel = (who: ActionWho): string => (who === 'members' ? 'Everyone here' : who === 'maintainers' ? 'Maintainers' : who === 'owner' ? 'The owner' : `Readers of ${who.board}`);
+
+/** The actions of a service you may use here, as buttons: each asks what it needs, then shows the service's answer. */
+export function ServiceActions({ space, service }: { space: { id: string; name: string }; service: { did: string; name: string } }) {
+  const { data: actions } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  const [using, setUsing] = useState<ServiceActionInfo>();
+  const mine = (actions ?? []).filter((a) => a.mine);
+  if (!mine.length) return null;
+  return (
+    <>
+      {mine.map((a) => (
+        <button key={a.name} onClick={() => setUsing(a)}>
+          {a.label}…
+        </button>
+      ))}
+      {using && <ActionDialog space={space} service={service} action={using} onClose={() => setUsing(undefined)} />}
+    </>
+  );
+}
+
+function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [asked, setAsked] = useState<string>();
+  const { data: answer } = useApi(
+    () => (asked ? api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }).then((all) => all.find((r) => r.id === asked)?.results[0]) : Promise.resolve(undefined)),
+    [asked],
+  );
+  const missing = (action.input ?? []).some((f) => !f.optional && !values[f.name]?.trim());
+  return (
+    <Modal title={`${action.label} · ${service.name}`} onClose={onClose}>
+      {!asked ? (
+        <>
+          {(action.input ?? []).map((f) => (
+            <div className="app-setting" key={f.name}>
+              <label htmlFor={`action-${f.name}`}>
+                {f.label}
+                {f.optional ? <span className="muted"> (optional)</span> : null}
+              </label>
+              <input id={`action-${f.name}`} className="wide" type={f.secret ? 'password' : 'text'} value={values[f.name] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))} />
+            </div>
+          ))}
+          <div className="buttons">
+            <AsyncButton
+              className="default"
+              disabled={missing}
+              onClick={() =>
+                attempt(async () => {
+                  const data = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
+                  const r = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action.label, action: action.name, ...(Object.keys(data).length ? { data } : {}) });
+                  setAsked(r.id);
+                })
+              }
+            >
+              {action.label}
+            </AsyncButton>
+          </div>
+        </>
+      ) : answer ? (
+        <p className={answer.error ? 'error-text' : ''}>{answer.error ?? (answer.text || 'Done.')}</p>
+      ) : (
+        <p className="small muted">Asked {service.name}: its answer shows here once it comes.</p>
+      )}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Who can use each of a service's actions here: maintainers make one narrower than its contract, never wider. */
+export function WhoCan({ space, service, maintainer }: { space: { id: string; name: string }; service: { did: string }; maintainer: boolean }) {
+  const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  if (!actions?.length) return null;
+  const narrower = (declared: ActionWho): ActionWho[] => (['members', 'maintainers', 'owner'] as ActionWho[]).filter((w) => (declared === 'members' ? true : declared === 'maintainers' ? w !== 'members' : declared === 'owner' ? w === 'owner' : false));
+  return (
+    <fieldset className="service-setting">
+      <legend>Who can</legend>
+      {actions.map((a) => (
+        <div className="field-row" key={a.name}>
+          <span className="grow">{a.label}</span>
+          {maintainer && typeof a.declared === 'string' ? (
+            <select
+              value={typeof a.who === 'string' ? a.who : ''}
+              onChange={(e) => void attempt(() => api('setServicePolicy', { space: space.id, service: service.did, action: a.name, who: e.target.value === a.declared ? null : e.target.value }).then(reload))}
+            >
+              {narrower(a.declared).map((w) => (
+                <option key={String(w)} value={String(w)}>
+                  {whoLabel(w)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="small">{whoLabel(a.who)}</span>
+          )}
+        </div>
+      ))}
+    </fieldset>
   );
 }

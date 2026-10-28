@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { Builtin, GumroadLink, OnchainPrice, VisitorRule } from '@weave/core';
+import type { ActionWho, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
@@ -407,12 +407,27 @@ export interface ServiceGate {
 }
 
 /** A request to a service in a space, and what the service answered. */
+/** One of a service's actions in a space: who may use it there (its contract's, or tighter), and whether you may. */
+export interface ServiceActionInfo {
+  name: string;
+  label: string;
+  /** Who may, here. */
+  who: ActionWho;
+  /** Who may, as its contract says. */
+  declared: ActionWho;
+  /** What using it asks for. */
+  input?: ServiceActionField[];
+  /** You may use it. */
+  mine: boolean;
+}
+
 export interface ServiceRequestInfo {
   id: string;
   to: Actor;
   from: Actor;
   text: string;
   data?: Json;
+  action?: string;
   time: string;
   results: Array<{ id: string; text: string; data?: Json; error?: string; time: string }>;
 }
@@ -1727,7 +1742,11 @@ export interface Backend {
   /** Wait until the provider came back (5 minutes at most): the service's settings with the sign-in. */
   finishServiceSignIn(input: { id: string }): Promise<ServiceSettingsInfo>;
   /** Ask a service something in a space: a request it reads (it must be in that space). */
-  askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo>;
+  askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo>;
+  /** What you may ask a service to do in a space: its actions, who may use each there, and whether you may. */
+  serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]>;
+  /** Maintainers: tighten who may use one of a service's actions in a space (null: as its contract says). */
+  setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
   /** Who owns a repository: an organization (members get read access) or a person (link only, or write access for people picked). */
@@ -2099,7 +2118,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'setServicePolicy', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

@@ -1,5 +1,5 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho } from '@weave/core';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -747,13 +747,17 @@ export class Services {
     throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
   }
 
-  async askService(input: { space: string; service: string; text: string; data?: Json; as?: string }): Promise<ServiceRequestInfo> {
+  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === to);
     if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
+    if (input.action && profile) {
+      const why = this.refusal(profile.contract, to, this.h.space(input.space), this.h.identity.author, input.action);
+      if (why) throw new Error(`${profile.name}: ${why}`);
+    }
     const text = input.text?.trim() ?? '';
     if (!text && input.data === undefined) throw new Error('ask with some text or data');
-    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}) }, space: input.space, as: input.as });
+    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) }, space: input.space, as: input.as });
     return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
   }
 
@@ -768,6 +772,7 @@ export class Services {
       from: this.h.actor(r.from, r.from),
       text: r.text,
       ...(r.data !== undefined ? { data: r.data as Json } : {}),
+      ...(r.action ? { action: r.action } : {}),
       time: r.time,
       // Only the service it was for answers it.
       results: results
@@ -785,8 +790,63 @@ export class Services {
    */
   serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
     if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
-    if (d.inner.kind === KIND_SERVICE_REQUEST) return takesRequests(stored.contract) && (d.inner.body as { to?: unknown } | null)?.to === did;
+    if (d.inner.kind === KIND_SERVICE_REQUEST) {
+      const body = d.inner.body as { to?: unknown; action?: unknown } | null;
+      if (!takesRequests(stored.contract) || body?.to !== did) return false;
+      if (body.action === undefined) return true;
+      // An action: only from someone who may use it here. Anyone else gets Weave's no, and the service never sees it.
+      const why = this.refusal(stored.contract, did, d.space, d.event.author, String(body.action));
+      if (why) this.#refuse(stored, d.id, why);
+      return !why;
+    }
     return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** Why someone may not use an action of a service in a space, or undefined: they may. */
+  refusal(contract: ServiceContract, service: Did, space: StoredSpace, person: Did, name: string): string | undefined {
+    const action = contract.actions?.find((a) => a.name === name);
+    if (!action) return `it has no action ${name}`;
+    const state = this.h.state(space);
+    const who = policiesOf(this.h.entries(space), state.maintainers, service, contract.actions!).get(name) ?? action.who;
+    return mayAct(who, person, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board)) ? undefined : `only ${whoWords(who)} can ${action.label.charAt(0).toLowerCase()}${action.label.slice(1)} in ${this.h.spaceName(space)}`;
+  }
+
+  /** Requests refused already, so each is answered once. */
+  #refused = new Set<string>();
+
+  #refuse(stored: StoredService, request: string, why: string): void {
+    if (this.#refused.has(request)) return;
+    this.#refused.add(request);
+    const gate = this.serviceGate(stored.token);
+    void gate?.answer({ request, error: why }).catch(() => this.#refused.delete(request));
+  }
+
+  /** A service's actions in a space: who may use each there, and whether you may. */
+  async serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]> {
+    const space = this.h.space(input.space);
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    const actions = profile?.contract.actions ?? [];
+    const state = this.h.state(space);
+    const tightened = policiesOf(this.h.entries(space), state.maintainers, did, actions);
+    return actions.map((a) => {
+      const who = tightened.get(a.name) ?? a.who;
+      return { name: a.name, label: a.label, who, declared: a.who, ...(a.input ? { input: a.input } : {}), mine: mayAct(who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board)) };
+    });
+  }
+
+  /** Maintainers: who may use a service's action in a space, tighter than its contract (or null: as it says). */
+  async setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]> {
+    const space = this.h.space(input.space);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
+    const did = await this.serviceDid(input.service);
+    const action = (await this.serviceProfiles()).find((p) => p.did === did)?.contract.actions?.find((a) => a.name === input.action);
+    if (!action) throw new Error(`that service has no action ${input.action}`);
+    const who = input.who === null ? action.who : parseWho(input.who);
+    if (!who) throw new Error('who is members, maintainers, owner, or {board: <name>}');
+    if (!tightens(action.who, who)) throw new Error(`${action.label} is for ${whoWords(action.who)}: a project can make that narrower, not wider`);
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(space), { kind: KIND_SERVICE_POLICY, body: { service: did, action: action.name, who: who as unknown as Json } }));
+    return this.serviceActions({ space: space.id, service: did });
   }
 
   /** The gate a service's token opens on the local API, or undefined for any other token. */

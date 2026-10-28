@@ -91,6 +91,7 @@ export type {
   CatalogEntryInfo,
   ServiceProfileInfo,
   ServiceSettingsInfo,
+  ServiceActionInfo,
   ShippedServiceInfo,
   ServiceOriginInfo,
   ServiceRequestInfo,

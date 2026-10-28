@@ -6,7 +6,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
+import { contractText, OriginText, ServiceActions, ServiceCard, KeptSettingsDialog } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -543,8 +543,9 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <div className="buttons">
         {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
         {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
+        {!!service.contract.actions?.length && <ServiceActions space={{ id: project.id, name: `p/${project.name}` }} service={service} />}
         {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
-        {(!!service.settings?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
+        {(!!service.settings?.length || !!service.contract.actions?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
         {own && mine && (
           <AsyncButton
             onClick={async () =>

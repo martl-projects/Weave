@@ -9093,6 +9093,8 @@ export class WeaveNode implements Backend {
       },
       state: n.#state.bind(n),
       toItem: n.#toItem.bind(n),
+      /** Who reads a board of a project (everyone, for a board nobody limited). */
+      boardReaders: (space: StoredSpace, board: string) => n.#repoReaders(space, n.#state(space), n.#entries(space), board),
     };
   }
 
@@ -9244,6 +9246,14 @@ export class WeaveNode implements Backend {
 
   serviceProfiles(...args: Parameters<Services['serviceProfiles']>): ReturnType<Services['serviceProfiles']> {
     return this.#services.serviceProfiles(...args);
+  }
+
+  serviceActions(...args: Parameters<Services['serviceActions']>): ReturnType<Services['serviceActions']> {
+    return this.#services.serviceActions(...args);
+  }
+
+  setServicePolicy(...args: Parameters<Services['setServicePolicy']>): ReturnType<Services['setServicePolicy']> {
+    return this.#services.setServicePolicy(...args);
   }
 
   askService(...args: Parameters<Services['askService']>): ReturnType<Services['askService']> {
