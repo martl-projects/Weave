@@ -37,6 +37,8 @@ interface Bridge {
   /** Ctrl+click: work on a post in the Claude app (its session, or a new one). Missing in a browser. */
   /** Work on an item in the Claude app: in a session you picked, a new one, or (no choice) where it was last. */
   workOn?(post: string, choice?: { session: { provider: string; id: string } } | { new: true }): Promise<{ how: 'session' | 'new' | 'cancelled'; delivered?: 'pasted' | 'clipboard' | 'link'; where?: string }>;
+  /** Start a Claude Code session in a folder; with a job, it gets it (and its projects) once the Claude app says which session it is. */
+  newSession?(input: { folder: string; role?: 'driver' | 'worker'; projects?: string[]; text?: string }): Promise<'pasted' | 'clipboard' | 'link'>;
   /** Bring a session (the Claude app's own id) to the front in the Claude app. Missing in a browser. */
   showSession?(host: string): Promise<void>;
   /** In the address book picker: put it away and paste `text` where you were typing (or leave it on the clipboard). Missing in a browser. */

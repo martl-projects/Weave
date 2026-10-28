@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('weave', {
   mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
   route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
   workOn: (post: string, choice?: unknown) => ipcRenderer.invoke('weave:work-on', post, choice),
+  newSession: (input: unknown) => ipcRenderer.invoke('weave:new-session', input),
   showSession: (host: string) => ipcRenderer.invoke('weave:show-session', host),
   pick: (text: string) => ipcRenderer.invoke('weave:pick', text),
   closePicker: () => ipcRenderer.invoke('weave:picker'),

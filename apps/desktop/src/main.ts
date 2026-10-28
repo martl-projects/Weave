@@ -399,6 +399,18 @@ function createTray(): void {
 }
 
 /** A folder on this computer, picked by the person (for a project app's local copy). */
+// A new Claude Code session from the Sessions page: it gets its job and projects once the Claude app says which session it is.
+ipcMain.handle('weave:new-session', async (_event, input: { folder?: unknown; role?: unknown; projects?: unknown; text?: unknown }): Promise<Delivered> => {
+  if (!daemon) throw new Error('not connected to Weave');
+  const folder = typeof input?.folder === 'string' ? input.folder.trim() : '';
+  if (!folder) throw new Error('say which folder the session works in');
+  const role = input.role === 'driver' || input.role === 'worker' ? input.role : undefined;
+  const projects = Array.isArray(input.projects) ? input.projects.filter((p): p is string => typeof p === 'string') : [];
+  if (role) await daemon.client.expectSession({ folder, role, projects });
+  for (const space of projects) await daemon.client.rememberFolder({ space, folder });
+  return newSession(folder, typeof input.text === 'string' ? input.text.trim() : '');
+});
+
 ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
   const options = { title: String(title ?? 'Choose a folder').slice(0, 80), properties: ['openDirectory' as const] };
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);

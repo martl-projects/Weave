@@ -1778,10 +1778,13 @@ export interface Backend {
   /** Run a routine now: its item for today (or its first start), unless that exists already. */
   runRoutine(input: { space?: string; id: string }): Promise<PostInfo>;
   /**
-   * A new session for this item is about to open in the Claude app (Ctrl+click): the next session you look at
-   * there that has no work items yet, within 15 minutes, gets it on its stack once the app says which session it is.
+   * A new session is about to open in the Claude app (Ctrl+click, or New session on the Sessions page): the next
+   * session you look at there that has no work items and no job yet, within 15 minutes, gets the item on its stack
+   * and the job (with its projects) once the app says which session it is.
    */
-  expectSession(input: { post: string; folder?: string }): Promise<void>;
+  expectSession(input: { post?: string; folder?: string; role?: 'driver' | 'worker'; projects?: string[] }): Promise<void>;
+  /** The folders you worked on a space in, latest first (rememberFolder). */
+  folders(input: { space: string }): Promise<string[]>;
   /** Remember a folder on this computer for a project (or community), for the next new session there. */
   rememberFolder(input: { space: string; folder: string }): Promise<string[]>;
   /** Rearrange a session's stack: these posts first, in this order; `remove` takes posts off. */
@@ -2056,7 +2059,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'setSessionRole', 'workers', 'assign',
+  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',

@@ -96,7 +96,7 @@ interface Link {
  * Sessions and projects side by side: your Claude sessions on the left, your Weave projects on the right, and a line
  * for each project a session takes work from. Drag from one side's port to the other to link them; click a line to unlink.
  */
-function SessionMap({ sessions, projects }: { sessions: SessionInfo[]; projects: SpaceInfo[] }) {
+function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; projects: SpaceInfo[]; onNew?(project?: string): void }) {
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<Record<string, { x: number; y: number }>>({});
   const [hover, setHover] = useState<string>();
@@ -145,6 +145,13 @@ function SessionMap({ sessions, projects }: { sessions: SessionInfo[]; projects:
   const finish = (target: Element | null) => {
     const to = (target?.closest('[data-end]') as HTMLElement | null)?.dataset.end;
     if (!hold || !to || to.slice(0, 2) === hold.from.slice(0, 2)) return false;
+    // A project dropped on New session: a new session for it.
+    if (to === 'n:new') {
+      if (!hold.from.startsWith('p:')) return false;
+      onNew?.(hold.from === `p:${ANY}` ? undefined : hold.from.slice(2));
+      setHold(undefined);
+      return true;
+    }
     const [s, p] = hold.from.startsWith('s:') ? [hold.from, to] : [to, hold.from];
     const session = sessions.find((x) => `s:${sessionKey(x)}` === s);
     if (session) void link(session, p.slice(2));
@@ -220,6 +227,17 @@ function SessionMap({ sessions, projects }: { sessions: SessionInfo[]; projects:
             )
           );
         })}
+        {onNew && (
+          <div className="map-session map-new" {...ends('n:new')} onClick={(e) => void (hold ? finish(e.currentTarget) : onNew())}>
+            <div className="session-row">
+              <span className="session-plus">+</span>
+              <div className="session-text">
+                <b className="session-title">New session…</b>
+                <span className="session-meta">In a folder, with a job; or drop a project here</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       <div className="map-side">
         <div className="map-head">Weave projects</div>
@@ -271,6 +289,8 @@ export function SessionsView() {
   const [all, setAll] = useState(false);
   const { data: follow } = useApi(() => api<ClaudeCodeFollow>('claudeCode'), []);
   const toggleFollow = () => attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }).then(bump));
+  // The New session dialog, for a project or any.
+  const [starting, setStarting] = useState<{ project?: string }>();
   // Sessions with a job first; the others only from the last day, unless you ask for all.
   const list = (sessions ?? []).filter((s) => all || s.role || Date.now() - Date.parse(s.active ?? s.time) < 24 * 3600 * 1000);
   const ordered = [...list.filter((s) => s.role === 'driver'), ...list.filter((s) => s.role === 'worker'), ...list.filter((s) => !s.role)];
@@ -296,12 +316,90 @@ export function SessionsView() {
         Link a session to a project by dragging from one side to the other: it then takes that project's work items, from you (Ctrl+click) and from your
         daily driver. Click a line to unlink. A dot marks the project a session is working in now.
       </p>
-      {sessions && !ordered.length ? (
-        <p className="empty">No Claude Code sessions here yet. Turn on Follow Claude Code to see them.</p>
-      ) : (
-        <SessionMap sessions={ordered} projects={projects} />
-      )}
+      {sessions && !ordered.length && <p className="empty">No Claude Code sessions here yet. Turn on Follow Claude Code to see them.</p>}
+      {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
+      {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
     </Page>
+  );
+}
+
+/** Start a Claude Code session in a folder, with a job: it takes work from the project (or any) once the Claude app says which session it is. */
+function NewSession({ project: initial, projects, following, onClose }: { project?: string; projects: SpaceInfo[]; following: boolean; onClose(): void }) {
+  const [project, setProject] = useState(initial ?? '');
+  const [folder, setFolder] = useState('');
+  const [role, setRole] = useState<'worker' | 'driver' | ''>('worker');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  // The folder you last worked on the project in, unless you typed one.
+  const [suggested, setSuggested] = useState('');
+  useEffect(() => {
+    let live = true;
+    void (project ? api<string[]>('folders', { space: project }) : Promise.resolve([])).then((list) => {
+      if (!live) return;
+      setFolder((f) => (f && f !== suggested ? f : (list[0] ?? '')));
+      setSuggested(list[0] ?? '');
+    });
+    return () => {
+      live = false;
+    };
+  }, [project]);
+  const choose = async () => {
+    const picked = await bridge.pickFolder('Folder for the new session (Claude Code works in it)');
+    if (picked) setFolder(picked);
+  };
+  const start = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const ok = await attempt(() => bridge.newSession!({ folder: folder.trim(), ...(role ? { role } : {}), projects: project ? [project] : [], text }));
+    setBusy(false);
+    if (ok !== undefined) onClose();
+  };
+  return (
+    <Modal title="New Claude Code session" onClose={onClose}>
+      <form className="form" onSubmit={(e) => void start(e)}>
+        <div className="field-row-stacked">
+          <label htmlFor="new-session-project">Project</label>
+          <select id="new-session-project" value={project} onChange={(e) => setProject(e.target.value)}>
+            <option value="">Any project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="new-session-folder">Folder (Claude Code works in it)</label>
+          <div className="field-row">
+            <input id="new-session-folder" className="grow" required value={folder} onChange={(e) => setFolder(e.target.value)} />
+            <button type="button" onClick={() => void choose()}>
+              Choose…
+            </button>
+          </div>
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="new-session-role">Job</label>
+          <select id="new-session-role" value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
+            <option value="worker">Worker</option>
+            <option value="driver">Daily driver</option>
+            <option value="">No job</option>
+          </select>
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="new-session-text">First message (optional; it waits in the text box, not sent)</label>
+          <textarea id="new-session-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+        </div>
+        {role && !following && <p className="small">Turn on Follow Claude Code first: Weave gives the session its job once it sees it in the Claude app.</p>}
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default" disabled={busy || !folder.trim()}>
+            Start session
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

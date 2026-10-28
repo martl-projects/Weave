@@ -860,8 +860,8 @@ export class WeaveNode implements Backend {
   /** The Claude app's log, for the session you're looking at, while that's on too. */
   #appLog?: AppLogFollower;
   readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
-  /** A session Ctrl+click is opening for an item (see expectSession). */
-  #expected?: { post: string; folder?: string; until: number };
+  /** A session Ctrl+click or the Sessions page is opening: its item, its job (see expectSession). */
+  #expected?: { post?: string; folder?: string; role?: SessionRole; projects?: string[]; until: number };
   /** Watchers told where the app should take its person (see openInApp). */
   #openListeners = new Set<(open: AppOpen) => void>();
   /** How license keys are checked with Gumroad (tests put a fake here). */
@@ -2567,21 +2567,36 @@ export class WeaveNode implements Backend {
     return post;
   }
 
-  async expectSession(input: { post: string; folder?: string }): Promise<void> {
-    const post = await this.post(input.post);
-    this.#expected = { post: post.id, ...(input.folder ? { folder: input.folder } : {}), until: Date.now() + 15 * 60 * 1000 };
+  async expectSession(input: { post?: string; folder?: string; role?: SessionRole; projects?: string[] }): Promise<void> {
+    if (input.role !== undefined && !SESSION_ROLES.includes(input.role)) throw new Error('a session is your driver or a worker');
+    const post = input.post ? (await this.post(input.post)).id : undefined;
+    const projects = input.projects?.map((p) => this.#space(p).id);
+    if (!post && !input.role) throw new Error('say what the new session gets: an item, a job or both');
+    this.#expected = {
+      ...(post ? { post } : {}),
+      ...(input.folder ? { folder: input.folder } : {}),
+      ...(input.role ? { role: input.role, ...(projects?.length ? { projects } : {}) } : {}),
+      until: Date.now() + 15 * 60 * 1000,
+    };
   }
 
-  /** The session Ctrl+click opened has shown up in the Claude app, with its id: give it its item. */
+  folders(input: { space: string }): Promise<string[]> {
+    return Promise.resolve(this.config.spaceFolders?.[this.#space(input.space).id] ?? []);
+  }
+
+  /** The session Ctrl+click or the Sessions page opened has shown up in the Claude app, with its id: give it its item and its job. */
   async #attachExpected(): Promise<void> {
     const expected = this.#expected;
     const focus = this.#appLog?.current;
     if (!expected || !focus?.id) return;
     if (Date.now() > expected.until) return void (this.#expected = undefined);
     // Only a session with nothing on it yet: not one you switched to on the way.
-    if (this.#sessionRecords().get(sessionKey('claude-code', focus.id))?.stack.length) return;
+    const known = this.#sessionRecords().get(sessionKey('claude-code', focus.id));
+    if (known?.stack.length || known?.role) return;
     this.#expected = undefined;
-    await this.workOn({ session: { provider: 'claude-code', id: focus.id, host: focus.host, ...(expected.folder ? { folder: expected.folder } : {}) }, post: expected.post });
+    const session = { provider: 'claude-code', id: focus.id, host: focus.host, ...(expected.folder ? { folder: expected.folder } : {}) };
+    if (expected.post) await this.workOn({ session, post: expected.post });
+    if (expected.role) await this.setSessionRole({ session, role: expected.role, ...(expected.projects ? { projects: expected.projects } : {}) });
   }
 
   async workTarget(input: { post: string; session?: SessionRef }): Promise<WorkTarget> {

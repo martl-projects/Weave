@@ -94,6 +94,36 @@ describe('the Mentions panel', () => {
     }
   });
 
+  it('gives a session the Sessions page opened its job and projects, once the Claude app says which session it is', async () => {
+    const claude = temp('weave-claude-');
+    const log = join(temp('weave-claude-log-'), 'main.log');
+    writeFileSync(log, '2026-10-28 09:00:00 [info] [CCD] LocalSessions.setFocusedSession: sessionId=null\n');
+    process.env.CLAUDE_CONFIG_DIR = claude;
+    process.env.WEAVE_CLAUDE_APP_LOG = log;
+    const martin = WeaveNode.init('Martin', temp('weave-mentions-'));
+    try {
+      const project = await martin.createProject({ name: 'Snake Flight' });
+      await martin.rememberFolder({ space: project.id, folder: 'C:\\snake' });
+      expect(await martin.folders({ space: 'Snake Flight' })).toEqual(['C:\\snake']);
+      await expect(martin.expectSession({ folder: 'C:\\snake' })).rejects.toThrow(/item, a job/);
+      await martin.followClaudeCode({ on: true });
+      await martin.expectSession({ folder: 'C:\\snake', role: 'worker', projects: ['Snake Flight'] });
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 1500));
+
+      appendFileSync(log, '2026-10-28 09:00:10 [info] [CCD] LocalSessions.setFocusedSession: sessionId=local_new\n');
+      appendFileSync(log, '2026-10-28 09:00:30 [info] Mapping internal session local_new to CLI session new-cli\n');
+      await settle();
+      const session = await martin.session({ id: 'new-cli' });
+      expect(session).toMatchObject({ host: 'local_new', folder: 'C:\\snake', role: 'worker', available: true, stack: [] });
+      expect(session.projects?.map((p) => p.name)).toEqual(['Snake Flight']);
+    } finally {
+      await martin.followClaudeCode({ on: false });
+      delete process.env.CLAUDE_CONFIG_DIR;
+      delete process.env.WEAVE_CLAUDE_APP_LOG;
+      await martin.close();
+    }
+  });
+
   it("follows Claude Code sessions for links in the agent's answers, once switched on", async () => {
     const claude = temp('weave-claude-');
     const folder = join(claude, 'projects', 'C--code-weave');

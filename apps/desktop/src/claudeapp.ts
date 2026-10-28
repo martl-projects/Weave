@@ -161,9 +161,9 @@ export async function pasteBack(text: string): Promise<Exclude<Delivered, 'link'
   return 'pasted';
 }
 
-/** Start a new Claude Code session in `folder` with `text` in its text box. */
+/** Start a new Claude Code session in `folder`, with `text` (if any) in its text box. */
 export async function newSession(folder: string, text: string): Promise<Delivered> {
-  const url = `claude://code/new?folder=${encodeURIComponent(folder)}&q=${encodeURIComponent(text.slice(0, 4000))}`;
+  const url = `claude://code/new?folder=${encodeURIComponent(folder)}${text ? `&q=${encodeURIComponent(text.slice(0, 4000))}` : ''}`;
   await shell.openExternal(url);
   return 'link';
 }
