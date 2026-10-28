@@ -319,6 +319,13 @@ export function SessionsView() {
       }
       actions={
         <>
+          <span className="info-tip" tabIndex={0} aria-label="How linking works">
+            <Icon name="info" />
+            <span className="info-pop small" role="tooltip">
+              Link a session to a project by dragging from one side to the other: it then takes that project's work items, from you (Ctrl+click) and from your
+              daily driver. Click a line to unlink. A dot marks the project a session is working in now.
+            </span>
+          </span>
           <input type="checkbox" id="follow-claude-code" checked={!!follow?.on} disabled={!follow} onChange={() => void toggleFollow()} />
           <label htmlFor="follow-claude-code" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
             Follow Claude Code{follow && !follow.found ? ' (not found)' : ''}
@@ -328,10 +335,6 @@ export function SessionsView() {
         </>
       }
     >
-      <p className="small">
-        Link a session to a project by dragging from one side to the other: it then takes that project's work items, from you (Ctrl+click) and from your
-        daily driver. Click a line to unlink. A dot marks the project a session is working in now.
-      </p>
       {sessions && !ordered.length && <p className="empty">No Claude Code sessions here yet. Turn on Follow Claude Code to see them.</p>}
       {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
       {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
