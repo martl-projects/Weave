@@ -31,6 +31,10 @@ interface host {
   /// key, PEM) or "HS256" (any secret). A setting its manifest marks "signing" is only usable this way: setting()
   /// doesn't return it. The signature (ES256 as r||s, as JWTs have it), or why not.
   sign: func(setting: string, algorithm: string, data: list<u8>) -> result<list<u8>, string>;
+  /// A release of one of its spaces as Weave knows it (published there by a maintainer), by its id: {id, tag, name,
+  /// manifest} as JSON, or nothing. Only for a service that offers artifact.fetch: it hands those releases' files out,
+  /// and only theirs, whatever a request names.
+  release: func(space: string, id: string) -> option<string>;
 }
 
 world service {

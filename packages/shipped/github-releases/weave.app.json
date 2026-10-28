@@ -1,0 +1,11 @@
+{
+  "app": "github-releases",
+  "name": "GitHub releases",
+  "service": { "reads": "addressed", "writes": [], "offers": ["artifact.fetch"], "net": ["api.github.com"], "version": "1.0" },
+  "wasm": { "component": "github-releases.wasm" },
+  "env": [
+    { "name": "GITHUB_TOKEN", "label": "GitHub token", "secret": true, "optional": true, "hint": "github.com → Settings → Developer settings → Fine-grained tokens: the release's repositories, Contents read-only" },
+    { "name": "GITHUB_APP_ID", "label": "GitHub App ID", "optional": true, "hint": "Or your own GitHub App, installed on the repositories (Contents: read)" },
+    { "name": "GITHUB_APP_KEY", "label": "GitHub App private key (.pem)", "signing": true, "optional": true, "hint": "Weave signs with it for the service; the service never sees it" }
+  ]
+}

@@ -1423,6 +1423,14 @@ export class Services {
             await this.settings.renew([current]);
             return this.settings.effective(current)[String(args[0])] ?? undefined;
           }
+          if (call === 'release') {
+            // Only a provider of releases' files, only its spaces' releases, only those its maintainers published.
+            if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it reads no releases`);
+            const space = this.h.spaces.get(String(args[0]));
+            if (!space || !current.spaces.includes(space.id)) return undefined;
+            const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
+            return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
+          }
           if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (call === 'tickEvery') {
             clearInterval(ticking.timer);

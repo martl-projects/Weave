@@ -39,7 +39,7 @@ export async function onEvent(text) {
 }
 ```
 
-A key it needs is a setting (`--setting API_KEY=…`), so it never sits in the code. Hosts on the node's own networks (localhost, 192.168.…) are never reached, whatever their name says, and redirects aren't followed.
+A key it needs is a setting (`--setting API_KEY=…`), so it never sits in the code. Give a POST (or PUT) a body, `'{}'` if nothing else: one without never finishes sending. Hosts on the node's own networks (localhost, 192.168.…) are never reached, whatever their name says, and redirects aren't followed.
 
 **One thing to know:** code at the top level of your module runs while the component is built (componentize-js takes a snapshot then), when Weave's functions aren't there yet. Call them from the exported functions, or on first use there, never at the top level.
 
