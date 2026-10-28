@@ -7,7 +7,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, contractText, lowerFirst, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { ActionScopes, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -99,6 +99,13 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
         <div className="room-head">
           <span className="live-dot" /> Offered by {offered}
           {room.mine ? ', running here' : ''}
+          {room.from && (
+            <span className="small muted">
+              {' '}
+              · runs {room.from.name ?? 'a release'} {room.from.tag}
+              {room.from.project.name && room.from.project.id !== room.project.id ? ` from p/${room.from.project.name}` : ''}
+            </span>
+          )}
           {who.length > 0 && <span className="tag">🎟 {who.join(' · ')}</span>}
           {room.joined && (
             <span className="room-peers">
@@ -236,6 +243,7 @@ export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.o
 function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; maintainer: boolean }) {
   const [adding, setAdding] = useState<ArtifactInfo>();
   const [access, setAccess] = useState<ArtifactInfo>();
+  const [launching, setLaunching] = useState<ArtifactInfo>();
   // Yours to get; maintainers see them all, and set who may get each.
   const shown = artifacts.filter((a) => a.mine || maintainer);
   if (!shown.length) return <p className="small muted">Nothing yet.</p>;
@@ -248,7 +256,8 @@ function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; ma
             {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
           </span>
           {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
-          {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && <button onClick={() => setAdding(a)}>Add to…</button>}
+          {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
+          {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
           {maintainer && (
             <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
               <Icon name="gear" />
@@ -257,8 +266,66 @@ function ArtifactList({ artifacts, maintainer }: { artifacts: ArtifactInfo[]; ma
         </div>
       ))}
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
+      {launching && <LaunchDialog artifact={launching} onClose={() => setLaunching(undefined)} />}
       {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
     </div>
+  );
+}
+
+/**
+ * Launch a website artifact: a running website in a project where you host websites. It's code from others, run on
+ * this computer: you approve it here, and it's there until its website is closed.
+ */
+function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+  const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
+  // Where you host websites, here.
+  const hosts = (services ?? []).filter((s) => (s.builtin === 'website' || s.contract.websites === 'host') && s.enabled && !s.node);
+  const projects = [...new Map(hosts.flatMap((s) => s.spaces).filter((x) => x.kind === 'project').map((x) => [x.id, x])).values()];
+  const [where, setWhere] = useState<string>();
+  const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
+  const runs = artifact.command?.join(' ') ?? 'its program';
+  return (
+    <Modal title={`Launch ${artifact.name} ${artifact.tag}`} onClose={onClose}>
+      {services && !projects.length ? (
+        <p className="small">You host no websites anywhere yet: add the Websites service to a project first (its Services, Add a service).</p>
+      ) : (
+        <>
+          <div className="field-row">
+            <label htmlFor="launch-in">In</label>
+            <select id="launch-in" className="grow" value={project?.id ?? ''} onChange={(e) => setWhere(e.target.value || undefined)}>
+              <option value="">Pick a project…</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  p/{p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="small">
+            Weave runs <code>{runs}</code> from {artifact.name} {artifact.tag}, released in p/{artifact.project.name}, on this computer. It only shows its page: it reads nothing and
+            writes nothing in the project. Your Websites service makes it a running website{project ? ` everyone in p/${project.name} can visit` : ''}, in Live, until you close it.
+          </p>
+          <p className="small muted">It's other people's code: only launch it if you trust p/{artifact.project.name}.</p>
+        </>
+      )}
+      <div className="buttons">
+        <AsyncButton
+          className="default"
+          disabled={!project}
+          onClick={() =>
+            attempt(async () => {
+              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true });
+              bump();
+              onClose();
+              location.hash = `#/p/${project!.id}/live`;
+            }, `${artifact.name} is launching in p/${project?.name}`)
+          }
+        >
+          Launch
+        </AsyncButton>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -776,7 +843,8 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
 
   // Room services first, then the rest.
-  const all = [...(profiles ?? [])].sort((a, b) => Number(hostsSites(b)) - Number(hostsSites(a)));
+  // Websites that are only that run in Live.
+  const all = [...(profiles ?? [])].filter((s) => !onlyAWebsite(s.contract)).sort((a, b) => Number(hostsSites(b)) - Number(hostsSites(a)));
   // One picked in the sidebar: that one alone.
   const list = focus ? all.filter((s) => s.did === focus) : all;
   return (

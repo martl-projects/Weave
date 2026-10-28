@@ -23,7 +23,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { RepoBanner, startAppOpens } from './github.tsx';
-import { SpaceServices } from './services.tsx';
+import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
   CommunityAbout,
   GroupSettings,
@@ -66,7 +66,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: rooms } = useApi(() => (space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id]);
-  const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).catch(() => []) : Promise.resolve([])), [space.id, open]);
+  const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   return (

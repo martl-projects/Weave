@@ -282,6 +282,9 @@ function GitHubAppSettings({ service, set, onChange }: { service: string; set: b
 }
 
 /** In Keys & devices: the services you run, here and on your always-on nodes. */
+/** A service that is only a website (it shows its page and acts on nothing): it lives in Live, not among services. */
+export const onlyAWebsite = (c: ServiceContract): boolean => c.reads === 'nothing' && !c.writes.length && !!c.website && c.websites !== 'host';
+
 /**
  * Your fetchers: client apps that fetch what a project's provider grants you (its contract names which), on this
  * node. Yours, not a project's: each fetches only for the projects you allow, with your own settings.

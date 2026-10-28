@@ -610,8 +610,11 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (m.file) return 'file';
   if (m.fetcher) return 'fetcher';
   if (m.client) return 'board-view';
+  const site = !!m.wasm?.site || m.services.some((s) => s.protocol === 'http');
+  // A website reads nothing and writes nothing: it only shows its page (and holds its visitors' game).
+  if (site && (!m.service || (m.service.reads === 'nothing' && !m.service.writes.length))) return 'website';
   if (m.service || m.install?.image?.packaged) return 'service';
-  if (m.wasm?.site || m.services.some((s) => s.protocol === 'http')) return 'website';
+  if (site) return 'website';
   return 'app';
 }
 
@@ -685,6 +688,8 @@ export interface Room {
   groups?: string[];
   /** The service that offers it (its key), when a service announced it rather than its person. */
   agent?: Did;
+  /** The release it runs (an artifact of that project), when it was launched from one. */
+  release?: { project: string; id: string; tag: string };
   /** Which page each side opens, and the ▶ label: whoever runs it (host), and everyone who joins. */
   pages?: RoomPages;
   open: boolean;
@@ -732,7 +737,9 @@ export function roomsOf(entries: Array<{ event: { author: Did; signer?: string; 
     const show = text(b.show, 100);
     const groups = Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string' && g.length <= 100).slice(0, 10) : [];
     const pages = parsePages(b.pages);
-    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), ...(agent ? { agent } : {}), ...(pages ? { pages } : {}), open: true, time: e.event.time });
+    const r = (b.release && typeof b.release === 'object' && !Array.isArray(b.release) ? b.release : {}) as Record<string, unknown>;
+    const release = typeof r.project === 'string' && typeof r.id === 'string' && typeof r.tag === 'string' && r.project.length <= 100 && r.id.length <= 100 && r.tag.length <= 100 ? { project: r.project, id: r.id, tag: r.tag } : undefined;
+    rooms.set(id, { id, host: e.event.author, name: text(b.name, 60) || 'Room', service: text(b.service, 32), key, invite, ...(show ? { show } : {}), ...(groups.length ? { groups } : {}), ...(agent ? { agent } : {}), ...(pages ? { pages } : {}), ...(release ? { release } : {}), open: true, time: e.event.time });
   }
   return [...rooms.values()];
 }

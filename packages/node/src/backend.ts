@@ -1192,6 +1192,8 @@ export interface WebsiteInfo {
   host: Person;
   /** A service offers it (its key and name): the room is there while that service runs. */
   offeredBy?: { did: Did; name?: string };
+  /** The release it runs, when it was launched from one: its project's artifact (its name, if that project is known here). */
+  from?: { project: { id: string; name?: string }; release: string; tag: string; name?: string };
   /** Your room service runs it on this device. */
   mine: boolean;
   open: boolean;
@@ -1791,6 +1793,11 @@ export interface Backend {
   setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Maintainers: who may get one of the project's artifacts (null: everyone there). Providers' nodes refuse the rest. */
   setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]>;
+  /**
+   * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
+   * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
+   */
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; name?: string }): Promise<ServiceInfo>;
   /** Maintainers: hand out a file of a GitHub release as an artifact of the project (a document, a dataset), fingerprinted. */
   releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
   /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */
@@ -2173,7 +2180,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'github', 'connectGithub', 'disconnectGithub', 'setGithubApp', 'githubRepos', 'githubRepoOwner', 'spaceRepos', 'linkRepo',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'githubAppSetup', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'shareGithub', 'showGithubOnHub',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

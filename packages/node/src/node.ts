@@ -609,6 +609,8 @@ export interface Handover {
 /** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
 export interface StoredService {
   name: string;
+  /** Launched as a website (launchWebsite): it's there for its website, and goes when that's closed. */
+  launched?: true;
   description: string;
   icon?: string;
   contract: ServiceContract;
@@ -657,6 +659,8 @@ export interface StoredRoom {
   pages?: RoomPages;
   /** Something its host should know: what changed when Weave stopped starting what answers it (0.21). */
   note?: string;
+  /** The release it runs, when its service runs one: announced with it. */
+  release?: { project: string; id: string; tag: string };
 }
 
 export interface Decoded {
@@ -9256,6 +9260,10 @@ export class WeaveNode implements Backend {
 
   serviceProfiles(...args: Parameters<Services['serviceProfiles']>): ReturnType<Services['serviceProfiles']> {
     return this.#services.serviceProfiles(...args);
+  }
+
+  launchWebsite(...args: Parameters<Services['launchWebsite']>): ReturnType<Services['launchWebsite']> {
+    return this.#services.launchWebsite(...args);
   }
 
   setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {

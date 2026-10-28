@@ -217,7 +217,8 @@ export class Services {
   artifact(ref: string, tag?: string): { project: StoredSpace; artifact: Artifact } {
     const project = this.h.project(ref);
     const all = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).filter((a) => a.kind !== 'file');
-    const artifact = tag ? all.find((a) => a.tag === tag) : all[0];
+    // By its id, or its tag.
+    const artifact = tag ? (all.find((a) => a.id === tag) ?? all.find((a) => a.tag === tag)) : all[0];
     if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
     return { project, artifact };
   }
@@ -881,6 +882,29 @@ export class Services {
   inGroup(group: string, person: Did): boolean {
     const space = this.h.spaces.get(group);
     return !!space && this.h.state(space).members.has(person);
+  }
+
+  /**
+   * Launch a website artifact in a project you host websites in: it runs here as a service of yours (approved, as any
+   * code from others), your website service hosts what it serves, and closing that website ends it.
+   */
+  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; name?: string }): Promise<ServiceInfo> {
+    const project = this.h.project(input.project);
+    const from = this.h.project(input.artifact.project);
+    const a = artifactsOf(this.h.entries(from), this.h.state(from).maintainers).find((x) => x.id === input.artifact.id);
+    if (!a) throw new Error(`${this.h.spaceName(from)} has no such artifact`);
+    if (a.kind !== 'website') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}, not a website to launch`);
+    const no = this.artifactRefusal(from, a.id, this.h.identity.author);
+    if (no) throw new Error(no);
+    if (!this.storedServices().some((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id))) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
+    // Its own name, unlike any service of yours.
+    const base = serviceName(a.manifest.app) ? a.manifest.app : 'website';
+    const taken = new Set(this.storedServices().map((s) => s.name));
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+    const added = await this.addService({ name, artifact: { project: from.id, tag: a.id }, spaces: [project.id], ...(input.approve ? { approve: true } : {}) });
+    this.saveServices(this.storedServices().map((s) => (s.name === added.name ? { ...s, launched: true as const } : s)));
+    return (await this.services()).find((s) => s.name === added.name) ?? added;
   }
 
   /** Why someone may not get a project's artifact (its maintainers narrowed who may), or undefined: they may. */
@@ -1678,6 +1702,8 @@ export class Services {
           throw new Error(`no host function ${call}`);
         },
         ready: () => {
+          // Taken out while it was starting: nothing to hand it.
+          if (!this.storedServices().some((s) => s.name === name)) return;
           // What it missed first, then as it comes.
           void gate.watch(hand, watching.signal);
           for (const item of gate.events(cursor)) hand(item);
