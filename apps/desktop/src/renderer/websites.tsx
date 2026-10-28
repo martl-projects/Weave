@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
@@ -222,94 +222,124 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 }
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
-/** What a release is, in a word or two. */
-const releaseKind = (a: ArtifactInfo): string => (a.lens ? 'a board view' : a.packaged ? 'a Weave service' : a.website && a.applet ? 'a website and service' : a.website ? 'a website' : a.applet ? 'a service' : 'a program');
-const releaseIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.website ? 'globe' : a.packaged ? 'store' : 'plug');
+/** What an artifact is, in a word. */
+const artifactKind = (a: ArtifactInfo): string => (a.lens ? 'Board view' : a.website && a.applet ? 'Website and service' : a.website ? 'Website' : a.applet || a.packaged ? 'Service' : 'App');
+const artifactIcon = (a: ArtifactInfo): IconName => (a.lens ? 'bulletList' : a.website ? 'globe' : a.packaged ? 'store' : 'plug');
 
-/** A service that hands out a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
+/** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
 export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
 
-/** The releases a service hands out: each with what it is, who released it, when; maintainers release more here. */
+/** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
+function ArtifactList({ artifacts }: { artifacts: ArtifactInfo[] }) {
+  const [adding, setAdding] = useState<ArtifactInfo>();
+  return (
+    <div className="service-releases">
+      {artifacts.map((a) => (
+        <div className="service-release" key={a.id}>
+          <Icon name={artifactIcon(a)} />
+          <span className="grow">
+            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}</span>
+          </span>
+          <button onClick={() => setAdding(a)}>Add to…</button>
+        </div>
+      ))}
+      {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
+    </div>
+  );
+}
+
+/** Adding an artifact: to a project of yours as a service or website, or (a board view) to one of its boards. */
+function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+  const { data: projects } = useApi(() => api<SpaceInfo[]>('spaces', 'project'), []);
+  const [where, setWhere] = useState<string>();
+  const project = (projects ?? []).find((p) => p.id === where);
+  const { data: boards } = useApi(() => (artifact.lens && where ? api<BoardInfo[]>('boards', where) : Promise.resolve([] as BoardInfo[])), [where, artifact.lens]);
+  const [board, setBoard] = useState<string>();
+  const { data: info } = useApi(() => (where ? api<ProjectInfo>('project', where) : Promise.resolve(undefined)), [where]);
+  return (
+    <Modal title={`Add ${artifact.name} to…`} onClose={onClose}>
+      <div className="field-row">
+        <label htmlFor="add-to-project">Project</label>
+        <select id="add-to-project" className="grow" value={where ?? ''} onChange={(e) => (setWhere(e.target.value || undefined), setBoard(undefined))}>
+          <option value="">Pick one…</option>
+          {(projects ?? []).filter((p) => !p.closed).map((p) => (
+            <option key={p.id} value={p.id}>
+              p/{p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {project && artifact.lens && (
+        <>
+          <div className="field-row">
+            <label htmlFor="add-to-board">Board</label>
+            <select id="add-to-board" className="grow" value={board ?? ''} onChange={(e) => setBoard(e.target.value || undefined)}>
+              <option value="">Pick one…</option>
+              {(boards ?? []).map((b) => (
+                <option key={b.name} value={b.name}>
+                  {b.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="small muted">Everyone in p/{project.name} can see this board through it.</p>
+          <div className="buttons">
+            <AsyncButton
+              className="default"
+              disabled={!board}
+              onClick={() => attempt(() => api('setBoardLens', { space: project.id, board, from: { project: artifact.project.id, tag: artifact.tag } }).then(() => (bump(), onClose())), `${artifact.name} shows ${board} in p/${project.name}`)}
+            >
+              Add to the board
+            </AsyncButton>
+          </div>
+        </>
+      )}
+      {project && !artifact.lens && <InstallRelease project={project} maintainer={!!info?.maintainer} only={artifact.id} onDone={onClose} />}
+      <div className="buttons">
+        <button onClick={onClose}>Close</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** What a service provides here: its artifacts; maintainers publish more from GitHub. */
 function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
   const [picking, setPicking] = useState(false);
   const [describing, setDescribing] = useState(false);
   return (
-    <div className="service-releases">
-      <div className="small"><b>Releases it hands out</b></div>
-      {artifacts.length ? (
-        artifacts.slice(0, 8).map((a) => (
-          <div className="service-release" key={a.id}>
-            <Icon name={releaseIcon(a)} />
-            <span className="grow">
-              {a.name} <b>{a.tag}</b> <span className="muted small">· {releaseKind(a)} · {a.released.name ?? shortDid(a.released.did)}, {ago(a.time)}</span>
-            </span>
-          </div>
-        ))
-      ) : (
-        <p className="small muted">Nothing released here yet.</p>
-      )}
+    <>
+      <div className="small"><b>Available</b></div>
+      {artifacts.length ? <ArtifactList artifacts={artifacts} /> : <p className="small muted">Nothing yet.</p>}
       {maintainer && app === null && !describing && (
         <p className="small muted">
-          Release this project's code: describe what it is first.{' '}
-          <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Describe it…</a>
+          <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Make this project's code available…</a>
         </p>
       )}
       {describing && <PublishApp project={project} />}
       {maintainer && app && (
         <div className="buttons">
-          <button onClick={() => setPicking(true)}>Release from GitHub…</button>
+          <button onClick={() => setPicking(true)}>Publish a new version…</button>
         </div>
       )}
       {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
-    </div>
+    </>
   );
 }
 
+/** What's available here that no service provides: from images Weave fetches itself, or GitHub releases before a service provides them. */
 function ProjectArtifacts({ project, app, artifacts, covered }: { project: SpaceInfo; app: AppManifest | null | undefined; artifacts: ArtifactInfo[]; covered: boolean }) {
   const [picking, setPicking] = useState(false);
-  const [describing, setDescribing] = useState(false);
-  if (app === undefined) return null;
-  if (app === null)
-    return describing ? (
-      <PublishApp project={project} />
-    ) : (
-      <p className="small muted">
-        p/{project.name} has released nothing to run yet; other projects' releases install here as services (Add a service).{' '}
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setDescribing(true);
-          }}
-        >
-          Describe one…
-        </a>
-      </p>
-    );
+  if (app === undefined || (!artifacts.length && covered)) return null;
   return (
     <fieldset>
-      <legend>{covered ? 'Releases from container images' : 'Releases'}</legend>
-      <p className="small muted">
-        {covered
-          ? 'Their images come from a registry: Weave fetches them itself, checked against their digest.'
-          : `No service here hands out ${project.name}'s GitHub releases yet: add GitHub releases (Add a service), so participants without access to the repository get them too.`}
-      </p>
-      {artifacts.length ? (
-        <p className="small">
-          {artifacts
-            .slice(0, 5)
-            .map((a) => `${a.name} ${a.tag} (${ago(a.time)})`)
-            .join(' · ')}
-        </p>
-      ) : (
-        <p className="small">Nothing released yet: release {app.name} from one of its repository's GitHub releases, and everyone in {project.name} can start it.</p>
-      )}
-      {!covered && (
+      <legend>Available</legend>
+      {artifacts.length ? <ArtifactList artifacts={artifacts} /> : <p className="small muted">Nothing yet.</p>}
+      {!covered && app && (
         <div className="buttons">
-          <button onClick={() => setPicking(true)}>Release from GitHub…</button>
+          <button onClick={() => setPicking(true)}>Publish from GitHub…</button>
         </div>
       )}
-      {picking && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
+      {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
     </fieldset>
   );
 }
@@ -485,7 +515,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 }
 
 /** What a service is there for, in a project. */
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Hands the project's release files to its participants" : s.description || `A service: it ${contractText(s.contract)}`);
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Gives the project's members access to its repositories" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined }) {
@@ -500,7 +530,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <legend>
         <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
       </legend>
-      <p className="small">{purpose(service)}</p>
+      {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
       {its.map((room) => (
         <div key={room.id}>
@@ -562,7 +592,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
   return (
     <fieldset>
       {!only && <legend>Install a project's release</legend>}
-      {usable.filter((a) => !only || a.id === only).map((a) => (
+      {!only && usable.map((a) => (
         <div className="field-row" key={a.id}>
           <input id={`artifact-${a.id}`} type="radio" checked={chosen?.id === a.id} onChange={() => setPicked(a.id)} />
           <label htmlFor={`artifact-${a.id}`}>

@@ -21,20 +21,13 @@ export function contractText(c: ServiceContract): string {
 
 /** Where a service comes from, and whether this computer could check it. */
 export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
-  if (origin.kind === 'weave') return <div className="small muted">Comes with Weave</div>;
-  if (origin.kind === 'unreleased') return <div className="small muted">Its person's own code, not released in a project</div>;
-  if (origin.kind === 'shipped')
-    return origin.checked === 'verified' ? <div className="small muted">✓ Ships with Weave: exactly the component your Weave has</div> : <div className="small muted">Ships with another version of Weave (not the component yours has)</div>;
-  const where = `${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, release ${origin.tag}`;
-  if (origin.checked === 'verified')
-    return (
-      <div className="small muted">
-        ✓ From {where}, released by {origin.publisher?.name ?? shortDid(origin.publisher?.did ?? '')}
-        {origin.packaged ? ' · a Weave service' : ''}
-      </div>
-    );
-  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but that project has no such release: don't trust it</div>;
-  return <div className="small muted">From {where} (only its participants can check)</div>;
+  if (origin.kind === 'weave') return <div className="small muted">Part of Weave</div>;
+  if (origin.kind === 'unreleased') return null;
+  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">✓ Made by Weave</div> : <div className="small muted">Made by another version of Weave</div>;
+  const where = origin.project.name ? `p/${origin.project.name}` : "a project you aren't in";
+  if (origin.checked === 'verified') return <div className="small muted">✓ From {where}, version {origin.tag}</div>;
+  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but isn't: don't trust it</div>;
+  return <div className="small muted">From {where}, version {origin.tag}</div>;
 }
 
 /** Every kind name, comma or space separated. */
