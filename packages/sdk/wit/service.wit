@@ -43,6 +43,13 @@ interface host {
   /// A container image's digest at the first of these tags that exists ({tag, digest} as JSON), read from its public
   /// registry: to pin a release's image. Only for a service that offers artifact.fetch.
   pin-image: func(image: string, tags: list<string>) -> result<string, string>;
+  /// Who should have access to the repositories linked in one of its spaces: [{repo, write, want, keep, gave}] as JSON,
+  /// GitHub logins each. want: members who proved their account (a gist); keep: unproven ones who keep what was given
+  /// before proofs; gave: whom it gave access (its weave.github.added there). Only for a service whose contract says
+  /// repos: access.
+  repo-access: func(space: string) -> result<string, string>;
+  /// How keeping a repository in step went: no problem, or what's wrong (shown with the repository).
+  repo-synced: func(repo: string, problem: option<string>);
   /// The websites it hosts in one of its projects: [{id, name, host, by?, visitors, open, time}] as JSON. Only for a
   /// service that hosts websites (websites: host in its contract), as Weave's website service does.
   websites: func(space: string) -> result<string, string>;
@@ -54,6 +61,7 @@ world service {
   import host;
   /// Something it may read arrived, as a feed item (JSON): a request addressed to it (kind weave.service.request,
   /// body {to, text?, data?}), or what its contract reads. One at a time, in order; also what came while it was off.
+  /// First of all, each time it starts, {"kind": "weave.start", "time"}: for work of its own (tick-every).
   export on-event: func(item: string);
 }
 

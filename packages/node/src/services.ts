@@ -1796,6 +1796,14 @@ export class Services {
             const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
             return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
           }
+          if (call === 'repoAccess' || call === 'repoSynced') {
+            // Only one that keeps repositories in step, only in its spaces.
+            if (current.contract.repos !== 'access') throw new Error(`${name} keeps no repositories in step in its contract`);
+            if (call === 'repoSynced') return void this.h.repoSynced(String(args[0]), args[1] ? String(args[1]).slice(0, 300) : undefined);
+            const space = this.h.spaces.get(String(args[0]));
+            if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
+            return JSON.stringify(await this.h.repoAccess(space, this.serviceKey(name).did));
+          }
           if (call === 'fingerprint' || call === 'pinImage') {
             // For a provider publishing what it hands out: only what it needs to pin a release, never more.
             if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it publishes no releases`);
@@ -1841,7 +1849,8 @@ export class Services {
         ready: () => {
           // Taken out while it was starting: nothing to hand it.
           if (!this.storedServices().some((s) => s.name === name)) return;
-          // What it missed first, then as it comes.
+          // Its start first (for work of its own: ticking), then what it missed, then as it comes.
+          this.h.runtime.deliver(key, JSON.stringify({ kind: 'weave.start', time: new Date(this.h.clock()).toISOString() }));
           void gate.watch(hand, watching.signal);
           for (const item of gate.events(cursor)) hand(item);
         },
@@ -1856,7 +1865,9 @@ export class Services {
           : {}),
         handled: (text) => {
           // A tick moves nothing on: the next one may come.
-          if ((JSON.parse(text) as { kind?: string }).kind === 'weave.tick') return void (ticking.pending = false);
+          const kind = (JSON.parse(text) as { kind?: string }).kind;
+          if (kind === 'weave.tick') return void (ticking.pending = false);
+          if (kind === 'weave.start') return;
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {
             cursor = time;

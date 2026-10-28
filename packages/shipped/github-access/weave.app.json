@@ -1,0 +1,9 @@
+{
+  "app": "github-access",
+  "name": "GitHub access",
+  "service": { "reads": { "kinds": ["weave.github.repo", "weave.github.account"] }, "writes": ["weave.github.added"], "repos": "access", "net": ["api.github.com"], "version": "1.0" },
+  "wasm": { "component": "github-access.wasm" },
+  "env": [
+    { "name": "GITHUB_TOKEN", "label": "GitHub token", "secret": true, "hint": "A token of an admin of the repositories: github.com → Settings → Developer settings → Fine-grained tokens, the organization's repositories, Administration read and write" }
+  ]
+}

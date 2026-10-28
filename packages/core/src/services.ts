@@ -92,6 +92,11 @@ export interface ServiceContract {
    * asker's own node. A fetcher Weave ships, by name ("github-checkout"), or exactly this component ("sha256:…").
    */
   fetcher?: string;
+  /**
+   * It keeps its spaces' linked GitHub repositories' access in step with who is in them, as GitHub access does:
+   * Weave tells it who should have access (repo-access in the WIT), it gives and takes it with its own token.
+   */
+  repos?: 'access';
   /** The sources whose artifacts it hands out (artifact.fetch): github, s3… Without, any. */
   sources?: string[];
   /**
@@ -211,7 +216,7 @@ export function parseContract(value: unknown): ServiceContract | undefined {
     ? Object.fromEntries(Object.entries(c.expires as Record<string, unknown>).filter(([k, v]) => /^[a-z][a-z0-9.-]{0,59}$/.test(k) && Number.isInteger(v) && (v as number) >= 10 && (v as number) <= 30 * 86400).slice(0, 20))
     : {};
   const sources = offers.length && Array.isArray(c.sources) ? [...new Set(c.sources.filter((x): x is string => typeof x === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(x)))].slice(0, 10) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(Object.keys(expires).length ? { expires: expires as Record<string, number> } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(Object.keys(expires).length ? { expires: expires as Record<string, number> } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), ...(c.repos === 'access' ? { repos: 'access' as const } : {}), version };
 }
 
 /**
@@ -229,7 +234,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.repos === 'access' ? "; gives its spaces' members access to their linked repositories" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */
