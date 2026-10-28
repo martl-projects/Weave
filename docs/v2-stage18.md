@@ -1,6 +1,6 @@
 # v2 stage 18: reputation (trust, vouches, gates)
 
-From the v2 spec ("reviews scored like PageRank"), and from the ideas "Abuse budgets: a fair share per person, and trust gates later" (its part 2) and "Credits as a stat, badges and a reputation signal". Builds on stage 8's budgets.
+From the v2 spec ("reviews scored like PageRank"), and from the ideas "Abuse budgets: a fair share per person, and trust gates later" (its part 2) and "Credits as a stat, badges and a reputation signal". Builds on stage 8's budgets, and on stage 19: built after it, as mark services (Weave trusted in your own domain, a space's view as the space's pinned service, gates through its `gate` slot).
 
 ## What it's for
 

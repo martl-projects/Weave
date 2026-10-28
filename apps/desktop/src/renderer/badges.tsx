@@ -5,15 +5,13 @@ import { api, onItem, useBlobUrl } from './lib.ts';
 import { AsyncButton, attempt, Modal } from './ui.tsx';
 
 /*
- * Badges next to people's names: lasting recognition from a project, like
+ * Badges on people's hubs: lasting recognition from a project, like
  * "Super Supporter #7 of 20". Each shows as the series' picture, or its symbol
  * when it has none. Only valid badges show: a series whose issuer cheated
  * (more than its limit, a number twice) shows none of its badges, and neither
  * does one claiming a project its issuer doesn't maintain (the node leaves it out).
+ * Next to names they show as marks (marks.tsx), from the Badges mark service.
  */
-
-/** How many badges show next to a name; the rest are on the person's hub. */
-const SHOWN = 3;
 
 const held = new Map<string, Promise<BadgeInfo[]>>();
 
@@ -80,7 +78,7 @@ export function BadgeMark({ badge, size = 16 }: { badge: BadgeInfo; size?: numbe
  * A badge in full: what it is, who gave it and why, and its personal note. That note is sealed to the one
  * it was given to (and its issuer) until they publish it; the issuer's signed hash proves the words are theirs.
  */
-function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
+export function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
   const issuer = badge.issuer.name ?? 'its issuer';
   const personal = badge.personal;
   const picture = useBlobUrl(badge.series.image);
@@ -133,19 +131,5 @@ export function HubBadges({ did, me, name }: { did: string; me: boolean; name: s
         ))}
       </div>
     </section>
-  );
-}
-
-/** The badges someone holds, next to their name; in a project, its own badges come first. */
-export function NameBadges({ did, project, size }: { did: string; project?: string; size?: number }) {
-  const badges = useHeldBadges(did);
-  if (!badges.length) return null;
-  const sorted = project ? [...badges].sort((a, b) => Number(b.series.project?.id === project) - Number(a.series.project?.id === project)) : badges;
-  return (
-    <span className="name-badges">
-      {sorted.slice(0, SHOWN).map((b) => (
-        <BadgeMark key={b.id} badge={b} size={size} />
-      ))}
-    </span>
   );
 }

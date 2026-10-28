@@ -1,0 +1,5 @@
+{
+  "app": "weave-badges",
+  "name": "Badges",
+  "marks": { "component": "badges.wasm", "reads": ["weave.badge.series", "weave.badge", "weave.badge.transfer", "weave.badge.note"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"] }
+}

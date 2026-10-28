@@ -24,6 +24,10 @@ export type {
   TierInfo,
   BadgeInfo,
   BadgeSeriesInfo,
+  MarkInfo,
+  MarkIssuerInfo,
+  MarksAnswer,
+  MarkServiceInfo,
   LabelInfo,
   RecipientInfo,
   SplitContractInfo,
@@ -99,6 +103,7 @@ export type {
 } from './backend.ts';
 export { noAgent, PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
 export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
+export { MARKS_TIMING } from './marks.ts';
 export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
 export { checkGumroadLicense, createGumroadMembership, startGumroadSignIn, type CreatedGumroadMembership, type GumroadSignIn, type NewGumroadMembership } from './gumroad.ts';
 export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';

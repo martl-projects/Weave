@@ -32,6 +32,8 @@ export function onItem(listener: (item: FeedItem) => void): () => void {
 
 bridge.onEvent((item) => {
   if (item) for (const listener of itemListeners) listener(item);
+  // Only marks may have changed: their views ask again themselves (marks.tsx), the rest stays as it is.
+  if (item?.kind === 'weave.marks') return;
   clearTimeout(pending);
   pending = setTimeout(bump, 120);
 });

@@ -449,6 +449,25 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     ),
   );
 
+  server.registerTool(
+    'weave_marks',
+    {
+      title: 'Marks',
+      description:
+        "What the mark services this person and the space chose say about people: the same marks they see next to names (a check From Weave, badges, labels, levels), each with who says so (issuer: its name, domain and digest; weave: true only for what this person's Weave app brought). A mark is a claim by its issuer, not a fact: weigh it by who says it. Slots: author, member, chat, profile.",
+      inputSchema: {
+        who: z.array(z.string()).describe('Names, did:keys or person urls'),
+        slot: z.enum(['author', 'member', 'chat', 'profile']).optional().describe('Where they would show (default: profile)'),
+        space: z.string().optional().describe("A project or community, to include the services it pinned (shown only there)"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ who, slot, space }: { who: string[]; slot?: string; space?: string }) => {
+      const subjects = await Promise.all(who.slice(0, 50).map(async (w) => ({ did: (await backend.profile(w)).did })));
+      return backend.marks({ slot: slot ?? 'profile', space, subjects });
+    }),
+  );
+
   // ---------------------------------------------------------------- memberships
 
   server.registerTool(

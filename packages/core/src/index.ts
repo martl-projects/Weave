@@ -243,6 +243,29 @@ export {
 } from './memberships.ts';
 export { badgesOf, BADGE_LIMIT_MAX, KIND_BADGE, KIND_BADGE_SERIES, KIND_BADGE_TRANSFER, KIND_BADGE_NOTE, BADGE_NOTE_MAX, badgeNoteHash, parseBadgeLimit, type Badge, type BadgeSeries } from './badges.ts';
 export {
+  checkMark,
+  checkMarkAnswer,
+  KIND_MARKS_MINE,
+  KIND_MARKS_PIN,
+  KIND_OFFICIAL,
+  MARK_KINDS,
+  MARK_LIMITS,
+  MARK_SLOTS,
+  MARK_SUBJECTS,
+  markServicesOf,
+  parseAppMarks,
+  parseMarkService,
+  parseSubject,
+  subjectKey,
+  type AppMarks,
+  type Mark,
+  type MarkKind,
+  type MarkService,
+  type MarkSlot,
+  type MarkSubject,
+  type MarkSubjectKind,
+} from './marks.ts';
+export {
   checksumAddress,
   isAddress,
   KIND_LABEL,

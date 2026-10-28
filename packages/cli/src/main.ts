@@ -53,6 +53,8 @@ import {
   type ThreadInfo,
   type TierInfo,
   type BadgeInfo,
+  type MarkInfo,
+  type MarkServiceInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
   type SafeProposalInfo,
@@ -200,9 +202,10 @@ github — repositories that follow a group, tier or project (members who give t
   github repos               repositories you can link (the app is installed on them and you're admin)
   github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
   github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
-  service new <folder> [--website] [--rust] [--lens]   start a WebAssembly service of your own from a starter: a bot
-                             (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), or a client service that shows a
-                             board its own way (a Kanban in JavaScript); Weave runs it itself, nothing to install
+  service new <folder> [--website] [--rust] [--lens] [--marks]   start a WebAssembly service of your own from a starter:
+                             a bot (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), a client service that shows a
+                             board its own way (a Kanban in JavaScript), or a mark service that labels people you list
+                             (JavaScript); Weave runs it itself, nothing to install
   service add <name>         run code under a key of its own, with exactly these rights:
                              --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
@@ -299,6 +302,16 @@ badges: lasting recognition from a project, signed and checkable by anyone, neve
   badge publish <badge>      make the personal note on a badge you were given public; --off to take it back
   badge pass <badge> <who>   pass a badge you hold on, e.g. to your other account; it keeps its number
   badges [who]               the badges someone holds (default: yours)
+
+marks: what shows next to names, from mark services you or a space chose (each says who says so):
+  marks [who]                what they say about someone (default: you)   [--slot author|member|chat|profile] [--space <project>]
+  marks list                 your mark services (shown everywhere you look); --space <project>: the ones pinned there
+  marks add <project>        take a project's mark service into your own domain   [--app <id>] [--tag 1.0]
+                             [--follow: its newest release] [--settings <json>]; --space <project>: pin it there instead
+                             (maintainers), shown in that project only   [--gate: the one its gates ask]
+  marks remove <service>     take it out of your own domain; --space <project>: unpin it there
+  official <who> -p <project>   say a person (did), space (id) or post (--post) comes from Weave (maintainers of From
+                             Weave's project)   [--text <note>] [--off: no longer]
 
 treasuries: a project's own wallet (a Safe its maintainers own) and how its income is split; Weave holds no keys or money:
   wallet message <address>   what your wallet signs (personal_sign) to show it's yours
@@ -467,6 +480,14 @@ const { values, positionals } = parseArgs({
     website: { type: 'boolean', default: false },
     rust: { type: 'boolean', default: false },
     lens: { type: 'boolean', default: false },
+    marks: { type: 'boolean', default: false },
+    space: { type: 'string' },
+    slot: { type: 'string' },
+    tag: { type: 'string' },
+    app: { type: 'string' },
+    follow: { type: 'boolean', default: false },
+    gate: { type: 'boolean', default: false },
+    settings: { type: 'string' },
     site: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
@@ -771,11 +792,12 @@ const SERVICE_WIT = STARTERS && join(STARTERS, '..', 'wit', 'service.wit');
  * A new WebAssembly service from a starter, in its own folder: a bot (JavaScript or Rust), a website (a game, in
  * JavaScript) or a client service (a board's Kanban, in JavaScript), with Weave's WIT next to it. Nothing is overwritten.
  */
-function newService(folder: string, kind: { website: boolean; rust: boolean; lens?: boolean }): { folder: string; starter: string; next: string[] } {
+function newService(folder: string, kind: { website: boolean; rust: boolean; lens?: boolean; marks?: boolean }): { folder: string; starter: string; next: string[] } {
   if (!STARTERS || !SERVICE_WIT || !existsSync(SERVICE_WIT)) throw new Error("this copy of Weave has no starters: get one from Weave's repository (packages/sdk/starters)");
-  if ((kind.website || kind.lens) && kind.rust) throw new Error(`the ${kind.lens ? 'client service' : 'website'} starter is in JavaScript for now: start from it, or from the Rust service starter`);
-  if (kind.website && kind.lens) throw new Error('a website or a client service: pick one');
+  if ((kind.website || kind.lens || kind.marks) && kind.rust) throw new Error(`the ${kind.lens ? 'client service' : kind.marks ? 'mark service' : 'website'} starter is in JavaScript for now: start from it, or from the Rust service starter`);
+  if ([kind.website, kind.lens, kind.marks].filter(Boolean).length > 1) throw new Error('a website, a client service or a mark service: pick one');
   if (kind.lens) return newLens(folder, resolvePath(process.env.INIT_CWD ?? process.cwd(), folder));
+  if (kind.marks) return newMarks(folder, resolvePath(process.env.INIT_CWD ?? process.cwd(), folder));
   const starter = kind.website ? 'js-website' : kind.rust ? 'rust-service' : 'js-service';
   const into = resolvePath(process.env.INIT_CWD ?? process.cwd(), folder);
   if (existsSync(into) && readdirSync(into).length) throw new Error(`${into} isn't empty: pick a new folder`);
@@ -804,6 +826,34 @@ function newLens(folder: string, into: string): { folder: string; starter: strin
   for (const file of ['package.json', 'weave.app.json']) writeFileSync(join(into, file), readFileSync(join(into, file), 'utf8').replace(/my-weave-board/, name));
   return { folder: into, starter: 'js-board', next: [`A Kanban (a Weave client service) is in ${into}. Next:`, `  cd ${folder}`, '  npm install', '  npm run build', 'Its README says how to release it and show a board with it.'] };
 }
+
+/** The mark service starter (labels from a list): built, released, and taken into your own domain. */
+function newMarks(folder: string, into: string): { folder: string; starter: string; next: string[] } {
+  if (existsSync(into) && readdirSync(into).length) throw new Error(`${into} isn't empty: pick a new folder`);
+  const name = basename(into).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'my-marks';
+  cpSync(join(STARTERS!, 'js-marks'), into, { recursive: true, filter: (from) => !/[\/]node_modules([\/]|$)/.test(from) });
+  mkdirSync(join(into, 'wit'), { recursive: true });
+  cpSync(SERVICE_WIT!, join(into, 'wit', 'service.wit'));
+  for (const file of ['package.json', 'weave.app.json']) writeFileSync(join(into, file), readFileSync(join(into, file), 'utf8').replace(/my-weave-marks/, name));
+  return { folder: into, starter: 'js-marks', next: [`A mark service (labels for people you list) is in ${into}. Next:`, `  cd ${folder}`, '  npm install', '  npm run build', 'Its README says how to release it and take it in.'] };
+}
+
+/** One mark as text: what it shows, and who says so. */
+const markLine = (m: MarkInfo): string => {
+  const shown = m.kind === 'check' ? '✓' : m.kind === 'label' ? `[${m.text}]` : m.kind === 'count' ? `(${m.count})` : m.kind === 'image' ? `${m.symbol ?? '▣'} (picture)` : m.symbol!;
+  const where = m.issuer.domain.kind === 'user' ? 'yours' : m.issuer.domain.name;
+  return `${shown}  ${m.tooltip ?? ''}  — ${m.issuer.name}${m.issuer.weave ? ' (Weave)' : ''}, ${where}`;
+};
+
+/** A mark service as text. */
+const markServiceLine = (s: MarkServiceInfo): string =>
+  [
+    `${s.name} (${s.service}) ${s.tag}  from ${s.project.name ?? s.project.id}${s.follow ? ', follows its newest release' : ''}${s.via === 'bundle' ? ', from your app' : ''}${s.gate ? ', the gate service' : ''}`,
+    `  shows at ${s.slots.join(', ')}; reads ${s.reads.join(', ') || 'nothing'}`,
+    `  ${s.digest}`,
+    ...(s.newer ? [`  newer: ${s.newer}`] : []),
+    ...(s.problem ? [`  shows nothing: ${s.problem}`] : []),
+  ].join('\n');
 
 /** How a website of the website service is doing. */
 const hostedLine = (r: HostedWebsiteInfo): string => {
@@ -1517,7 +1567,7 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       const [sub, ref] = args;
       // A new service of your own starts as files: no node needed.
       if (sub === 'new' && ref) {
-        const made = newService(ref, { website: values.website, rust: values.rust, lens: values.lens });
+        const made = newService(ref, { website: values.website, rust: values.rust, lens: values.lens, marks: values.marks });
         return out(made, () => made.next.join('\n'));
       }
       const b = await backend();
@@ -2356,6 +2406,37 @@ ${postLine(p)}`);
     case 'badges': {
       const list = await (await backend()).badges(args[0]);
       return out(list, () => list.map(badgeLine).join('\n\n') || '(no badges)');
+    }
+
+    case 'marks': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const settings = values.settings === undefined ? undefined : (JSON.parse(values.settings) as MarkServiceInfo['settings']);
+      if (sub === 'list') {
+        const list = await b.markServices({ space: values.space });
+        return out(list, () => list.map(markServiceLine).join('\n\n') || (values.space ? '(no mark services pinned there)' : '(no mark services: weave marks add <project>)'));
+      }
+      if (sub === 'add' && ref) {
+        const s = await b.addMarks({ project: ref, app: values.app, tag: values.tag, space: values.space, settings, follow: values.follow, gate: values.gate, as: values.as });
+        return out(s, () => `${values.space ? `pinned to ${values.space}` : 'yours now'}: ${markServiceLine(s)}`);
+      }
+      if (sub === 'remove' && ref) {
+        await b.removeMarks({ service: ref, space: values.space, as: values.as });
+        return out({ removed: ref }, () => `${ref}: ${values.space ? `no longer pinned to ${values.space}` : 'no longer yours'}`);
+      }
+      if (sub === 'add' || sub === 'remove') throw new Error('usage: weave marks add <project> | weave marks remove <service> [--space <project>]');
+      const who = (await b.profile(sub)).did;
+      const [answer] = await b.marks({ slot: values.slot ?? 'profile', space: values.space, subjects: [{ did: who }] });
+      return out(answer ?? { marks: [] }, () => answer?.marks.map(markLine).join('\n') || '(no marks)');
+    }
+
+    case 'official': {
+      const [ref] = args;
+      if (!ref) throw new Error('usage: weave official <did|space id|post id> -p <project> [--text <note>] [--off]');
+      const b = await backend();
+      const subject = ref.startsWith('did:') ? { did: ref } : values.post ? { post: ref } : (await b.spaces()).some((s) => s.id === ref) ? { space: ref } : { post: ref };
+      const item = await b.setOfficial({ project: needProject(), subject, note: values.text, on: !values.off, as: values.as });
+      return out(item, () => `${values.off ? 'no longer' : 'now'} from Weave: ${ref}`);
     }
 
     case 'wallet': {

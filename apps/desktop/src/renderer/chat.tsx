@@ -8,7 +8,7 @@ import { CharCount } from './editor.tsx';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
-import { NameBadges } from './badges.tsx';
+import { Marks } from './marks.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -58,6 +58,7 @@ function Message({
   mentionNames,
   onReply,
   moderating,
+  space,
 }: {
   row: Extract<Row, { kind: 'msg' }>;
   meDid: string;
@@ -65,6 +66,8 @@ function Message({
   onReply(m: MessageInfo): void;
   /** You maintain or moderate the space: you may take down anyone's message. */
   moderating: boolean;
+  /** The space it's in: its own mark services show too. */
+  space: string;
 }) {
   const { m, compact } = row;
   const [picking, setPicking] = useState(false);
@@ -85,7 +88,7 @@ function Message({
   const author = (
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
       <a href={`#/space/${encodeURIComponent(m.by.did)}`}>{nameOf(m.by, meDid)}</a>
-      {!m.by.agent && <NameBadges did={m.by.did} />}
+      {!m.by.agent && <Marks did={m.by.did} slot="author" space={space} />}
       {m.by.agent && (
         <span className="agent-tag" title={`${m.by.name ?? 'Someone'}'s agent, signing with its own key`}>
           {m.by.agent} · AGENT
@@ -357,7 +360,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
                     <span>{row.label}</span>
                   </div>
                 ) : (
-                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} />
+                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} space={space.id} />
                 )}
               </div>
             );

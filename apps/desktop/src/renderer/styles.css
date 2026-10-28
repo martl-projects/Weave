@@ -183,6 +183,13 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .hub-badge { display: flex; align-items: center; gap: 8px; min-width: 200px; }
 .badge-picture { display: block; margin: 4px auto 8px; border-radius: 8px; object-fit: cover; }
 .badge-mark-text { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+/* Marks (stage 19): a check (bare only for Weave's own), a label or a count; who says so on hover. */
+.mark { display: inline-flex; align-items: center; justify-content: center; line-height: 1; cursor: help; white-space: nowrap; }
+.mark-check { padding: 0 2px; border-radius: 3px; font: bold 10px var(--content-font); color: var(--cl-accent, #3a5dff); border: 1px solid currentColor; }
+.mark-check.is-weave { border-radius: 50%; background: var(--cl-accent, #3a5dff); color: #fff; border-color: transparent; }
+.mark-label { padding: 0 4px; border-radius: 3px; font: 10px var(--content-font); background: var(--cl-line, #ddd); color: var(--cl-text, #222); height: 14px; }
+.marks-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.marks-row select { flex: 1; min-width: 0; }
 
 /* ---------- banners (project and community heads) */
 .banner {

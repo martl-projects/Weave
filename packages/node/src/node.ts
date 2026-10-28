@@ -276,6 +276,8 @@ import {
   KIND_BADGE_SERIES,
   KIND_BADGE_TRANSFER,
   KIND_BADGE_NOTE,
+  KIND_MARKS_PIN,
+  KIND_OFFICIAL,
   BADGE_NOTE_MAX,
   badgeNoteHash,
   parseBadgeLimit,
@@ -535,6 +537,7 @@ import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
+import { Marks } from './marks.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
@@ -860,6 +863,18 @@ export class WeaveNode implements Backend {
     changed: () => this.#emitLive(),
   });
   #liveListeners = new Set<(notice?: Notice) => void>();
+  #marksListeners = new Set<() => void>();
+  #marksTimer?: ReturnType<typeof setTimeout>;
+
+  /** Tell watchers what the mark services say may have changed (debounced: a burst of badge events is one). */
+  #marksChanged(): void {
+    if (this.#marksTimer) return;
+    this.#marksTimer = setTimeout(() => {
+      this.#marksTimer = undefined;
+      for (const listener of this.#marksListeners) listener();
+    }, 150);
+    this.#marksTimer.unref?.();
+  }
   /** Posts agents pointed to, newest first (the Mentions panel), and who's watching for more. */
   #mentions: MentionInfo[] = [];
   readonly #mentionListeners = new Set<(mention: MentionInfo) => void>();
@@ -946,6 +961,8 @@ export class WeaveNode implements Backend {
   #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
   /** Boards' client services, run here for this member. */
   #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services);
+  /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
+  #marks: Marks = new Marks(WeaveNode.servicesHost(this));
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -1465,6 +1482,7 @@ export class WeaveNode implements Backend {
     let queue = Promise.resolve();
     const unsubscribe = this.replica.onAppend((event) => {
       const item = this.itemFor(event);
+      if (item && this.#marks.reads(item.kind)) this.#marksChanged();
       if (!item || this.#hiddenAuthors().has(item.author)) return;
       queue = queue.then(async () => {
         const notice = await this.#noticeFor(item).catch(() => undefined);
@@ -1484,7 +1502,11 @@ export class WeaveNode implements Backend {
     // You switched sessions in the Claude app: the panel follows.
     const onFocus = (session: SessionInfo | null) => onItem({ id: `focus-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.focus', scope: 'live', body: session as unknown as Json, author: me, signer: me, seq: 0 });
     this.#focusListeners.add(onFocus);
+    // What the mark services say may have changed: views showing marks ask again (and only then).
+    const onMarks = () => onItem({ id: `marks-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.marks', scope: 'live', body: null, author: me, signer: me, seq: 0 });
+    this.#marksListeners.add(onMarks);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+    this.#marksListeners.delete(onMarks);
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
     this.#mentionListeners.delete(onMention);
@@ -3145,6 +3167,7 @@ export class WeaveNode implements Backend {
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    await this.#takeInBundleMarks();
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
@@ -4388,7 +4411,39 @@ export class WeaveNode implements Backend {
   async applyBundle(bundle: Bundle): Promise<void> {
     for (const link of bundle.contacts ?? []) await this.addContact(link);
     for (const tier of bundle.tiers ?? []) this.queueMembershipRequest(tier);
+    const marks = (bundle.marks ?? []).filter((m) => typeof m?.project === 'string' && typeof m?.app === 'string');
+    if (marks.length) {
+      const pending = this.config.pendingMarks ?? [];
+      this.config = { ...this.config, pendingMarks: [...pending, ...marks.filter((m) => !pending.some((p) => p.project === m.project && p.app === m.app))] };
+      saveConfig(this.home, this.config);
+    }
     await this.#sendQueuedRequests();
+    await this.#takeInBundleMarks();
+  }
+
+  /**
+   * The bundle's mark services: once the tier brought you into their project and it has released them, each is
+   * taken into your own domain, following its project's newest release. One you removed stays removed.
+   */
+  async #takeInBundleMarks(): Promise<void> {
+    const pending = this.config.pendingMarks ?? [];
+    if (!pending.length) return;
+    const left = [];
+    for (const m of pending) {
+      if (this.#marks.hadMine(m.app)) continue;
+      if (!this.#spaces.has(m.project) || !this.#marks.released(m.project, m.app)) {
+        left.push(m);
+        continue;
+      }
+      try {
+        await this.#marks.addMarks({ project: m.project, app: m.app, follow: true, via: 'bundle' });
+      } catch {
+        left.push(m);
+      }
+    }
+    if (left.length === pending.length) return;
+    this.config = { ...this.config, pendingMarks: left };
+    saveConfig(this.home, this.config);
   }
 
   async #sendQueuedRequests(): Promise<number> {
@@ -9060,8 +9115,11 @@ export class WeaveNode implements Backend {
       cipher: n.#cipher.bind(n),
       decode: n.#decode.bind(n),
       decodeAll: n.#decodeAll.bind(n),
+      emitLive: n.#emitLive.bind(n),
       entries: n.#entries.bind(n),
       find: n.#find.bind(n),
+      marksChanged: n.#marksChanged.bind(n),
+      memo: n.#memo.bind(n),
       get home() {
         return n.home;
       },
@@ -9218,6 +9276,29 @@ export class WeaveNode implements Backend {
     return this.#lenses.lensFile(...args);
   }
 
+  marks(...args: Parameters<Marks['marks']>): ReturnType<Marks['marks']> {
+    return this.#marks.marks(...args);
+  }
+
+  markServices(...args: Parameters<Marks['markServices']>): ReturnType<Marks['markServices']> {
+    return this.#marks.markServices(...args);
+  }
+
+  addMarks(input: Omit<Parameters<Marks['addMarks']>[0], 'via'>): ReturnType<Marks['addMarks']> {
+    if (input.as) this.#agentMay(input.as, KIND_MARKS_PIN);
+    return this.#marks.addMarks(input);
+  }
+
+  removeMarks(input: Parameters<Marks['removeMarks']>[0]): ReturnType<Marks['removeMarks']> {
+    if (input.as) this.#agentMay(input.as, KIND_MARKS_PIN);
+    return this.#marks.removeMarks(input);
+  }
+
+  setOfficial(input: Parameters<Marks['setOfficial']>[0]): ReturnType<Marks['setOfficial']> {
+    if (input.as) this.#agentMay(input.as, KIND_OFFICIAL);
+    return this.#marks.setOfficial(input);
+  }
+
   catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {
     return this.#services.catalogArtifact(...args);
   }
@@ -9334,6 +9415,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export interface Bundle {
   contacts?: string[];
   tiers?: Array<{ tier: string; creator: Did; note?: string }>;
+  /** Mark services to take into your own domain: a project (one of the tiers brings you in) and its service's app id. */
+  marks?: Array<{ project: string; app: string }>;
 }
 
 /** The start of a Markdown text as one plain line, for shares and older clients. */

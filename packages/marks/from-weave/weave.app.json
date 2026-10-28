@@ -1,0 +1,5 @@
+{
+  "app": "from-weave",
+  "name": "From Weave",
+  "marks": { "component": "from-weave.wasm", "reads": ["weave.official"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did", "space", "post"] }
+}

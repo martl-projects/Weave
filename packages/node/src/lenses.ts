@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
-import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type BoardLens, type Did, type Json } from '@weave/core';
+import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type Did, type Json } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
 import type { BoardViewInfo, FeedItem } from './backend.ts';
 import type { ServicesHost } from './node.ts';
@@ -29,6 +29,32 @@ const LENS_FILE_MAX = 5_000_000;
 interface Ready {
   key: string;
   site?: string;
+}
+
+/**
+ * A pure component's release, fetched into `dir` once (its release file through the project's provider or GitHub,
+ * checked against its SHA-256; or its image, each layer checked against its digest): the folder it unpacked into.
+ */
+export async function releaseFolder(h: ServicesHost, dir: string, r: { origin: { project: string; release: string }; tag: string; manifest: AppManifest }): Promise<string> {
+  const target = joinPath(dir, tagFolder(r.tag));
+  if (!existsSync(target)) {
+    const image = r.manifest.install?.image;
+    const asset = r.manifest.install?.assets?.wasm;
+    if (asset) await h.releases.fetch(dir, { project: r.origin.project, id: r.origin.release, tag: r.tag, manifest: r.manifest }, asset, {});
+    else if (image) {
+      const staging = `${target}.unpacking`;
+      rmSync(staging, { recursive: true, force: true });
+      try {
+        await pullImage(image.ref, image.digest, staging, { fetch: h.registryFetch() });
+        renameSync(staging, target);
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+    }
+  }
+  // Unpacked into its tag's folder (or the one folder in it).
+  const inside = existsSync(target) ? readdirSync(target).filter((e) => !e.startsWith('.')) : [];
+  return inside.length === 1 && statSync(joinPath(target, inside[0])).isDirectory() ? joinPath(target, inside[0]) : target;
 }
 
 export class Lenses {
@@ -111,26 +137,7 @@ export class Lenses {
     const ready = (async (): Promise<Ready> => {
       const dir = joinPath(this.h.home.dir, 'lenses', lens.origin.release.slice(0, 40));
       const client = lens.manifest.client!;
-      const target = joinPath(dir, tagFolder(lens.tag));
-      if (!existsSync(target)) {
-        const image = lens.manifest.install?.image;
-        const asset = lens.manifest.install?.assets?.wasm;
-        if (asset) await this.h.releases.fetch(dir, { project: lens.origin.project, id: lens.origin.release, tag: lens.tag, manifest: lens.manifest }, asset, {});
-        else if (image) {
-          // Its image, pulled by Weave itself: each layer checked against its digest.
-          const staging = `${target}.unpacking`;
-          rmSync(staging, { recursive: true, force: true });
-          try {
-            await pullImage(image.ref, image.digest, staging, { fetch: this.h.registryFetch() });
-            renameSync(staging, target);
-          } finally {
-            rmSync(staging, { recursive: true, force: true });
-          }
-        }
-      }
-      // Unpacked into its tag's folder (or the one folder in it).
-      const inside = existsSync(target) ? readdirSync(target).filter((e) => !e.startsWith('.')) : [];
-      const root = inside.length === 1 && statSync(joinPath(target, inside[0])).isDirectory() ? joinPath(target, inside[0]) : target;
+      const root = await releaseFolder(this.h, dir, lens);
       if (!existsSync(joinPath(root, client.component))) throw new Error(`${lens.name} ${lens.tag} has no ${client.component}`);
       const entry = await prepareWasm(joinPath(root, client.component), joinPath(dir, 'wasm'));
       this.h.runtime.startWasm(

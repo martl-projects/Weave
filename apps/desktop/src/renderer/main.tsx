@@ -6,6 +6,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { countIn, NotificationSettings, startNotifications } from './notify.tsx';
+import { MarksSettings } from './marks.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
@@ -41,7 +42,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -605,6 +606,7 @@ function Shell() {
             'sep',
             { label: 'Refresh', onClick: bump },
             { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
+            { label: 'Marks…', onClick: () => setDialog({ kind: 'marks' }) },
             'sep',
             ...(Object.keys(SKINS) as Skin[]).map((s) => ({
               label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
@@ -684,6 +686,7 @@ function Shell() {
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
+      {dialog?.kind === 'marks' && <MarksSettings onClose={close} />}
       {dialog?.kind === 'desk' && <SetupDeskDialog onClose={close} />}
     </div>
   );

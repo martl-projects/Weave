@@ -1,0 +1,5 @@
+{
+  "app": "my-weave-marks",
+  "name": "My labels",
+  "marks": { "component": "marks.wasm", "reads": [], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"] }
+}

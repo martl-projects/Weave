@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { Builtin, GumroadLink, OnchainPrice, VisitorRule } from '@weave/core';
-import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, RepoAccess, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -532,6 +532,53 @@ export interface BoardInfo {
  * a view of its own (`site`: its files come from lensFile). Without a lens, or with a suggested one not chosen here,
  * just the board; `problem` when it couldn't be fetched or run.
  */
+/** Who says so, as the node knows it (a service can't claim to be another). */
+export interface MarkIssuerInfo {
+  service: string;
+  name: string;
+  tag: string;
+  release: string;
+  /** What runs: the image's digest, or the release file's SHA-256. */
+  digest: string;
+  domain: { kind: 'user' } | { kind: 'project' | 'community'; id: string; name: string };
+  /** Brought by your app's bundle: Weave's own. Only these may show a bare check. */
+  weave?: true;
+}
+
+export interface MarkInfo extends Mark {
+  issuer: MarkIssuerInfo;
+}
+
+export interface MarksAnswer {
+  subject: MarkSubject;
+  marks: MarkInfo[];
+}
+
+export interface MarkServiceInfo {
+  service: string;
+  name: string;
+  tag: string;
+  release: string;
+  digest: string;
+  project: { id: string; name?: string };
+  domain: MarkIssuerInfo['domain'];
+  settings: Json;
+  reads: string[];
+  slots: MarkSlot[];
+  /** Yours: the newest release of its project runs. */
+  follow?: true;
+  /** Yours: your app's bundle brought it. */
+  via?: 'bundle';
+  /** A space's: the one its gates ask. */
+  gate?: true;
+  /** A newer release of it, when it doesn't follow its project. */
+  newer?: string;
+  /** Why it shows nothing (it couldn't be fetched, its fold failed, its state grew too large). */
+  problem?: string;
+  by: Actor;
+  time: string;
+}
+
 export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
@@ -1864,6 +1911,18 @@ export interface Backend {
    */
   lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }>;
 
+  // marks (stage 19)
+  /** What the mark services you and the space chose say about these subjects ({did}, {space} or {post}) at a slot, with who says so. */
+  marks(input: { slot: string; space?: string; subjects: unknown[] }): Promise<MarksAnswer[]>;
+  /** Your own mark services, or (space) the ones a project or community pinned. */
+  markServices(input?: { space?: string }): Promise<MarkServiceInfo[]>;
+  /** Take a project's mark service into your own domain (follow: its newest release), or as a maintainer pin it to a space. */
+  addMarks(input: { project: string; app?: string; tag?: string; space?: string; settings?: Json; follow?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo>;
+  /** Take a mark service out of your own domain, or unpin it from a space. */
+  removeMarks(input: { service: string; space?: string; as?: string }): Promise<void>;
+  /** Maintainers of the project From Weave comes from: say that something comes from Weave (on: false, no longer). */
+  setOfficial(input: { project: string; subject: unknown; note?: string; on?: boolean; as?: string }): Promise<FeedItem>;
+
   // projects
   project(ref: string): Promise<ProjectInfo>;
   setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
@@ -2096,6 +2155,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
+  'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react',

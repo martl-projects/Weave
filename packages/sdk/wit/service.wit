@@ -82,3 +82,19 @@ world board {
   /// renderer or agent gave (JSON), the state as fold made it, and me who asks ({did, name}).
   export act: func(name: string, input: string, state: string, me: string) -> result<string, string>;
 }
+
+/// A mark service: what shows next to names, from an issuer someone chose (docs/v2-stage19.md). Pure like a board's
+/// lens (no clock, randomness, network or key), run by every node that took it in, so the same events give the same
+/// marks. It shows only in its domain: your own (everywhere you look) or a space's (only in that space).
+world marks {
+  /// Take new items into the state, oldest first: the state is the service's own (JSON), none the first time.
+  /// domain: {kind: "user" | "project" | "community", id}; settings: its rules, as its domain set them (JSON).
+  /// items: feed items of the kinds its manifest reads, from public events and its domain; each has "home": true when
+  /// it's in the project the service comes from, by one of its maintainers.
+  export fold: func(domain: string, settings: string, state: option<string>, items: string) -> string;
+  /// Marks for these subjects at this slot, as JSON [{subject, marks: [{kind, text?, count?, symbol?, image?,
+  /// tooltip?, ref?}]}]: kind is check, label (at most 16 characters), count, symbol (an emoji) or image (a wblob:
+  /// reference). Anything else is dropped, and Weave adds who says so.
+  /// slot: {kind, space?}; subjects: [{did} | {space} | {post}]; viewer: {did}.
+  export ask: func(slot: string, subjects: string, state: string, viewer: string) -> string;
+}
