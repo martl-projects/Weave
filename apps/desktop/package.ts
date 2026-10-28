@@ -50,8 +50,13 @@ writeFileSync(
   JSON.stringify({ name: 'weave', productName: 'Weave', version, description: 'Build things together, peer to peer', license: 'MIT', author: 'Weave', main: 'dist/main.cjs' }, null, 2),
 );
 
+// --- the services Weave ships: built, then next to the daemon, their digests built into it (packages/shipped)
+execFileSync(process.execPath, [join(root, 'packages', 'shipped', 'build.ts')], { stdio: 'inherit' });
+const shipped = JSON.parse(readFileSync(join(root, 'packages', 'shipped', 'dist', 'shipped.json'), 'utf8')) as Record<string, { digest: string }>;
+
 // --- the daemon: the CLI bundled into one file
 mkdirSync('pack/daemon', { recursive: true });
+cpSync(join(root, 'packages', 'shipped', 'dist'), 'pack/daemon/shipped', { recursive: true });
 await bundle({
   entryPoints: [join(root, 'packages', 'cli', 'src', 'main.ts')],
   outfile: 'pack/daemon/weave.mjs',
@@ -60,7 +65,7 @@ await bundle({
   format: 'esm',
   target: 'node22',
   external: [...NATIVE, ...BESIDE],
-  define: { WEAVE_VERSION: JSON.stringify(version) },
+  define: { WEAVE_VERSION: JSON.stringify(version), WEAVE_SHIPPED: JSON.stringify(Object.fromEntries(Object.entries(shipped).map(([name, s]) => [name, s.digest]))) },
   // Bundled CommonJS dependencies still call require().
   banner: { js: "import { createRequire as __weaveRequire } from 'node:module'; const require = __weaveRequire(import.meta.url);" },
 });

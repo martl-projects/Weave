@@ -2,8 +2,9 @@ import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CA
 import { type ServiceGate, type FeedItem, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
+import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
@@ -51,10 +52,27 @@ const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string;
 const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin].settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
+/** A signature with a key among a service's settings (it never sees the key): RS256, ES256 (r||s) or HS256. */
+function signWith(key: string | undefined, name: string, algorithm: string, data: Uint8Array): Uint8Array {
+  if (!key) throw new Error(`no setting ${name} to sign with`);
+  const bytes = Buffer.from(data);
+  try {
+    if (algorithm === 'HS256') return new Uint8Array(createHmac('sha256', key).update(bytes).digest());
+    if (algorithm === 'RS256') return new Uint8Array(cryptoSign('sha256', bytes, key));
+    if (algorithm === 'ES256') return new Uint8Array(cryptoSign('sha256', bytes, { key, dsaEncoding: 'ieee-p1363' }));
+  } catch (error) {
+    throw new Error(`${name} isn't a key for ${algorithm}: ${(error as Error).message}`);
+  }
+  throw new Error(`it signs with RS256, ES256 or HS256, not ${algorithm}`);
+}
+
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
 
-const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact' | 'asks'>): Json => ({
+/** The services this Weave ships (tests give their own folder). */
+const shippedHere = (h: ServicesHost) => shippedServices(h.shippedDir() ?? SHIPPED_DIR);
+
+const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'builtin' | 'contract' | 'artifact' | 'asks' | 'shipped'>): Json => ({
   name: s.name,
   description: s.description,
   ...(s.icon ? { icon: s.icon } : {}),
@@ -63,6 +81,7 @@ const profileBody = (s: Pick<StoredService, 'name' | 'description' | 'icon' | 'b
   ...(s.artifact ? { origin: { project: s.artifact.project, release: s.artifact.id, tag: s.artifact.tag, fingerprint: releaseApproval(s.artifact) } } : {}),
   // What it asks for, so its spaces' maintainers can fill it in (sign-ins with their provider).
   ...(asksOf(s)?.length ? { settings: asksOf(s) as unknown as Json } : {}),
+  ...(s.shipped ? { shipped: s.shipped } : {}),
 });
 
 export class Services {
@@ -151,6 +170,8 @@ export class Services {
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
       running: stored.builtin ? stored.enabled : this.h.runtime.running(`service:${stored.name}`),
+      // Why it doesn't run (a shipped component that isn't what Weave ships, say); a release says so in its artifact.
+      ...(!stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
     };
   }
 
@@ -270,7 +291,7 @@ export class Services {
    * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
    * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string; shipped?: string }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
     const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
@@ -286,9 +307,14 @@ export class Services {
     // Or a Weave service listed in a catalog: what it is comes from its image, not from the catalog.
     const found: { project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } } | undefined = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : input.from ? await this.fromCatalog(input.from) : undefined;
     if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
-    const manifest = found?.artifact.manifest;
+    // One Weave ships: its component, checked against its digest whenever it starts.
+    const shipped = input.shipped ? shippedHere(this.h).get(input.shipped) : undefined;
+    if (input.shipped && !shipped) throw new Error(`this Weave ships no service named ${input.shipped}${shippedHere(this.h).size ? ` (it ships ${[...shippedHere(this.h).keys()].join(', ')})` : ''}`);
+    if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
+    if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
+    const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
-    if (manifest && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
+    if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
     const given = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
@@ -304,14 +330,14 @@ export class Services {
     // A sign-in comes after: its provider's page opens once the service is there.
     const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
-    const name = serviceName(input.name ?? builtin ?? manifest?.app);
+    const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
     const contract = parseContract(builtin ? BUILTIN[builtin].contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? `${manifest!.name}, shipped with Weave` : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -328,7 +354,8 @@ export class Services {
       ...(site ? { site } : {}),
       ...(builtin ? { builtin } : {}),
       ...(artifact ? { artifact, approved: [approved!] } : {}),
-      ...(!manifest && asks?.length ? { asks } : {}),
+      ...((!manifest || shipped) && asks?.length ? { asks } : {}),
+      ...(shipped ? { shipped: { name: shipped.name, digest: shipped.digest } } : {}),
       settings,
       token: b64u.encode(randomBytes(24)),
       enabled: true,
@@ -674,7 +701,7 @@ export class Services {
       ...(p.icon ? { icon: p.icon } : {}),
       ...(p.builtin ? { builtin: p.builtin } : {}),
       contract: p.contract,
-      origin: this.originInfo(p.builtin, p.origin),
+      origin: p.shipped ? this.shippedOrigin(p.shipped) : this.originInfo(p.builtin, p.origin),
       ...(p.settings ? { settings: p.settings } : {}),
       time: p.time,
     }));
@@ -694,6 +721,11 @@ export class Services {
     const found = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release);
     if (!found || releaseApproval(found) !== origin.fingerprint) return { ...base, checked: 'unmatched' };
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
+  }
+
+  /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */
+  shippedOrigin(claim: { name: string; digest: string }): ServiceOriginInfo {
+    return { kind: 'shipped', name: claim.name, checked: shippedHere(this.h).get(claim.name)?.digest === claim.digest ? 'verified' : 'other' };
   }
 
   /** A service by its key, or by "person/name" or its name when that's unique among the profiles known here. */
@@ -1149,6 +1181,7 @@ export class Services {
   startService(stored: StoredService): void {
     if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
     const a = stored.artifact;
+    if (stored.shipped) return this.startShipped(stored);
     if (!a && stored.wasm) return void this.spawnWasm(stored, stored.wasm);
     if (!a) return stored.command?.length ? this.spawnService(stored) : undefined;
     // An applet: only the release you approved, fetched and checked against its fingerprints first.
@@ -1157,6 +1190,24 @@ export class Services {
       const now = this.storedServices().find((s) => s.name === stored.name);
       if (now?.enabled && now.artifact?.id === a.id) this.spawnService(now);
     });
+  }
+
+  /**
+   * A service Weave ships: its component as this Weave ships it, only if the file is exactly that (its digest). After
+   * an update the digest it runs changes, and its profile says so.
+   */
+  startShipped(stored: StoredService): void {
+    const key = `service:${stored.name}`;
+    const s = shippedHere(this.h).get(stored.shipped!.name);
+    const problem = s ? shippedProblem(s) : `this Weave doesn't ship ${stored.shipped!.name} any more`;
+    if (problem || !s) return void this.h.releases.jobs.set(key, { error: problem! });
+    if (s.digest !== stored.shipped!.digest) {
+      const after = { ...stored, shipped: { name: s.name, digest: s.digest } };
+      this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
+      this.publishServiceProfile(after);
+      stored = after;
+    }
+    void this.spawnWasm(stored, s.file, s.site);
   }
 
   /** Resolves when fetching an applet's release ends (for tests and the CLI). */
@@ -1343,6 +1394,9 @@ export class Services {
     this.#watching.get(name)?.abort();
     this.#watching.set(name, watching);
     const handed = new Set<string>();
+    // Its ticks (tickEvery): one at a time, none piling up while it's busy; they stop with it.
+    const ticking: { timer?: ReturnType<typeof setInterval>; pending: boolean } = { pending: false };
+    watching.signal.addEventListener('abort', () => clearInterval(ticking.timer));
     const hand = (item: FeedItem) => {
       if (handed.has(item.id)) return;
       handed.add(item.id);
@@ -1363,9 +1417,23 @@ export class Services {
           if (!current?.enabled) throw new Error(`${name} is stopped`);
           if (call === 'me') return JSON.stringify(gate.me());
           if (call === 'setting') {
+            // A key it signs with is never handed to it (sign uses it).
+            if (asksOf(current)?.find((a) => a.name === String(args[0]))?.signing) return undefined;
             // A sign-in about to run out is renewed first: it always gets a current token.
             await this.settings.renew([current]);
             return this.settings.effective(current)[String(args[0])] ?? undefined;
+          }
+          if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (call === 'tickEvery') {
+            clearInterval(ticking.timer);
+            const ms = Math.floor(Number(args[0]) || 0);
+            if (ms > 0)
+              ticking.timer = setInterval(() => {
+                if (ticking.pending) return;
+                ticking.pending = true;
+                this.h.runtime.deliver(key, JSON.stringify({ kind: 'weave.tick', time: new Date(this.h.clock()).toISOString() }));
+              }, Math.max(1000, ms)).unref();
+            return;
           }
           if (call === 'publish') {
             const [space, kind, body] = args as [string, string, string];
@@ -1403,6 +1471,8 @@ export class Services {
             }
           : {}),
         handled: (text) => {
+          // A tick moves nothing on: the next one may come.
+          if ((JSON.parse(text) as { kind?: string }).kind === 'weave.tick') return void (ticking.pending = false);
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {
             cursor = time;

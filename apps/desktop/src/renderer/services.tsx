@@ -23,6 +23,8 @@ export function contractText(c: ServiceContract): string {
 export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
   if (origin.kind === 'weave') return <div className="small muted">Comes with Weave</div>;
   if (origin.kind === 'unreleased') return <div className="small muted">Its person's own code, not released in a project</div>;
+  if (origin.kind === 'shipped')
+    return origin.checked === 'verified' ? <div className="small muted">✓ Ships with Weave: exactly the component your Weave has</div> : <div className="small muted">Ships with another version of Weave (not the component yours has)</div>;
   const where = `${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, release ${origin.tag}`;
   if (origin.checked === 'verified')
     return (

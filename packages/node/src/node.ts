@@ -626,6 +626,8 @@ export interface StoredService {
   hosted?: Record<string, StoredRoom>;
   /** The settings your own code asks for (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
   asks?: AppSetting[];
+  /** One Weave ships (shipped.ts): its name, and the digest it ran last. */
+  shipped?: { name: string; digest: string };
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
   approved?: string[];
   /** An applet: the release it runs, pinned (its manifest as released). */
@@ -911,7 +913,7 @@ export class WeaveNode implements Backend {
   /** How services' sign-ins reach their providers' token pages (tests put a stand-in there). */
   oauthSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
-  wasmSetup: { testHosts: Record<string, number> } = { testHosts: {} };
+  wasmSetup: { testHosts: Record<string, number>; shippedDir?: string } = { testHosts: {} };
   #githubLogin?: GitHubLogin;
 
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
@@ -9067,6 +9069,8 @@ export class WeaveNode implements Backend {
       githubFetch: () => n.githubSetup.fetch,
       /** Fetch for services' sign-ins (tests put a stand-in there). */
       oauthFetch: () => n.oauthSetup.fetch,
+      /** Where the services Weave ships are (tests give their own). */
+      shippedDir: () => n.wasmSetup.shippedDir,
       clock: () => n.clock(),
       github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),

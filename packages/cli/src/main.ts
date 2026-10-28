@@ -213,6 +213,7 @@ github — repositories that follow a group, tier or project (members who give t
                              [--setting KEY=VALUE …] [--keep-in <project>]: keep them in the project, for its maintainers to change
                              [--offers-website --site <folder>]: a game or page (the website world): Weave serves its files and
                              holds its players' connections (/weave/socket), telling it who each player is
+  service add --shipped <name>     one Weave ships (packages/shipped), checked by its digest each time it starts
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
   service add github --builtin github   the GitHub service Weave ships: hands a project's release files to its participants
@@ -442,6 +443,7 @@ const { values, positionals } = parseArgs({
     net: { type: 'string' },
     blind: { type: 'boolean', default: false },
     'keep-in': { type: 'string' },
+    shipped: { type: 'string' },
     manifest: { type: 'string' },
     run: { type: 'string' },
     spaces: { type: 'string' },
@@ -595,6 +597,7 @@ const settingsText = (s: ServiceSettingsInfo) =>
 const originLine = (o: ServiceOriginInfo): string => {
   if (o.kind === 'weave') return 'from Weave itself';
   if (o.kind === 'unreleased') return 'from code its person runs without releasing it';
+  if (o.kind === 'shipped') return o.checked === 'verified' ? `shipped with Weave (${o.name}): exactly the component this Weave has` : `shipped with another version of Weave (${o.name}): not the component this Weave has`;
   const where = `${o.project.name ? `p/${o.project.name}` : 'a project you aren\'t in'}, release ${o.tag}`;
   if (o.checked === 'verified') return `from ${where}, released by ${o.publisher?.name ?? o.publisher?.did}${o.packaged ? ' (a Weave service)' : ''}: checked`;
   if (o.checked === 'unmatched') return `claims to be from ${where}, but that project has no such release: don't trust it`;
@@ -1585,6 +1588,13 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
             ? `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`
             : `${line(s)}\n\nIt answers as you · ${s.name}: participants of its projects fetch release files through it, with this node's GitHub sign-in (weave github connect for private repositories).`,
         );
+      }
+      if (sub === 'add' && values.shipped) {
+        const settings = settingsOf();
+        const s = await b.addService({ ...(ref ? { name: ref } : {}), shipped: values.shipped, spaces: list(values.spaces), ...(Object.keys(settings).length ? { settings: settings as Record<string, string> } : {}), ...(values['keep-in'] ? { settingsIn: values['keep-in'] } : {}) });
+        return out(s, () => `${line(s)}
+
+It ships with Weave: it runs only as exactly the component this Weave has.`);
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
