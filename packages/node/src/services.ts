@@ -788,7 +788,7 @@ export class Services {
     throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
   }
 
-  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo> {
+  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string; within?: number }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === to);
     if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
@@ -798,13 +798,54 @@ export class Services {
     }
     const text = input.text?.trim() ?? '';
     if (!text && input.data === undefined) throw new Error('ask with some text or data');
-    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) }, space: input.space, as: input.as });
+    // What's asked is for the service (and me) alone: the others see that it was asked, of whom, not what.
+    const asked: Json = { ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) };
+    const sealed = [boxTo(to, asked), boxTo(this.h.encryptionKeyOf(this.h.identity.author), asked)] as unknown as Json[];
+    const until = input.within ? new Date(this.h.clock() + Math.min(Math.max(input.within, 10), 30 * 86400) * 1000).toISOString() : undefined;
+    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, for: sealed, ...(until ? { until } : {}) }, space: input.space, as: input.as });
     return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
+  }
+
+  /**
+   * A request as the one it's for (or who asked) reads it: opened with a key of this node's services or mine. Sealed
+   * for others: only whom it's for, and that it's private.
+   */
+  openRequest(body: unknown): Record<string, Json> {
+    const b = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, Json>;
+    if (!Array.isArray(b.for)) return b;
+    const boxes = b.for as unknown as Box[];
+    const service = this.h.agents.find((a) => a.did === b.to);
+    for (const box of boxes) {
+      let opened: Json | undefined;
+      try {
+        if (service) opened = openBox(service.keys.secretKey, service.keys.publicKey, box);
+      } catch {
+        opened = undefined;
+      }
+      opened ??= this.#openAnswer([box]);
+      if (opened && typeof opened === 'object' && !Array.isArray(opened)) return { to: b.to, ...(b.until !== undefined ? { until: b.until } : {}), ...(opened as Record<string, Json>) };
+    }
+    return { to: b.to, ...(b.until !== undefined ? { until: b.until } : {}), sealed: true };
+  }
+
+  /** A space's entries, its requests opened where they're for us (requestsOf reads them as anyone's). */
+  #openedEntries(space: StoredSpace) {
+    return this.h.entries(space).map((e) => (e.kind === KIND_SERVICE_REQUEST ? { ...e, body: this.openRequest(e.body) as Json } : e));
+  }
+
+  /** Until when a request counts: as its asker said, or as its service's contract says for its action or protocol. */
+  requestDeadline(contract: ServiceContract, body: Record<string, Json>, asked: string): number | undefined {
+    const until = typeof body.until === 'string' ? Date.parse(body.until) : NaN;
+    const key = typeof body.action === 'string' ? body.action : (body.data as { protocol?: unknown } | undefined)?.protocol;
+    const seconds = typeof key === 'string' ? contract.expires?.[key] : undefined;
+    const fromContract = seconds ? Date.parse(asked) + seconds * 1000 : NaN;
+    const all = [until, fromContract].filter((t) => !Number.isNaN(t));
+    return all.length ? Math.min(...all) : undefined;
   }
 
   async serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]> {
     const space = this.h.space(input.space);
-    const entries = this.h.entries(space);
+    const entries = this.#openedEntries(space);
     const to = input.service ? await this.serviceDid(input.service) : undefined;
     const results = entries.filter((e) => e.kind === KIND_SERVICE_RESULT);
     return requestsOf(entries, to).map((r) => ({
@@ -814,6 +855,7 @@ export class Services {
       text: r.text,
       ...(r.data !== undefined ? { data: r.data as Json } : {}),
       ...(r.action ? { action: r.action } : {}),
+      ...((entries.find((e) => e.id === r.id)?.body as { sealed?: unknown } | undefined)?.sealed ? { private: true as const } : {}),
       time: r.time,
       // Only the service it was for answers it.
       results: results
@@ -851,10 +893,13 @@ export class Services {
   serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
     if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
     if (d.inner.kind === KIND_SERVICE_REQUEST) {
-      const body = d.inner.body as { to?: unknown; action?: unknown } | null;
+      const body = this.openRequest(d.inner.body) as { to?: unknown; action?: unknown; sealed?: unknown };
       if (!takesRequests(stored.contract) || body?.to !== did) return false;
       // Refused once (Weave answered no): it stays that, even if who may changes later.
       if (this.#refused.has(d.id)) return false;
+      // Older than it counts (the service was off): Weave says so, and the service never sees it.
+      const deadline = this.requestDeadline(stored.contract, body as Record<string, Json>, d.event.time);
+      if (deadline !== undefined && this.h.clock() > deadline) return (this.#refuse(stored, d.id, `it expired before ${stored.name} got to it: ask again`), false);
       const fetching = (body as { data?: { protocol?: unknown; artifact?: unknown } }).data;
       if (fetching?.protocol === PROTOCOL_ARTIFACT_FETCH && typeof fetching.artifact === 'string') {
         const no = this.artifactRefusal(d.space, fetching.artifact, d.event.author);
@@ -867,6 +912,11 @@ export class Services {
       return !why;
     }
     return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** A feed item for a service: a request to it, opened. */
+  itemFor(d: Decoded): FeedItem {
+    return this.h.toItem(d.inner.kind === KIND_SERVICE_REQUEST ? { ...d, inner: { ...d.inner, body: this.openRequest(d.inner.body) as Json } } : d);
   }
 
   /** Why someone may not use an action of a service in a space, or undefined: they may. */
@@ -994,11 +1044,11 @@ export class Services {
         this.h.decodeAll()
           .filter((d) => (!since || d.event.time > since) && this.serviceSees(current(), key.did, d))
           .sort((a, b) => a.event.time.localeCompare(b.event.time))
-          .map((d) => this.h.toItem(d)),
+          .map((d) => this.itemFor(d)),
       watch: async (onItem, signal) => {
         const unsubscribe = this.h.replica.onAppend((event) => {
           const decoded = this.h.decode(event);
-          if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.h.toItem(decoded));
+          if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.itemFor(decoded));
         });
         await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         unsubscribe();
@@ -1126,7 +1176,8 @@ export class Services {
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
     if (!provider) return undefined;
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
-    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag}${platform === 'file' ? '' : ` for ${platform}`}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform } });
+    // Only worth answering while this node waits for it.
+    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag}${platform === 'file' ? '' : ` for ${platform}`}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform }, within: Math.ceil(this.locateWait / 1000) + 30 });
     const until = Date.now() + this.locateWait;
     for (;;) {
       const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];
@@ -1252,11 +1303,16 @@ export class Services {
       for (const id of stored.spaces) {
         const space = this.h.spaces.get(id);
         if (!space) continue;
-        const entries = this.h.entries(space);
+        const entries = this.#openedEntries(space);
         const answered = new Set(entries.filter((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did).map((e) => (e.body as { request?: unknown } | null)?.request));
         for (const r of requestsOf(entries, did)) {
           if (answered.has(r.id) || this.#answering.has(r.id)) continue;
           this.#answering.add(r.id);
+          const deadline = this.requestDeadline(stored.contract, entries.find((e) => e.id === r.id)!.body as Record<string, Json>, r.time);
+          if (deadline !== undefined && this.h.clock() > deadline) {
+            void (this.serviceGate(stored.token)?.answer({ request: r.id, error: `it expired before ${stored.name} got to it: ask again` }) ?? Promise.resolve()).catch(() => {}).finally(() => this.#answering.delete(r.id));
+            continue;
+          }
           void this.answerFetch(stored, space, r).finally(() => this.#answering.delete(r.id));
         }
       }

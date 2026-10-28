@@ -94,6 +94,11 @@ export interface ServiceContract {
   fetcher?: string;
   /** The sources whose artifacts it hands out (artifact.fetch): github, s3… Without, any. */
   sources?: string[];
+  /**
+   * How long a request counts, in seconds, by action or protocol ({"artifact.fetch": 120}): one older than that when
+   * the service gets to it is answered by Weave as expired, and never reaches it. Without, a request waits for it.
+   */
+  expires?: Record<string, number>;
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -202,8 +207,11 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   // Actions are requests: a service that reads nothing takes none.
   const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
   const fetcher = offers.length && typeof c.fetcher === 'string' && isFetcherRef(c.fetcher) ? c.fetcher : undefined;
+  const expires = reads !== 'nothing' && c.expires && typeof c.expires === 'object' && !Array.isArray(c.expires)
+    ? Object.fromEntries(Object.entries(c.expires as Record<string, unknown>).filter(([k, v]) => /^[a-z][a-z0-9.-]{0,59}$/.test(k) && Number.isInteger(v) && (v as number) >= 10 && (v as number) <= 30 * 86400).slice(0, 20))
+    : {};
   const sources = offers.length && Array.isArray(c.sources) ? [...new Set(c.sources.filter((x): x is string => typeof x === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(x)))].slice(0, 10) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(Object.keys(expires).length ? { expires: expires as Record<string, number> } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**

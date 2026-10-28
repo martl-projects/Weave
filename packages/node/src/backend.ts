@@ -470,6 +470,8 @@ export interface ServiceRequestInfo {
   time: string;
   /** Its answers: one for someone else shows only that it came (private). */
   results: Array<{ id: string; text: string; data?: Json; error?: string; private?: true; time: string }>;
+  /** Asked of the service alone (and you, if you asked): you see that it was asked, not what. */
+  private?: true;
 }
 
 export interface SpaceRepos {

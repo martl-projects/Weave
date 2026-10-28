@@ -108,8 +108,9 @@ describe('a service’s actions', { timeout: 120_000 }, () => {
       // martl may.
       await martl.askService({ space: 'Weave', service: bot.did, text: 'wipe, really', data: { reason: 'tests' }, action: 'wipe' });
       await vi.waitFor(async () => expect((await answers(martl))['wipe, really']?.text).toMatch(/from bot \(#2\)/), { timeout: 30_000, interval: 200 });
-      // Lena sees that it was answered, not what.
-      expect((await answers())['wipe, really']).toMatchObject({ text: '', private: true });
+      // Lena sees that martl asked it something, and that it answered: not what.
+      const theirs = (await lena.serviceRequests({ space: 'Weave', service: bot.did })).filter((r) => r.from.did === martl.identity.author);
+      expect(theirs).toMatchObject([{ text: '', private: true, results: [{ text: '', private: true }] }]);
 
       // The project makes hello maintainers only: Lena's hello goes no further. Wider than the contract: refused.
       await expect(lena.setServicePolicy({ space: 'Weave', service: bot.did, action: 'hello', who: 'maintainers' })).rejects.toThrow(/only the maintainers/);
@@ -121,6 +122,48 @@ describe('a service’s actions', { timeout: 120_000 }, () => {
       await lena.publish({ kind: 'weave.service.request', body: { to: bot.did, text: 'hello again', action: 'hello' }, space: 'Weave' });
       sync([martl, lena]);
       await vi.waitFor(async () => expect((await answers())['hello again']?.error).toMatch(/only maintainers can say hello/), { timeout: 30_000, interval: 200 });
+    } finally {
+      await martl.removeService('bot').catch(() => {});
+      await api.close();
+    }
+  });
+});
+
+describe('requests while a service is off', { timeout: 120_000 }, () => {
+  it('wait for it, unless they expired first: then Weave says so, and the service never sees them', async () => {
+    expect(parseContract({ ...CONTRACT, expires: { hello: 60, 'artifact.fetch': 120, bad: 1, 'Not ok': 60 } })?.expires).toEqual({ hello: 60, 'artifact.fetch': 120 });
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Later' });
+    await lena.joinSpace(await martl.invite('Later'));
+    sync([martl, lena]);
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    try {
+      const bot = await martl.addService({ name: 'bot', contract: { ...CONTRACT, expires: { hello: 60 } } as never, spaces: ['Later'], wasm: component });
+      await martl.setService({ name: 'bot', enabled: false });
+      sync([martl, lena]);
+      // Asked while it's off: one that waits, one that counts a minute (the contract's), one Lena wants within 10s.
+      await lena.askService({ space: 'Later', service: bot.did, text: 'whenever', action: 'wipe', data: { reason: 'x' } }).catch(() => {});
+      const waits = await lena.askService({ space: 'Later', service: bot.did, text: 'still there?' });
+      const hello = await lena.askService({ space: 'Later', service: bot.did, text: 'hi', action: 'hello' });
+      const soon = await lena.askService({ space: 'Later', service: bot.did, text: 'quick', within: 10 });
+      sync([martl, lena]);
+      // An hour later it's on again.
+      martl.clock = () => Date.now() + 3600_000;
+      await martl.setService({ name: 'bot', enabled: true });
+      const answered = async () => {
+        sync([martl, lena]);
+        return Object.fromEntries((await lena.serviceRequests({ space: 'Later', service: bot.did })).map((r) => [r.id, r.results[0]]));
+      };
+      await vi.waitFor(async () => {
+        const got = await answered();
+        expect(got[waits.id]?.text).toMatch(/still there\?/);
+        expect(got[hello.id]?.error).toMatch(/expired before bot got to it/);
+        expect(got[soon.id]?.error).toMatch(/expired before bot got to it/);
+      }, { timeout: 30_000, interval: 200 });
+      // It saw only the one that waited.
+      expect(readFileSync(join(martl.home.dir, 'services', 'bot', 'data', 'count'), 'utf8')).toBe('1');
     } finally {
       await martl.removeService('bot').catch(() => {});
       await api.close();

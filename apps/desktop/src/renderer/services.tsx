@@ -490,7 +490,7 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
           .map((r) => (
             <div className="service-request" key={r.id}>
               <div className="small">
-                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.text}
+                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.private ? <span className="muted">asked something, for it alone</span> : r.text}
               </div>
               {r.results.length ? (
                 r.results.map((x) => (
