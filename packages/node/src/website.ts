@@ -1,5 +1,5 @@
 import { hostsWebsites } from './services.ts';
-import { b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
+import { artifactsOf, b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
 import { createHash, createHmac } from 'node:crypto';
@@ -206,12 +206,26 @@ export class Website {
     return Promise.all(rooms.map(({ room, project }) => this.roomInfo(room, project)));
   }
 
+  /** A release a room runs, as people see it: its project and artifact by name where they're known here. */
+  releaseOf(r: { project: string; id: string; tag: string }): NonNullable<WebsiteInfo['from']> {
+    const project = this.h.spaces.get(r.project);
+    const artifact = project ? artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === r.id) : undefined;
+    return { project: { id: r.project, ...(project ? { name: project.name } : {}) }, release: r.id, tag: r.tag, ...(artifact ? { name: artifact.manifest.name } : {}) };
+  }
+
   async closeWebsite(ref: string): Promise<void> {
     const { room } = this.roomById(ref);
     if (room.host !== this.h.identity.author || !room.agent) throw new Error('only the person whose website service offers a website closes it');
     // A website of the website service closes. On an always-on node: handed over as a change.
     const service = this.svc.localServiceByKey(room.agent);
-    if (service?.hosted?.[room.id]) return this.closeHostedRooms(service.name, (r) => r.id !== room.id);
+    if (service?.hosted?.[room.id]) {
+      const servedBy = service.hosted[room.id].servedBy;
+      await this.closeHostedRooms(service.name, (r) => r.id !== room.id);
+      // A launched website was all its service was there for: it goes with it.
+      const launched = servedBy ? this.svc.storedServices().find((s) => s.name === servedBy && s.launched) : undefined;
+      if (launched) await this.svc.removeService(launched.name);
+      return;
+    }
     const away = this.h.isLinkedNode ? undefined : [...this.svc.handedOver().values()].find((h) => h.did === room.agent);
     if (away?.hosted?.[room.id]) {
       const { [room.id]: _gone, ...hosted } = away.hosted;
@@ -329,6 +343,7 @@ export class Website {
       name: room.name,
       host: { did: room.host, name: this.h.nameOf(room.host) },
       offeredBy: { did: room.agent!, ...(name ? { name } : {}) },
+      ...(room.release ? { from: this.releaseOf(room.release) } : {}),
       mine: here,
       open: room.open,
       mayJoin: this.mayJoin(room, me),
@@ -422,7 +437,9 @@ export class Website {
     const before = Object.values(site.hosted ?? {}).find((r) => r.servedBy === by && r.project === project.id && r.name === name);
     // Its own websites may share its port: one process answers them all, in each project.
     this.portFree(this.hosted().map((h) => h.room).filter((r) => r.servedBy !== by), port);
-    const room: StoredRoom = before ? { ...before, port, ...(pages ? { pages } : {}) } : { id: b64u.encode(randomBytes(12)), project: project.id, name, port, token: b64u.encode(randomBytes(24)), servedBy: by, ...(pages ? { pages } : {}) };
+    // What it runs, for everyone to see: the release its service was installed from.
+    const release = serving.artifact ? { project: serving.artifact.project, id: serving.artifact.id, tag: serving.artifact.tag } : undefined;
+    const room: StoredRoom = before ? { ...before, port, ...(pages ? { pages } : {}), ...(release ? { release } : {}) } : { id: b64u.encode(randomBytes(12)), project: project.id, name, port, token: b64u.encode(randomBytes(24)), servedBy: by, ...(pages ? { pages } : {}), ...(release ? { release } : {}) };
     this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === site.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
     const announced = this.announceRoom(site.name, room)!;
     this.h.emitLive();
@@ -456,7 +473,7 @@ export class Website {
       const a = room.access ?? {};
       this.h.replica.write(
         key,
-        sealFor(this.h.cipher(project), { kind: KIND_ROOM, body: { room: room.id, name: room.name, service: 'room', key: roomKey, invite: a.invite ?? 'participants', ...(a.show ? { show: a.show } : {}), ...(a.groups?.length ? { groups: a.groups } : {}), ...(room.pages ? { pages: room.pages as unknown as Json } : {}), agent: key.did, open: true } }),
+        sealFor(this.h.cipher(project), { kind: KIND_ROOM, body: { room: room.id, name: room.name, service: 'room', key: roomKey, invite: a.invite ?? 'participants', ...(a.show ? { show: a.show } : {}), ...(a.groups?.length ? { groups: a.groups } : {}), ...(room.pages ? { pages: room.pages as unknown as Json } : {}), ...(room.release ? { release: room.release } : {}), agent: key.did, open: true } }),
       );
     }
     const announced = this.roomById(room.id).room;

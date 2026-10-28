@@ -187,4 +187,50 @@ describe('WebAssembly services as releases', { timeout: 120_000 }, () => {
       await api.close();
     }
   });
+
+  it('launches a website artifact as a running website: approved, hosted, shown with its release, gone when closed', async () => {
+    process.env.FAKE_DOCKER_DOWN = '1';
+    const label = { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' }, wasm: { component: 'counter.wasm', site: 'site' } };
+    const fetchImpl = registry({ 'counter:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(label) }, wasm: layer } });
+    const martl = person('martl', fetchImpl);
+    const lena = person('Lena', fetchImpl);
+    await martl.createProject({ name: 'Arcade' });
+    await lena.joinSpace(await martl.invite('Arcade'));
+    const released = await martl.releaseService({ project: 'Arcade', image: 'ghcr.io/martl/counter:1.0' });
+    const artifact = (await martl.artifacts('Arcade')).find((a) => a.app === released.app)!;
+    // It shows a page and acts on nothing: a website, to launch rather than add.
+    expect(artifact).toMatchObject({ kind: 'website', source: { provider: 'oci' } });
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    try {
+      await expect(martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true })).rejects.toThrow(/you host no websites in Arcade/);
+      await martl.addService({ builtin: 'website', spaces: ['Arcade'] });
+      await expect(martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id } })).rejects.toThrow(/approve it first: Weave would run/);
+      const launched = await martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true });
+      expect(launched.name).toBe('counter');
+      await martl.serviceReady('counter');
+      // In Live, for everyone there, with the release it runs.
+      const site = await vi.waitFor(
+        async () => {
+          const found = (await martl.websites('Arcade')).find((r) => r.name === 'Counter');
+          expect(found).toBeTruthy();
+          return found!;
+        },
+        { timeout: 30_000, interval: 200 },
+      );
+      expect(site.from).toEqual({ project: { id: artifact.project.id, name: 'Arcade' }, release: artifact.id, tag: '1.0', name: 'Counter' });
+      sync([martl, lena]);
+      expect((await lena.websites('Arcade')).find((r) => r.id === site.id)?.from).toMatchObject({ name: 'Counter', tag: '1.0' });
+      // Launched again: a second one, under its own name.
+      expect((await martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true })).name).toBe('counter-2');
+      await martl.removeService('counter-2');
+      // Closed, it's over: its service goes with it.
+      await martl.closeWebsite(site.id);
+      expect((await martl.services()).map((s) => s.name)).not.toContain('counter');
+      await expect(martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: (await martl.artifacts('Arcade'))[0].id + 'x' }, approve: true })).rejects.toThrow(/no such artifact/);
+    } finally {
+      await martl.removeService('counter').catch(() => {});
+      await api.close();
+    }
+  });
 });

@@ -26,6 +26,8 @@ interface Bridge {
   openApp(url: string, title: string): Promise<void>;
   /** Let the person pick a folder on this computer; undefined if they cancel. */
   pickFolder(title: string): Promise<string | undefined>;
+  /** Show a file Weave got (an artifact's) in its folder. */
+  reveal?(path: string): Promise<void>;
   /** Bring the app's window to the front (a notification was clicked). */
   show(): Promise<void>;
   /** Show or hide the Mentions panel window; missing in a browser (open #/overlay there). */

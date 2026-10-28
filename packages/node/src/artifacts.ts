@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppAsset, AppManifest, Json } from '@weave/core';
@@ -52,7 +53,7 @@ export class Releases {
   readonly #github: () => GitHub;
   readonly #runtime: Runtime;
   readonly #changed: () => void;
-  readonly #locate: (a: ArtifactRef) => Promise<Located | undefined>;
+  readonly #locate: (a: ArtifactRef, platform: string) => Promise<Located | undefined>;
   readonly #fetchFile: () => typeof fetch;
   readonly #registryFetch: () => typeof fetch;
   /** The fetchers its person added: they fetch what a provider grants. */
@@ -62,7 +63,7 @@ export class Releases {
    * `services`: the folder services keep their files in; `github`: a client with this node's sign-in, if any;
    * `locate`: asks a provider in the release's project; `fetchFile`: downloads what a provider points at.
    */
-  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef) => Promise<Located | undefined>, fetchFile: () => typeof fetch, registryFetch: () => typeof fetch) {
+  constructor(services: () => string, github: () => GitHub, runtime: Runtime, changed: () => void, locate: (a: ArtifactRef, platform: string) => Promise<Located | undefined>, fetchFile: () => typeof fetch, registryFetch: () => typeof fetch) {
     this.#registryFetch = registryFetch;
     this.#services = services;
     this.#github = github;
@@ -76,7 +77,9 @@ export class Releases {
   async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string }> {
     let refused: string | undefined;
     try {
-      const located = await this.#locate(a);
+      // Asked for the file it is: this computer's build, the wasm one, or the file itself.
+      const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
+      const located = await this.#locate(a, platform);
       if (located?.fetcher) {
         // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
         if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);
@@ -133,6 +136,25 @@ export class Releases {
     return root;
   }
 
+  /**
+   * A file artifact, into dir: fetched unless it's there already and still matches its fingerprint. Its path, and who
+   * delivered it.
+   */
+  async getFile(dir: string, a: ArtifactRef): Promise<{ path: string; by: string }> {
+    const asset = a.manifest.install?.assets?.file;
+    if (!asset) throw new Error(`${a.manifest.name} ${a.tag} is no file`);
+    const path = join(dir, asset.file);
+    if (existsSync(path) && createHash('sha256').update(readFileSync(path)).digest('hex') === asset.sha256) return { path, by: this.from(dir, a) ?? 'this computer, before' };
+    mkdirSync(dir, { recursive: true });
+    const download = await this.#download(a, asset);
+    const partial = join(dir, `.download-${asset.file}`);
+    await saveVerified(download.body, partial, asset.sha256);
+    rmSync(path, { force: true });
+    renameSync(partial, path);
+    writeJson(join(dir, `.${asset.file}.from.json`), { from: download.from });
+    return { path, by: download.from };
+  }
+
   /** Fetch a release for a service unless it's here (or runs as a container), then go on. */
   ensure(service: string, a: ArtifactRef, job: string, then: () => void): void {
     const dir = join(this.#services(), service, 'artifacts', a.project);
@@ -184,10 +206,10 @@ export class Releases {
     await this.#waiting.get(job);
   }
 
-  /** Whether a service has this release here. */
-  /** Who delivered a service's release here: a provider, or GitHub itself. */
+  /** Who delivered a service's release here (or a file into its folder): a provider, or GitHub itself. */
   from(service: string, a: ArtifactRef): string | undefined {
-    const file = join(this.#services(), service, 'artifacts', a.project, `${tagFolder(a.tag)}.from.json`);
+    const asset = a.manifest.install?.assets?.file;
+    const file = a.manifest.file && asset ? join(service, `.${asset.file}.from.json`) : join(this.#services(), service, 'artifacts', a.project, `${tagFolder(a.tag)}.from.json`);
     try {
       return (JSON.parse(readFileSync(file, 'utf8')) as { from?: string }).from;
     } catch {
@@ -195,6 +217,7 @@ export class Releases {
     }
   }
 
+  /** Whether a service has this release here. */
   has(service: string, a: ArtifactRef): boolean {
     return existsSync(join(this.#services(), service, 'artifacts', a.project, tagFolder(a.tag)));
   }

@@ -127,6 +127,8 @@ import {
   inception,
   KIND_ADMIT,
   KIND_APP,
+  KIND_ARTIFACT,
+  artifactsOf,
   KIND_BOARD,
   KIND_CURATE,
   KIND_BLOCK,
@@ -486,6 +488,7 @@ import {
   type ExportLine,
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
+  type ArtifactInfo,
   type FetcherInfo,
   noAgent,
 } from './backend.ts';
@@ -609,6 +612,8 @@ export interface Handover {
 /** A service as this node keeps it: sealed in services.json, with its settings and the token of its API. */
 export interface StoredService {
   name: string;
+  /** Launched as a website (launchWebsite): it's there for its website, and goes when that's closed. */
+  launched?: true;
   description: string;
   icon?: string;
   contract: ServiceContract;
@@ -657,6 +662,8 @@ export interface StoredRoom {
   pages?: RoomPages;
   /** Something its host should know: what changed when Weave stopped starting what answers it (0.21). */
   note?: string;
+  /** The release it runs, when its service runs one: announced with it. */
+  release?: { project: string; id: string; tag: string };
 }
 
 export interface Decoded {
@@ -957,7 +964,7 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a) => this.#services.locateArtifact(a), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
   /** Services: code you run under keys of their own (see services.ts). */
@@ -9314,8 +9321,47 @@ export class WeaveNode implements Backend {
     return this.#services.serviceProfiles(...args);
   }
 
+  launchWebsite(...args: Parameters<Services['launchWebsite']>): ReturnType<Services['launchWebsite']> {
+    return this.#services.launchWebsite(...args);
+  }
+
   setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {
     return this.#services.setArtifactAccess(...args);
+  }
+
+  async releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo> {
+    if (input.as) this.#agentMay(input.as, KIND_ARTIFACT);
+    const project = this.#project(input.project);
+    const state = this.#maintainerState(project);
+    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
+    // As given, or where the project's app is released, or its one linked repository.
+    const repo = input.repo?.trim() || this.#app(project)?.install?.github || (linked.length === 1 ? linked[0].repo : '');
+    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
+    const client = new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch);
+    const release = await client.release(repo, input.tag.trim());
+    const asset = release.assets.find((a) => a.name === input.file);
+    if (!asset) throw new Error(`the release ${release.tag} in ${repo} has no file ${input.file}${release.assets.length ? ` (it has ${release.assets.slice(0, 8).map((a) => a.name).join(', ')})` : ''}`);
+    // Fingerprinted once, so whoever gets it can check it.
+    const download = await client.download(repo, asset.id);
+    const hash = createHash('sha256');
+    const reader = download.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      hash.update(value);
+    }
+    const app = (input.name ?? asset.name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'file';
+    const manifest = parseManifest({ app, name: (input.name ?? asset.name).slice(0, 40), version: 1, services: [], file: input.type ? { type: input.type } : {}, install: { github: repo, tag: release.tag, assets: { file: { file: asset.name, sha256: hash.digest('hex'), size: asset.size } } } });
+    const item = await this.publish({ kind: KIND_ARTIFACT, body: manifest as unknown as Json, space: project.id, as: input.as });
+    return (await this.artifacts(project.id)).find((a) => a.id === item.id)!;
+  }
+
+  async getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }> {
+    const project = this.#project(input.project);
+    const a = artifactsOf(this.#entries(project), this.#state(project).maintainers).find((x) => x.id === input.artifact);
+    if (!a) throw new Error(`${project.name} has no such artifact`);
+    if (a.kind !== 'file') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}: something to use, not a file to get`);
+    return this.#releases.getFile(joinPath(this.home.dir, 'files', project.id, `${a.manifest.app}-${a.tag.replace(/[^A-Za-z0-9._-]/g, '_')}`), { project: project.id, id: a.id, tag: a.tag, manifest: a.manifest });
   }
 
   /** My fetchers: client apps that fetch artifacts for me (fetchers.ts). */

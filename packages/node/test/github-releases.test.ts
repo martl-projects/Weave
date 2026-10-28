@@ -49,6 +49,7 @@ const APP_KEY = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toStrin
 /** GitHub with a private repository: a token or the App's installation sees it; its file store hands files out. */
 class PrivateGitHub {
   bytes = buildArchive();
+  guide = Buffer.from('%PDF-1.4 the guide\n');
   manifest = { app: 'bot', name: 'Bot', version: 1, services: [], service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [platformKey()]: ['node', 'bot.cjs'] } } };
   delivered = 0;
   /** Who reached the repository: the token, or the App. */
@@ -56,6 +57,7 @@ class PrivateGitHub {
   fetch: Fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+    if (url.host === 'objects.githubusercontent.com' && url.pathname.endsWith('/22')) return new Response(new Uint8Array(this.guide), { status: 200 });
     if (url.host === 'objects.githubusercontent.com') {
       this.delivered++;
       return new Response(new Uint8Array(this.bytes), { status: 200, headers: { 'content-length': String(this.bytes.length) } });
@@ -73,7 +75,11 @@ class PrivateGitHub {
     }
     if (auth !== 'gho_martl' && auth !== 'ghs_app9' && auth !== 'gho_lena') return json(404, { message: 'Not Found' });
     this.seen.push(auth === 'ghs_app9' ? 'app' : auth === 'gho_lena' ? 'lena' : 'token');
-    if (url.pathname === '/repos/martl/bot/releases/tags/v1.0') return json(200, { tag_name: 'v1.0', assets: [{ id: 21, name: `Bot-${platformKey()}.tar.gz`, size: this.bytes.length }] });
+    if (url.pathname === '/repos/martl/bot/releases/tags/v1.0') return json(200, { tag_name: 'v1.0', assets: [{ id: 21, name: `Bot-${platformKey()}.tar.gz`, size: this.bytes.length }, { id: 22, name: 'Guide.pdf', size: this.guide.length }] });
+    if (url.pathname === '/repos/martl/bot/releases/assets/22') {
+      if (init?.redirect === 'manual') return new Response(null, { status: 302, headers: { location: 'https://objects.githubusercontent.com/github-production-release-asset/22' } });
+      return new Response(new Uint8Array(this.guide), { status: 200 });
+    }
     if (url.pathname === '/repos/martl/bot/contents/weave.app.json') return json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(this.manifest)).toString('base64') });
     if (url.pathname === '/repos/martl/bot/releases/assets/21') {
       if (init?.redirect === 'manual') return new Response(null, { status: 302, headers: { location: 'https://objects.githubusercontent.com/github-production-release-asset/21?X-Amz-Signature=abc' } });
@@ -169,12 +175,23 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       expect(github.delivered).toBe(1);
       expect(github.seen).toContain('token');
 
+      // A file of the same release, handed out as the project's artifact: something to get, never to run.
+      const guide = await martl.releaseFile({ project: 'Bot', tag: 'v1.0', file: 'Guide.pdf', name: 'Guide', type: 'application/pdf' });
+      expect(guide).toMatchObject({ kind: 'file', name: 'Guide', tag: 'v1.0', source: { provider: 'github', ref: 'martl/bot' }, file: { name: 'Guide.pdf', size: github.guide.length }, type: 'application/pdf' });
+      await vi.waitFor(async () => expect((await lena.artifacts('Bot')).map((a) => [a.name, a.kind]).sort()).toEqual([['Bot', 'service'], ['Guide', 'file']]), { timeout: 10_000, interval: 100 });
+      await expect(lena.getArtifactFile({ project: 'Bot', artifact: (await lena.artifacts('Bot')).find((a) => a.kind === 'service')!.id })).rejects.toThrow(/not a file to get/);
+      const got = await lena.getArtifactFile({ project: 'Bot', artifact: guide.id });
+      expect(readFileSync(got.path, 'utf8')).toBe('%PDF-1.4 the guide\n');
+      expect(got.by).toBe('GitHub checkout, with what github-releases (martl) granted');
+      // Got again: it's here, and still what was released.
+      expect((await lena.getArtifactFile({ project: 'Bot', artifact: guide.id })).path).toBe(got.path);
+
       // The grant is Lena's (and martl's, whose service it is): Ben sees that it was answered, not what.
-      const granted = (await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0];
+      const granted = (await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((q) => q.text.startsWith('Bot '))!;
       expect(granted.results[0].data).toMatchObject({ repo: 'martl/bot', tag: 'v1.0', url: expect.stringMatching(/^https:\/\/objects\.githubusercontent\.com\//) });
-      expect((await martl.serviceRequests({ space: 'Bot', service: provider.did }))[0].results[0].data).toMatchObject({ repo: 'martl/bot' });
-      await vi.waitFor(async () => expect((await ben.serviceRequests({ space: 'Bot', service: provider.did }))[0]?.results[0]).toMatchObject({ text: '', private: true }), { timeout: 10_000, interval: 100 });
-      expect((await ben.serviceRequests({ space: 'Bot', service: provider.did }))[0].results[0].data).toBeUndefined();
+      expect((await martl.serviceRequests({ space: 'Bot', service: provider.did })).find((q) => q.id === granted.id)!.results[0].data).toMatchObject({ repo: 'martl/bot' });
+      await vi.waitFor(async () => expect((await ben.serviceRequests({ space: 'Bot', service: provider.did })).find((q) => q.id === granted.id)?.results[0]).toMatchObject({ text: '', private: true }), { timeout: 10_000, interval: 100 });
+      expect((await ben.serviceRequests({ space: 'Bot', service: provider.did })).find((q) => q.id === granted.id)!.results[0].data).toBeUndefined();
 
       // Only releases its maintainers published, only its protocol.
       const wrong = await lena.askService({ space: 'Bot', service: provider.did, text: 'that one', data: { protocol: 'artifact.fetch', artifact: 'not-a-release', platform: platformKey() } });
@@ -186,11 +203,11 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       }, { timeout: 20_000, interval: 200 });
 
       // Only maintainers may get it now: Lena's fetch is refused before the service sees it, and she doesn't see it.
-      const release = ((await lena.serviceRequests({ space: 'Bot', service: provider.did }))[0].data as { artifact: string }).artifact;
+      const release = (granted.data as { artifact: string }).artifact;
       await expect(lena.setArtifactAccess({ project: 'Bot', artifact: release, who: 'maintainers' })).rejects.toThrow(/only the maintainers/);
       const narrowed = await martl.setArtifactAccess({ project: 'Bot', artifact: release, who: 'maintainers' });
-      expect(narrowed[0]).toMatchObject({ who: 'maintainers', mine: true });
-      await vi.waitFor(async () => expect((await lena.artifacts('Bot'))[0]).toMatchObject({ who: 'maintainers', mine: false }), { timeout: 10_000, interval: 100 });
+      expect(narrowed.find((a) => a.id === release)).toMatchObject({ who: 'maintainers', mine: true });
+      await vi.waitFor(async () => expect((await lena.artifacts('Bot')).find((a) => a.id === release)).toMatchObject({ who: 'maintainers', mine: false }), { timeout: 10_000, interval: 100 });
       const refused = await lena.askService({ space: 'Bot', service: provider.did, text: 'mine?', data: { protocol: 'artifact.fetch', artifact: release, platform: platformKey() } });
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === refused.id)?.results[0]?.error).toMatch(/only maintainers may get that in Bot/), { timeout: 20_000, interval: 200 });
       await martl.setArtifactAccess({ project: 'Bot', artifact: release, who: null });

@@ -92,6 +92,8 @@ export interface ServiceContract {
    * asker's own node. A fetcher Weave ships, by name ("github-checkout"), or exactly this component ("sha256:…").
    */
   fetcher?: string;
+  /** The sources whose artifacts it hands out (artifact.fetch): github, s3… Without, any. */
+  sources?: string[];
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -200,7 +202,8 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   // Actions are requests: a service that reads nothing takes none.
   const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
   const fetcher = offers.length && typeof c.fetcher === 'string' && isFetcherRef(c.fetcher) ? c.fetcher : undefined;
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
+  const sources = offers.length && Array.isArray(c.sources) ? [...new Set(c.sources.filter((x): x is string => typeof x === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(x)))].slice(0, 10) : [];
+  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**

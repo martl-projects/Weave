@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('weave', {
   enroll: (link: string) => ipcRenderer.invoke('weave:enroll', link),
   openApp: (url: string, title: string) => ipcRenderer.invoke('weave:open-app', url, title),
   pickFolder: (title: string) => ipcRenderer.invoke('weave:pick-folder', title),
+  reveal: (path: string) => ipcRenderer.invoke('weave:reveal', path),
   show: () => ipcRenderer.invoke('weave:show'),
   mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
   route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
