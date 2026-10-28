@@ -442,6 +442,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
       </p>
       {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
         const set = data.settings.find((x) => x.name === name);
@@ -524,45 +525,85 @@ function narrower(declared: ActionWho, boards: string[], groups: Array<{ id: str
   return all.filter((w) => breadth(w) >= breadth(declared) && (declared === 'members' || typeof w === 'string'));
 }
 
+/** Something done with a service besides its contract's actions: asking it, getting access, running it, its settings. */
+export interface ScopedAction {
+  key: string;
+  label: string;
+  /** Whose: a group of people here, or 'runner': only whoever runs the service. */
+  who: ActionWho | 'runner';
+  mine: boolean;
+  run(): void;
+}
+
 /**
- * A service's actions, by who may use them here: a section each (everyone, a board's readers, a group's members,
- * maintainers, the owner). Yours are buttons; the others say whose they are. Maintainers move an action to a
- * narrower section right here, so one in the wrong place shows, and is fixed, at a glance.
+ * Everything one can do with a service, by who may: a section per group (everyone, a board's readers, a group's
+ * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
+ * which is changed in its settings (maintainers).
  */
-export function ActionScopes({ space, service, groups, boards, maintainer }: { space: { id: string; name: string }; service: { did: string; name: string }; groups: Array<{ id: string; name: string }>; boards: string[]; maintainer: boolean }) {
-  const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+export function ActionScopes({ space, service, groups, extras }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[] }) {
+  const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
-  if (!actions?.length) return null;
-  const sections = [...new Map(actions.map((a) => [JSON.stringify(a.who), a.who])).values()].sort((a, b) => breadth(a) - breadth(b));
-  const move = (a: ServiceActionInfo, to: string) => attempt(() => api('setServicePolicy', { space: space.id, service: service.did, action: a.name, who: to === JSON.stringify(a.declared) ? null : JSON.parse(to) }).then(reload));
+  const all: ScopedAction[] = [...(actions ?? []).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
+  if (!all.length) return null;
+  const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
+  const sections = [...new Map(all.map((a) => [JSON.stringify(a.who), a.who])).values()].sort((a, b) => rank(a) - rank(b));
+  const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
   return (
     <div className="action-scopes">
       {sections.map((who) => (
         <div className="action-scope" key={JSON.stringify(who)}>
-          <div className="action-scope-title small">{whoLabel(who, space.name, groups)}</div>
-          {actions
-            .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
-            .map((a) => (
-              <div className="action-row" key={a.name}>
-                <button disabled={!a.mine} title={a.mine ? undefined : `Only ${lowerFirst(whoLabel(a.who, space.name, groups))}`} onClick={() => setUsing(a)}>
-                  {a.label}…
+          <div className="action-scope-title small">{title(who)}</div>
+          <div className="action-row">
+            {all
+              .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
+              .map((a) => (
+                <button key={a.key} disabled={!a.mine} title={a.mine ? undefined : `Only ${lowerFirst(title(a.who))}`} onClick={a.run}>
+                  {a.label}
                 </button>
-                {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted">moved here (its contract: {lowerFirst(whoLabel(a.declared, space.name, groups))})</span>}
-                {maintainer && narrower(a.declared, boards, groups).length > 1 && (
-                  <select className="action-move" value={JSON.stringify(a.who)} title="Who may use it here" onChange={(e) => void move(a, e.target.value)}>
-                    {narrower(a.declared, boards, groups).map((w) => (
-                      <option key={JSON.stringify(w)} value={JSON.stringify(w)}>
-                        {whoLabel(w, space.name, groups)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            ))}
+              ))}
+          </div>
         </div>
       ))}
       {using && <ActionDialog space={space} service={service} action={using} onClose={() => setUsing(undefined)} />}
     </div>
+  );
+}
+
+/** Who may use each of a service's actions here (in its settings): maintainers make one narrower than its contract, never wider. */
+function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string } }) {
+  const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
+  const { data: info } = useApi(() => api<{ groups: Array<{ id: string; name: string }> }>('project', space.id).catch(() => ({ groups: [] })), [space.id]);
+  const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
+  if (!actions?.length) return null;
+  const groups = info?.groups ?? [];
+  const move = (a: ServiceActionInfo, to: string) => attempt(() => api('setServicePolicy', { space: space.id, service: service.did, action: a.name, who: to === JSON.stringify(a.declared) ? null : JSON.parse(to) }).then(reload));
+  return (
+    <fieldset className="service-setting">
+      <legend>Who can</legend>
+      {actions.map((a) => {
+        const options = narrower(a.declared, (boards ?? []).map((b) => b.name), groups);
+        return (
+          <div className="field-row" key={a.name}>
+            <span className="grow">
+              {a.label}
+              {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted"> · its contract: {lowerFirst(whoLabel(a.declared, space.name, groups))}</span>}
+            </span>
+            {options.length > 1 ? (
+              <select value={JSON.stringify(a.who)} onChange={(e) => void move(a, e.target.value)}>
+                {options.map((w) => (
+                  <option key={JSON.stringify(w)} value={JSON.stringify(w)}>
+                    {whoLabel(w, space.name, groups)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="small">{whoLabel(a.who, space.name, groups)}</span>
+            )}
+          </div>
+        );
+      })}
+      <p className="small muted">A project can make who may narrower than the service's contract, never wider.</p>
+    </fieldset>
   );
 }
 

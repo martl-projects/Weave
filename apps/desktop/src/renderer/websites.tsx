@@ -1,12 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, BoardInfo, SpaceRepos, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, contractText, OriginText, ServiceCard, KeptSettingsDialog } from './services.tsx';
+import { ActionScopes, contractText, OriginText, ServiceCard, KeptSettingsDialog, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -304,7 +304,6 @@ function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onCl
 
 /** What a service provides here: its artifacts; maintainers publish more from GitHub. */
 function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
-  const [picking, setPicking] = useState(false);
   const [describing, setDescribing] = useState(false);
   return (
     <>
@@ -316,12 +315,6 @@ function ServiceReleases({ project, artifacts, app, maintainer }: { project: Spa
         </p>
       )}
       {describing && <PublishApp project={project} />}
-      {maintainer && app && (
-        <div className="buttons">
-          <button onClick={() => setPicking(true)}>Publish a new version…</button>
-        </div>
-      )}
-      {picking && app && <ReleasePicker project={project} app={app} onClose={() => setPicking(false)} />}
     </>
   );
 }
@@ -522,9 +515,35 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const [setting, setSetting] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const own = service.person.did === meDid;
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
+  // Getting access to a GitHub service's repositories: your GitHub account, shared with this project.
+  const { data: repos, reload: reloadRepos } = useApi(() => (service.builtin === 'github' ? api<SpaceRepos>('spaceRepos', project.id).catch(() => undefined) : Promise.resolve(undefined)), [project.id, service.builtin]);
+  const extras: ScopedAction[] = [
+    ...(service.builtin !== 'website' && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
+    ...(service.builtin === 'github' && repos?.repos.length
+      ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories', who: 'members' as const, mine: true, run: () => void attempt(() => api('shareGithub', { space: project.id, on: !repos.shared }).then(reloadRepos), repos.shared ? 'Your access goes' : `Your GitHub account is shared with p/${project.name}: you'll get an invitation`) }]
+      : []),
+    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true) }] : []),
+    ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
+    ...(service.builtin === 'website' && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
+    ...(own && mine
+      ? [
+          {
+            key: 'out',
+            label: `Take out of p/${project.name}`,
+            who: 'runner' as const,
+            mine: true,
+            run: () =>
+              void (async () =>
+                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
+                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))(),
+          },
+        ]
+      : []),
+  ];
   return (
     <fieldset className="project-service">
       <legend>
@@ -539,27 +558,13 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
         </div>
       ))}
       {service.builtin === 'website' && !its.length && <p className="small muted">No open websites{own ? '' : ` from ${by}`}.</p>}
-      {!!service.contract.actions?.length && <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} boards={boards} maintainer={maintainer} />}
       {handsOutGitHub(service) && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.from && 'github' in a.from)} app={app} maintainer={maintainer} />}
-      <div className="buttons">
-        {service.builtin === 'website' && own && mine && <button onClick={() => setOpening(true)}>Open a website…</button>}
-        {service.builtin === 'website' && own && !mine && <span className="small muted">It runs on another of your devices: open websites there.</span>}
-        {service.builtin !== 'website' && service.contract.reads !== 'nothing' && <button onClick={() => setAsking(true)}>Ask {service.name}…</button>}
-        {(!!service.settings?.length || (maintainer && service.builtin !== 'website')) && <button onClick={() => setSetting(true)}>Settings…</button>}
-        {own && mine && (
-          <AsyncButton
-            onClick={async () =>
-              (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
-              attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`)
-            }
-          >
-            Take out of p/{project.name}
-          </AsyncButton>
-        )}
-      </div>
+      {service.builtin === 'website' && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
+      {publishing && app && <ReleasePicker project={project} app={app} onClose={() => setPublishing(false)} />}
     </fieldset>
   );
 }
