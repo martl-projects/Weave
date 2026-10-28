@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "jco componentize src/service.js --wit wit --world-name service --disable http fetch-event -o service.wasm"
+    "build": "jco componentize src/service.js --wit wit --world-name service --disable fetch-event -o service.wasm"
   },
   "devDependencies": {
     "@bytecodealliance/componentize-js": "^0.23.0",

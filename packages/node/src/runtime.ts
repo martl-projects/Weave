@@ -1,12 +1,14 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lookup } from 'node:dns/promises';
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import { BlockList, isIP } from 'node:net';
 import { dirname, extname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
-import { canonicalJson, startCommand, type AppImage, type AppManifest, type Json } from '@weave/core';
+import { canonicalJson, netAllows, startCommand, type AppImage, type AppManifest, type Json } from '@weave/core';
 import { platformKey } from './appinstall.ts';
 import { launchFingerprint } from './applaunch.ts';
 import { listenNear } from './live.ts';
@@ -24,7 +26,8 @@ import { acceptWebSocket, type WebSocketConnection } from './websocket.ts';
  * what it keeps (/data). Without Docker it doesn't run here.
  *
  * A Weave service built as a WebAssembly component needs nothing installed: it runs inside Weave, in a worker thread
- * of its own (wasmworker.ts) with a memory limit, and gets only its /data folder and the host's functions. It
+ * of its own (wasmworker.ts) with a memory limit, and gets only its /data folder and the host's functions, and
+ * HTTPS to the hosts its contract names (none on this computer's networks). It
  * handles one event at a time; one that takes too long ends the worker (it starts again, the event is given up).
  */
 
@@ -67,7 +70,18 @@ export interface WasmRun {
    * `listening` where it listens, so it can be made reachable.
    */
   site?: { folder?: string; who(req: IncomingMessage): Record<string, unknown> | undefined; listening(port: number): void };
+  /** Hosts it may reach over HTTPS (its contract's net); without, it reaches none. */
+  net?: string[];
 }
+
+/** Addresses a service's requests out never reach, whatever a host's name says: this computer and its networks. */
+const NEARBY = new BlockList();
+for (const [net, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.168.0.0', 16], ['224.0.0.0', 3]] as const) NEARBY.addSubnet(net, bits, 'ipv4');
+for (const [net, bits] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]] as const) NEARBY.addSubnet(net, bits, 'ipv6');
+export const nearby = (address: string): boolean => {
+  const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
+  return v4 ? NEARBY.check(v4, 'ipv4') : NEARBY.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4');
+};
 
 /** What a component handles, one at a time: an event, or what its website's players do. */
 type WasmTask =
@@ -135,9 +149,13 @@ export class Runtime {
   /** Whether Docker answers on this computer: asked at most every 30 seconds. */
   #dockerSeen?: { at: number; up: boolean };
 
+  /** Tests only: hosts a service's requests go to over plain HTTP on this computer, by port. */
+  readonly #testHosts: () => Record<string, number>;
+
   /** `docker`: how to call Docker (tests put a stand-in there). */
-  constructor(docker: () => string[]) {
+  constructor(docker: () => string[], testHosts: () => Record<string, number> = () => ({})) {
     this.#docker = docker;
+    this.#testHosts = testHosts;
   }
 
   dockerUp(): boolean {
@@ -238,6 +256,14 @@ export class Runtime {
   }
 
   /** Run a component under this key, in a worker of its own; when it crashes (or hangs), `again` after a wait. */
+  /** Whether a service may send a request to this host: its contract names it, and it isn't on this computer's networks. */
+  async #reach(run: WasmRun, host: string): Promise<void> {
+    if (!netAllows(run.net, host)) throw new Error(`${host} isn't among the hosts its contract names`);
+    if (this.#testHosts()[host]) return;
+    const addresses = await lookup(host, { all: true });
+    if (!addresses.length || addresses.some((a) => nearby(a.address))) throw new Error(`${host} is on this computer's networks`);
+  }
+
   startWasm(key: string, run: WasmRun, again: () => void): void {
     if (this.running(key) || !WASM_WORKER) return;
     mkdirSync(dirname(run.log), { recursive: true });
@@ -247,7 +273,7 @@ export class Runtime {
     const flag = new SharedArrayBuffer(4);
     const waiting = new Int32Array(flag);
     const worker = new Worker(WASM_WORKER, {
-      workerData: { dir: run.dir, entry: run.entry, data: run.data, host: port2, flag },
+      workerData: { dir: run.dir, entry: run.entry, data: run.data, host: port2, flag, testHosts: this.#testHosts() },
       transferList: [port2],
       resourceLimits: { maxOldGenerationSizeMb: WASM_LIMITS.memoryMb },
       // Its own output only: nothing of the daemon's environment.
@@ -263,7 +289,7 @@ export class Runtime {
     port1.on('message', async ({ name, args }: { name: string; args: unknown[] }) => {
       let reply: { value?: unknown; error?: string };
       try {
-        reply = { value: await run.host(name, args) };
+        reply = { value: name === 'reach' ? await this.#reach(run, String(args[0])) : await run.host(name, args) };
       } catch (error) {
         reply = { error: (error as Error)?.message ?? String(error) };
       }

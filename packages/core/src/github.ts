@@ -15,8 +15,10 @@ import { isDid, type Did } from './keys.ts';
  *                         linked, nobody gets anything), write (the people named in writers, picked
  *                         one by one, never through a group: a person's repositories only have
  *                         collaborators who can write)
- *   weave.github.account  {login, on}          sealed in the space, by a member: "give my
- *                         GitHub account access" (one personal account each, never a team)
+ *   weave.github.account  {login, gist, on}    sealed in the space, by a member: "give my
+ *                         GitHub account access" (one personal account each, never a team);
+ *                         gist: a secret gist of that account naming the member's did, the proof
+ *                         it's theirs (nobody is invited without one)
  *   weave.github.added    {repo, login, on}    sealed to the owner: who Weave gave access, so it
  *                         only ever takes away what it gave
  *   weave.github.public   {login, gist}        public: a GitHub account shown on the hub, proven
@@ -77,15 +79,29 @@ export function reposOf(entries: Entry[], mayManage: (did: Did) => boolean): Rep
 
 /** The GitHub accounts members shared in a space (the latest word of each member). */
 export function accountsOf(entries: Entry[]): Map<Did, string> {
-  const out = new Map<Did, string>();
+  return new Map([...sharedAccountsOf(entries)].map(([did, a]) => [did, a.login]));
+}
+
+/** A shared GitHub account, with the gist that proves it's the member's (shares from before proofs have none). */
+export interface SharedAccount {
+  login: string;
+  gist?: string;
+}
+
+/** The GitHub accounts members shared in a space, with their proofs (the latest word of each member). */
+export function sharedAccountsOf(entries: Entry[]): Map<Did, SharedAccount> {
+  const out = new Map<Did, SharedAccount>();
   for (const entry of entries) {
     if (entry.kind !== KIND_GITHUB_ACCOUNT) continue;
     const body = bodyOf(entry);
     if (body.on === false) out.delete(entry.event.author);
-    else if (isLogin(body.login)) out.set(entry.event.author, body.login);
+    else if (isLogin(body.login)) out.set(entry.event.author, { login: body.login, ...(isGistId(body.gist) ? { gist: body.gist } : {}) });
   }
   return out;
 }
+
+/** A gist's id: hexadecimal, as GitHub makes them. */
+export const isGistId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{20,40}$/i.test(value);
 
 export interface RepoCollaborators {
   /** People with access now (lowercase logins). */

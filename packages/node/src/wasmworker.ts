@@ -12,11 +12,12 @@ import * as random from '@bytecodealliance/preview2-shim/random';
 /*
  * One Weave service as a WebAssembly component, in a worker thread of its own (see Runtime.startWasm). It gets only
  * what's handed to it here: the WASI pieces every program needs (clocks, randomness, streams), a file system that is
- * its /data folder and nothing else, none of the daemon's environment, no network, and Weave's host functions. Those
+ * its /data folder and nothing else, none of the daemon's environment, HTTPS to the hosts its contract names and no
+ * other network, and Weave's host functions. Those
  * are answered by the main thread over a blocking channel: the component calls them like plain functions.
  */
 
-const { dir, entry, data, host, flag } = workerData as { dir: string; entry: string; data: string; host: MessagePort; flag: SharedArrayBuffer };
+const { dir, entry, data, host, flag, testHosts } = workerData as { dir: string; entry: string; data: string; host: MessagePort; flag: SharedArrayBuffer; testHosts: Record<string, number> };
 const waiting = new Int32Array(flag);
 
 /** A host call: ask the main thread, and wait until it has answered. A refusal comes back as the call's error. */
@@ -29,6 +30,14 @@ function call(name: string, args: unknown[]): unknown {
   return reply?.value;
 }
 
+/** The part of wasi:http's outgoing-request the handler looks at (preview2-shim's class). */
+interface OutgoingRequest {
+  scheme(): { tag: string } | undefined;
+  authority(): string | undefined;
+  setScheme(scheme: { tag: string }): void;
+  setAuthority(authority: string): void;
+}
+
 const camel = (text: string) => text.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 const packages: Record<string, Record<string, unknown>> = { cli, clocks, io, random, http, filesystem: createFilesystem({ preopens: { '/data': data } }) };
 const overrides: Record<string, unknown> = {
@@ -39,10 +48,25 @@ const overrides: Record<string, unknown> = {
       throw new Error('a service runs until Weave stops it');
     },
   },
-  // No network: every request out is refused (a contract may allow some, later).
+  // Requests out: HTTPS on its usual port, to a host the main thread lets it reach (its contract names it, and it
+  // isn't on this computer's networks). Redirects aren't followed, so they can't lead elsewhere. The rest is refused.
   'http/outgoing-handler': {
-    handle: () => {
-      throw { tag: 'HTTP-request-denied' };
+    handle: (request: OutgoingRequest, options: unknown) => {
+      const authority = (request.authority() ?? '').toLowerCase();
+      const [name, port, ...rest] = authority.split(':');
+      try {
+        if (rest.length || (request.scheme()?.tag ?? 'HTTPS') !== 'HTTPS' || (port && port !== '443')) throw new Error('only HTTPS, on its usual port');
+        call('reach', [name]);
+      } catch (error) {
+        console.error(`weave: refused a request to ${authority || '(no host)'}: ${(error as Error)?.message ?? String(error)}`);
+        throw { tag: 'HTTP-request-denied' };
+      }
+      // Tests: the host stands for a server on this computer.
+      if (testHosts[name]) {
+        request.setScheme({ tag: 'HTTP' });
+        request.setAuthority(`127.0.0.1:${testHosts[name]}`);
+      }
+      return (http.outgoingHandler as { handle(request: unknown, options: unknown): unknown }).handle(request, options);
     },
   },
 };

@@ -1,6 +1,7 @@
 /// A Weave service as a WebAssembly component: Weave runs it inside itself, in a sandbox, under the service's own
 /// key and with exactly its contract's rights. It needs nothing installed (no Docker), and gets only what Weave hands
-/// it: these functions, a folder of its own (/data), clocks and randomness. No network, no other files, no processes.
+/// it: these functions, a folder of its own (/data), clocks and randomness, and HTTPS (wasi:http) to the hosts its
+/// contract names in "net", none on the node's own networks. No other network, no other files, no processes.
 ///
 /// Values that carry Weave's own data (items, bodies, who it is) are JSON, so any language can read and write them.
 package weave:service@0.1.0;

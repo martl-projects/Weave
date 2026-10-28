@@ -365,7 +365,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ROOM, artifactsOf, type Artifact, type AppWasm, type AppClient, parsePages, type RoomPages, checkManifest, checkServiceLabel, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_ROOM, artifactsOf, type Artifact, type AppWasm, type AppClient, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -394,6 +394,9 @@ export {
 export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
 export {
   accountsOf,
+  sharedAccountsOf,
+  isGistId,
+  type SharedAccount,
   githubProofText,
   isLogin,
   isRepoName,
@@ -424,6 +427,9 @@ export {
   isBuiltin,
   type Builtin,
   parseContract,
+  isNetHost,
+  netAllows,
+  resolveNet,
   profilesOf,
   requestsOf,
   serviceName,
@@ -439,3 +445,4 @@ export {
   type ServiceRequest,
 } from './services.ts';
 export { KIND_CATALOG_ENTRY, catalogOf, parseCatalogEntry, type CatalogEntry } from './catalog.ts';
+export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type SpaceServiceSetting } from './servicesettings.ts';

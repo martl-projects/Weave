@@ -179,8 +179,9 @@ export class GitHub {
   }
 
   /** A public gist with one file (the proof behind a GitHub account on a hub). */
-  async createGist(description: string, filename: string, content: string): Promise<{ id: string; url: string }> {
-    const { data } = await this.#call<{ id: string; html_url: string }>('POST', '/gists', { description, public: true, files: { [filename]: { content } } });
+  /** A gist of the signed-in account: public, or secret (unlisted: only who knows its id finds it). */
+  async createGist(description: string, filename: string, content: string, visible = true): Promise<{ id: string; url: string }> {
+    const { data } = await this.#call<{ id: string; html_url: string }>('POST', '/gists', { description, public: visible, files: { [filename]: { content } } });
     return { id: data.id, url: data.html_url };
   }
 

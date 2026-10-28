@@ -38,6 +38,7 @@ import {
   type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
+  type ServiceSettingsInfo,
   type ServiceOriginInfo,
   type HostedWebsiteInfo,
   type IssueInfo,
@@ -207,6 +208,9 @@ github — repositories that follow a group, tier or project (members who give t
                              [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
                              or [--wasm <component.wasm>]: your own WebAssembly component (packages/sdk/wit/service.wit), which
                              Weave runs itself, sandboxed: nothing to install, only /data and its contract
+                             [--net <host,…>]: hosts it may reach over HTTPS (api.example.com, *.example.com), nothing else
+                             [--manifest weave.app.json]: its contract and the settings it asks for (env), from that file
+                             [--setting KEY=VALUE …] [--keep-in <project>]: keep them in the project, for its maintainers to change
                              [--offers-website --site <folder>]: a game or page (the website world): Weave serves its files and
                              holds its players' connections (/weave/socket), telling it who each player is
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
@@ -229,6 +233,10 @@ github — repositories that follow a group, tier or project (members who give t
   service start|stop <name>  run it or not
   service remove <name>      stop it for good (its key is revoked)
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
+  service settings <service>       its settings kept in a space (-p/-g): what it asks for, what the maintainers set (a secret only as set)
+  service setting <service> KEY=VALUE   maintainers: keep a setting for it in the space (KEY= removes it); one it asks for as secret,
+                             or with --blind, is boxed to the service: readable by it alone, you included
+  service sign-in <service> KEY    maintainers: sign it in with its provider (a setting that is a sign-in): opens the browser
   repo list <space>          a space's repositories
   repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
                              a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
@@ -431,6 +439,10 @@ const { values, positionals } = parseArgs({
     writes: { type: 'string' },
     'offers-website': { type: 'boolean', default: false },
     'contract-version': { type: 'string' },
+    net: { type: 'string' },
+    blind: { type: 'boolean', default: false },
+    'keep-in': { type: 'string' },
+    manifest: { type: 'string' },
     run: { type: 'string' },
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
@@ -566,7 +578,18 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; reaches ${c.net.join(', ')} over HTTPS` : ''}; contract ${c.version}`;
+
+/** A service's settings in a space: each it asks for, set (by whom) or not; a secret only as set. */
+const settingsText = (s: ServiceSettingsInfo) =>
+  [...s.asks.map((a) => a.name), ...s.settings.map((x) => x.name).filter((n) => !s.asks.some((a) => a.name === n))]
+    .map((name) => {
+      const asked = s.asks.find((a) => a.name === name);
+      const set = s.settings.find((x) => x.name === name);
+      const what = set ? (set.oauth ? 'signed in' : set.secret ? 'set (secret)' : JSON.stringify(set.value)) : asked?.optional ? 'not set (optional)' : asked?.oauth ? 'not signed in (weave service sign-in)' : 'not set: it needs this';
+      return `  ${name}${asked && asked.label !== name ? ` (${asked.label})` : ''}: ${what}${set ? `  · ${set.by.name ?? set.by.did} ${set.time.slice(0, 10)}` : ''}`;
+    })
+    .join('\n') || '  (it asks for nothing, and nothing is set)';
 
 /** Where a service comes from, and whether that's checked here. */
 const originLine = (o: ServiceOriginInfo): string => {
@@ -1565,8 +1588,13 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'add' && ref) {
         const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
-        const contract = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), version: values['contract-version'] ?? '1.0' };
-        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site ? { site: values.site } : {}), ...(values.node ? { node: values.node } : {}) });
+        // Its weave.app.json (--manifest): the settings it asks for, and its contract unless --reads says otherwise.
+        const manifest = values.manifest ? checkManifest(JSON.parse(readFileSync(values.manifest, 'utf8'))) : undefined;
+        if (manifest && !manifest.manifest) throw new Error(`${values.manifest}: ${manifest.problems.join('; ')}`);
+        const own = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), ...(values.net ? { net: list(values.net) } : {}), version: values['contract-version'] ?? '1.0' };
+        const contract = manifest?.manifest?.service && !values.reads ? manifest.manifest.service : own;
+        const settings = settingsOf();
+        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site ? { site: values.site } : {}), ...(values.node ? { node: values.node } : {}), ...(manifest?.manifest?.env ? { asks: manifest.manifest.env } : {}), ...(Object.keys(settings).length ? { settings: settings as Record<string, string> } : {}), ...(values['keep-in'] ? { settingsIn: values['keep-in'] } : {}) });
         return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : s.wasm ? ' Weave runs its component itself, sandboxed: its log is weave service log.' : ' Give it a command with --run (or a WebAssembly component with --wasm), or let a process use its token.'}`);
       }
       if (sub === 'list') {
@@ -1602,7 +1630,26 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const all = await b.serviceRequests({ space: needSpace(), ...(ref ? { service: ref } : {}) });
         return out(all, () => all.map((r) => `${r.from.name ?? r.from.did} → ${r.to.name ?? r.to.did}: ${r.text}\n${r.results.map((x) => `  ${x.error ? `error: ${x.error}` : x.text || JSON.stringify(x.data)}`).join('\n') || '  (no answer yet)'}`).join('\n\n') || '(no requests)');
       }
-      throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests — see "weave --help"');
+      if (sub === 'settings' && ref) {
+        const s = await b.serviceSettings({ space: needSpace(), service: ref });
+        return out(s, () => settingsText(s));
+      }
+      if (sub === 'setting' && ref && args[2]?.includes('=')) {
+        const [name, ...rest] = args[2].split('=');
+        const value = rest.join('=');
+        const s = await b.setServiceSetting({ space: needSpace(), service: ref, name, value: value || null, ...(values.blind ? { secret: true } : {}) });
+        return out(s, () => `${value ? `set ${name}` : `removed ${name}`} for ${s.service.name} in ${s.space.name}\n${settingsText(s)}`);
+      }
+      if (sub === 'sign-in' && ref && args[2]) {
+        const { id, url } = await b.startServiceSignIn({ space: needSpace(), service: ref, name: args[2] });
+        const { spawn } = await import('node:child_process');
+        const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
+        spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
+        if (!values.json) console.log(`Allow it in your browser (it opened; or open this):\n  ${url}`);
+        const s = await b.finishServiceSignIn({ id });
+        return out(s, () => `signed ${s.service.name} in: ${args[2]}\n${settingsText(s)}`);
+      }
+      throw new Error('usage: weave service add|artifacts|list|profiles|set|start|stop|remove|ask|requests|settings|setting|sign-in — see "weave --help"');
     }
 
     case 'repo': {
