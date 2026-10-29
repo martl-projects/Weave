@@ -1404,6 +1404,17 @@ export interface CompanyDeviceInfo {
 }
 
 /** An account elsewhere someone said is theirs, as its platform's verifier finds it. */
+/** One of your accounts elsewhere, and where you said it's yours: on your hub (everyone sees it), in spaces (their members). */
+export interface MyAccountInfo {
+  platform: string;
+  handle: string;
+  proof: string;
+  url?: string;
+  verified?: boolean;
+  hub: boolean;
+  spaces: SpaceRef[];
+}
+
 export interface AccountInfo {
   who: Actor;
   platform: string;
@@ -1769,6 +1780,8 @@ export interface Backend {
   finishAccountProof(input: { id: string }): Promise<AccountInfo[]>;
   /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
   accounts(input?: { space?: string; who?: string }): Promise<AccountInfo[]>;
+  /** Your accounts elsewhere, proven once: each with where it shows (your hub, and the spaces you shared it with). */
+  myAccounts(): Promise<MyAccountInfo[]>;
 
   // communities
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
@@ -2123,7 +2136,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

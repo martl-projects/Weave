@@ -542,6 +542,14 @@ export function SettingInput({ setting, value, onChange }: { setting: ArtifactIn
         <div className="small muted">A sign-in with {new URL(setting.oauth.authorize ?? setting.oauth.device ?? setting.oauth.token).hostname}: once it's added, sign it in from its Settings (one click).</div>
       </div>
     );
+  // Picked from what it lists (a repository its sign-in reaches): once it runs, right after it's added.
+  if (setting.choose)
+    return (
+      <div className="app-setting">
+        <label>{setting.label}</label>
+        <div className="small muted">{setting.hint ?? 'Picked from a list it makes'}: you pick {setting.choose.many ? 'them' : 'it'} right after adding it.</div>
+      </div>
+    );
   return (
     <div className="app-setting">
       <label htmlFor={`setting-${setting.name}`}>

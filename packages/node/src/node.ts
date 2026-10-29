@@ -114,6 +114,7 @@ import {
   KIND_ARTIFACT,
   KIND_ACCOUNT,
   accountClaimsOf,
+  type AccountClaim,
   accountProofText,
   isPlatform,
   KIND_SERVICE_REQUEST,
@@ -474,6 +475,7 @@ import {
   type ShippedServiceInfo,
   type ArtifactInfo,
   type AccountInfo,
+  type MyAccountInfo,
   type FetcherInfo,
   noAgent,
 } from './backend.ts';
@@ -3274,6 +3276,31 @@ export class WeaveNode implements Backend {
         const verified = await this.#verifiers.verify(claim, did);
         const page = this.#verifiers.page(claim);
         return { who: this.#actor(did, did), platform: claim.platform, handle: claim.handle, proof: claim.proof, ...(page ? { url: page } : {}), ...(verified !== undefined ? { verified } : {}) };
+      }),
+    );
+  }
+
+  async myAccounts(): Promise<MyAccountInfo[]> {
+    const me = this.identity.author;
+    const byAccount = new Map<string, MyAccountInfo>();
+    const said = (claim: AccountClaim | undefined, where: { hub: true } | { space: StoredSpace }) => {
+      if (!claim) return;
+      const key = JSON.stringify([claim.platform, claim.handle.toLowerCase(), claim.proof]);
+      const page = this.#verifiers.page(claim);
+      const a = byAccount.get(key) ?? { ...claim, ...(page ? { url: page } : {}), hub: false, spaces: [] };
+      if ('hub' in where) a.hub = true;
+      else a.spaces.push({ id: where.space.id, kind: where.space.kind, name: where.space.name });
+      byAccount.set(key, a);
+    };
+    for (const claim of accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT && e.author === me).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } }))).get(me)?.values() ?? []) said(claim, { hub: true });
+    for (const space of this.#spaces.values()) {
+      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
+      for (const claim of accountClaimsOf(this.#entries(space)).get(me)?.values() ?? []) said(claim, { space });
+    }
+    return Promise.all(
+      [...byAccount.values()].map(async (a) => {
+        const verified = await this.#verifiers.verify(a, me);
+        return { ...a, ...(verified !== undefined ? { verified } : {}) };
       }),
     );
   }

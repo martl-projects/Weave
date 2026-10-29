@@ -24,6 +24,23 @@ describe('app settings in a manifest', () => {
   });
 });
 
+describe('a setting picked from what the service lists', () => {
+  const service = { reads: 'addressed', writes: [], actions: [{ name: 'reachable', label: 'List the repositories', who: 'maintainers' }], version: '1.0' };
+  const wasm = { component: 'access.wasm', panel: 'panel', panels: [{ name: 'repos', title: 'Repositories', who: 'members', page: 'index.html', covers: ['reachable', 'Bad Name'] }] };
+  it('names one of its actions, and its panel may stand in for that action', () => {
+    const checked = checkManifest({ app: 'access', name: 'Access', service, wasm, env: [{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable', many: true } }] });
+    expect(checked.problems).toEqual([]);
+    expect(checked.manifest?.env).toEqual([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable', many: true } }]);
+    expect(checked.manifest?.wasm?.panels?.[0].covers).toEqual(['reachable']);
+  });
+  it('refuses an action it lacks, and a secret or sign-in picked from a list', () => {
+    const problems = (env: unknown[]) => checkManifest({ app: 'access', name: 'Access', service, wasm, env }).problems.join('\n');
+    expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'nothing' } }])).toMatch(/has no such action/);
+    expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, secret: true }])).toMatch(/neither a secret nor a sign-in/);
+    expect(problems([{ name: 'REPOS', label: 'Repositories', choose: 'reachable' }])).toMatch(/"choose" names the action/);
+  });
+});
+
 describe('artifacts: their kind and where their files are', () => {
   const sha = 'a'.repeat(64);
   const entry = (id: string, kind: string, body: unknown, time: string) => ({ id, kind, body: body as never, event: { author: 'did:key:zMaintainer' as Did, time } });

@@ -4,7 +4,7 @@ import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
 import { AccountProofDialog } from './accounts.tsx';
-import { ago, api, bump, shortDid, useApi, useTick } from './lib.ts';
+import { ago, api, bump, onItem, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 
 /*
@@ -471,6 +471,76 @@ export function SpaceServices({ space }: { space: SpaceInfo }) {
  * shows its value; a secret is set blind (sealed for the service, nobody reads it back); a sign-in goes through the
  * provider's own page, and the node that runs the service keeps it current.
  */
+/** Ask a service with one of its actions, and wait for its answer (from the node that runs it; half a minute at most). */
+export async function askAndWait(space: string, service: { did: string; name: string }, action: string, input?: unknown, label?: string): Promise<{ text?: string; data?: unknown }> {
+  const asked = await api<ServiceRequestInfo>('askService', { space, service: service.did, text: label ?? action, action, ...(input !== undefined && input !== null ? { data: input } : {}) });
+  for (let i = 0; i < 60; i++) {
+    const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space, service: service.did })).find((r) => r.id === asked.id)?.results[0];
+    if (answer) {
+      if (answer.error) throw new Error(answer.error);
+      return { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`${service.name} didn't answer in time`);
+}
+
+/** A setting picked from what the service lists (its action answers [{value, label?, note?}]): one, or several. */
+function ChooseSetting({ space, service, action, many, value, onSave }: { space: string; service: { did: string; name: string }; action: string; many: boolean; value: string; onSave(value: string): Promise<unknown> }) {
+  const [choices, setChoices] = useState<Array<{ value: string; label?: string; note?: string }>>();
+  const [picked, setPicked] = useState<string[]>(value ? value.split('\n').filter(Boolean) : []);
+  const [find, setFind] = useState('');
+  const [problem, setProblem] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const load = async () => {
+    setLoading(true);
+    setProblem(undefined);
+    try {
+      const got = (await askAndWait(space, service, action)).data;
+      setChoices(Array.isArray(got) ? got.filter((c): c is { value: string } => typeof c?.value === 'string') : []);
+    } catch (error) {
+      setProblem((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  if (!choices)
+    return (
+      <div className="field-row">
+        <button disabled={loading} onClick={load}>
+          {loading ? 'Asking it…' : value ? 'Change…' : 'Choose…'}
+        </button>
+        {problem && <span className="small problem">{problem}</span>}
+      </div>
+    );
+  type Choice = { value: string; label?: string; note?: string };
+  const shown = [...choices, ...picked.filter((p) => !choices.some((c) => c.value === p)).map((p): Choice => ({ value: p, note: "it doesn't list it now" }))].filter((c) => !find.trim() || `${c.value} ${c.label ?? ''}`.toLowerCase().includes(find.trim().toLowerCase()));
+  const toggle = (v: string) => setPicked((p) => (many ? (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]) : [v]));
+  return (
+    <div className="choose-setting">
+      <input className="wide" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find…" autoFocus />
+      <div className="choose-list sunken">
+        {shown.map((c) => (
+          <div className="field-row" key={c.value}>
+            <input type={many ? 'checkbox' : 'radio'} id={`choose-${c.value}`} checked={picked.includes(c.value)} onChange={() => toggle(c.value)} />
+            <label htmlFor={`choose-${c.value}`}>
+              {c.label ?? c.value}
+              {c.note && <span className="small muted"> · {c.note}</span>}
+            </label>
+          </div>
+        ))}
+        {!shown.length && <div className="small muted">{find ? 'Nothing is called that.' : 'It lists nothing.'}</div>}
+      </div>
+      <div className="field-row">
+        <button onClick={() => setChoices(undefined)}>Cancel</button>
+        <AsyncButton className="default" disabled={!picked.length} onClick={() => onSave(picked.join('\n')).then(() => setChoices(undefined))}>
+          {many ? `Use these ${picked.length}` : 'Use it'}
+        </AsyncButton>
+      </div>
+    </div>
+  );
+}
+
 export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -507,10 +577,13 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
             </legend>
             {asked?.hint && <p className="small muted">{asked.hint}</p>}
             <p className="small">
-              {set ? (set.oauth ? 'Signed in' : secret ? 'Set (secret)' : <code>{set.value}</code>) : asked?.oauth ? 'Not signed in' : 'Not set'}
+              {set ? (set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>) : asked?.oauth ? 'Not signed in' : asked?.choose ? 'None chosen yet' : 'Not set'}
               {set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
             </p>
-            {data.mayChange && (
+            {data.mayChange && asked?.choose && (
+              <ChooseSetting space={space.id} service={service} action={asked.choose.action} many={!!asked.choose.many} value={set?.value ?? ''} onSave={(value) => save(name, value)} />
+            )}
+            {data.mayChange && !asked?.choose && (
               <div className="field-row">
                 {asked?.oauth ? (
                   <AsyncButton
@@ -756,9 +829,18 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () =>
     send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })), boards: boardNames.current });
-  // Again whenever something changed here (a website opened, a setting changed): it shows what's current.
-  const tick = useTick();
-  useEffect(sendView, [actions, tick, boards]);
+  // Again whenever something changed here (a website opened, a setting changed): it shows what's current. Not for
+  // requests to services and their answers: a page that asks its service on each view would ask on and on.
+  useEffect(sendView, [actions, boards]);
+  useEffect(() => {
+    let soon: ReturnType<typeof setTimeout> | undefined;
+    const off = onItem((item) => {
+      if (item.kind === 'weave.service.request' || item.kind === 'weave.service.result') return;
+      clearTimeout(soon);
+      soon = setTimeout(sendView, 300);
+    });
+    return () => (off(), clearTimeout(soon));
+  }, []);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
@@ -772,14 +854,7 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
         const action = latest.current.find((a) => a.name === m.name);
         void (async () => {
           try {
-            const asked = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action?.label ?? String(m.name), action: m.name, ...(m.input !== undefined && m.input !== null ? { data: m.input } : {}) });
-            // Its answer comes from the node that runs it: wait for it (half a minute at most).
-            for (let i = 0; i < 60; i++) {
-              const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did })).find((r) => r.id === asked.id)?.results[0];
-              if (answer) return send({ weave: 'acted', id: m.id, ...(answer.error ? { error: answer.error } : { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) }) });
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-            send({ weave: 'acted', id: m.id, error: `${service.name} didn't answer in time` });
+            send({ weave: 'acted', id: m.id, ...(await askAndWait(space.id, service, String(m.name), m.input, action?.label)) });
           } catch (error) {
             send({ weave: 'acted', id: m.id, error: (error as Error).message });
           }

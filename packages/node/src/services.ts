@@ -1,4 +1,4 @@
-import { b64u, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -340,8 +340,8 @@ export class Services {
     if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
     if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
     const settings = keptIn ? {} : given;
-    // A sign-in comes after: its provider's page opens once the service is there.
-    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !given[e.name]);
+    // A sign-in comes after: its provider's page opens once the service is there. So does a pick from what it lists.
+    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
@@ -1371,9 +1371,13 @@ export class Services {
     const shippedContract = this.artifactContract(s.manifest);
     const rights = (c: ServiceContract) => JSON.stringify([c.reads ?? null, [...(c.writes ?? [])].sort(), [...(c.net ?? [])].sort(), [...(c.offers ?? [])].sort()]);
     const contract = rights(shippedContract) === rights(stored.contract) ? shippedContract : stored.contract;
-    if (s.digest !== stored.shipped!.digest || JSON.stringify(stored.asks ?? []) !== JSON.stringify(s.manifest.env ?? []) || JSON.stringify(contract) !== JSON.stringify(stored.contract)) {
+    // What it does, as this Weave says it now.
+    const description = s.about?.split(/(?<=\.)\s/)[0] ?? s.manifest.name;
+    // Compared as values, whatever order their keys were kept in.
+    const same = (a: unknown, b: unknown) => canonicalJson(JSON.parse(JSON.stringify(a ?? null)) as Json) === canonicalJson(JSON.parse(JSON.stringify(b ?? null)) as Json);
+    if (s.digest !== stored.shipped!.digest || !same(stored.asks ?? [], s.manifest.env ?? []) || !same(contract, stored.contract) || description !== stored.description) {
       // This Weave ships a new one: its settings as it asks for them now.
-      const after = { ...stored, contract, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
+      const after = { ...stored, contract, description, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
       this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
       this.publishServiceProfile(after);
       stored = after;

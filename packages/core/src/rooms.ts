@@ -181,6 +181,18 @@ export interface AppSetting {
   oauth?: AppOAuth;
   /** A key the service signs with (sign, in the WIT) but never reads: setting() doesn't return it. */
   signing?: true;
+  /**
+   * Picked from a list rather than typed: one of its actions (for maintainers) answers the choices, as
+   * [{value, label?, note?}] (a repository its sign-in reaches, say). With many, several, one per line.
+   */
+  choose?: { action: string; many?: true };
+}
+
+/** A setting's choices, checked: the action that lists them, and whether several are picked. */
+export function parseChoose(value: unknown): { action: string; many?: true } | undefined {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const action = typeof o.action === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(o.action) ? o.action : undefined;
+  return action ? { action, ...(o.many === true ? { many: true as const } : {}) } : undefined;
 }
 
 /**
@@ -216,7 +228,8 @@ export function appSettingsOf(value: unknown): AppSetting[] {
     const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim().slice(0, 60) : name;
     const hint = typeof e.hint === 'string' ? e.hint.trim().slice(0, 200) : '';
     const oauth = e.oauth === undefined ? undefined : parseOAuth(e.oauth).oauth;
-    out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}) });
+    const choose = oauth || e.secret === true || e.signing === true ? undefined : parseChoose(e.choose);
+    out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}) });
   }
   return out;
 }
@@ -573,10 +586,15 @@ export function checkManifest(input: unknown): ManifestCheck {
         const hint = text(e.hint, 200);
         const oauth = e.oauth === undefined ? {} : parseOAuth(e.oauth);
         if (oauth.problem) { problems.push(`${where}: ${oauth.problem}`); continue; }
-        env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}) });
+        const choose = e.choose === undefined ? undefined : parseChoose(e.choose);
+        if (e.choose !== undefined && !choose) { problems.push(`${where}: "choose" names the action that lists its choices, like {"action": "repos", "many": true}`); continue; }
+        if (choose && (oauth.oauth || e.secret === true || e.signing === true)) { problems.push(`${where}: a setting picked from a list is neither a secret nor a sign-in`); continue; }
+        env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}) });
       }
     }
   }
+
+  for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
   return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}) } };

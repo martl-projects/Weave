@@ -179,8 +179,15 @@ describe('accounts elsewhere', { timeout: 120_000 }, () => {
 ` });
       expect(JSON.stringify(martl.replica.events())).not.toContain('gho-gist');
 
-      // Taken back: gone from the hub.
+      // Proven once, shown where he says: his hub, and a project he picks (its members, its services).
+      await martl.createProject({ name: 'Mine' });
+      const [made] = await martl.myAccounts();
+      await martl.linkAccount({ platform: 'github', handle: made.handle, proof: made.proof, space: 'Mine' });
+      expect(await martl.myAccounts()).toMatchObject([{ platform: 'github', handle: 'martl', verified: true, hub: true, spaces: [{ name: 'Mine' }] }]);
+
+      // Taken back: gone from the hub, still in the project.
       await martl.linkAccount({ platform: 'github', on: false });
+      expect(await martl.myAccounts()).toMatchObject([{ hub: false, spaces: [{ name: 'Mine' }] }]);
       expect((await martl.profile()).accounts).toBeUndefined();
     } finally {
       server.close();
@@ -189,7 +196,7 @@ describe('accounts elsewhere', { timeout: 120_000 }, () => {
 });
 
 describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
-  it("gives members who proved their account read access to the project's repository, and takes it back when they leave", async () => {
+  it("gives members who shared a proven account access to the repositories chosen, and takes it back when they leave", async () => {
     const github = new OrgGitHub().add('acme/secret', 'Organization', ['old-friend']).add('martl/notes', 'User');
     const { server, nodes: [martl, lena, kofi] } = await people(github, 'martl', 'Lena', 'Kofi');
     await martl.createProject({ name: 'Site' });
@@ -219,64 +226,68 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // A verifier is nobody's service.
       await expect(martl.addService({ shipped: 'github-verify', spaces: ['Site'] })).rejects.toThrow(/is a verifier/);
 
-      // The service, with an admin's token kept in the project.
+      // The service, with an admin's token kept in Site; its maintainers choose the repositories, from those it reaches.
       const access = await martl.addService({ shipped: 'github-access', spaces: ['Site', 'Docs'], settingsIn: 'Site', settings: { GITHUB_TOKEN: 'ghp_admin' } });
       expect(access.contract).toMatchObject({ reads: { kinds: ['weave.account'] }, writes: ['github.added'], net: ['api.github.com'] });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena, kofi]);
+      const settings = await martl.serviceSettings({ space: 'Site', service: access.did });
+      expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
+      expect(settings.missing).toEqual(['GITHUB', 'REPOS']);
+      await expect(lena.askService({ space: 'Site', service: access.did, text: 'reachable', action: 'reachable' })).rejects.toThrow(/only maintainers/);
+      expect((await ask(martl, access.did, 'reachable')).data).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's: members get write access" }]);
+      const choose = async (space: string, repos: string[]) => {
+        await martl.setServiceSetting({ space, service: access.did, name: 'REPOS', value: repos.join('\n') });
+        sync([martl, lena, kofi]);
+      };
+      await choose('Site', ['acme/site', 'acme/secret']);
 
-      // Linking is the service's, for maintainers (Lena may not), picked from what its sign-in reaches. Linked, a
-      // repository gives nobody anything: who gets access is said apart. A person's repository can't take readers.
-      await expect(lena.askService({ space: 'Site', service: access.did, text: 'link', action: 'link', data: { repo: 'acme/site' } })).rejects.toThrow(/only maintainers can link a repository/);
-      expect(((await ask(martl, access.did, 'available')).data as Array<{ repo: string }>).map((r) => r.repo)).toEqual(['acme/site', 'acme/secret', 'martl/notes']);
-      expect((await ask(martl, access.did, 'link', { repo: 'https://github.com/acme/site' })).text).toBe('acme/site is linked here: nobody gets access by it yet');
-      expect((await ask(martl, access.did, 'link', { repo: 'acme/secret' })).text).toMatch(/linked here/);
-      expect((await ask(martl, access.did, 'link', { repo: 'martl/notes' })).text).toMatch(/linked here/);
-      expect((await ask(martl, access.did, 'access', { repo: 'martl/notes', access: 'read' })).error).toMatch(/belongs to a person/);
-      expect((await ask(martl, access.did, 'unlink', { repo: 'martl/notes' })).text).toMatch(/unlinked/);
-      expect((await ask(lena, access.did, 'repos')).data).toMatchObject([{ repo: 'acme/site', access: 'none' }, { repo: 'acme/secret', access: 'none' }]);
-      expect((await ask(martl, access.did, 'access', { repo: 'acme/site', access: 'read' })).text).toMatch(/everyone here reads/);
-      expect((await ask(martl, access.did, 'access', { repo: 'acme/secret', access: 'read', board: 'ideas' })).text).toMatch(/the readers of ideas read/);
-
-      // Lena proves her GitHub account in the project; Kofi only says it's his (no proof, so nothing to check).
+      // Lena proves her GitHub account and shares it with Site; Kofi only says it's his (no proof, so nothing to check).
       gistFor(github, '0123456789abcdef01234567', 'lena-gh', lena);
       await lena.linkAccount({ platform: 'github', handle: 'lena-gh', proof: '0123456789abcdef01234567', space: 'Site' });
       await kofi.publish({ kind: 'weave.account', body: { platform: 'github', handle: 'kofi-gh', proof: 'ffffffffffffffffffff', on: true }, space: 'Site' });
       await vi.waitFor(async () => expect((await martl.accounts({ space: 'Site' })).map((a) => [a.who.name, a.handle, a.verified])).toEqual([['Lena', 'lena-gh', true], ['Kofi', 'kofi-gh', false]]), { timeout: 10_000, interval: 200 });
 
-      // Lena gets access to both (she reads ideas); Kofi to none.
+      // Members get read access to both (an organization's); Kofi to none.
       await vi.waitFor(() => {
         expect([...github.invited.keys()]).toEqual(['lena-gh']);
         expect([...github.repos.get('acme/secret')!.invited.keys()]).toEqual(['lena-gh']);
-      }, { timeout: 30_000, interval: 200 });
+      }, { timeout: 60_000, interval: 200 });
       expect(github.invited.get('lena-gh')?.permission).toBe('pull');
-      expect((await ask(lena, access.did, 'repos')).data).toMatchObject([{ repo: 'acme/site', access: 'read', given: 1 }, { repo: 'acme/secret', board: 'ideas', given: 1 }]);
+      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, me: { handle: 'lena-gh' } });
+      expect((await ask(kofi, access.did, 'status')).data).not.toHaveProperty('me');
 
-      // She accepts; then the secret one is unlinked: what it gave goes, the friend added by hand stays.
+      // A person's repository too: members write there (GitHub has no read-only collaborators for it).
+      await choose('Site', ['acme/site', 'acme/secret', 'martl/notes']);
+      await vi.waitFor(() => expect(github.repos.get('martl/notes')!.invited.get('lena-gh')?.permission).toBe('push'), { timeout: 60_000, interval: 200 });
+
+      // She accepts; then acme/secret isn't chosen any more: what it gave goes, the friend added by hand stays.
       const secret = github.repos.get('acme/secret')!;
       secret.invited.delete('lena-gh');
       secret.collaborators.add('lena-gh');
       github.invited.delete('lena-gh');
       github.collaborators.add('lena-gh');
-      expect((await ask(martl, access.did, 'unlink', { repo: 'acme/secret' })).text).toMatch(/unlinked/);
-      await vi.waitFor(() => expect([...secret.collaborators]).toEqual(['old-friend']), { timeout: 30_000, interval: 200 });
+      await choose('Site', ['acme/site']);
+      await vi.waitFor(() => expect([...secret.collaborators]).toEqual(['old-friend']), { timeout: 60_000, interval: 200 });
+      await vi.waitFor(() => expect(github.repos.get('martl/notes')!.invited.size).toBe(0), { timeout: 60_000, interval: 200 });
 
-      // acme/site is linked to Docs too, where everyone reads (and Lena proved her account): a repository with any
-      // number of projects. She leaves Site, and keeps her access by Docs.
-      expect((await ask(martl, access.did, 'link', { repo: 'acme/site', access: 'read' }, 'Docs')).text).toMatch(/everyone here reads/);
+      // Docs chooses acme/site too, and Lena shares her account there: a repository with any number of projects.
+      // She leaves Site, and keeps her access by Docs.
       await lena.linkAccount({ platform: 'github', handle: 'lena-gh', proof: '0123456789abcdef01234567', space: 'Docs' });
+      await choose('Docs', ['acme/site']);
       const rounds = () => github.calls.filter((c) => c === 'GET /repos/acme/site/collaborators').length;
       await martl.removeMember('Site', lena.identity.author);
       sync([martl, lena, kofi]);
       const before = rounds();
       await kofi.linkAccount({ platform: 'github', on: false, space: 'Site' });
-      await vi.waitFor(() => expect(rounds()).toBeGreaterThan(before + 1), { timeout: 30_000, interval: 200 });
+      await vi.waitFor(() => expect(rounds()).toBeGreaterThan(before + 1), { timeout: 60_000, interval: 200 });
       expect(github.collaborators.has('lena-gh')).toBe(true);
-      // Docs gives nobody access by it any more: hers goes.
-      expect((await ask(martl, access.did, 'access', { repo: 'acme/site', access: 'none' }, 'Docs')).text).toMatch(/nobody gets access/);
-      await vi.waitFor(() => expect(github.collaborators.has('lena-gh')).toBe(false), { timeout: 30_000, interval: 200 });
+
+      // Docs chooses nothing any more: hers goes.
+      await martl.setServiceSetting({ space: 'Docs', service: access.did, name: 'REPOS', value: null });
+      sync([martl, lena, kofi]);
+      await vi.waitFor(() => expect(github.collaborators.has('lena-gh')).toBe(false), { timeout: 60_000, interval: 200 });
       expect(github.calls).toContain('DELETE /repos/acme/site/collaborators/lena-gh');
-      expect((await ask(martl, access.did, 'repos', undefined, 'Docs')).data).toMatchObject([{ repo: 'acme/site', access: 'none' }]);
     } finally {
       clearInterval(syncing);
       await martl.removeService('github-access').catch(() => {});
