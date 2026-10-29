@@ -71,7 +71,8 @@ class OrgGitHub {
     }
     if (new Headers(init?.headers).get('authorization') !== 'Bearer ghp_admin') return json(404, { message: 'Not Found' });
     this.calls.push(`${method} ${url.pathname}`);
-    // What the sign-in reaches.
+    // Whose sign-in it is, and what it reaches.
+    if (url.pathname === '/user') return json(200, { login: 'martl' });
     if (url.pathname === '/user/repos') return json(200, [...this.repos].map(([full_name, r]) => ({ full_name, private: full_name !== 'acme/site', owner: { type: r.owner }, permissions: { admin: true } })));
     const m = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)(\/.*)?$/);
     const repo = m ? this.repos.get(m[1]) : undefined;
@@ -226,7 +227,8 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // A verifier is nobody's service.
       await expect(martl.addService({ shipped: 'github-verify', spaces: ['Site'] })).rejects.toThrow(/is a verifier/);
 
-      // The service, with an admin's token kept in Site; its maintainers choose the repositories, from those it reaches.
+      // The service, acting as martl on GitHub (his token: his, for both projects, never kept in one); its maintainers
+      // choose the repositories, from those it reaches.
       const access = await martl.addService({ shipped: 'github-access', spaces: ['Site', 'Docs'], settingsIn: 'Site', settings: { GITHUB_TOKEN: 'ghp_admin' } });
       expect(access.contract).toMatchObject({ reads: { kinds: ['weave.account'] }, writes: ['github.added'], net: ['api.github.com'] });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
@@ -234,6 +236,10 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       const settings = await martl.serviceSettings({ space: 'Site', service: access.did });
       expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
       expect(settings.missing).toEqual(['GITHUB', 'REPOS']);
+      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
+      // Lena, a member: it's martl's to keep, not hers or Site's maintainers'.
+      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB' }, { name: 'GITHUB_TOKEN' }], missing: ['REPOS'] });
+      await expect(lena.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: 'ghp_lena' })).rejects.toThrow(/only whoever runs it/);
       await expect(lena.askService({ space: 'Site', service: access.did, text: 'reachable', action: 'reachable' })).rejects.toThrow(/only maintainers/);
       expect((await ask(martl, access.did, 'reachable')).data).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's: members get write access" }]);
       const choose = async (space: string, repos: string[]) => {
@@ -254,7 +260,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         expect([...github.repos.get('acme/secret')!.invited.keys()]).toEqual(['lena-gh']);
       }, { timeout: 60_000, interval: 200 });
       expect(github.invited.get('lena-gh')?.permission).toBe('pull');
-      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, me: { handle: 'lena-gh' } });
+      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, as: 'martl', me: { handle: 'lena-gh' } });
       expect((await ask(kofi, access.did, 'status')).data).not.toHaveProperty('me');
 
       // A person's repository too: members write there (GitHub has no read-only collaborators for it).

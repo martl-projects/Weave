@@ -14,8 +14,8 @@
     "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html", "covers": ["status", "reachable"]}]
   },
   "env": [
-    {"name": "GITHUB", "label": "GitHub", "oauth": {"device": "https://github.com/login/device/code", "token": "https://github.com/login/oauth/access_token", "client": "Ov23liWKLCViesJn7ICe", "scopes": ["repo"]}, "hint": "Sign in as an admin of the repositories: it invites and removes people with that access"},
+    {"name": "GITHUB", "label": "Your GitHub", "yours": true, "oauth": {"device": "https://github.com/login/device/code", "token": "https://github.com/login/oauth/access_token", "client": "Ov23liWKLCViesJn7ICe", "scopes": ["repo"]}, "hint": "It acts as you on GitHub, in every project you run it in: it invites and removes people where you're an admin"},
     {"name": "REPOS", "label": "Repositories", "choose": {"action": "reachable", "many": true}, "hint": "The repositories the project's members get access to"},
-    {"name": "GITHUB_TOKEN", "label": "Or a GitHub token", "secret": true, "optional": true, "hint": "Instead of signing in: a token of an admin of the repositories (Administration: read and write)"}
+    {"name": "GITHUB_TOKEN", "label": "Or a GitHub token of yours", "yours": true, "secret": true, "optional": true, "hint": "Instead of signing in: a token of yours (Administration: read and write on the repositories)"}
   ]
 }

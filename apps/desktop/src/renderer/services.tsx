@@ -554,6 +554,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
     <Modal title={`${service.name}: settings in ${space.name}`} onClose={onClose} wide>
       <p className="small muted">
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
+        {data.yours?.length ? (data.runsHere ? ' Those marked yours stay with it on this computer, for every project you run it in.' : ` Its sign-in is ${data.service.person.name ?? 'its runner'}'s, who runs it: kept on their computer, for every project they run it in.`) : ''}
       </p>
       {signing && (
         <div className="notice">
@@ -564,12 +565,16 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
           (it's copied): <b className="user-code">{signing.code}</b>. Only ever enter a code Weave shows you, here.
         </div>
       )}
-      {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      {data.missing.length > 0 && <p className="note">It needs {data.missing.map((n) => data.asks.find((a) => a.name === n)?.label ?? n).join(', ')} to work.</p>}
       {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
-        const set = data.settings.find((x) => x.name === name);
+        // Yours (whoever runs it): kept with it on their computer, for every project it's in; only they change it.
+        const yours = asked?.yours ? (data.yours?.find((y) => y.name === name) ?? { name }) : undefined;
+        const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: true, value: undefined } : undefined) : data.settings.find((x) => x.name === name);
         const secret = asked?.secret ?? set?.secret ?? false;
+        const mayChange = yours ? data.runsHere : data.mayChange;
+        const runner = data.service.person.name ?? shortDid(data.service.person.did);
         return (
           <fieldset key={name} className="service-setting">
             <legend>
@@ -577,13 +582,18 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
             </legend>
             {asked?.hint && <p className="small muted">{asked.hint}</p>}
             <p className="small">
-              {set ? (set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>) : asked?.oauth ? 'Not signed in' : asked?.choose ? 'None chosen yet' : 'Not set'}
-              {set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
+              {yours && !data.runsHere
+                ? `${runner}'s, who runs it: kept with it on their computer, for every project they run it in`
+                : set
+                  ? set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>
+                  : asked?.oauth ? 'Not signed in' : asked?.choose ? 'None chosen yet' : 'Not set'}
+              {yours && data.runsHere && <span className="muted"> · yours, for every project you run it in</span>}
+              {set && 'by' in set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
             </p>
-            {data.mayChange && asked?.choose && (
+            {mayChange && asked?.choose && (
               <ChooseSetting space={space.id} service={service} action={asked.choose.action} many={!!asked.choose.many} value={set?.value ?? ''} onSave={(value) => save(name, value)} />
             )}
-            {data.mayChange && !asked?.choose && (
+            {mayChange && !asked?.choose && (
               <div className="field-row">
                 {asked?.oauth ? (
                   <AsyncButton

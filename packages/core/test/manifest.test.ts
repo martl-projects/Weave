@@ -38,6 +38,11 @@ describe('a setting picked from what the service lists', () => {
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'nothing' } }])).toMatch(/has no such action/);
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, secret: true }])).toMatch(/neither a secret nor a sign-in/);
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: 'reachable' }])).toMatch(/"choose" names the action/);
+    expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, yours: true }])).toMatch(/the project's, not yours/);
+  });
+  it("keeps a sign-in as whoever runs it: theirs, for every project", () => {
+    const oauth = { device: 'https://github.com/login/device/code', token: 'https://github.com/login/oauth/access_token', client: 'abc' };
+    expect(checkManifest({ app: 'access', name: 'Access', service, wasm, env: [{ name: 'GITHUB', label: 'Your GitHub', yours: true, oauth }] }).manifest?.env).toEqual([{ name: 'GITHUB', label: 'Your GitHub', secret: true, oauth, yours: true }]);
   });
 });
 

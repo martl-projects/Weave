@@ -2,22 +2,24 @@
 // setting picked from what its GitHub sign-in reaches), and takes it back when they leave. A repository can be chosen
 // in any number of projects: it gets everyone any of them lets in. Members get it with a GitHub account they proved
 // and shared with the project (weave.account, checked by GitHub's verifier): read access to an organization's
-// repository, write access to a person's (GitHub has no read-only collaborators there). All of it with its own
-// sign-in (an admin's): Weave only says who is in a project and whose accounts hold (readers, accounts), and knows
-// nothing of GitHub. Each change it records in the project (github.added), to take back what it gave and nothing else.
+// repository, write access to a person's (GitHub has no read-only collaborators there). All of it as whoever runs it,
+// with their GitHub sign-in (GITHUB, theirs: once, for every project they run it in): Weave only says who is in a
+// project and whose accounts hold (readers, accounts), and knows nothing of GitHub. Each change it records in the project (github.added), to take back what it gave and nothing else.
 import { accounts, answer, load, log, me, publish, readers, save, setting, tickEvery } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
 const isRepo = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value);
-const NOT_SIGNED_IN = "it isn't signed in to GitHub here yet: one of the maintainers signs it in, in its Settings (an admin of the repositories)";
+const NOT_SIGNED_IN = "whoever runs it hasn't signed it in to GitHub yet: they do, once, in its Settings (as an admin of the repositories)";
 
-/** Its projects, each with its own settings: the repositories chosen there, and its sign-in there. */
+/** Its sign-in: its person's GitHub, the same for every project. */
+const token = () => setting('GITHUB') ?? setting('GITHUB_TOKEN');
+
+/** Its projects, each with the repositories chosen there. */
 const projects = () =>
   JSON.parse(me()).spaces.map((s) => ({
     id: s.id,
     name: s.name,
     repos: [...new Set(String(s.settings?.REPOS ?? '').split(/[\s,]+/).filter(isRepo))],
-    token: s.settings?.GITHUB ?? s.settings?.GITHUB_TOKEN ?? setting('GITHUB') ?? setting('GITHUB_TOKEN'),
   }));
 
 /**
@@ -44,7 +46,7 @@ async function github(token, method, path, body) {
     headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-access', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : method === 'POST' || method === 'PUT' ? { body: '{}' } : {}),
   });
-  if (res.status === 401) throw new Error("GitHub doesn't take its sign-in (any more): one of the maintainers signs it in again, in its Settings");
+  if (res.status === 401) throw new Error("GitHub doesn't take its sign-in (any more): whoever runs it signs it in again, in its Settings");
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${method} ${path}`);
   return res.status === 204 ? undefined : res.json().catch(() => undefined);
 }
@@ -99,43 +101,46 @@ async function syncRepo(repo, chosen, token) {
 
 /** Every repository its projects chose, each with all of them; ones no project chooses any more only take back what it gave. */
 async function syncAll() {
-  const all = projects();
+  const signIn = token();
+  if (!signIn) return log('not signed in to GitHub');
+  // Whom it acts as there, to show: its person's GitHub account.
+  try {
+    const login = (await github(signIn, 'GET', '/user'))?.login;
+    if (login && login !== state().login) change((s) => void (s.login = login));
+  } catch (error) {
+    log(error?.message ?? String(error));
+  }
   const byRepo = new Map(Object.keys(state().gave).map((repo) => [repo, []]));
-  for (const project of all) for (const repo of project.repos) byRepo.set(repo, [...(byRepo.get(repo) ?? []), project]);
+  for (const project of projects()) for (const repo of project.repos) byRepo.set(repo, [...(byRepo.get(repo) ?? []), project]);
   for (const [repo, chosen] of byRepo) {
-    // Its sign-in: one of the projects' that chose it (or, for one none chooses now, any).
-    const token = [...chosen, ...all].find((p) => p.token)?.token;
-    if (!token) {
-      log(`${repo}: not signed in to GitHub`);
-      continue;
-    }
     try {
-      await syncRepo(repo, chosen, token);
+      await syncRepo(repo, chosen, signIn);
     } catch (error) {
       change((s) => void (s.status[repo] = { ...(s.status[repo] ?? {}), problem: error?.message ?? String(error), time: new Date().toISOString() }));
     }
   }
 }
 
-/** The repositories its sign-in in a project reaches, to choose from (REPOS): those it administers first. */
-async function reachable(space) {
-  const token = projects().find((p) => p.id === space)?.token;
-  if (!token) throw new Error(NOT_SIGNED_IN);
-  const all = (await github(token, 'GET', '/user/repos?per_page=100&sort=updated')) ?? [];
+/** The repositories its sign-in reaches, to choose from (REPOS): those it administers first. */
+async function reachable() {
+  const signIn = token();
+  if (!signIn) throw new Error(NOT_SIGNED_IN);
+  const all = (await github(signIn, 'GET', '/user/repos?per_page=100&sort=updated')) ?? [];
   return all
     .map((r) => ({ value: r.full_name, admin: !!r.permissions?.admin, note: [r.private ? 'private' : '', r.owner?.type === 'Organization' ? '' : "a person's: members get write access", r.permissions?.admin ? '' : "its sign-in isn't an admin"].filter(Boolean).join(' · ') }))
     .sort((a, b) => Number(b.admin) - Number(a.admin))
     .map(({ admin, ...r }) => (r.note ? r : { value: r.value }));
 }
 
-/** How it's going in a project: its repositories, and whether the one asking gets access (and as whom). */
+/** How it's going in a project: its repositories, whom it acts as on GitHub, and whether the one asking gets access (and as whom). */
 function status(space, who) {
   const project = projects().find((p) => p.id === space);
   const s = state();
   const mine = JSON.parse(accounts(space, 'github')).find((a) => a.did === who && a.verified);
   return {
     repos: (project?.repos ?? []).map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
-    signedIn: !!project?.token,
+    signedIn: !!token(),
+    ...(token() && s.login ? { as: s.login } : {}),
     ...(mine ? { me: { handle: mine.handle } } : {}),
   };
 }
@@ -149,7 +154,7 @@ export async function onEvent(text) {
   if (item.kind !== 'weave.service.request') return;
   const { action } = item.body ?? {};
   try {
-    if (action === 'reachable') return void answer(item.id, undefined, JSON.stringify(await reachable(item.space.id)), undefined);
+    if (action === 'reachable') return void answer(item.id, undefined, JSON.stringify(await reachable()), undefined);
     if (action === 'status') return void answer(item.id, undefined, JSON.stringify(status(item.space.id, item.author)), undefined);
     throw new Error('it answers reachable and status');
   } catch (error) {

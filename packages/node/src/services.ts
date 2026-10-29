@@ -339,7 +339,9 @@ export class Services {
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
     if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
     if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
-    const settings = keptIn ? {} : given;
+    // Except what it asks for as yours: that stays with you, for every project it's in.
+    const yours = (name: string) => (asks ?? []).some((e) => e.name === name && e.yours);
+    const settings = keptIn ? Object.fromEntries(Object.entries(given).filter(([n]) => yours(n))) : given;
     // A sign-in comes after: its provider's page opens once the service is there. So does a pick from what it lists.
     const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
@@ -382,7 +384,7 @@ export class Services {
     this.saveServices([...this.storedServices(), stored]);
     this.publishServiceProfile(stored);
     if (keptIn) {
-      for (const [name, value] of Object.entries(given)) this.settings.write(keptIn, key.did, name, value, (asks ?? []).find((e) => e.name === name)?.secret === true);
+      for (const [name, value] of Object.entries(given)) if (!yours(name)) this.settings.write(keptIn, key.did, name, value, (asks ?? []).find((e) => e.name === name)?.secret === true);
     }
     this.announceService(key.did, [], stored.spaces);
     // Services start once the app API runs (it gives them WEAVE_API).
@@ -1301,6 +1303,8 @@ export class Services {
   }
 
   #restarts = false;
+  /** Start a running service again, a moment from now (its settings changed): once services run. */
+  restartSoon: (name: string) => void = () => {};
 
   /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
@@ -1321,6 +1325,7 @@ export class Services {
           this.startService(now);
         }, 200);
       };
+      this.restartSoon = restart;
       this.h.replica.onAppend((event) => {
         const d = this.h.decode(event);
         if (d?.inner.kind !== KIND_SERVICE_SETTING) return;

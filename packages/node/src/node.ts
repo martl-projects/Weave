@@ -528,6 +528,7 @@ import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
+import type { Grant as ServiceGrant } from './servicesettings.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -617,6 +618,8 @@ export interface StoredService {
   hosted?: Record<string, StoredRoom>;
   /** The settings your own code asks for (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
   asks?: AppSetting[];
+  /** Its sign-ins as you (settings it asks for as yours), by name: for every project it's in. */
+  grants?: Record<string, ServiceGrant>;
   /** One Weave ships (shipped.ts): its name, and the digest it ran last. */
   shipped?: { name: string; digest: string };
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
