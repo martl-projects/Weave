@@ -687,13 +687,14 @@ export interface ScopedAction {
  * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
  * which is changed in its settings (maintainers).
  */
-export function ActionScopes({ space, service, groups, extras }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[] }) {
+export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
   // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say), and so can
   // one of its own pages, where it's shown.
-  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? [])]);
+  // And Weave's own view of what it does (a website service's running websites, say): `covered`.
+  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? [])]);
   const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);

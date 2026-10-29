@@ -7,7 +7,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { ActionScopes, askAndWait, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -741,26 +741,62 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       </legend>
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
-      {/* What it hosts runs in Live: a link there (one with its own page shows its overview below). */}
-      {hostsSites(service) && (
-        <p className="small">
-          {its.length ? (
-            <a href={`#/p/${project.id}/live`}>
-              Hosts {its.length} running website{its.length === 1 ? '' : 's'} → Live
-            </a>
-          ) : (
-            <span className="muted">No running websites{own ? '' : ` from ${by}`}.</span>
-          )}
-        </p>
-      )}
+      {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
+      {hostsSites(service) && (its.length ? <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} /> : <p className="small muted">No running websites{own ? '' : ` from ${by}`}.</p>)}
       {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
-      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : undefined} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
       {publishing && app && <ReleasePicker project={project} app={app} onClose={() => setPublishing(false)} />}
     </fieldset>
+  );
+}
+
+/**
+ * A website service's running websites, as Weave knows them: each a website artifact running (or a page of a service),
+ * who may visit, who opened it; your own you close, and maintainers close any (asking the service that hosts it).
+ */
+function RunningWebsites({ project, service, rooms, shows, maintainer }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; maintainer: boolean }) {
+  const visitors = (room: WebsiteInfo) => {
+    const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
+    const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
+    return who.length ? who.join(' or ') : room.open ? 'everyone here' : 'people invited';
+  };
+  const close = (room: WebsiteInfo) =>
+    void (async () =>
+      (await ask(`Close "${room.name}"? Everyone on it is disconnected, and what answers it stops.`, 'Close website')) &&
+      attempt(() => (room.mine ? api('closeWebsite', room.id) : askAndWait(project.id, service, 'close', { id: room.id }, `Close ${room.name}`)).then(bump), 'Website closed'))();
+  return (
+    <table className="release-list running-websites">
+      <thead>
+        <tr>
+          <th>Website</th>
+          <th>Who may visit</th>
+          <th>Opened by</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {rooms.map((room) => (
+          <tr key={room.id}>
+            <td>
+              <a href={`#/p/${project.id}/live`}>{room.name}</a>
+              {room.from && (
+                <div className="small muted">
+                  {room.from.name ?? 'a release'} {room.from.tag}
+                  {room.from.project.name && room.from.project.id !== project.id ? ` from p/${room.from.project.name}` : ''}
+                </div>
+              )}
+            </td>
+            <td className="muted">{visitors(room)}</td>
+            <td className="muted">{room.host.name ?? shortDid(room.host.did)}</td>
+            <td>{(room.mine || maintainer) && <button onClick={() => close(room)}>Close</button>}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

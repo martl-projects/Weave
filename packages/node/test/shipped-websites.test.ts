@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -36,8 +36,7 @@ beforeAll(async () => {
   const component = await buildComponent(join(source, 'src', 'service.js'), 'service');
   shipped = temp('weave-shipped-websites-');
   copyFileSync(component, join(shipped, 'websites.wasm'));
-  cpSync(join(source, 'panel'), join(shipped, 'websites-panel'), { recursive: true });
-  writeFileSync(join(shipped, 'shipped.json'), JSON.stringify({ websites: { component: 'websites.wasm', digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')), panel: 'websites-panel' } }));
+  writeFileSync(join(shipped, 'shipped.json'), JSON.stringify({ websites: { component: 'websites.wasm', digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) } }));
 }, 180_000);
 
 function person(name: string): WeaveNode {
@@ -82,7 +81,8 @@ describe('Websites, shipped with Weave', { timeout: 120_000 }, () => {
 
       // Everyone sees what's there; its panel is theirs too.
       expect((await answer(lena, 'what is there?', 'list')).data).toMatchObject([{ id: game.id, name: 'Game night', visitors: 'everyone here' }]);
-      expect((await lena.servicePanels({ space: 'Party', service: websites.did })).map((p) => [p.name, p.mine])).toEqual([['overview', true]]);
+      // No page of its own: Weave lists the running websites itself.
+      expect(await lena.servicePanels({ space: 'Party', service: websites.did })).toEqual([]);
       // Closing is for maintainers: Lena can't, martl can.
       await expect(lena.askService({ space: 'Party', service: websites.did, text: 'close it', action: 'close', data: { id: game.id } })).rejects.toThrow(/only maintainers can close a website/);
       expect((await answer(martl, 'close it', 'close', { id: game.id })).text).toBe('Closed.');
