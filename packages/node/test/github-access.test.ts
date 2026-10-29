@@ -235,11 +235,21 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       sync([martl, lena, kofi]);
       const settings = await martl.serviceSettings({ space: 'Site', service: access.did });
       expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
-      expect(settings.missing).toEqual(['GITHUB', 'REPOS']);
+      // Repositories are optional: none chosen, it's the project's own (where its releases come from).
+      expect(settings.missing).toEqual(['GITHUB']);
       expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
       // Lena, a member: it's martl's to keep, not hers or Site's maintainers'.
-      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB' }, { name: 'GITHUB_TOKEN' }], missing: ['REPOS'] });
+      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB' }, { name: 'GITHUB_TOKEN' }], missing: [] });
       await expect(lena.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: 'ghp_lena' })).rejects.toThrow(/only whoever runs it/);
+      // martl signs it in instead (a code on GitHub): his, at once, and its token is what it uses.
+      martl.oauthSetup.fetch = async (url) => {
+        const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+        return String(url).endsWith('/device/code') ? json({ device_code: 'd-1', user_code: 'WXYZ-1234', verification_uri: 'https://github.com/login/device', interval: 0.01 }) : json({ access_token: 'ghp_admin', scope: 'repo' });
+      };
+      const signIn = await martl.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB' });
+      expect(await martl.finishServiceSignIn({ id: signIn.id })).toMatchObject({ yours: [{ name: 'GITHUB', set: true }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
+      await martl.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: null });
+      expect((await martl.serviceSettings({ space: 'Docs', service: access.did })).missing).toEqual([]);
       await expect(lena.askService({ space: 'Site', service: access.did, text: 'reachable', action: 'reachable' })).rejects.toThrow(/only maintainers/);
       expect((await ask(martl, access.did, 'reachable')).data).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's: members get write access" }]);
       const choose = async (space: string, repos: string[]) => {
@@ -277,20 +287,24 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       await vi.waitFor(() => expect([...secret.collaborators]).toEqual(['old-friend']), { timeout: 60_000, interval: 200 });
       await vi.waitFor(() => expect(github.repos.get('martl/notes')!.invited.size).toBe(0), { timeout: 60_000, interval: 200 });
 
-      // Docs chooses acme/site too, and Lena shares her account there: a repository with any number of projects.
-      // She leaves Site, and keeps her access by Docs.
+      // Docs chooses none, and its releases come from acme/site: its own, so that one. Lena shares her account there:
+      // a repository with any number of projects. She leaves Site, and keeps her access by Docs.
       await lena.linkAccount({ platform: 'github', handle: 'lena-gh', proof: '0123456789abcdef01234567', space: 'Docs' });
-      await choose('Docs', ['acme/site']);
+      await martl.publishApp({ project: 'Docs', manifest: { app: 'docs', name: 'Docs', services: [{ port: 3000 }], install: { github: 'acme/site', tag: 'v1', assets: { 'linux-x64': { file: 'docs.tgz', sha256: 'a'.repeat(64) } } } } });
+      sync([martl, lena, kofi]);
+      await vi.waitFor(async () => expect((await ask(lena, access.did, 'status', undefined, 'Docs')).data).toMatchObject({ repos: [{ repo: 'acme/site' }], own: true }), { timeout: 90_000, interval: 500 });
       const rounds = () => github.calls.filter((c) => c === 'GET /repos/acme/site/collaborators').length;
       await martl.removeMember('Site', lena.identity.author);
       sync([martl, lena, kofi]);
       const before = rounds();
       await kofi.linkAccount({ platform: 'github', on: false, space: 'Site' });
-      await vi.waitFor(() => expect(rounds()).toBeGreaterThan(before + 1), { timeout: 60_000, interval: 200 });
+      // A round after Kofi's change, through (it would take hers back after reading the invitations).
+      await vi.waitFor(() => expect(rounds()).toBeGreaterThan(before), { timeout: 60_000, interval: 200 });
+      await vi.waitFor(() => expect(github.calls.filter((c) => c === 'GET /repos/acme/site/invitations').length).toBe(rounds()), { timeout: 60_000, interval: 200 });
       expect(github.collaborators.has('lena-gh')).toBe(true);
 
-      // Docs chooses nothing any more: hers goes.
-      await martl.setServiceSetting({ space: 'Docs', service: access.did, name: 'REPOS', value: null });
+      // Docs chooses another instead of its own: hers goes.
+      await choose('Docs', ['martl/notes']);
       sync([martl, lena, kofi]);
       await vi.waitFor(() => expect(github.collaborators.has('lena-gh')).toBe(false), { timeout: 60_000, interval: 200 });
       expect(github.calls).toContain('DELETE /repos/acme/site/collaborators/lena-gh');

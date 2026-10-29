@@ -38,12 +38,12 @@
       const s = (await act('status')).data ?? { repos: [] };
       if (!s.repos.length) {
         list.className = 'empty';
-        list.textContent = maintainer() ? 'No repositories chosen yet: choose them in its Settings (below).' : 'No repositories chosen yet: its maintainers choose them.';
+        list.textContent = maintainer() ? 'No repositories yet: the project has none of its own (no releases from GitHub), so choose them in its Settings.' : 'No repositories yet: its maintainers choose them.';
       } else {
         list.className = '';
         list.innerHTML = `<table><tr><th>Repository</th><th>Members get</th><th>Given so far</th></tr>${s.repos
           .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td class="muted">${r.personal === undefined ? '' : r.personal ? 'write access' : 'read access'}</td><td class="muted">${r.given ?? 0}</td></tr>`)
-          .join('')}</table>`;
+          .join('')}</table>${s.own ? `<div class="empty">The project's own repository, where its releases come from${maintainer() ? ': choose others in its Settings' : ''}.</div>` : ''}`;
       }
       if (!s.signedIn) list.insertAdjacentHTML('beforeend', '<div class="empty problem">Not signed in to GitHub yet: whoever runs it signs in once, in its Settings, as themselves.</div>');
       else if (s.as) list.insertAdjacentHTML('beforeend', `<div class="empty">It acts on GitHub as <a href="https://github.com/${esc(s.as)}" target="_blank" rel="noopener">${esc(s.as)}</a>: the account of whoever runs it.</div>`);

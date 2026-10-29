@@ -1,7 +1,7 @@
 # GitHub access
 
-Gives a project's members access to GitHub repositories: a maintainer adds it and chooses the repositories (from
-those their GitHub account reaches). Members who proved their GitHub account and shared it with the
+Gives a project's members access to GitHub repositories: the project's own (where its releases come from), or
+those a maintainer chooses (from those their GitHub account reaches). Members who proved their GitHub account and shared it with the
 project get access, and whoever leaves loses it again. Read access to an organization's repository; write access to
 a person's (GitHub has no read-only collaborators there).
 

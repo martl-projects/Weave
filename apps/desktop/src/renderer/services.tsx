@@ -474,7 +474,8 @@ export function SpaceServices({ space }: { space: SpaceInfo }) {
 /** Ask a service with one of its actions, and wait for its answer (from the node that runs it; half a minute at most). */
 export async function askAndWait(space: string, service: { did: string; name: string }, action: string, input?: unknown, label?: string): Promise<{ text?: string; data?: unknown }> {
   const asked = await api<ServiceRequestInfo>('askService', { space, service: service.did, text: label ?? action, action, ...(input !== undefined && input !== null ? { data: input } : {}) });
-  for (let i = 0; i < 60; i++) {
+  // Two minutes at most: it answers one thing at a time, and may be starting again (a setting changed).
+  for (let i = 0; i < 240; i++) {
     const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space, service: service.did })).find((r) => r.id === asked.id)?.results[0];
     if (answer) {
       if (answer.error) throw new Error(answer.error);
@@ -541,6 +542,10 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
   );
 }
 
+/** A service's settings changed here: its pages show what's current (detail: its key). */
+const SERVICE_CHANGED = 'weave-service-changed';
+const serviceChanged = (did: string) => dispatchEvent(new CustomEvent(SERVICE_CHANGED, { detail: did }));
+
 export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -548,7 +553,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
   const [signing, setSigning] = useState<{ code: string; url: string }>();
   if (!data) return null;
   const save = (name: string, value: string | null, secret?: boolean) =>
-    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump())), value === null ? `${name} removed` : `${name} set`);
+    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump(), serviceChanged(service.did))), value === null ? `${name} removed` : `${name} set`);
   const names = [...data.asks.map((a) => a.name), ...data.settings.map((x) => x.name).filter((n) => !data.asks.some((a) => a.name === n))];
   return (
     <Modal title={`${service.name}: settings in ${space.name}`} onClose={onClose} wide>
@@ -611,8 +616,9 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
                           await api('finishServiceSignIn', { id });
                         } finally {
                           setSigning(undefined);
+                          reload();
+                          serviceChanged(service.did);
                         }
-                        reload();
                       }, `${service.name} is signed in`)
                     }
                   >
@@ -845,13 +851,16 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
   useEffect(sendView, [actions, boards]);
   useEffect(() => {
     let soon: ReturnType<typeof setTimeout> | undefined;
+    const again = () => (clearTimeout(soon), (soon = setTimeout(sendView, 300)));
     const off = onItem((item) => {
       if (item.kind === 'weave.service.request' || item.kind === 'weave.service.result') return;
-      clearTimeout(soon);
-      soon = setTimeout(sendView, 300);
+      again();
     });
-    return () => (off(), clearTimeout(soon));
-  }, []);
+    // Its settings changed here (a sign-in of yours is no event anywhere): a moment later, once it started again.
+    const changed = (event: Event) => (event as CustomEvent<string>).detail === service.did && setTimeout(again, 1500);
+    addEventListener(SERVICE_CHANGED, changed);
+    return () => (off(), clearTimeout(soon), removeEventListener(SERVICE_CHANGED, changed));
+  }, [service.did]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;

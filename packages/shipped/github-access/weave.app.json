@@ -15,7 +15,7 @@
   },
   "env": [
     {"name": "GITHUB", "label": "Your GitHub", "yours": true, "oauth": {"device": "https://github.com/login/device/code", "token": "https://github.com/login/oauth/access_token", "client": "Ov23liWKLCViesJn7ICe", "scopes": ["repo"]}, "hint": "It acts as you on GitHub, in every project you run it in: it invites and removes people where you're an admin"},
-    {"name": "REPOS", "label": "Repositories", "choose": {"action": "reachable", "many": true}, "hint": "The repositories the project's members get access to"},
+    {"name": "REPOS", "label": "Repositories", "choose": {"action": "reachable", "many": true}, "optional": true, "hint": "The repositories the project's members get access to. None chosen: the project's own, where its releases come from"},
     {"name": "GITHUB_TOKEN", "label": "Or a GitHub token of yours", "yours": true, "secret": true, "optional": true, "hint": "Instead of signing in: a token of yours (Administration: read and write on the repositories)"}
   ]
 }

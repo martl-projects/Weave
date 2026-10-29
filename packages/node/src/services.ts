@@ -1065,7 +1065,13 @@ export class Services {
         contract: current().contract,
         spaces: (() => {
           const kept = this.settings.valuesOf(current());
-          return this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: { ...(current().spaceSettings?.[id] ?? {}), ...(kept[id] ?? {}) } }));
+          // And where each space's releases come from (its own repository, say).
+          const sources = (id: string) => {
+            const space = this.h.spaces.get(id);
+            const all = space ? artifactsOf(this.h.entries(space), this.h.state(space).maintainers).flatMap((a) => (a.source ? [a.source] : [])) : [];
+            return [...new Map(all.map((s) => [`${s.provider} ${s.ref}`, s])).values()];
+          };
+          return this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: { ...(current().spaceSettings?.[id] ?? {}), ...(kept[id] ?? {}) }, sources: sources(id) }));
         })(),
       }),
       events: (since) =>

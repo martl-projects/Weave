@@ -1,5 +1,6 @@
-// GitHub access: gives a project's members access to the GitHub repositories its maintainers chose for it (REPOS, a
-// setting picked from what its GitHub sign-in reaches), and takes it back when they leave. A repository can be chosen
+// GitHub access: gives a project's members access to its GitHub repositories, and takes it back when they leave: the
+// project's own (where its releases come from), or those its maintainers chose for it (REPOS, a setting picked from
+// what its GitHub sign-in reaches). A repository can be chosen
 // in any number of projects: it gets everyone any of them lets in. Members get it with a GitHub account they proved
 // and shared with the project (weave.account, checked by GitHub's verifier): read access to an organization's
 // repository, write access to a person's (GitHub has no read-only collaborators there). All of it as whoever runs it,
@@ -14,13 +15,13 @@ const NOT_SIGNED_IN = "whoever runs it hasn't signed it in to GitHub yet: they d
 /** Its sign-in: its person's GitHub, the same for every project. */
 const token = () => setting('GITHUB') ?? setting('GITHUB_TOKEN');
 
-/** Its projects, each with the repositories chosen there. */
+/** Its projects, each with its repositories: those chosen there, or else the project's own (its releases' source). */
 const projects = () =>
-  JSON.parse(me()).spaces.map((s) => ({
-    id: s.id,
-    name: s.name,
-    repos: [...new Set(String(s.settings?.REPOS ?? '').split(/[\s,]+/).filter(isRepo))],
-  }));
+  JSON.parse(me()).spaces.map((s) => {
+    const chosen = [...new Set(String(s.settings?.REPOS ?? '').split(/[\s,]+/).filter(isRepo))];
+    const own = [...new Set((s.sources ?? []).filter((x) => x.provider === 'github' && isRepo(x.ref)).map((x) => x.ref))];
+    return { id: s.id, name: s.name, repos: chosen.length ? chosen : own, own: !chosen.length && own.length > 0 };
+  });
 
 /**
  * What it keeps (in its own folder): whom it gave access by repository (and in which project), and how each went. A
@@ -139,6 +140,7 @@ function status(space, who) {
   const mine = JSON.parse(accounts(space, 'github')).find((a) => a.did === who && a.verified);
   return {
     repos: (project?.repos ?? []).map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
+    ...(project?.own ? { own: true } : {}),
     signedIn: !!token(),
     ...(token() && s.login ? { as: s.login } : {}),
     ...(mine ? { me: { handle: mine.handle } } : {}),
