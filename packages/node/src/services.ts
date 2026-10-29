@@ -813,9 +813,22 @@ export class Services {
     return { to: b.to, ...(b.until !== undefined ? { until: b.until } : {}), sealed: true };
   }
 
+  /**
+   * Requests and answers as opened here, by event id: a sealed box never changes, and opening one is slow (pages ask
+   * their services on every view, and asking waits by looking again), so each is opened once.
+   */
+  #opened = new Map<string, Json | null>();
+  #openedOnce<T extends Json | null>(id: string, open: () => T): T {
+    if (this.#opened.has(id)) return this.#opened.get(id) as T;
+    const got = open();
+    if (this.#opened.size > 20_000) this.#opened.clear();
+    this.#opened.set(id, got);
+    return got;
+  }
+
   /** A space's entries, its requests opened where they're for us (requestsOf reads them as anyone's). */
   #openedEntries(space: StoredSpace) {
-    return this.h.entries(space).map((e) => (e.kind === KIND_SERVICE_REQUEST ? { ...e, body: this.openRequest(e.body) as Json } : e));
+    return this.h.entries(space).map((e) => (e.kind === KIND_SERVICE_REQUEST ? { ...e, body: this.#openedOnce(`request ${e.id}`, () => this.openRequest(e.body)) as Json } : e));
   }
 
   /** Until when a request counts: as its asker said, or as its service's contract says for its action or protocol. */
@@ -849,7 +862,7 @@ export class Services {
           const sealed = (e.body ?? {}) as Record<string, Json>;
           // An answer for who asked: opened if that's me (or my service's), else only that it came.
           const boxes = Array.isArray(sealed.for) ? (sealed.for as unknown as Box[]) : undefined;
-          const body = (boxes ? this.#openAnswer(boxes) : sealed) as Record<string, Json> | undefined;
+          const body = (boxes ? (this.#openedOnce(`answer ${e.id}`, () => this.#openAnswer(boxes) ?? null) ?? undefined) : sealed) as Record<string, Json> | undefined;
           if (!body) return { id: e.id, text: '', private: true as const, time: e.event.time };
           return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
         }),

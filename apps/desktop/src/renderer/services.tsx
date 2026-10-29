@@ -474,14 +474,15 @@ export function SpaceServices({ space }: { space: SpaceInfo }) {
 /** Ask a service with one of its actions, and wait for its answer (from the node that runs it; half a minute at most). */
 export async function askAndWait(space: string, service: { did: string; name: string }, action: string, input?: unknown, label?: string): Promise<{ text?: string; data?: unknown }> {
   const asked = await api<ServiceRequestInfo>('askService', { space, service: service.did, text: label ?? action, action, ...(input !== undefined && input !== null ? { data: input } : {}) });
-  // Two minutes at most: it answers one thing at a time, and may be starting again (a setting changed).
-  for (let i = 0; i < 240; i++) {
+  // Two minutes at most: it answers one thing at a time, and may be starting again (a setting changed). Often at
+  // first, then calmer.
+  for (let i = 0, until = Date.now() + 120_000; Date.now() < until; i++) {
     const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space, service: service.did })).find((r) => r.id === asked.id)?.results[0];
     if (answer) {
       if (answer.error) throw new Error(answer.error);
       return { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) };
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, i < 10 ? 500 : 1500));
   }
   throw new Error(`${service.name} didn't answer in time`);
 }
