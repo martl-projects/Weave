@@ -279,7 +279,8 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       const sent = JSON.parse(unescape(page.match(/name="manifest" value="([^"]+)"/)![1])) as { name: string; redirect_url: string; default_permissions: unknown };
       expect(action.origin + action.pathname).toBe('https://github.com/settings/apps/new');
       expect(sent).toMatchObject({ default_permissions: { administration: 'write', metadata: 'read' }, public: false });
-      expect(sent.name).toMatch(/^Weave access [0-9a-f]{6}$/);
+      // Named for whose it is: his name here (he proved no GitHub account in Site).
+      expect(sent.name).toBe("martl's Weave connect");
       const back = await fetch(`${sent.redirect_url}?code=c-1&state=${action.searchParams.get('state')}`, { redirect: 'manual' });
       // On to installing it.
       expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);

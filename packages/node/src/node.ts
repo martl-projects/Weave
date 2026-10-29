@@ -8801,6 +8801,8 @@ export class WeaveNode implements Backend {
       toItem: n.#toItem.bind(n),
       /** Accounts elsewhere said in a space, checked. */
       accounts: (space: StoredSpace, platform: string) => n.accounts({ space: space.id }).then((all) => all.filter((a) => a.platform === platform)),
+      /** Your own account on a platform, proven (on your hub or in any space of yours): its handle. */
+      myAccount: (platform: string) => n.myAccounts().then((all) => all.find((a) => a.platform === platform && a.verified)?.handle),
       /** Who reads a board of a project (everyone, for a board nobody limited). */
       boardReaders: (space: StoredSpace, board: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
       /** Who reads a space (or one of its boards). */

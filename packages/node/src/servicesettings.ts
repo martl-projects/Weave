@@ -386,9 +386,14 @@ export class ServiceSettings {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (url.searchParams.get('state') !== state) return void res.writeHead(404).end();
       if (url.pathname === '/') {
-        // Sent on at once: the provider's page, with the app's manifest (and where to come back to).
+        // Sent on at once: the provider's page, with the app's manifest (named for whose it is, and where to come back to).
         const random = randomBytes(3).toString('hex');
         const named = Object.fromEntries(Object.entries(register.manifest).map(([k, v]) => [k, typeof v === 'string' ? v.replace('{random}', random) : v]));
+        if (typeof named.name === 'string') {
+          // At most 34 characters (GitHub's limit): whose it is shortened to fit.
+          const room = Math.max(3, 34 - named.name.replace('{account}', '').length);
+          named.name = named.name.replace('{account}', account.length > room ? account.slice(0, room) : account);
+        }
         const manifest = JSON.stringify({ ...named, redirect_url: `${base}back` });
         const action = `${register.page}${register.page.includes('?') ? '&' : '?'}state=${encodeURIComponent(state)}`;
         const esc = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -409,6 +414,9 @@ export class ServiceSettings {
       }
       res.writeHead(404).end();
     });
+    // Whose it is: the account you proved there, else your name here.
+    const proven = register.platform ? await this.h.myAccount(register.platform).catch(() => undefined) : undefined;
+    const account = proven ?? this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'your';
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
     const id = state;

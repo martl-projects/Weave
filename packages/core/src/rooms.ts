@@ -206,8 +206,13 @@ export interface AppRegister {
   page: string;
   /** Where the code the provider sends back becomes the app ({code} in it): POSTed, JSON back. */
   exchange: string;
-  /** The app's manifest, as the provider takes it: Weave adds where to come back to (redirect_url). */
+  /**
+   * The app's manifest, as the provider takes it: Weave adds where to come back to (redirect_url). In its name,
+   * {account} becomes whose it is (the account they proved on `platform`, else their name), {random} a few letters.
+   */
   manifest: Record<string, Json>;
+  /** The platform whose proven account names the app ({account}): github, say. */
+  platform?: string;
   /** The fields of the app kept for the service, like id or slug (owner.login reaches inside). */
   keep: string[];
   /** The field that holds the app's private key: Weave signs with it for the service. */
@@ -226,9 +231,10 @@ export function parseRegister(value: unknown): { register?: AppRegister; problem
   const keep = Array.isArray(o.keep) ? o.keep.filter(field).slice(0, 10) as string[] : [];
   const key = field(o.key) ? (o.key as string) : '';
   const then = typeof o.then === 'string' && /^https:\/\/|^\{[a-z_]+\}\//i.test(o.then) ? o.then.slice(0, 300) : undefined;
+  const platform = typeof o.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(o.platform) ? o.platform : undefined;
   if (!page || !exchange?.includes('{code}') || !manifest || JSON.stringify(manifest).length > 8000 || !keep.length || !key)
     return { problem: '"register" names the provider\'s page, where its code becomes the app, the app\'s manifest, what\'s kept and its key: {"page": "https://…", "exchange": "https://…/{code}/…", "manifest": {...}, "keep": ["id", "slug"], "key": "pem", "then": "{html_url}/installations/new"}' };
-  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}) } };
+  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}) } };
 }
 
 /** A setting's choices, checked: the action that lists them, and whether several are picked. */
