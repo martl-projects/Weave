@@ -96,6 +96,22 @@ export interface AppManifest {
    * nobody has to trust anyone's word that an account is theirs.
    */
   verifier?: AppVerifier;
+  /**
+   * A keyvault: a client app of its person's that holds their access to a platform (their GitHub App, say) and hands
+   * their services only access derived from it, cut to what each declared (uses, in its contract) and to what its
+   * person handed each project. Shown in Keys & devices, never in a project.
+   */
+  keyvault?: AppKeyvault;
+}
+
+/** What a keyvault holds access to, and where it may reach. */
+export interface AppKeyvault {
+  /** The platform it holds access to (github…): services name it in "uses". */
+  platform: string;
+  /** Hosts it may reach over HTTPS. */
+  net?: string[];
+  /** What it hands to projects, in words: "repositories". */
+  resources?: string;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -456,7 +472,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -486,7 +502,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -590,6 +606,16 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (!m.wasm) problems.push('a verifier is a WebAssembly component: say where it is ("wasm": {"component": "verifier.wasm"})');
     else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}), ...(prove?.oauth?.device ? { prove: prove.oauth } : {}) };
   }
+  // A keyvault: the platform it holds access to, and where it may reach.
+  let keyvault: AppKeyvault | undefined;
+  if (m.keyvault !== undefined) {
+    const raw = (m.keyvault && typeof m.keyvault === 'object' && !Array.isArray(m.keyvault) ? m.keyvault : {}) as Record<string, unknown>;
+    const platform = typeof raw.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(raw.platform) ? raw.platform : '';
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost).filter(isNetHost) : [];
+    if (!platform) problems.push('"keyvault.platform" names the platform it holds access to, like "github"');
+    else if (!m.wasm) problems.push('a keyvault is a WebAssembly component: say where it is ("wasm": {"component": "keyvault.wasm"})');
+    else keyvault = { platform, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.resources, 40) ? { resources: text(raw.resources, 40) } : {}) };
+  }
   // A file: its media type, if it says.
   let file: AppFile | undefined;
   if (m.file !== undefined) {
@@ -659,7 +685,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}) } };
 }
 
 /**
@@ -714,7 +740,7 @@ export const MANIFEST_RULES = [
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A setting picked from a list and yours is per project, but only whoever runs it picks (the repositories its access reaches, say: theirs to hand out). "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A setting picked from a list and yours is per project, but only whoever runs it picks (the repositories its access reaches, say: theirs to hand out). "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service needing access to a platform declares it in its contract ("uses": {"github": {"contents": "read"}}) and gets it only from its person’s keyvault (token(), in the WIT), cut to those rights and to what they handed each project: it asks for no access of its own. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. "expires" says how long a request counts, in seconds, by action or protocol ({"artifact.fetch": 300}): one older when the service gets to it (it was off) is answered by Weave as expired. Without, requests wait for it. What is asked and answered is sealed for the service and the asker. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',

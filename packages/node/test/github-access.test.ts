@@ -39,6 +39,8 @@ class OrgGitHub {
   /** The GitHub App made with a manifest (martl's): its public key, and the repositories it's installed on. */
   app?: { publicKey: string; installed: Set<string>; manifest: Record<string, unknown> };
   calls: string[] = [];
+  /** What each installation token was asked for: its repositories and permissions. */
+  mints: Array<{ repositories?: string[]; permissions?: Record<string, string> }> = [];
   #next = 1;
   constructor() {
     this.add('acme/site');
@@ -86,7 +88,7 @@ class OrgGitHub {
       if (!ok || JSON.parse(Buffer.from(jwt[2], 'base64url').toString()).iss !== '42') return json(401, { message: 'Bad credentials' });
       this.calls.push(`${method} ${url.pathname} (app)`);
       if (url.pathname === '/app/installations') return json(200, this.app.installed.size ? [{ id: 7 }] : []);
-      if (url.pathname === '/app/installations/7/access_tokens' && method === 'POST') return json(201, { token: 'ghs_inst', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+      if (url.pathname === '/app/installations/7/access_tokens' && method === 'POST') return (this.mints.push(JSON.parse(String(init?.body ?? '{}'))), json(201, { token: 'ghs_inst', expires_at: new Date(Date.now() + 3600_000).toISOString() }));
       const at = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)\/installation$/);
       return at && this.app.installed.has(at[1]) ? json(200, { id: 7 }) : json(404, { message: 'Not Found' });
     }
@@ -140,7 +142,7 @@ let shipped: string;
 beforeAll(async () => {
   shipped = temp('weave-shipped-access-');
   const listed: Record<string, unknown> = {};
-  for (const [name, world] of [['github-access', 'service'], ['github-verify', 'verifier']] as const) {
+  for (const [name, world] of [['github-access', 'service'], ['github-verify', 'verifier'], ['github-keyvault', 'keyvault']] as const) {
     const source = join(import.meta.dirname, '..', '..', 'shipped', name);
     const component = await buildComponent(join(source, 'src', 'service.js'), world, { http: true });
     copyFileSync(component, join(shipped, `${name}.wasm`));
@@ -253,59 +255,50 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // A verifier is nobody's service.
       await expect(martl.addService({ shipped: 'github-verify', spaces: ['Site'] })).rejects.toThrow(/is a verifier/);
 
-      // The service, acting as martl on GitHub (his token: his, for both projects, never kept in one); its maintainers
-      // choose the repositories, from those it reaches.
-      const access = await martl.addService({ shipped: 'github-access', spaces: ['Site', 'Docs'], settingsIn: 'Site', settings: { GITHUB_TOKEN: 'ghp_admin' } });
-      expect(access.contract).toMatchObject({ reads: { kinds: ['weave.account'] }, writes: ['github.added'], net: ['api.github.com'] });
+      // The service holds no GitHub access: its contract says what it uses of martl's GitHub keyvault.
+      const access = await martl.addService({ shipped: 'github-access', spaces: ['Site', 'Docs'] });
+      expect(access.contract).toMatchObject({ reads: { kinds: ['weave.account'] }, writes: ['github.added'], net: ['api.github.com'], uses: { github: { administration: 'write', metadata: 'read' } } });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena, kofi]);
-      const settings = await martl.serviceSettings({ space: 'Site', service: access.did });
-      expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
-      // Repositories are optional: none chosen, it's the project's own (where its releases come from).
-      expect(settings.missing).toEqual(['GITHUB_APP']);
-      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB_APP', set: false }, { name: 'REPOS', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
-      // Lena, a member: it's martl's to keep, not hers or Site's maintainers'.
-      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB_APP' }, { name: 'REPOS' }, { name: 'GITHUB_TOKEN' }], missing: [] });
-      await expect(lena.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: 'ghp_lena' })).rejects.toThrow(/only whoever runs it/);
-      await expect(lena.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB_APP' })).rejects.toThrow(/only whoever runs/);
+      expect((await martl.serviceSettings({ space: 'Site', service: access.did })).asks).toEqual([]);
 
-      // martl makes his own GitHub App instead (GitHub's App manifest flow): a page here sends its manifest on to
-      // GitHub, he creates it there, GitHub comes back with a code, and the App is his: its key kept here, for signing.
+      // His keyvault: in Keys & devices, his alone. He makes his GitHub App there (GitHub's App manifest flow): a page
+      // here sends its manifest on to GitHub, he creates it there, GitHub comes back with a code, and the App is his.
+      expect((await martl.keyvaults()).map((k) => [k.name, k.platform, k.added])).toEqual([['github-keyvault', 'github', false]]);
+      await martl.addKeyvault({ shipped: 'github-keyvault' });
       martl.oauthSetup.fetch = github.fetch;
-      const making = await martl.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB_APP' });
+      const making = await martl.startKeyvaultApp({ name: 'github-keyvault', setting: 'GITHUB_APP' });
       const page = await (await fetch(making.url)).text();
       const unescape = (text: string) => text.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
       const action = new URL(unescape(page.match(/action="([^"]+)"/)![1]));
       const sent = JSON.parse(unescape(page.match(/name="manifest" value="([^"]+)"/)![1])) as { name: string; redirect_url: string; default_permissions: unknown };
       expect(action.origin + action.pathname).toBe('https://github.com/settings/apps/new');
-      expect(sent).toMatchObject({ default_permissions: { administration: 'write', metadata: 'read' }, public: false });
-      // Named for whose it is: his name here (he proved no GitHub account in Site).
+      expect(sent).toMatchObject({ default_permissions: { administration: 'write', contents: 'read', metadata: 'read' }, public: false });
+      // Named for whose it is: his name here (he proved no GitHub account).
       expect(sent.name).toBe("martl's Weave connect");
       const back = await fetch(`${sent.redirect_url}?code=c-1&state=${action.searchParams.get('state')}`, { redirect: 'manual' });
       // On to installing it.
       expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);
-      const made = await martl.finishServiceSignIn({ id: making.id });
-      expect(made.yours).toEqual([{ name: 'GITHUB_APP', set: true, app: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }, { name: 'REPOS', set: false }, { name: 'GITHUB_TOKEN', set: true }]);
-      expect(JSON.stringify(made)).not.toMatch(/PRIVATE KEY|shh-client/);
-      await martl.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: null });
-      expect((await martl.serviceSettings({ space: 'Docs', service: access.did })).missing).toEqual([]);
-      await expect(lena.askService({ space: 'Site', service: access.did, text: 'reachable', action: 'reachable' })).rejects.toThrow(/only maintainers/);
+      const vault = await martl.finishKeyvaultApp({ id: making.id });
+      expect(vault.apps).toEqual([{ setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }]);
+      expect(JSON.stringify(await martl.keyvaults())).not.toMatch(/PRIVATE KEY|shh-client/);
+      expect(vault.users).toEqual([{ service: 'github-access', rights: { administration: 'write', metadata: 'read' }, projects: [{ id: expect.any(String), name: 'Site' }, { id: expect.any(String), name: 'Docs' }] }]);
       // Not installed anywhere yet; then on all three.
-      expect((await ask(martl, access.did, 'reachable')).error).toMatch(/isn't installed on any repository yet/);
+      await expect(martl.keyvaultReachable({ name: 'github-keyvault' })).rejects.toThrow(/isn't installed on any repository yet/);
       github.app!.installed = new Set(['acme/site', 'acme/secret', 'martl/notes']);
-      expect((await ask(martl, access.did, 'reachable')).data).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's: members get write access" }]);
-      const choose = async (space: string, repos: string[]) => {
-        await martl.setServiceSetting({ space, service: access.did, name: 'REPOS', value: repos.join('\n') });
-        sync([martl, lena, kofi]);
-      };
-      // Only martl hands out what his App reaches: Kofi, made a maintainer of Site, can't choose any of it for Site.
+      expect(await martl.keyvaultReachable({ name: 'github-keyvault' })).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's" }]);
+      // Only he hands anything of his to a project: nobody else has his keyvault (Kofi, even as Site's maintainer).
       await martl.setMaintainer({ project: 'Site', who: kofi.identity.author, on: true });
       sync([martl, lena, kofi]);
-      await expect(kofi.setServiceSetting({ space: 'Site', service: access.did, name: 'REPOS', value: 'martl/notes' })).rejects.toThrow(/only whoever runs github-access picks/);
+      await expect(kofi.handKeyvault({ name: 'github-keyvault', project: 'Site', resources: ['martl/notes'] })).rejects.toThrow(/no keyvault github-keyvault here/);
       await martl.setMaintainer({ project: 'Site', who: kofi.identity.author, on: false });
       sync([martl, lena, kofi]);
+      const choose = async (space: string, repos: string[]) => {
+        await martl.handKeyvault({ name: 'github-keyvault', project: space, resources: repos });
+        sync([martl, lena, kofi]);
+      };
       await choose('Site', ['acme/site', 'acme/secret']);
-      expect((await martl.serviceSettings({ space: 'Site', service: access.did })).yours).toContainEqual({ name: 'REPOS', set: true, value: 'acme/site\nacme/secret' });
+      expect((await martl.keyvaults())[0].handed).toEqual([{ project: { id: expect.any(String), name: 'Site' }, resources: ['acme/site', 'acme/secret'] }]);
 
       // Lena proves her GitHub account and shares it with Site; Kofi only says it's his (no proof, so nothing to check).
       gistFor(github, '0123456789abcdef01234567', 'lena-gh', lena);
@@ -319,7 +312,11 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         expect([...github.repos.get('acme/secret')!.invited.keys()]).toEqual(['lena-gh']);
       }, { timeout: 60_000, interval: 200 });
       expect(github.invited.get('lena-gh')?.permission).toBe('pull');
-      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, as: "weave-access-t (martl's)", me: { handle: 'lena-gh' } });
+      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], me: { handle: 'lena-gh' } });
+      // Each token cut to one repository and the service's rights, and logged in his keyvault.
+      expect(github.mints).toContainEqual({ repositories: ['site'], permissions: { administration: 'write', metadata: 'read' } });
+      expect(github.mints.filter((m) => m.repositories).every((m) => m.repositories!.length === 1 && JSON.stringify(m.permissions) === JSON.stringify({ administration: 'write', metadata: 'read' }))).toBe(true);
+      expect((await martl.keyvaults())[0].log[0]).toMatchObject({ service: 'github-access', project: { name: 'Site' }, rights: { administration: 'write', metadata: 'read' } });
       expect((await ask(kofi, access.did, 'status')).data).not.toHaveProperty('me');
 
       // A person's repository too: members write there (GitHub has no read-only collaborators for it).
@@ -336,12 +333,11 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       await vi.waitFor(() => expect([...secret.collaborators]).toEqual(['old-friend']), { timeout: 60_000, interval: 200 });
       await vi.waitFor(() => expect(github.repos.get('martl/notes')!.invited.size).toBe(0), { timeout: 60_000, interval: 200 });
 
-      // Docs chooses none, and its releases come from acme/site: its own, so that one. Lena shares her account there:
-      // a repository with any number of projects. She leaves Site, and keeps her access by Docs.
+      // Docs gets acme/site too, and Lena shares her account there: a repository with any number of projects. She
+      // leaves Site, and keeps her access by Docs.
       await lena.linkAccount({ platform: 'github', handle: 'lena-gh', proof: '0123456789abcdef01234567', space: 'Docs' });
-      await martl.publishApp({ project: 'Docs', manifest: { app: 'docs', name: 'Docs', services: [{ port: 3000 }], install: { github: 'acme/site', tag: 'v1', assets: { 'linux-x64': { file: 'docs.tgz', sha256: 'a'.repeat(64) } } } } });
-      sync([martl, lena, kofi]);
-      await vi.waitFor(async () => expect((await ask(lena, access.did, 'status', undefined, 'Docs')).data).toMatchObject({ repos: [{ repo: 'acme/site' }], own: true }), { timeout: 90_000, interval: 500 });
+      await choose('Docs', ['acme/site']);
+      await vi.waitFor(async () => expect((await ask(lena, access.did, 'status', undefined, 'Docs')).data).toMatchObject({ repos: [{ repo: 'acme/site' }] }), { timeout: 90_000, interval: 500 });
       const rounds = () => github.calls.filter((c) => c === 'GET /repos/acme/site/collaborators').length;
       await martl.removeMember('Site', lena.identity.author);
       sync([martl, lena, kofi]);

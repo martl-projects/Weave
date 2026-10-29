@@ -9,6 +9,7 @@
     "sources": ["github"],
     "expires": {"artifact.fetch": 300},
     "net": ["api.github.com"],
+    "uses": {"github": {"contents": "read", "metadata": "read"}},
     "actions": [{"name": "publish", "label": "Publish a release", "who": "maintainers", "input": [{"name": "tag", "label": "Its tag, like v1.0"}]}, {"name": "releases", "label": "See the releases on GitHub", "who": "maintainers"}],
     "version": "1.0"
   },

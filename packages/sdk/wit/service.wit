@@ -55,6 +55,12 @@ interface host {
   websites: func(space: string) -> result<string, string>;
   /// Close a website it hosts. Opening one is its person's (a port of their computer) or a service's (its own page).
   close-website: func(id: string) -> result<_, string>;
+  /// Access to a platform through its person's keyvault (uses, in its contract), for one of its spaces and some of
+  /// what its person handed that space there (repositories, say): {token, expires?} as JSON, cut to the rights its
+  /// contract declares. Never through an event, and nothing it wasn't handed: or why not.
+  token: func(platform: string, space: string, resources: list<string>) -> result<string, string>;
+  /// What its person handed one of its spaces in their keyvault for a platform it uses: [resource] as JSON.
+  handed: func(platform: string, space: string) -> result<string, string>;
 }
 
 world service {
@@ -130,6 +136,28 @@ world verifier {
   /// Make a proof for its person, with a sign-in there they just allowed (used once, then forgotten):
   /// {platform, token, subject, text}, as JSON. {handle, proof} as JSON, or why not.
   export prove: func(input: string) -> result<string, string>;
+}
+
+/// What Weave offers a keyvault: its person's settings for it (what's kept of their app), signing with its key, a log.
+interface vaulting {
+  /// A setting of its person's for it: their app as JSON (what's kept of it, never its key), or one they typed.
+  setting: func(name: string) -> option<string>;
+  /// Sign data with the key a setting holds (their app's), the key never reaching it: as the service host's sign.
+  sign: func(setting: string, algorithm: string, data: list<u8>) -> result<list<u8>, string>;
+  /// A line for its log.
+  log: func(message: string);
+}
+
+/// A keyvault: a client app of its person's that holds their access to a platform and hands their services only what's
+/// derived from it. Weave calls it, never a service: what it's asked for already passed Weave's checks (the service is
+/// its person's, declares this use, and asks for what its person handed that project). It reaches the hosts its
+/// manifest names (keyvault.net) over HTTPS; nothing else.
+world keyvault {
+  import vaulting;
+  /// What its access reaches, for its person to hand to projects: [{value, note?}] as JSON.
+  export reachable: func(input: string) -> result<string, string>;
+  /// Access cut to {resources, rights} (JSON): {token, expires?} as JSON, or why not.
+  export mint: func(input: string) -> result<string, string>;
 }
 
 /// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's

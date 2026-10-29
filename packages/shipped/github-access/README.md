@@ -1,24 +1,15 @@
 # GitHub access
 
-Gives a project's members access to GitHub repositories: the project's own (where its releases come from), or
-those a maintainer chooses (from those their GitHub account reaches). Members who proved their GitHub account and shared it with the
-project get access, and whoever leaves loses it again. Read access to an organization's repository; write access to
-a person's (GitHub has no read-only collaborators there).
+Gives a project's members access to the GitHub repositories whoever runs it handed that project, in their GitHub keyvault. Members who proved their GitHub account and shared it with the project get access, and whoever leaves loses it again. Read access to an organization's repository; write access to a person's (GitHub has no read-only collaborators there).
 
-A repository can be chosen in any number of projects (it gets everyone any of them lets in), and a project can choose
-any number of repositories.
+A repository can be handed to any number of projects (it gets everyone any of them lets in), and a project any number of repositories.
 
-It ships with Weave and acts on GitHub as whoever runs it, with their own GitHub App: they make it once, with one
-click on GitHub (Weave hands GitHub the App's manifest: Administration write and Metadata read, nothing else), and
-install it on the repositories members get access to. The App's key stays with the service on their computer, for
-every project they run it in: Weave signs the App's tokens for it, and the service never reads the key. No app of
-Weave's or of anyone else's is involved. A token of theirs (GITHUB_TOKEN) works instead. Members prove their GitHub account once, in Keys & devices (a secret gist
-naming their Weave id, checked by GitHub's verifier), and choose which projects see it. Weave only tells it who is in
-a project and whose accounts hold: it knows nothing of GitHub. Each change it makes is recorded in the project
-(github.added), so it only ever takes back access it gave. It reaches `api.github.com` only.
+It ships with Weave and holds no GitHub access of its own: its contract says it uses its person's GitHub keyvault (Administration write, Metadata read), and Weave hands it short-lived access from there, one repository at a time, only for repositories its person handed that project. Only they hand anything to a project: never the project's other maintainers. Taken back, a repository is still reachable for a day, only to take back the access it gave there.
+
+Members prove their GitHub account once, in Keys & devices (a secret gist naming their Weave id, checked by GitHub's verifier), and choose which projects see it. Weave only tells it who is in a project and whose accounts hold: it knows nothing of GitHub. Each change it makes is recorded in the project (github.added), so it only ever takes back access it gave. It reaches `api.github.com` only.
 
 A project that only hands out builds (GitHub releases) doesn't need it: it gives people the code.
 
-    weave service add --shipped github-access --spaces <project> --keep-in <project> --setting GITHUB_TOKEN=… --setting REPOS=acme/site
+    weave service add --shipped github-access --spaces <project>
 
-(GITHUB_TOKEN, a token of yours, instead of the App: it stays yours, like the App. REPOS is the project's.)
+Then, in Keys & devices: add the GitHub keyvault, make your GitHub App there (one click on GitHub), install it on your repositories, and hand the project the ones its members get.

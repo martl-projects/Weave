@@ -4,7 +4,8 @@ import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
-import { createHash, createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { signWith } from './register.ts';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
@@ -48,19 +49,6 @@ export const GITHUB_SERVICE_GONE = "Weave's GitHub service is gone: add GitHub r
 const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin]?.settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
-/** A signature with a key among a service's settings (it never sees the key): RS256, ES256 (r||s) or HS256. */
-function signWith(key: string | undefined, name: string, algorithm: string, data: Uint8Array): Uint8Array {
-  if (!key) throw new Error(`no setting ${name} to sign with`);
-  const bytes = Buffer.from(data);
-  try {
-    if (algorithm === 'HS256') return new Uint8Array(createHmac('sha256', key).update(bytes).digest());
-    if (algorithm === 'RS256') return new Uint8Array(cryptoSign('sha256', bytes, key));
-    if (algorithm === 'ES256') return new Uint8Array(cryptoSign('sha256', bytes, { key, dsaEncoding: 'ieee-p1363' }));
-  } catch (error) {
-    throw new Error(`${name} isn't a key for ${algorithm}: ${(error as Error).message}`);
-  }
-  throw new Error(`it signs with RS256, ES256 or HS256, not ${algorithm}`);
-}
 
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin]?.settings : s.asks);
@@ -1680,6 +1668,19 @@ export class Services {
             return JSON.stringify(await this.fingerprint(String(args[0])));
           }
           if (call === 'sign') return signWith(this.settings.signingKey(current, String(args[0])), String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (call === 'token' || call === 'handed') {
+            // Access through its person's keyvault: only one it declares (uses, agreed to when it was added), only for
+            // one of its spaces, and only what its person handed that space there. Never by an event: this call alone.
+            const platform = String(args[0]);
+            const rights = current.contract.uses?.[platform];
+            if (!rights) throw new Error(`${name}'s contract doesn't use a ${platform} keyvault`);
+            const space = this.h.spaces.get(String(args[1]));
+            if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
+            const vault = this.h.keyvaults().forPlatform(platform);
+            if (call === 'handed') return JSON.stringify(vault?.handed[space.id] ?? []);
+            const resources = (Array.isArray(args[2]) ? args[2] : []).map(String).slice(0, 100);
+            return JSON.stringify(await this.h.keyvaults().mint({ platform, service: name, project: space.id, resources, rights }));
+          }
           if (call === 'tickEvery') {
             clearInterval(ticking.timer);
             const ms = Math.floor(Number(args[0]) || 0);

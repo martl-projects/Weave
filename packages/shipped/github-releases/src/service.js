@@ -10,7 +10,7 @@
 //
 // Only releases its projects' maintainers published count (release() in the WIT), whatever a request names, and the
 // asker's Weave checks the file against the release's digest, so nobody has to trust what it grants.
-import { answer, fingerprint, me, pinImage, publish, release, setting, sign } from 'weave:service/host@0.1.0';
+import { answer, fingerprint, me, pinImage, publish, release, setting, sign, token as keyvaultToken } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
 const PROTOCOL = 'artifact.fetch';
@@ -49,8 +49,17 @@ async function appToken(repo) {
   return token;
 }
 
-/** Its access to a repository: its App's, a maintainer's sign-in, or a token; none for public repositories only. */
-const accessTo = async (repo) => (await appToken(repo)) ?? setting('GITHUB') ?? setting('GITHUB_TOKEN');
+/** Access through its person's GitHub keyvault, for a project and a repository they handed it: read-only, short-lived. */
+function fromKeyvault(space, repo) {
+  try {
+    return JSON.parse(keyvaultToken('github', space, [repo])).token;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Its access to a repository for a project: its person's keyvault's, its own App's, a sign-in, or a token; none for public repositories only. */
+const accessTo = async (space, repo) => fromKeyvault(space, repo) ?? (await appToken(repo)) ?? setting('GITHUB') ?? setting('GITHUB_TOKEN');
 
 /** A release by its tag, as GitHub has it: its files and whether its repository is public. */
 async function releaseAt(repo, tag, token) {
@@ -86,7 +95,7 @@ async function publishRelease(space, input) {
   const tag = String(input?.tag ?? '').trim();
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository holds the release? (owner/name: Weave says it when you publish from the project)');
   if (!tag) throw new Error('which release? (its tag, like v1.0)');
-  const token = await accessTo(repo);
+  const token = await accessTo(space, repo);
   const info = await github(`/repos/${repo}`, token);
   if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}` : `GitHub said ${info.status} for ${repo}`);
   // Public: its files are anyone's, so fetchers get them directly. Private: only through a grant of this service.
@@ -149,10 +158,10 @@ async function publishRelease(space, input) {
 }
 
 /** The releases of a repository on GitHub, newest first: for picking one to publish. */
-async function releasesOf(input) {
+async function releasesOf(space, input) {
   const repo = String(input?.source ?? input?.repo ?? '');
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('which repository? (owner/name)');
-  const token = await accessTo(repo);
+  const token = await accessTo(space, repo);
   const res = await github(`/repos/${repo}/releases?per_page=30`, token);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo}'s releases`);
   const all = await res.json();
@@ -172,8 +181,8 @@ async function grant(space, data) {
   // Its code is open: the fetcher gets it as it is.
   if (manifest.install.access === 'direct') return release_;
   // Closed: only this service reaches it, and grants one file, for a few minutes. Never the asker's own access.
-  const token = await accessTo(repo);
-  if (!token) throw new Error(`it has no GitHub access for ${repo}: one of its maintainers signs it in to GitHub (its Settings)`);
+  const token = await accessTo(space, repo);
+  if (!token) throw new Error(`it has no GitHub access for ${repo}: whoever runs it hands ${repo} to this project in their GitHub keyvault (Keys & devices)`);
   const file = (await releaseAt(repo, tag, token)).assets.find((a) => a.name === asset.file);
   if (!file) throw new Error(`the release ${tag} on GitHub has no file ${asset.file}`);
   return { ...release_, url: await downloadAddress(repo, file.id, token) };
@@ -186,7 +195,7 @@ export async function onEvent(text) {
   try {
     let said;
     if (body.action === 'publish') said = await publishRelease(item.space.id, body.data);
-    else if (body.action === 'releases') said = await releasesOf(body.data);
+    else if (body.action === 'releases') said = await releasesOf(item.space.id, body.data);
     else if (body.data?.protocol === PROTOCOL) said = { data: await grant(item.space.id, body.data) };
     else throw new Error(`it answers ${PROTOCOL}, publish and releases only`);
     answer(item.id, said.text, said.data === undefined ? undefined : JSON.stringify(said.data), undefined);

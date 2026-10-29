@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { boxTo, openBox, isSettingName, type AppRegister, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting, type AppOAuth } from '@weave/core';
 import type { ServiceSettingsInfo } from './backend.ts';
 import { startDeviceSignIn, tokenRequest } from './devicecode.ts';
+import { filled, startRegistration, type Registered } from './register.ts';
 import type { ServicesHost, StoredService } from './node.ts';
 import type { Services } from './services.ts';
 import type { StoredSpace } from './spacestore.ts';
@@ -34,25 +35,6 @@ export interface Grant {
 const isGrant = (value: unknown): value is Grant => {
   const g = value as Record<string, unknown> | null;
   return !!g && typeof g.access === 'string' && typeof g.token === 'string' && typeof g.client === 'string';
-};
-
-/** An app registered with a provider as you (a GitHub App): what the service reads of it, and the key Weave signs with. */
-export interface Registered {
-  info: Record<string, Json>;
-  key: string;
-}
-
-/** A field of a provider's answer, maybe one level in (owner.login). */
-const fieldOf = (from: unknown, path: string): Json | undefined => path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), from) as Json | undefined;
-
-/** A page with fields in braces filled in, if it's an HTTPS page then. */
-const filled = (template: string, info: Record<string, Json>): string | undefined => {
-  const url = template.replace(/\{([a-z_.]+)\}/gi, (_, k: string) => String(info[k] ?? ''));
-  try {
-    return new URL(url).protocol === 'https:' ? url : undefined;
-  } catch {
-    return undefined;
-  }
 };
 
 /** A sign-in's access token is renewed this long before it runs out. */
@@ -103,6 +85,23 @@ export class ServiceSettings {
     this.services.saveServices(this.services.storedServices().map((s) => (s.name === stored.name ? after : s)));
     this.#renewed.delete(`${stored.name} yours ${name}`);
     this.services.restartSoon(stored.name);
+  }
+
+  /** Apps of yours registered for services (by setting name): taken out of them, to move into a keyvault. */
+  takeApps(names: string[]): Record<string, Registered> {
+    const out: Record<string, Registered> = {};
+    const all = this.services.storedServices();
+    let changed = false;
+    for (const s of all)
+      for (const name of names) {
+        if (!s.registered?.[name]) continue;
+        out[name] ??= s.registered[name];
+        delete s.registered[name];
+        if (!Object.keys(s.registered).length) delete s.registered;
+        changed = true;
+      }
+    if (changed) this.services.saveServices(all);
+    return out;
   }
 
   /** The service in this space, by its key or name: its profile, and the settings it asks for. */
@@ -389,68 +388,15 @@ export class ServiceSettings {
    * it on your repositories, say). finishSignIn waits for that (10 minutes at most).
    */
   async #startRegister(space: StoredSpace, service: Did, name: string, label: string, register: AppRegister): Promise<{ id: string; url: string }> {
-    const state = randomBytes(16).toString('base64url');
-    let finish!: (code: string) => void;
-    const coming = new Promise<string>((resolve) => (finish = resolve));
-    let made: Promise<ServiceSettingsInfo> | undefined;
-    const html = (text: string) => `<!doctype html><meta charset="utf-8"><title>Weave</title><body style="font:16px system-ui;margin:3em">${text}</body>`;
-    const server = createServer((req, res) => {
-      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-      if (url.searchParams.get('state') !== state) return void res.writeHead(404).end();
-      if (url.pathname === '/') {
-        // Sent on at once: the provider's page, with the app's manifest (named for whose it is, and where to come back to).
-        const random = randomBytes(3).toString('hex');
-        const named = Object.fromEntries(Object.entries(register.manifest).map(([k, v]) => [k, typeof v === 'string' ? v.replace('{random}', random) : v]));
-        if (typeof named.name === 'string') {
-          // At most 34 characters (GitHub's limit): whose it is shortened to fit.
-          const room = Math.max(3, 34 - named.name.replace('{account}', '').length);
-          named.name = named.name.replace('{account}', account.length > room ? account.slice(0, room) : account);
-        }
-        const manifest = JSON.stringify({ ...named, redirect_url: `${base}back` });
-        const action = `${register.page}${register.page.includes('?') ? '&' : '?'}state=${encodeURIComponent(state)}`;
-        const esc = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
-        return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`<form method="post" action="${esc(action)}"><input type="hidden" name="manifest" value="${esc(manifest)}"><p>Creating your ${esc(label)} on ${esc(new URL(register.page).hostname)}…</p><button>Go on</button></form><script>document.forms[0].submit()</script>`));
-      }
-      if (url.pathname === '/back' && url.searchParams.get('code')) {
-        finish(url.searchParams.get('code')!);
-        // Once it's here: on to its next page (installing it), or a word that it's done.
-        void made!.then(
-          (info) => {
-            const next = info.yours?.find((y) => y.name === name)?.next;
-            if (next) res.writeHead(302, { location: next }).end();
-            else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`Your ${label} is there: you can close this page and go back to Weave.`));
-          },
-          (error: Error) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`It didn't work: ${error.message.replace(/[<>&]/g, '')}`)),
-        );
-        return;
-      }
-      res.writeHead(404).end();
-    });
     // Whose it is: the account you proved there, else your name here.
     const proven = register.platform ? await this.h.myAccount(register.platform).catch(() => undefined) : undefined;
     const account = proven ?? this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'your';
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-    const id = state;
-    made = (async () => {
-      try {
-        const code = await Promise.race([coming, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`no ${label} created within 10 minutes`)), 10 * 60_000).unref())]);
-        const res = await this.#fetch()(register.exchange.replace('{code}', encodeURIComponent(code)), { method: 'POST', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
-        const app = (await res.json().catch(() => undefined)) as unknown;
-        const key = fieldOf(app, register.key);
-        if (!res.ok || typeof key !== 'string') throw new Error(`the provider answered ${res.status}: no ${label}`);
-        // What the service reads of it; nothing else (no secrets of the provider's) is kept.
-        const info = Object.fromEntries(register.keep.flatMap((k) => (fieldOf(app, k) !== undefined ? [[k, fieldOf(app, k)!]] : [])));
-        this.#setYours(service, name, { registered: { info, key } });
-        return await this.serviceSettings({ space: space.id, service });
-      } finally {
-        setTimeout(() => server.close(), 5000).unref();
-        setTimeout(() => this.#signIns.delete(id), 60_000).unref();
-      }
-    })();
-    made.catch(() => {});
-    this.#signIns.set(id, { done: made });
-    return { id, url: `${base}?state=${encodeURIComponent(state)}` };
+    const started = await startRegistration({ register, label, account, fetch: this.#fetch(), keep: (app) => this.#setYours(service, name, { registered: app }) });
+    const id = randomBytes(16).toString('base64url');
+    const done = started.done.then(() => this.serviceSettings({ space: space.id, service })).finally(() => setTimeout(() => this.#signIns.delete(id), 60_000).unref());
+    done.catch(() => {});
+    this.#signIns.set(id, { done });
+    return { id, url: started.url };
   }
 
   /** Wait for a sign-in startSignIn began: the service's settings once it's signed in, or why not. */

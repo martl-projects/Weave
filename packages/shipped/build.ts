@@ -25,8 +25,8 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
   const { component } = await componentize({
     sourcePath: join(here, name, 'src', 'service.js'),
     witWorld: wit,
-    worldName: manifest.fetcher ? 'fetcher' : manifest.verifier ? 'verifier' : manifest.wasm.site ? 'website' : 'service',
-    disableFeatures: (manifest.service?.net ?? manifest.fetcher?.net ?? manifest.verifier?.net)?.length ? ['fetch-event'] : ['http', 'fetch-event'],
+    worldName: manifest.fetcher ? 'fetcher' : manifest.verifier ? 'verifier' : manifest.keyvault ? 'keyvault' : manifest.wasm.site ? 'website' : 'service',
+    disableFeatures: (manifest.service?.net ?? manifest.fetcher?.net ?? manifest.verifier?.net ?? manifest.keyvault?.net)?.length ? ['fetch-event'] : ['http', 'fetch-event'],
   } as Parameters<typeof componentize>[0]);
   writeFileSync(join(dist, manifest.wasm.component), component);
   if (manifest.wasm.site) cpSync(join(here, name, manifest.wasm.site), join(dist, `${name}-site`), { recursive: true });

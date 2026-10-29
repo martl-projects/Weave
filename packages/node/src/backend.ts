@@ -342,6 +342,26 @@ export interface ShippedServiceInfo {
  * A fetcher of yours: a client app that fetches artifacts for you, with what providers grant you, in the projects
  * you allow (or all). Its settings are yours (your own sign-in), kept sealed on your node: only which are filled in.
  */
+/** A keyvault of yours: what it holds access to, what you handed which project, who uses it, and what it minted. */
+export interface KeyvaultInfo {
+  name: string;
+  title: string;
+  about?: string;
+  platform: string;
+  /** What it hands to projects, in words: "repositories". */
+  resources?: string;
+  settings: AppSetting[];
+  /** Your apps in it: what's kept of each (never its key), and its next page (installing it). */
+  apps: Array<{ setting: string; info: Record<string, Json>; next?: string }>;
+  handed: Array<{ project: { id: string; name: string }; resources: string[] }>;
+  /** Your services that use it, with the rights their contracts declare. */
+  users: Array<{ service: string; rights: Record<string, string>; projects: Array<{ id: string; name: string }> }>;
+  log: Array<{ time: string; service: string; project: { id: string; name: string }; resources: string[]; rights: Record<string, string> }>;
+  problem?: string;
+  /** Not added yet: one this Weave ships. */
+  added: boolean;
+}
+
 export interface FetcherInfo {
   name: string;
   title: string;
@@ -1781,6 +1801,18 @@ export interface Backend {
   /** Change what a fetcher of yours fetches for, or your settings for it (null: take one out). */
   setFetcher(input: { name: string; projects?: string[] | 'all'; settings?: Record<string, string | null> }): Promise<FetcherInfo>;
   removeFetcher(name: string): Promise<void>;
+  /** Your keyvaults (what each holds, what you handed which project, which services use it, its log), and those this Weave ships that you haven't added. */
+  keyvaults(): Promise<KeyvaultInfo[]>;
+  /** Add a keyvault Weave ships: an app you made for a service before moves into it. */
+  addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo>;
+  removeKeyvault(name: string): Promise<void>;
+  /** Make your app for a keyvault (GitHub's App manifest flow): the page to open, and an id to wait on (finishKeyvaultApp). */
+  startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }>;
+  finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo>;
+  /** What a keyvault's access reaches, to hand to projects. */
+  keyvaultReachable(input: { name: string }): Promise<Array<{ value: string; note?: string }>>;
+  /** Hand a project (name or id) these resources (repositories) in a keyvault, instead of what it had: yours alone to say. */
+  handKeyvault(input: { name: string; project: string; resources: string[] }): Promise<KeyvaultInfo>;
   /** Requests to services in a space, with their answers (optionally for one service). */
   serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]>;
   // accounts elsewhere: yours on other platforms, proven, checked by each platform's verifier
@@ -2157,7 +2189,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

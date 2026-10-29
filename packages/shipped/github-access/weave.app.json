@@ -5,17 +5,13 @@
     "reads": {"kinds": ["weave.account"]},
     "writes": ["github.added"],
     "net": ["api.github.com"],
-    "actions": [{"name": "status", "label": "See who gets access", "who": "members"}, {"name": "reachable", "label": "List the repositories it reaches", "who": "maintainers"}],
+    "uses": {"github": {"administration": "write", "metadata": "read"}},
+    "actions": [{"name": "status", "label": "See who gets access", "who": "members"}],
     "version": "1.0"
   },
   "wasm": {
     "component": "github-access.wasm",
     "panel": "panel",
-    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html", "covers": ["status", "reachable"]}]
-  },
-  "env": [
-    {"name": "GITHUB_APP", "label": "Your GitHub App", "register": {"page": "https://github.com/settings/apps/new", "exchange": "https://api.github.com/app-manifests/{code}/conversions", "platform": "github", "manifest": {"name": "{account}'s Weave connect", "url": "https://github.com", "public": false, "default_permissions": {"administration": "write", "metadata": "read"}, "default_events": []}, "keep": ["id", "slug", "html_url", "owner.login"], "key": "pem", "then": "{html_url}/installations/new"}, "hint": "Yours, made once on GitHub: install it on the repositories members get access to. It only adds and removes collaborators there"},
-    {"name": "REPOS", "label": "Repositories", "choose": {"action": "reachable", "many": true}, "yours": true, "optional": true, "hint": "The repositories of yours the project's members get access to (only you choose: it's your App). None chosen: the project's own, where your releases come from"},
-    {"name": "GITHUB_TOKEN", "label": "Or a GitHub token of yours", "yours": true, "secret": true, "optional": true, "hint": "Instead of an App: a token of yours (Administration: read and write on the repositories)"}
-  ]
+    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html", "covers": ["status"]}]
+  }
 }

@@ -1,74 +1,30 @@
-// GitHub access: gives a project's members access to its GitHub repositories, and takes it back when they leave: the
-// project's own (where the releases its person published come from), or those its person chose for it (REPOS, picked
-// from the repositories it reaches). Only its person hands out what its access reaches: never a project's other
-// maintainers. A repository can be chosen in any number of projects: it gets everyone any of them
-// lets in. Members get it with a GitHub account they proved and shared with the project (weave.account, checked by
-// GitHub's verifier): read access to an organization's repository, write access to a person's (GitHub has no
-// read-only collaborators there). All of it as whoever runs it, with their own GitHub App (GITHUB_APP: they create it
-// once, on GitHub, and install it on their repositories; Weave signs its JWTs, the key never reaches this code), or a
-// token of theirs (GITHUB_TOKEN). Weave only says who is in a project and whose accounts hold (readers, accounts), and
-// knows nothing of GitHub. Each change it records in the project (github.added), to take back what it gave and
-// nothing else.
-import { accounts, answer, load, log, me, publish, readers, save, setting, sign, tickEvery } from 'weave:service/host@0.1.0';
+// GitHub access: gives a project's members access to the GitHub repositories whoever runs it handed that project in
+// their GitHub keyvault, and takes it back when they leave. A repository can be handed to any number of projects: it
+// gets everyone any of them lets in. Members get it with a GitHub account they proved and shared with the project
+// (weave.account, checked by GitHub's verifier): read access to an organization's repository, write access to a
+// person's (GitHub has no read-only collaborators there). It holds no GitHub access of its own: Weave hands it
+// short-lived access from its person's keyvault (token), cut to what its contract declares and to that project's
+// repositories. Weave only says who is in a project and whose accounts hold (readers, accounts), and knows nothing of
+// GitHub. Each change it records in the project (github.added), to take back what it gave and nothing else.
+import { accounts, answer, handed, load, log, me, publish, readers, save, tickEvery, token } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
 const isRepo = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value);
-const NOT_SIGNED_IN = "whoever runs it hasn't made its GitHub App yet: they do, once, in its Settings";
-const encode = (text) => new TextEncoder().encode(text);
-const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-/** Its person's GitHub App, if they made one: {id, slug, html_url, owner.login}. */
-const app = () => {
-  try {
-    return JSON.parse(setting('GITHUB_APP') ?? 'null');
-  } catch {
-    return null;
-  }
-};
-
-/** The App's JWT (Weave signs it with the App's key): for asking GitHub about the App and its installations. */
-function appJwt(id) {
-  const now = Math.floor(Date.now() / 1000);
-  const unsigned = `${base64url(encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' })))}.${base64url(encode(JSON.stringify({ iat: now - 60, exp: now + 540, iss: String(id) })))}`;
-  return `${unsigned}.${base64url(sign('GITHUB_APP', 'RS256', encode(unsigned)))}`;
-}
-
-/** Installation tokens, by installation: kept until a few minutes before they run out. */
-const minted = new Map();
-async function installationToken(installation) {
-  const kept = minted.get(installation);
-  if (kept && kept.expires - Date.now() > 5 * 60_000) return kept.token;
-  const { token, expires_at } = await github(appJwt(app().id), 'POST', `/app/installations/${installation}/access_tokens`);
-  minted.set(installation, { token, expires: Date.parse(expires_at) });
-  return token;
-}
-
-/** Its access to a repository: its App's installation there, or its person's token. */
-async function tokenFor(repo) {
-  const a = app();
-  if (!a) return setting('GITHUB_TOKEN');
-  let installation;
-  try {
-    installation = (await github(appJwt(a.id), 'GET', `/repos/${repo}/installation`)).id;
-  } catch (error) {
-    if (/ 404 /.test(error?.message ?? '')) throw new Error(`${a.slug} isn't installed on ${repo}: install it there (${a.html_url}/installations/new)`);
-    throw error;
-  }
-  return installationToken(installation);
-}
-
-/** Whether it may act at all: its person made their App, or gave a token. */
-const signedIn = () => !!app() || !!setting('GITHUB_TOKEN');
-
-/** Its projects, each with its repositories: those its person chose there, or else the project's own (the source of releases its person published). */
-const projects = () => {
-  const { person, spaces } = JSON.parse(me());
-  return spaces.map((s) => {
-    const chosen = [...new Set(String(s.settings?.REPOS ?? '').split(/[\s,]+/).filter(isRepo))];
-    const own = [...new Set((s.sources ?? []).filter((x) => x.provider === 'github' && isRepo(x.ref) && x.by === person).map((x) => x.ref))];
-    return { id: s.id, name: s.name, repos: chosen.length ? chosen : own, own: !chosen.length && own.length > 0 };
+/** Its projects, each with the repositories its person handed it (in their GitHub keyvault). */
+const projects = () =>
+  JSON.parse(me()).spaces.map((s) => {
+    let repos = [];
+    try {
+      repos = JSON.parse(handed('github', s.id)).filter(isRepo);
+    } catch (error) {
+      log(error?.message ?? String(error));
+    }
+    return { id: s.id, name: s.name, repos };
   });
-};
+
+/** Access to a repository for one of the projects it was handed to, from its person's keyvault. */
+const tokenFor = (project, repo) => JSON.parse(token('github', project, [repo])).token;
 
 /**
  * What it keeps (in its own folder): whom it gave access by repository (and in which project), and how each went. A
@@ -96,7 +52,7 @@ async function github(token, method, path, body) {
     headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-access', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : method === 'POST' || method === 'PUT' ? { body: '{}' } : {}),
   });
-  if (res.status === 401) throw new Error("GitHub doesn't take its access (any more): whoever runs it makes its App again, or gives another token, in its Settings");
+  if (res.status === 401) throw new Error("GitHub doesn't take its access (any more): whoever runs it looks at their GitHub keyvault (Keys & devices)");
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${method} ${path}`);
   return res.status === 204 ? undefined : res.json().catch(() => undefined);
 }
@@ -163,71 +119,49 @@ async function syncRepo(repo, chosen, token) {
   });
 }
 
-/** Every repository its projects chose, each with all of them; ones no project chooses any more only take back what it gave. */
+/** Every repository handed to its projects, each with all of them; ones no project has any more only take back what it gave. */
 async function syncAll() {
-  if (!signedIn()) return log('no GitHub App yet');
-  // Whom it acts as there, to show: its App (and whose it is), or its person's account (a token).
-  const a = app();
-  const as = a ? `${a.slug}${a['owner.login'] ? ` (${a['owner.login']}'s)` : ''}` : (await github(setting('GITHUB_TOKEN'), 'GET', '/user').catch((error) => log(error?.message ?? String(error))))?.login;
-  if (as && as !== state().login) change((s) => void (s.login = as));
+  const all = projects();
   const byRepo = new Map(Object.keys(state().gave).map((repo) => [repo, []]));
-  for (const project of projects()) for (const repo of project.repos) byRepo.set(repo, [...(byRepo.get(repo) ?? []), project]);
+  for (const project of all) for (const repo of project.repos) byRepo.set(repo, [...(byRepo.get(repo) ?? []), project]);
   for (const [repo, chosen] of byRepo) {
+    // Its access: through a project it's handed to; one taken back: through a project it gave access in (its keyvault
+    // still mints it for a day, to take that back).
+    const through = chosen[0]?.id ?? Object.values(state().gave[repo] ?? {}).find((p) => all.some((x) => x.id === p));
+    if (!through) {
+      log(`${repo}: in none of its projects any more, so it can't take back what it gave there`);
+      continue;
+    }
     try {
-      await syncRepo(repo, chosen, await tokenFor(repo));
+      await syncRepo(repo, chosen, tokenFor(through, repo));
     } catch (error) {
       change((s) => void (s.status[repo] = { ...(s.status[repo] ?? {}), problem: error?.message ?? String(error), time: new Date().toISOString() }));
     }
   }
 }
 
-/** The repositories it reaches, to choose from (REPOS): those its App is installed on (or, with a token, those it administers first). */
-async function reachable() {
-  if (!signedIn()) throw new Error(NOT_SIGNED_IN);
-  const a = app();
-  if (a) {
-    const repos = [];
-    for (const installation of (await github(appJwt(a.id), 'GET', '/app/installations?per_page=100')) ?? []) {
-      const got = await github(await installationToken(installation.id), 'GET', '/installation/repositories?per_page=100');
-      repos.push(...(got?.repositories ?? []));
-    }
-    if (!repos.length) throw new Error(`${a.slug} isn't installed on any repository yet: install it (${a.html_url}/installations/new)`);
-    return repos.map((r) => ({ value: r.full_name, ...(r.private || r.owner?.type !== 'Organization' ? { note: [r.private ? 'private' : '', r.owner?.type === 'Organization' ? '' : "a person's: members get write access"].filter(Boolean).join(' · ') } : {}) }));
-  }
-  const all = (await github(setting('GITHUB_TOKEN'), 'GET', '/user/repos?per_page=100&sort=updated')) ?? [];
-  return all
-    .map((r) => ({ value: r.full_name, admin: !!r.permissions?.admin, note: [r.private ? 'private' : '', r.owner?.type === 'Organization' ? '' : "a person's: members get write access", r.permissions?.admin ? '' : "its sign-in isn't an admin"].filter(Boolean).join(' · ') }))
-    .sort((a, b) => Number(b.admin) - Number(a.admin))
-    .map(({ admin, ...r }) => (r.note ? r : { value: r.value }));
-}
-
-/** How it's going in a project: its repositories, whom it acts as on GitHub, and whether the one asking gets access (and as whom). */
+/** How it's going in a project: its repositories, and whether the one asking gets access (and as whom). */
 function status(space, who) {
   const project = projects().find((p) => p.id === space);
   const s = state();
   const mine = JSON.parse(accounts(space, 'github')).find((a) => a.did === who && a.verified);
   return {
     repos: (project?.repos ?? []).map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
-    ...(project?.own ? { own: true } : {}),
-    signedIn: signedIn(),
-    ...(signedIn() && s.login ? { as: s.login } : {}),
-    ...(app() ? { install: `${app().html_url}/installations/new` } : {}),
     ...(mine ? { me: { handle: mine.handle } } : {}),
   };
 }
 
 export async function onEvent(text) {
   const item = JSON.parse(text);
-  // Who's in changes without a word to it (someone leaves): checked every few minutes too. A changed setting (the
-  // repositories chosen) starts it again.
+  // Who's in changes without a word to it (someone leaves): checked every few minutes too. What its person hands a
+  // project starts it again.
   if (item.kind === 'weave.start') tickEvery(5 * 60_000);
   if (['weave.start', 'weave.tick', 'weave.account'].includes(item.kind)) return syncAll();
   if (item.kind !== 'weave.service.request') return;
   const { action } = item.body ?? {};
   try {
-    if (action === 'reachable') return void answer(item.id, undefined, JSON.stringify(await reachable()), undefined);
     if (action === 'status') return void answer(item.id, undefined, JSON.stringify(status(item.space.id, item.author)), undefined);
-    throw new Error('it answers reachable and status');
+    throw new Error('it answers status');
   } catch (error) {
     answer(item.id, undefined, undefined, error?.message ?? String(error));
   }

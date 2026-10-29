@@ -88,6 +88,8 @@ const weave: Record<string, unknown> = {
     pinImage: (image: string, tags: string[]) => call('pinImage', [image, tags]),
     websites: (space: string) => call('websites', [space]),
     closeWebsite: (id: string) => call('closeWebsite', [id]),
+    token: (platform: string, space: string, resources: string[]) => call('token', [platform, space, resources]),
+    handed: (platform: string, space: string) => call('handed', [platform, space]),
   },
   // A fetcher's: its settings, its log, and the bytes it fetches.
   'service/fetching': {
@@ -97,6 +99,12 @@ const weave: Record<string, unknown> = {
   },
   // A verifier's: a log.
   'service/verifying': {
+    log: (message: string) => call('log', [message]),
+  },
+  // A keyvault's: what's kept of its person's app, signing with its key, a log.
+  'service/vaulting': {
+    setting: (name: string) => call('setting', [name]),
+    sign: (setting: string, algorithm: string, data: Uint8Array) => call('sign', [setting, algorithm, data]),
     log: (message: string) => call('log', [message]),
   },
   // Its website's players: Weave holds their connections; what it says to them goes out without waiting.

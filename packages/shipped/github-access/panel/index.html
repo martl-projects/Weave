@@ -28,8 +28,6 @@
       parent.postMessage({ weave: 'act', id, name, input }, '*');
     });
   const tall = () => parent.postMessage({ weave: 'height', px: document.body.scrollHeight + 12 }, '*');
-  // Whoever may list what it reaches (its person among them) is pointed at its Settings.
-  const maintainer = () => !!view?.actions.find((a) => a.name === 'reachable' && a.mine);
   const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
   async function show() {
@@ -39,15 +37,13 @@
       const s = (await act('status')).data ?? { repos: [] };
       if (!s.repos.length) {
         list.className = 'empty';
-        list.textContent = 'No repositories yet: whoever runs it chooses them in its Settings (theirs to hand out).';
+        list.textContent = 'No repositories yet: whoever runs it hands them to this project in their GitHub keyvault (Keys & devices).';
       } else {
         list.className = '';
         list.innerHTML = `<table><tr><th>Repository</th><th>Members get</th><th>Given so far</th></tr>${s.repos
           .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td class="muted">${r.personal === undefined ? '' : r.personal ? 'write access' : 'read access'}</td><td class="muted">${r.given ?? 0}</td></tr>`)
-          .join('')}</table>${s.own ? `<div class="empty">The project's own repository, where the releases of whoever runs it come from.</div>` : ''}`;
+          .join('')}</table><div class="empty">Handed to this project by whoever runs it, in their GitHub keyvault.</div>`;
       }
-      if (!s.signedIn) list.insertAdjacentHTML('beforeend', '<div class="empty problem">No GitHub App yet: whoever runs it makes theirs once, in its Settings.</div>');
-      else if (s.as) list.insertAdjacentHTML('beforeend', `<div class="empty">It acts on GitHub as ${esc(s.as)}${s.install && maintainer() ? `: <a href="${esc(s.install)}" target="_blank" rel="noopener">install it on more repositories</a>` : ''}.</div>`);
       // Your own access: by the GitHub account you proved and shared with this project.
       mine.innerHTML = s.me
         ? `<span class="grow muted">You get access as ${esc(s.me.handle)} on GitHub.</span>`

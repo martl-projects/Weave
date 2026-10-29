@@ -482,6 +482,7 @@ import {
   type AccountInfo,
   type MyAccountInfo,
   type FetcherInfo,
+  type KeyvaultInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -531,9 +532,11 @@ import { BlobStore } from './blobstore.ts';
 import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
+import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
-import type { Grant as ServiceGrant, Registered as ServiceRegistered } from './servicesettings.ts';
+import type { Grant as ServiceGrant } from './servicesettings.ts';
+import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -941,6 +944,8 @@ export class WeaveNode implements Backend {
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
+  /** My keyvaults (keyvaults.ts): my access to platforms, of which my services get only what's derived. */
+  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
@@ -8801,6 +8806,8 @@ export class WeaveNode implements Backend {
       toItem: n.#toItem.bind(n),
       /** Accounts elsewhere said in a space, checked. */
       accounts: (space: StoredSpace, platform: string) => n.accounts({ space: space.id }).then((all) => all.filter((a) => a.platform === platform)),
+      /** My keyvaults: what my services get access through. */
+      keyvaults: () => n.#keyvaults,
       /** Your own account on a platform, proven (on your hub or in any space of yours): its handle. */
       myAccount: (platform: string) => n.myAccounts().then((all) => all.find((a) => a.platform === platform && a.verified)?.handle),
       /** Who reads a board of a project (everyone, for a board nobody limited). */
@@ -9003,6 +9010,52 @@ export class WeaveNode implements Backend {
 
   async removeFetcher(name: string): Promise<void> {
     this.#fetchers.remove(name);
+  }
+
+  /** A keyvault as the app shows it: projects by name, and which of my services use it. */
+  #keyvaultInfo(k: KeyvaultState, added = true): KeyvaultInfo {
+    const ref = (id: string) => ({ id, name: this.#spaces.has(id) ? this.#spaceName(this.#spaces.get(id)!) : id });
+    const users = this.#services.storedServices().filter((s) => s.contract.uses?.[k.platform]).map((s) => ({ service: s.name, rights: s.contract.uses![k.platform], projects: s.spaces.filter((id) => this.#spaces.has(id)).map(ref) }));
+    return { name: k.name, title: k.title, ...(k.about ? { about: k.about } : {}), platform: k.platform, ...(k.resources ? { resources: k.resources } : {}), settings: k.settings, apps: k.apps, handed: Object.entries(k.handed).map(([id, resources]) => ({ project: ref(id), resources })), users, log: k.log.map((l) => ({ ...l, project: ref(l.project) })).reverse(), ...(k.problem ? { problem: k.problem } : {}), added };
+  }
+
+  async keyvaults(): Promise<KeyvaultInfo[]> {
+    const mine = this.#keyvaults.list();
+    const more = this.#keyvaults.shipped().filter((s) => !mine.some((k) => k.name === s.name));
+    return [...mine.map((k) => this.#keyvaultInfo(k)), ...more.map((s) => this.#keyvaultInfo({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), platform: s.manifest.keyvault!.platform, ...(s.manifest.keyvault!.resources ? { resources: s.manifest.keyvault!.resources } : {}), digest: s.digest, settings: s.manifest.env ?? [], apps: [], handed: {}, log: [] }, false))];
+  }
+
+  async addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo> {
+    // An app made for a service before (its own setting of that name) moves into the keyvault: the service keeps no access.
+    const s = this.#keyvaults.shipped().find((x) => x.name === input.shipped);
+    const apps = s ? this.#services.settings.takeApps((s.manifest.env ?? []).filter((e) => e.register).map((e) => e.name)) : {};
+    return this.#keyvaultInfo(this.#keyvaults.add({ shipped: input.shipped, apps }));
+  }
+
+  async removeKeyvault(name: string): Promise<void> {
+    this.#keyvaults.remove(name);
+  }
+
+  async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {
+    const k = this.#keyvaults.list().find((x) => x.name === input.name);
+    // Named for whose it is: the account you proved there, else your name here.
+    const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;
+    return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
+  }
+
+  async finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo> {
+    return this.#keyvaultInfo(await this.#keyvaults.finishApp(input.id));
+  }
+
+  async keyvaultReachable(input: { name: string }): Promise<Array<{ value: string; note?: string }>> {
+    return this.#keyvaults.reachable(input.name);
+  }
+
+  async handKeyvault(input: { name: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {
+    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, project: this.#project(input.project).id, resources: input.resources }));
+    // Its users bring their projects in step with what they're handed now.
+    for (const u of k.users) this.#services.restartSoon(u.service);
+    return k;
   }
 
   servicePanels(...args: Parameters<Services['servicePanels']>): ReturnType<Services['servicePanels']> {
