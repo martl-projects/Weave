@@ -276,6 +276,7 @@
 :root[data-skin='clean'] :is(input[type='checkbox'], input[type='radio']):focus-visible + label::before { box-shadow: 0 0 0 3px #2563eb40; }
 
 :root[data-skin='clean'] fieldset { background: var(--cl-panel); border: 1px solid var(--cl-line); border-radius: 8px; padding: 12px 14px; }
+:root[data-skin='clean'] .choose-list { background: var(--cl-subtle); color: var(--cl-text); border: 1px solid var(--cl-line); border-radius: var(--cl-radius); }
 :root[data-skin='clean'] legend { padding: 0 6px; background: var(--cl-panel); color: var(--cl-text); font: 600 13px var(--content-font); }
 
 :root[data-skin='clean'] menu[role='tablist'] { gap: 4px; padding: 2px; margin-bottom: 12px; background: var(--cl-hover); border-radius: 8px; width: fit-content; }
