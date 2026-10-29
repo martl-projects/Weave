@@ -195,7 +195,9 @@ github — repositories that follow a group, tier or project (members who give t
   gumroad disconnect         forget the connection on this device
   account platforms          where accounts can be proven here (a verifier checks each: github…)
   account proof <platform>   what a proof there holds (your Weave id), and how to make one
-  account link <platform> <handle> <proof>   say an account there is yours: on your hub, or with -p/-g in a space
+  account prove <platform>   prove an account there in one go: a code to enter there, and its verifier makes the proof
+                             (on GitHub, a secret gist naming you); on your hub, or with -p/-g in a space
+  account link <platform> <handle> <proof>   or by hand: say an account there is yours, with a proof you made
                              (its members see it, and its services may give you access by it: GitHub access, say)
   account unlink <platform>  take it back (on your hub, or with -p/-g in a space)
   account list [--who <someone>]   accounts elsewhere on hubs (or in a space with -p/-g), each checked
@@ -1486,6 +1488,12 @@ async function main(): Promise<void> {
       if (sub === 'proof' && platform) {
         const p = await b.accountProof({ platform });
         return out(p, () => `${p.howto ?? 'Make a proof there, as that account, holding:'}\n\n  ${p.text}\n\nthen: weave account link ${platform} <your account> <its address>`);
+      }
+      if (sub === 'prove' && platform) {
+        const { id, url, code } = await b.startAccountProof({ platform, ...(space ? { space } : {}) });
+        if (!values.json) console.log(`Enter this code on ${url}: ${code}`);
+        const all = await b.finishAccountProof({ id });
+        return out(all, () => `proven${space ? ` in ${space}` : ' on your hub'}\n${all.map(line).join('\n')}`);
       }
       if (sub === 'link' && platform && handle && proof) {
         const all = await b.linkAccount({ platform, handle, proof, ...(space ? { space } : {}) });

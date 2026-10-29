@@ -20,6 +20,53 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
   const { data: proof } = useApi(() => (chosen ? api<{ text: string; howto?: string }>('accountProof', { platform: chosen }) : Promise.resolve(undefined)), [chosen]);
   const [handle, setHandle] = useState('');
   const [address, setAddress] = useState('');
+  // By hand: making the proof there yourself. Otherwise, where its verifier can: one click.
+  const [byHand, setByHand] = useState(false);
+  const [signing, setSigning] = useState<{ code: string; url: string }>();
+  const oneClick = !!about?.prove && !byHand;
+  const proveWith = () =>
+    attempt(async () => {
+      const { id, url, code } = await api<{ id: string; url: string; code: string }>('startAccountProof', { platform: chosen, ...(space ? { space: space.id } : {}) });
+      void navigator.clipboard?.writeText(code).catch(() => {});
+      setSigning({ code, url });
+      window.open(url, '_blank', 'noopener');
+      try {
+        const all = await api<AccountInfo[]>('finishAccountProof', { id });
+        bump();
+        onClose();
+        return all;
+      } finally {
+        setSigning(undefined);
+      }
+    }, `Your ${about?.title ?? chosen} account is proven yours`);
+  if (oneClick)
+    return (
+      <Modal title={space ? `Your account elsewhere, in ${space.name}` : 'Show an account elsewhere'} onClose={onClose}>
+        <p className="small">{space ? 'Its members see it, and its services may give you access by it (a repository, say).' : 'Your hub shows it, with a check: anyone can see that its proof names you.'}</p>
+        {signing ? (
+          <div className="notice">
+            Enter this code on{' '}
+            <a href={signing.url} target="_blank" rel="noopener noreferrer">
+              {new URL(signing.url).hostname}
+            </a>{' '}
+            (it's copied): <b className="user-code">{signing.code}</b>. Then {about?.title ?? chosen} makes the proof, a secret note naming you, and Weave forgets the sign-in. Only ever enter a code Weave shows you, here.
+          </div>
+        ) : (
+          <p className="small muted">You allow it once on {about?.title ?? chosen}: it makes a proof naming you there (on GitHub, a secret gist), and Weave forgets the sign-in right away. Delete the proof there, and the account is no longer yours here.</p>
+        )}
+        <div className="buttons">
+          <button type="button" onClick={() => setByHand(true)}>
+            Make the proof myself…
+          </button>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <AsyncButton className="default" disabled={!!signing} onClick={proveWith}>
+            Prove with {about?.title ?? chosen}…
+          </AsyncButton>
+        </div>
+      </Modal>
+    );
   return (
     <Modal title={space ? `Your account elsewhere, in ${space.name}` : 'Show an account elsewhere'} onClose={onClose}>
       <form

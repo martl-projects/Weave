@@ -60,6 +60,15 @@ class OrgGitHub {
       const g = this.gists.get(gist[1]);
       return g ? json(200, { owner: { login: g.owner }, files: { 'weave.md': { content: g.content } } }) : json(404, { message: 'Not Found' });
     }
+    // A sign-in for a gist: who it is, and the gist it makes.
+    if (new Headers(init?.headers).get('authorization') === 'Bearer gho-gist') {
+      if (url.pathname === '/user') return json(200, { login: 'martl' });
+      if (url.pathname === '/gists' && method === 'POST') {
+        const id = `${'e'.repeat(19)}${this.#next++}`;
+        this.gists.set(id, { owner: 'martl', content: Object.values((JSON.parse(String(init?.body)) as { files: Record<string, { content: string }> }).files)[0].content });
+        return json(201, { id, html_url: `https://gist.github.com/martl/${id}` });
+      }
+    }
     if (new Headers(init?.headers).get('authorization') !== 'Bearer ghp_admin') return json(404, { message: 'Not Found' });
     this.calls.push(`${method} ${url.pathname}`);
     const m = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)(\/.*)?$/);
@@ -153,6 +162,20 @@ describe('accounts elsewhere', { timeout: 120_000 }, () => {
       const fresh = (await people(github, 'Ola')).nodes[0];
       sync([martl, fresh]);
       expect((await fresh.profile(martl.identity.author)).accounts).toBeUndefined();
+
+      // In one go instead: a code entered on GitHub, and the verifier makes the gist itself (scope gist); the sign-in is forgotten.
+      martl.oauthSetup.fetch = async (url) => {
+        const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+        return String(url).endsWith('/device/code') ? json({ device_code: 'd-9', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', interval: 0.01 }) : json({ access_token: 'gho-gist', scope: 'gist' });
+      };
+      expect((await martl.platforms())[0]).toMatchObject({ platform: 'github', prove: true });
+      const started = await martl.startAccountProof({ platform: 'github' });
+      expect(started).toMatchObject({ code: 'ABCD-EFGH', url: 'https://github.com/login/device' });
+      const proven = await martl.finishAccountProof({ id: started.id });
+      expect(proven).toMatchObject([{ platform: 'github', handle: 'martl', verified: true }]);
+      expect([...github.gists.values()].at(-1)).toEqual({ owner: 'martl', content: `My Weave id: ${martl.identity.author}
+` });
+      expect(JSON.stringify(martl.replica.events())).not.toContain('gho-gist');
 
       // Taken back: gone from the hub.
       await martl.linkAccount({ platform: 'github', on: false });

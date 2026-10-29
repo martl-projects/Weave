@@ -115,6 +115,11 @@ export interface AppVerifier {
   howto?: string;
   /** An account's page there, with {handle} in it: https://github.com/{handle}. */
   page?: string;
+  /**
+   * It makes the proof itself (prove in the WIT), with a sign-in with a code there, used once and forgotten: one click
+   * instead of making a proof by hand.
+   */
+  prove?: AppOAuth;
 }
 
 export interface AppFile {
@@ -507,9 +512,11 @@ export function checkManifest(input: unknown): ManifestCheck {
     const platforms = Array.isArray(raw.platforms) ? raw.platforms.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(p)).slice(0, 10) : [];
     const net = Array.isArray(raw.net) ? raw.net.map(lowerHost).filter(isNetHost) : [];
     const page = text(raw.page, 200);
+    const prove = raw.prove === undefined ? undefined : parseOAuth(raw.prove);
+    if (prove?.problem) problems.push(`"verifier.prove" is a sign-in with a code: ${prove.problem}`);
     if (!platforms.length) problems.push('"verifier.platforms" names the platforms it checks accounts on, like ["github"]');
     else if (!m.wasm) problems.push('a verifier is a WebAssembly component: say where it is ("wasm": {"component": "verifier.wasm"})');
-    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}) };
+    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}), ...(prove?.oauth?.device ? { prove: prove.oauth } : {}) };
   }
   // A file: its media type, if it says.
   let file: AppFile | undefined;

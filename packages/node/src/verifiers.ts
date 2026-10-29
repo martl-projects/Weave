@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { accountProofText, type AccountClaim, type Did } from '@weave/core';
+import { accountProofText, type AccountClaim, type AppOAuth, type Did } from '@weave/core';
 import type { Home } from './home.ts';
 import { prepareWasm, type Runtime } from './runtime.ts';
 import { shippedProblem, shippedServices, SHIPPED_DIR, type ShippedService } from './shipped.ts';
@@ -15,6 +15,8 @@ import { shippedProblem, shippedServices, SHIPPED_DIR, type ShippedService } fro
 
 export interface PlatformInfo {
   platform: string;
+  /** Its verifier makes the proof itself, with a sign-in with a code: one click. */
+  prove?: true;
   /** The verifier that checks it. */
   verifier: string;
   title: string;
@@ -48,7 +50,7 @@ export class Verifiers {
 
   /** The platforms accounts can be proven on here, with how. */
   platforms(): PlatformInfo[] {
-    return this.shipped().flatMap((s) => s.manifest.verifier!.platforms.map((platform) => ({ platform, verifier: s.name, title: s.manifest.name, ...(s.manifest.verifier!.howto ? { howto: s.manifest.verifier!.howto } : {}), ...(s.manifest.verifier!.page ? { page: s.manifest.verifier!.page } : {}) })));
+    return this.shipped().flatMap((s) => s.manifest.verifier!.platforms.map((platform) => ({ platform, verifier: s.name, title: s.manifest.name, ...(s.manifest.verifier!.prove?.device ? { prove: true as const } : {}), ...(s.manifest.verifier!.howto ? { howto: s.manifest.verifier!.howto } : {}), ...(s.manifest.verifier!.page ? { page: s.manifest.verifier!.page } : {}) })));
   }
 
   /** An account's page on its platform, if its verifier says where. */
@@ -82,10 +84,35 @@ export class Verifiers {
     return work;
   }
 
+  /** How a platform's verifier makes a proof itself, with a sign-in with a code, if it does. */
+  prover(platform: string): AppOAuth | undefined {
+    return this.shipped().find((x) => x.manifest.verifier!.platforms.includes(platform))?.manifest.verifier!.prove;
+  }
+
+  /** Have a platform's verifier make a proof for someone, with a token they just gave it: {handle, proof}. */
+  async prove(platform: string, token: string, subject: Did): Promise<{ handle: string; proof: string }> {
+    const s = this.shipped().find((x) => x.manifest.verifier!.platforms.includes(platform));
+    if (!s) throw new Error(`nothing here checks accounts on ${platform}`);
+    const made = JSON.parse(String(await this.#call(s, 'prove', JSON.stringify({ platform, token, subject, text: accountProofText(subject) })))) as { handle?: unknown; proof?: unknown };
+    if (typeof made.handle !== 'string' || typeof made.proof !== 'string') throw new Error(`${s.manifest.name} made no proof`);
+    return { handle: made.handle, proof: made.proof };
+  }
+
   /** Run the platform's verifier once, in a worker of its own. */
   async #run(claim: AccountClaim, subject: Did): Promise<boolean | undefined> {
     const s = this.shipped().find((x) => x.manifest.verifier!.platforms.includes(claim.platform));
     if (!s || shippedProblem(s)) return undefined;
+    try {
+      return (await this.#call(s, 'verify', JSON.stringify({ ...claim, subject, text: accountProofText(subject) }))) === true;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Call one of a verifier's functions, in a worker of its own for that call. */
+  async #call(s: ShippedService, fn: string, input: string): Promise<unknown> {
+    const problem = shippedProblem(s);
+    if (problem) throw new Error(problem);
     const dir = join(this.#homeOf().dir, 'verifiers', s.name);
     const entry = await prepareWasm(s.file, join(dir, 'wasm'));
     const key = `verifier:${s.name}:${randomBytes(4).toString('hex')}`;
@@ -107,9 +134,7 @@ export class Verifiers {
       () => {},
     );
     try {
-      return (await this.#runtime.callWasm(key, 'verify', [JSON.stringify({ ...claim, subject, text: accountProofText(subject) })])) === true;
-    } catch {
-      return undefined;
+      return await this.#runtime.callWasm(key, fn, [input]);
     } finally {
       this.#runtime.stop(key);
     }

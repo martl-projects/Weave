@@ -15,3 +15,18 @@ export async function verify(text) {
   log(`${handle}: ${ok ? 'holds' : "doesn't hold"}`);
   return ok;
 }
+
+/** Make the proof for its person, with a sign-in they just allowed (scope gist): a secret gist naming them. */
+export async function prove(text) {
+  const { token, text: line } = JSON.parse(text);
+  const headers = { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-verify', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}` };
+  const me = await fetch('https://api.github.com/user', { headers });
+  if (!me.ok) throw new Error(`GitHub said ${me.status} for the account`);
+  const { login } = await me.json();
+  const made = await fetch('https://api.github.com/gists', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ description: 'Weave', public: false, files: { 'weave.md': { content: `${line}
+` } } }) });
+  if (!made.ok) throw new Error(`GitHub said ${made.status} for the gist`);
+  const gist = await made.json();
+  log(`${login}: proof made`);
+  return JSON.stringify({ handle: login, proof: gist.html_url ?? gist.id });
+}

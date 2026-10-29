@@ -125,6 +125,9 @@ world verifier {
   /// Whether a claim holds: {platform, handle, proof, subject (the person's did), text (what the proof must hold)},
   /// as JSON. True or false; an error when it couldn't tell (the platform didn't answer).
   export verify: func(claim: string) -> result<bool, string>;
+  /// Make a proof for its person, with a sign-in there they just allowed (used once, then forgotten):
+  /// {platform, token, subject, text}, as JSON. {handle, proof} as JSON, or why not.
+  export prove: func(input: string) -> result<string, string>;
 }
 
 /// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's

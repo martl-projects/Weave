@@ -525,6 +525,7 @@ import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
+import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -3230,6 +3231,35 @@ export class WeaveNode implements Backend {
     if (space) await this.publish({ kind: KIND_ACCOUNT, body, space: space.id, as: input.as });
     else this.replica.write(this.identity, { kind: KIND_ACCOUNT, body });
     return this.accounts({ ...(space ? { space: space.id } : {}) });
+  }
+
+  /** Proofs its verifier makes, under way: each waits for its sign-in with a code. */
+  #proving = new Map<string, Promise<AccountInfo[]>>();
+
+  /**
+   * Prove an account elsewhere in one go: a sign-in with a code there (its verifier's), used once for the verifier to
+   * make the proof (a secret gist naming you, on GitHub), then forgotten; the account is then yours on your hub, or in
+   * a space. finishAccountProof waits for it.
+   */
+  async startAccountProof(input: { platform: string; space?: string }): Promise<{ id: string; url: string; code: string }> {
+    const oauth = this.#verifiers.prover(input.platform);
+    if (!oauth?.device) throw new Error(`${input.platform}'s verifier can't make a proof itself: make one by hand (weave account proof ${input.platform})`);
+    if (input.space) this.#space(input.space);
+    const started = await startDeviceSignIn(oauth as DeviceOAuth, this.oauthSetup.fetch, input.platform);
+    const id = b64u.encode(randomBytes(12));
+    const done = started.grant
+      .then((grant) => this.#verifiers.prove(input.platform, grant.access, this.identity.author))
+      .then(({ handle, proof }) => this.linkAccount({ platform: input.platform, handle, proof, ...(input.space ? { space: input.space } : {}) }))
+      .finally(() => setTimeout(() => this.#proving.delete(id), 60_000).unref());
+    done.catch(() => {});
+    this.#proving.set(id, done);
+    return { id, url: started.url, code: started.code };
+  }
+
+  async finishAccountProof(input: { id: string }): Promise<AccountInfo[]> {
+    const proving = this.#proving.get(input.id);
+    if (!proving) throw new Error('no proof under way with that id');
+    return proving;
   }
 
   /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
