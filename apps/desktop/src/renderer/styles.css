@@ -702,6 +702,8 @@ button.session-title { all: unset; overflow: hidden; text-overflow: ellipsis; wh
 button.session-title:hover { text-decoration: underline; }
 .session-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .7; }
 .session-row select { flex: none; font-size: 12px; }
+.session-row .session-name { flex: none; opacity: .5; padding: 2px; }
+.session-row .session-name:hover { opacity: 1; }
 .session-row input[type=checkbox]:disabled + label { visibility: hidden; }
 .session-row.is-driver .session-title { color: var(--cl-accent, var(--accent)); }
 .map-new { margin-top: 6px; cursor: pointer; }

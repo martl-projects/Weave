@@ -195,7 +195,12 @@ import {
   routinesOf,
   type Routine,
   KIND_SESSION,
+  MAX_ABOUT,
+  MAX_DESCRIPTION,
+  nameProblem,
   pushOnto,
+  sameName,
+  sessionTitle,
   reorder,
   sessionKey,
   SESSION_ROLES,
@@ -2314,7 +2319,8 @@ export class WeaveNode implements Backend {
       if (!post) continue;
       const hour = Date.now() - 60 * 60 * 1000;
       if (this.#mentions.some((m) => m.post.id === post.id && m.session?.id === said.session && Date.parse(m.time) > hour)) continue;
-      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
+      const name = this.#sessionRecords().get(sessionKey('claude-code', said.session))?.name;
+      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(name ? { name } : {}), ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
     }
   }
 
@@ -2438,6 +2444,35 @@ export class WeaveNode implements Backend {
     if (!(await this.workers({ post: post.id })).some((w) => w.provider === record.provider && w.id === record.id))
       throw new Error(`that session doesn't take ${post.title} now: it isn't an available worker for its project`);
     return this.workOn({ session: input.session, post: post.id, as: input.as });
+  }
+
+  async nameSession(input: { session: SessionRef; name?: string; about?: string; description?: string; rename?: boolean }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const name = input.name?.trim();
+    const about = input.about === undefined ? record.about : input.about.trim() || undefined;
+    const description = input.description === undefined ? record.description : input.description.trim() || undefined;
+    if (about && about.length > MAX_ABOUT) throw new Error(`about is one line, up to ${MAX_ABOUT} characters`);
+    if (description && description.length > MAX_DESCRIPTION) throw new Error(`a description is up to ${MAX_DESCRIPTION} characters`);
+    if (name === undefined && !record.name) throw new Error('this session has no name yet: name it first (name, with about: one line on what it specializes in)');
+    if (name === '' && !input.rename) throw new Error('a session name is permanent');
+    if (name && !sameName(name, record.name)) {
+      // A name is for good: the session picks it once; from then on only its person changes it.
+      if (record.name && !input.rename) throw new Error(`this session is ${record.name}: a name is permanent, only your person renames a session (in Weave's Sessions view)`);
+      const taken = this.#takenNames(record);
+      const problem = nameProblem(name, taken);
+      if (problem) throw new Error(`${problem}; names around you: ${[...new Set(taken.filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b)).join(', ') || 'none yet'}`);
+    }
+    return this.#saveSession({ ...record, name: name === '' ? undefined : (name ?? record.name), about, description });
+  }
+
+  /** Names a session can't take (except `own`'s): your other sessions', people's around you, your agents' and yours. */
+  #takenNames(own: SessionRecord): Array<string | undefined> {
+    const names: Array<string | undefined> = [this.nameOf(this.identity.author), ...this.#agents.map((a) => a.name)];
+    for (const r of this.#sessionRecords().values()) if (!(r.provider === own.provider && r.id === own.id)) names.push(r.name);
+    const people = new Set<Did>(this.#contacts().keys());
+    for (const space of this.#spaces.values()) for (const did of this.#state(space).members.keys()) people.add(did);
+    for (const did of people) if (did !== this.identity.author) names.push(this.nameOf(did));
+    return names;
   }
 
   // ---------------------------------------------------------------- your desk and its routines
@@ -2658,13 +2693,18 @@ export class WeaveNode implements Backend {
     const provider = ref.provider?.trim() || 'claude-code';
     const id = ref.id?.trim();
     if (!id || id.length > 200) throw new Error('say which session (its id)');
-    const known = this.#sessionRecords().get(sessionKey(provider, id));
+    const records = this.#sessionRecords();
+    // "Give that to Skala": a name does where no session has that id.
+    const known = records.get(sessionKey(provider, id)) ?? [...records.values()].find((r) => r.provider === provider && sameName(r.name, id));
     return {
       provider,
-      id,
+      id: known?.id ?? id,
       ...((ref.host ?? known?.host) ? { host: ref.host ?? known?.host } : {}),
       ...((ref.folder ?? known?.folder) ? { folder: ref.folder ?? known?.folder } : {}),
       ...(known?.title ? { title: known.title } : {}),
+      ...(known?.name ? { name: known.name } : {}),
+      ...(known?.about ? { about: known.about } : {}),
+      ...(known?.description ? { description: known.description } : {}),
       stack: known?.stack ?? [],
       ...(known?.role ? { role: known.role } : {}),
       ...(known?.projects ? { projects: known.projects } : {}),
@@ -2682,6 +2722,9 @@ export class WeaveNode implements Backend {
       ...(record.host ? { host: record.host } : {}),
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
+      ...(record.name ? { name: record.name } : {}),
+      ...(record.about ? { about: record.about } : {}),
+      ...(record.description ? { description: record.description } : {}),
       stack: record.stack.map((s) => ({ post: s.post, since: s.since })),
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length ? { projects: record.projects } : {}),
@@ -2697,7 +2740,8 @@ export class WeaveNode implements Backend {
       const p = posts.get(item.post);
       return p ?? { id: item.post, missing: true };
     };
-    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const providerTitle = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const title = sessionTitle({ ...record, title: providerTitle });
     const active = record.provider === 'claude-code' ? transcriptActive(record.id) : undefined;
     const host = record.host ?? (record.provider === 'claude-code' ? this.#appLog?.hostOf(record.id) : undefined);
     return {
@@ -2707,6 +2751,10 @@ export class WeaveNode implements Backend {
       ...(host ? { host } : {}),
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
+      ...(record.name ? { name: record.name } : {}),
+      ...(record.about ? { about: record.about } : {}),
+      ...(record.description ? { description: record.description } : {}),
+      ...(providerTitle ? { providerTitle } : {}),
       stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length

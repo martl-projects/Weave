@@ -61,6 +61,44 @@ describe('Weave over MCP', () => {
     expect(instructions).toContain('weave_link_account');
     expect(instructions).toContain('GitHub access service');
     expect(instructions).toMatch(/Things only the person does/);
+    expect(instructions).toMatch(/permanent name.*weave_name_session/s);
+    close();
+  });
+
+  it('has the session name itself once, and tells it the title to go by', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-'));
+    dirs.push(dir);
+    const node = WeaveNode.init('Martin', dir);
+    await node.createProject({ name: 'Weave' });
+    await node.addAgent('claude', ['weave.post']);
+    await node.nameSession({ session: { id: 'other-session' }, name: 'Skala', about: 'Reviews' });
+    const session = sessionFromEnv({ CLAUDE_CODE_SESSION_ID: 'e360e3d1-named', CLAUDE_CODE_HOST_SESSION_ID: 'local_named' }, 'C:\\code\\weave');
+    const { server, close } = createWeaveMcp(node, { as: 'claude', session });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test-harness', version: '1.0.0' });
+    await client.connect(clientSide);
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = (await client.callTool({ name, arguments: args })) as { content: Array<{ text: string }>; isError?: boolean };
+      const text = result.content[0].text;
+      return { error: result.isError ? text : undefined, data: result.isError ? undefined : JSON.parse(text) };
+    };
+
+    // New here: whoami and the stack both say it has no name, and what to do.
+    expect((await call('weave_whoami')).data.session).toMatchObject({ name: null, nameIt: expect.stringMatching(/weave_name_session/) });
+    expect((await call('weave_session')).data).toMatchObject({ id: 'e360e3d1-named', name: null, stack: [] });
+    // Taken names are refused with the names around; then it's named, for good.
+    expect((await call('weave_name_session', { name: 'skala', about: 'Weave naming feature' })).error).toMatch(/"Skala" is taken; names around you: claude, Martin, Skala/);
+    const named = (await call('weave_name_session', { name: 'Shuttle', about: 'Weave naming feature', description: 'Builds the session naming feature.' })).data;
+    expect(named).toMatchObject({ id: 'e360e3d1-named', name: 'Shuttle', about: 'Weave naming feature', title: 'Shuttle · Weave naming feature', setTitle: expect.stringMatching(/set it to "Shuttle · Weave naming feature"/) });
+    expect((await call('weave_whoami')).data.session).toMatchObject({ name: 'Shuttle', title: 'Shuttle · Weave naming feature' });
+    expect((await call('weave_name_session', { name: 'Heddle' })).error).toMatch(/this session is Shuttle: a name is permanent/);
+    expect((await call('weave_name_session', { about: 'Sessions and their names' })).data.title).toBe('Shuttle · Sessions and their names');
+    // The driver hands work to it by name.
+    await node.setSessionRole({ session: { id: 'e360e3d1-named' }, role: 'worker' });
+    const item = await node.submit({ space: 'Weave', board: 'issues', title: 'Name sessions' });
+    expect((await call('weave_assign', { post: item.url, worker: 'Shuttle' })).data).toMatchObject({ id: 'e360e3d1-named', stack: [{ post: { title: 'Name sessions' } }] });
+    expect((await call('weave_workers')).data.map((w: { title: string }) => w.title)).toEqual(['Shuttle · Sessions and their names']);
     close();
   });
 

@@ -95,3 +95,44 @@ describe('your workers and your driver', () => {
     expect(await ids(fix.id)).toEqual(['any', 'd1', 'w1']);
   });
 });
+
+describe('sessions with permanent names', () => {
+  it('lets a session name itself once, uniquely among your sessions and the people around you, and goes by "name · about"', async () => {
+    const martin = person('Martin');
+    await martin.createProject({ name: 'Weave' });
+    await martin.addAgent('claude', ['weave.post']);
+    const fix = await martin.submit({ space: 'Weave', board: 'issues', title: 'Fix the login' });
+
+    // Unnamed: the title is whatever the provider says; about alone isn't enough.
+    await expect(martin.nameSession({ session: { id: 's1' }, about: 'Reviews' })).rejects.toThrow(/no name yet/);
+    const s1 = await martin.nameSession({ session: { id: 's1', folder: 'C:\code\weave' }, name: 'Skala', about: 'Service-, Netzwerk- und Last-Review', description: 'Reviews services, networking and load behaviour on main.' });
+    expect(s1).toMatchObject({ id: 's1', name: 'Skala', about: 'Service-, Netzwerk- und Last-Review', title: 'Skala · Service-, Netzwerk- und Last-Review', description: 'Reviews services, networking and load behaviour on main.' });
+    expect((await martin.session({ id: 's1' })).title).toBe('Skala · Service-, Netzwerk- und Last-Review');
+
+    // Taken: by another session (any case), by the person, by an agent. Well-formed only.
+    await expect(martin.nameSession({ session: { id: 's2' }, name: 'skala' })).rejects.toThrow(/"Skala" is taken; names around you: claude, Martin, Skala/);
+    await expect(martin.nameSession({ session: { id: 's2' }, name: 'Martin' })).rejects.toThrow(/"Martin" is taken/);
+    await expect(martin.nameSession({ session: { id: 's2' }, name: 'Claude' })).rejects.toThrow(/"claude" is taken/);
+    await expect(martin.nameSession({ session: { id: 's2' }, name: 'Skala · free' })).rejects.toThrow(/2 to 24/);
+    const s2 = await martin.nameSession({ session: { id: 's2' }, name: 'Shuttle' });
+    expect(s2).toMatchObject({ name: 'Shuttle', title: 'Shuttle' });
+
+    // Permanent: the session can't rename itself, nor drop the name; about and description it may change.
+    await expect(martin.nameSession({ session: { id: 's1' }, name: 'Skala II' })).rejects.toThrow(/this session is Skala: a name is permanent/);
+    await expect(martin.nameSession({ session: { id: 's1' }, name: '' })).rejects.toThrow(/permanent/);
+    expect(await martin.nameSession({ session: { id: 's1' }, name: 'Skala', about: 'Reviews' })).toMatchObject({ name: 'Skala', title: 'Skala · Reviews' }); // the same name again is fine
+    expect(await martin.nameSession({ session: { id: 's1' }, about: '' })).toMatchObject({ name: 'Skala', title: 'Skala', description: 'Reviews services, networking and load behaviour on main.' });
+    // The person renames (from the app), to a free name only.
+    await expect(martin.nameSession({ session: { id: 's1' }, name: 'Shuttle', rename: true })).rejects.toThrow(/taken/);
+    expect(await martin.nameSession({ session: { id: 's1' }, name: 'Skala II', rename: true })).toMatchObject({ name: 'Skala II', title: 'Skala II' });
+
+    // The name survives everything else that touches the record, and addresses the session: "give that to Skala II".
+    await martin.setSessionRole({ session: { id: 's1' }, role: 'worker', projects: ['Weave'] });
+    const given = await martin.assign({ post: fix.id, session: { id: 'skala ii' } });
+    expect(given).toMatchObject({ id: 's1', name: 'Skala II', role: 'worker', stack: [{ post: { id: fix.id } }] });
+    expect((await martin.workers({ post: fix.id })).map((w) => w.title)).toEqual(['Skala II']);
+    expect(await martin.doneWith({ session: { id: 'Skala II' } })).toMatchObject({ id: 's1', name: 'Skala II', stack: [] });
+    // A fresh id that happens to be nobody's name is a new session, as before.
+    expect((await martin.session({ id: 'Heddle' })).name).toBeUndefined();
+  });
+});

@@ -3,7 +3,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionRef } from '@weave/node';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -90,6 +90,8 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
 Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
+
+Your session has a permanent name. weave_whoami says whether yours has one yet (session.name). If not, pick one now: one short pronounceable word, like a person's first name but nobody's around you ("Skala", "Heddle"), and say in one line what this session specializes in (about: "Service-, Netzwerk- und Last-Review"), then call weave_name_session. Weave refuses a name that is taken and lists the names around you: pick another. The name is for good and survives restarts and resumes: never ask to change it, your person renames a session in Weave's Sessions view. Weave shows the session as "name · about" everywhere; set your harness's own session title to that too, once (in the Claude app with its session-title tool; in a terminal ask your person to /rename). Change about and description when your job changes, not per work item.
 
 Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
 
@@ -258,9 +260,11 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
       const [me, spaces] = await Promise.all([backend.whoami(), backend.spaces()]);
       const agent = as ? me.agents.find((a) => a.name === as) : undefined;
       if (as && !agent) throw new Error(noAgent(as, me.agents.map((a) => a.name)));
+      const session = options.session ? await backend.session(options.session) : undefined;
       return {
         person: { name: me.name, did: me.did },
         actingAs: agent ? { agent: agent.name, did: agent.did, permissions: agent.permissions } : 'the person themself',
+        ...(session ? { session: sessionName(session) } : {}),
         projects: spaces.filter((p) => p.kind === 'project').map((p) => ({ id: p.id, name: p.name, participants: p.members })),
         groups: spaces.filter((g) => g.kind === 'group').map((g) => ({ id: g.id, name: g.name, members: g.members })),
         communities: spaces.filter((c) => c.kind === 'community').map((c) => ({ id: c.id, name: c.name, members: c.members })),
@@ -681,6 +685,17 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     if (options.session) return options.session;
     throw new Error("Weave doesn't know which session you are: pass session_id (your harness's session id)");
   };
+  /** A session's name as the agent should see it: what it has, and what to do about it. */
+  const sessionName = (s: SessionInfo) =>
+    s.name
+      ? {
+          name: s.name,
+          ...(s.about ? { about: s.about } : {}),
+          ...(s.description ? { description: s.description } : {}),
+          title: s.title,
+          ...(s.providerTitle !== s.title ? { setTitle: `Your harness's session title is "${s.providerTitle ?? ''}": set it to "${s.title}" once (the Claude app's session-title tool, or /rename in a terminal).` } : {}),
+        }
+      : { name: null, nameIt: 'This session has no name yet: pick one short pronounceable word nobody around you has, say in one line what it specializes in, and call weave_name_session.' };
 
   server.registerTool(
     'weave_session',
@@ -691,7 +706,29 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
       inputSchema: { session_id: sessionId },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ session_id }: { session_id?: string }) => backend.session(sessionOf(session_id))),
+    run(async ({ session_id }: { session_id?: string }) => {
+      const session = await backend.session(sessionOf(session_id));
+      return { ...session, ...sessionName(session) };
+    }),
+  );
+
+  server.registerTool(
+    'weave_name_session',
+    {
+      title: 'Name this session',
+      description:
+        'Give your session its permanent name, once: one short pronounceable word nobody around you has (weave_whoami says whether you have one). about: one line on what this session specializes in; description: its job at length. Both can change later when the job changes (empty removes them), the name never: your person renames a session in Weave. The result says the title to set as your harness\'s session title.',
+      inputSchema: {
+        name: z.string().min(2).max(24).optional().describe('The permanent name, when the session has none yet'),
+        about: z.string().max(100).optional().describe('One line on what this session specializes in'),
+        description: z.string().max(1000).optional().describe('Its job at length'),
+        session_id: sessionId,
+      },
+    },
+    run(async ({ name, about, description, session_id }: { name?: string; about?: string; description?: string; session_id?: string }) => {
+      const session = await backend.nameSession({ session: sessionOf(session_id), name, about, description });
+      return { ...session, ...sessionName(session) };
+    }),
   );
 
   server.registerTool(

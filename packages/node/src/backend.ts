@@ -996,13 +996,16 @@ export interface MentionInfo {
   source: 'agent' | 'claude-code';
   /** The agent that showed it (weave_show). */
   agent?: string;
-  /** For claude-code: the session, and the folder it works in. */
-  session?: { id: string; folder?: string };
+  /** For claude-code: the session (with its name, once it has one), and the folder it works in. */
+  session?: { id: string; name?: string; folder?: string };
   /** What the agent said about it (weave_show). */
   note?: string;
 }
 
-/** A session, as a tool or the app names it: its provider (default claude-code) and id, plus what's known about it. */
+/**
+ * A session, as a tool or the app names it: its provider (default claude-code) and id, plus what's known about it.
+ * Where no session has that id, a session's name does as well ("Skala").
+ */
 export interface SessionRef {
   provider?: string;
   id: string;
@@ -1023,8 +1026,16 @@ export interface SessionInfo {
   id: string;
   host?: string;
   folder?: string;
-  /** Its name with the provider (the Claude app's sidebar title), when known. */
+  /** What it goes by: "name · about" once it has named itself, else its title with the provider. */
   title?: string;
+  /** Its permanent name, chosen once by the session (unique among your sessions); only you rename it. */
+  name?: string;
+  /** One line on what it specializes in. */
+  about?: string;
+  /** Its job at length. */
+  description?: string;
+  /** Its title with the provider (the Claude app's sidebar title), when known. */
+  providerTitle?: string;
   /** Top first. A post you can no longer see is listed by id only. */
   stack: Array<{ post: StackPost | { id: string; missing: true }; since: string }>;
   /** When its stack last changed. */
@@ -1889,6 +1900,12 @@ export interface Backend {
   workers(input?: { post?: string; space?: string }): Promise<SessionInfo[]>;
   /** Hand an item to one of your workers (or the driver): it goes on top of that session's stack. */
   assign(input: { post: string; session: SessionRef; as?: string }): Promise<SessionInfo>;
+  /**
+   * Name a session, once: a short pronounceable name no session of yours, nobody around you and none of your
+   * agents has; it's permanent, and only you rename it (`rename: true`, from the app). `about` (one line on
+   * what it specializes in) and `description` (its job at length) can change any time; empty removes them.
+   */
+  nameSession(input: { session: SessionRef; name?: string; about?: string; description?: string; rename?: boolean }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
   /** Allow (adds the kinds to the agent) or decline an agent's request. */
@@ -2146,7 +2163,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
-  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign',
+  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',

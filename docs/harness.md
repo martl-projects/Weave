@@ -196,6 +196,34 @@ Agent tools for it: `weave_session` (this session's stack), `weave_work_on`
 part (for Claude Code, a SessionStart hook hands Weave the session id together
 with the MCP server's process, so the agent never has to say).
 
+### Sessions with permanent names
+
+Every session names itself when it first connects: one short pronounceable
+word, like a first name, that no session of yours, nobody around you (your
+address book, the members of your spaces) and none of your agents has, and
+one line on what it specializes in. Weave keeps both in the session's record,
+so they survive restarts and resumed sessions, and shows the session as
+**name · about** everywhere: the Sessions page, the side panel, Mentions,
+`weave_workers`, the worker chooser.
+
+- **Name**: chosen once, permanent. The session can't rename itself or drop
+  the name; you rename it on the Sessions page (the pencil), to a free name.
+- **About** (one line) and **description** (its job at length): the
+  session's specialization, changed when its job changes, not per work item.
+  The stack stays out of the title.
+- **Addressable**: wherever a tool takes a session id, its name does too, so
+  the driver can `weave_assign` to "Skala".
+- **The harness title** is the session's own to set: Weave tells it the title
+  to use (`weave_name_session` and `weave_whoami` return it) and reads the
+  Claude app's title back from the transcript, so a mismatch stays visible.
+- A resumed session keeps its id and so its name; a fork has a new id and
+  names itself anew ("Skala II" is a name of its own).
+- The name is in your own views only: what the session signs still shows as
+  "person · agent" to others.
+
+Agent tools: `weave_whoami` says whether the session has a name,
+`weave_name_session` names it (once) and changes about and description.
+
 ### Starting sessions automatically
 
 Routines and Work on this start sessions through the provider. Two kinds:
