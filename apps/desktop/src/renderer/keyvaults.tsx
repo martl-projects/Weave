@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { KeyvaultInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
@@ -134,7 +134,17 @@ export function KeyvaultsBox() {
 
 /** Which of what your access reaches (your repositories) a project gets: yours alone to say. */
 function HandDialog({ vault, project, resources, onClose }: { vault: KeyvaultInfo; project: { id: string; name: string }; resources: string[]; onClose(): void }) {
-  const { data: reachable, error } = useApi(() => api<Array<{ value: string; note?: string }>>('keyvaultReachable', { name: vault.name }), [vault.name]);
+  // Asked once (it asks GitHub, which takes a moment): not again on every event, which would never let it finish.
+  const [reachable, setReachable] = useState<Array<{ value: string; note?: string }>>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    let alive = true;
+    api<Array<{ value: string; note?: string }>>('keyvaultReachable', { name: vault.name }).then(
+      (got) => alive && setReachable(got),
+      (e: Error) => alive && setError(e.message),
+    );
+    return () => void (alive = false);
+  }, [vault.name]);
   const [picked, setPicked] = useState(resources);
   const [filter, setFilter] = useState('');
   const what = vault.resources ?? 'resources';
