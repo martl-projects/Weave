@@ -150,6 +150,8 @@ export interface AppPanel {
   who: ActionWho;
   /** Its page in the panel folder, like index.html. */
   page: string;
+  /** The actions it stands in for: the app shows no button of their own where the panel is shown. */
+  covers?: string[];
 }
 
 /** A path inside a package: relative (a leading / is dropped, as in an image), and never out of it. */
@@ -487,8 +489,10 @@ export function checkManifest(input: unknown): ManifestCheck {
       const who = parseWho(o.who);
       const page = packagePath(o.page);
       const name = text(o.name, 40);
+      // The actions it stands in for, by name.
+      const covers = (Array.isArray(o.covers) ? o.covers : []).filter((c): c is string => typeof c === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(c)).slice(0, 20);
       if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
-      else panels.push({ name, title: text(o.title, 60) || name, who, page });
+      else panels.push({ name, title: text(o.title, 60) || name, who, page, ...(covers.length ? { covers } : {}) });
     }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');

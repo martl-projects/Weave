@@ -608,8 +608,9 @@ export function ActionScopes({ space, service, groups, extras }: { space: { id: 
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
-  // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say).
-  const replaced = new Set(extras.flatMap((e) => e.replaces ?? []));
+  // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say), and so can
+  // one of its own pages, where it's shown.
+  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? [])]);
   const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
@@ -739,7 +740,7 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
  * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
  * and gets the service's answer back; it may say how tall it is.
  *
- *   to it:    {weave: 'view', panel, space, me, actions} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
+ *   to it:    {weave: 'view', panel, space, me, actions, boards} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
  *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}   {weave: 'visit', website} (to Live)
  */
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
@@ -747,14 +748,17 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
   const [height, setHeight] = useState(160);
   const [proving, setProving] = useState<string>();
   const { data: base } = useApi(async () => bridge.lensBase(panel.key), [panel.key]);
+  const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
   const latest = useRef(actions);
   latest.current = actions;
+  const boardNames = useRef<string[]>([]);
+  boardNames.current = (boards ?? []).map((b) => b.name);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () =>
-    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })) });
+    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })), boards: boardNames.current });
   // Again whenever something changed here (a website opened, a setting changed): it shows what's current.
   const tick = useTick();
-  useEffect(sendView, [actions, tick]);
+  useEffect(sendView, [actions, tick, boards]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;

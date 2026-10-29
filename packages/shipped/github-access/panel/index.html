@@ -8,25 +8,29 @@
   .muted { color: #555; }
   .problem { color: #a00000; }
   a { color: #000080; }
-  input { font: inherit; }
+  input, select { font: inherit; }
   button { font: inherit; padding: 2px 8px; background: #c0c0c0; border: 1px solid; border-color: #fff #000 #000 #fff; }
   .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
   .grow { flex: 1; }
   .empty { padding: 6px; color: #555; }
+  #picker select { width: 100%; }
 </style>
 <div id="list" class="empty">Looking for repositories…</div>
+<div id="adding" class="row" hidden><span class="grow muted">Linked, a repository gives nobody anything yet: say next to it who here gets access.</span><button id="add">Link a repository…</button></div>
+<div id="picker" hidden>
+  <div class="row"><input id="filter" class="grow" placeholder="Find a repository its GitHub sign-in reaches" /></div>
+  <select id="choice" size="8"></select>
+  <div class="row"><span id="picked" class="grow muted"></span><button id="cancel" type="button">Cancel</button><button id="link" disabled>Link</button></div>
+</div>
 <div id="mine" class="row"></div>
-<form id="link" class="row" hidden>
-  <input id="repo" class="grow" placeholder="owner/name of a repository" required />
-  <input id="board" placeholder="only readers of board (optional)" />
-  <button>Link</button>
-</form>
 <div id="error" class="problem"></div>
 <script>
   // Talks only to Weave: asks the service (its actions, checked by Weave) and shows the answer.
   let view;
   let soon;
   let next = 1;
+  let linked = [];
+  let reachable;
   const waiting = new Map();
   const act = (name, input) =>
     new Promise((resolve, reject) => {
@@ -34,25 +38,38 @@
       waiting.set(id, { resolve, reject });
       parent.postMessage({ weave: 'act', id, name, input }, '*');
     });
+  const $ = (id) => document.getElementById(id);
   const tall = () => parent.postMessage({ weave: 'height', px: document.body.scrollHeight + 4 }, '*');
   const may = (name) => !!view?.actions.find((a) => a.name === name && a.mine);
   const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-  const who = (r) => (r.access === 'write' ? 'people picked, to write' : r.access === 'none' ? 'nobody (linked only)' : r.board ? `readers of ${r.board}` : 'everyone here');
+  const failed = (error) => ($('error').textContent = String(error));
+  // Who gets access by a link, as one value: none, read (everyone), read:<board>, write.
+  const valueOf = (r) => (r.access === 'write' ? 'write' : r.access === 'read' ? (r.board ? `read:${r.board}` : 'read') : 'none');
+  const said = (r) => (r.access === 'write' ? 'people picked, to write' : r.access === 'read' ? (r.board ? `readers of ${r.board}` : 'everyone here') : 'nobody: just linked');
+
+  function whoCell(r) {
+    if (!may('access')) return `<span class="muted">${esc(said(r))}</span>`;
+    const boards = view?.boards ?? [];
+    const options = [['none', 'Nobody: just linked'], ['read', 'Everyone here, to read'], ...boards.map((b) => [`read:${b}`, `Readers of ${b}, to read`]), ...(r.access === 'write' ? [['write', 'People picked, to write']] : [])];
+    const value = valueOf(r);
+    if (!options.some(([v]) => v === value)) options.push([value, said(r)]);
+    return `<select data-access="${esc(r.repo)}">${options.map(([v, label]) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
+  }
 
   async function show() {
-    const list = document.getElementById('list');
-    document.getElementById('link').hidden = !may('link');
+    const list = $('list');
+    $('adding').hidden = !may('link') || !$('picker').hidden;
     // Getting access: a GitHub account proven here (Weave asks for it).
-    document.getElementById('mine').innerHTML = `<span class="grow muted">Access goes to members who proved their GitHub account here.</span><button data-account="github">Prove my GitHub account here…</button>`;
+    $('mine').innerHTML = `<span class="grow muted">Access goes to members who proved their GitHub account here.</span><button data-account="github">Prove my GitHub account here…</button>`;
     try {
-      const repos = (await act('repos')).data ?? [];
-      if (!repos.length) {
+      linked = (await act('repos')).data ?? [];
+      if (!linked.length) {
         list.className = 'empty';
-        list.textContent = may('link') ? 'No repositories yet: link one below.' : 'No repositories linked here yet.';
+        list.textContent = 'No repositories linked here yet.';
       } else {
         list.className = '';
-        list.innerHTML = `<table><tr><th>Repository</th><th>Who gets access</th><th>Given</th><th></th></tr>${repos
-          .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td class="muted">${esc(who(r))}</td><td class="muted">${r.given ?? 0}</td><td>${may('unlink') ? `<button data-unlink="${esc(r.repo)}">Unlink</button>` : ''}</td></tr>`)
+        list.innerHTML = `<table><tr><th>Repository</th><th>Who here gets access</th><th>Given</th><th></th></tr>${linked
+          .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td>${whoCell(r)}</td><td class="muted">${r.given ?? 0}</td><td>${may('unlink') ? `<button data-unlink="${esc(r.repo)}">Unlink</button>` : ''}</td></tr>`)
           .join('')}</table>`;
       }
     } catch (error) {
@@ -61,6 +78,68 @@
     }
     tall();
   }
+
+  // The picker: the repositories its sign-in reaches, those not linked here yet.
+  function fill() {
+    const here = new Set(linked.map((r) => r.repo.toLowerCase()));
+    const find = $('filter').value.trim().toLowerCase();
+    const shown = (reachable ?? []).filter((r) => !here.has(r.repo.toLowerCase()) && (!find || r.repo.toLowerCase().includes(find)));
+    $('choice').innerHTML = shown.map((r) => `<option value="${esc(r.repo)}">${esc(r.repo)}${r.private ? ' · private' : ''}${r.admin ? '' : ' · not an admin'}</option>`).join('');
+    $('picked').textContent = reachable && !shown.length ? (find ? 'None of them is called that.' : 'Every repository it reaches is linked here.') : '';
+    $('link').disabled = !$('choice').value;
+    tall();
+  }
+  $('add').addEventListener('click', async () => {
+    $('error').textContent = '';
+    $('add').disabled = true;
+    try {
+      reachable = (await act('available')).data ?? [];
+      $('picker').hidden = false;
+      $('adding').hidden = true;
+      fill();
+      $('filter').focus();
+    } catch (error) {
+      failed(error);
+    } finally {
+      $('add').disabled = false;
+      tall();
+    }
+  });
+  $('filter').addEventListener('input', fill);
+  $('choice').addEventListener('change', () => {
+    const r = reachable?.find((x) => x.repo === $('choice').value);
+    $('picked').textContent = r && !r.org ? "A person's repository: GitHub lets its collaborators write, so only people you pick get in." : '';
+    $('link').disabled = !$('choice').value;
+  });
+  $('cancel').addEventListener('click', () => {
+    $('picker').hidden = true;
+    show();
+  });
+  $('link').addEventListener('click', async () => {
+    $('error').textContent = '';
+    $('link').disabled = true;
+    try {
+      await act('link', { repo: $('choice').value });
+      $('picker').hidden = true;
+    } catch (error) {
+      failed(error);
+    }
+    show();
+  });
+
+  addEventListener('change', async (event) => {
+    const repo = event.target?.dataset?.access;
+    if (!repo) return;
+    const [access, board] = event.target.value.split(/:(.*)/);
+    $('error').textContent = '';
+    event.target.disabled = true;
+    try {
+      await act('access', { repo, access, ...(board ? { board } : {}) });
+    } catch (error) {
+      failed(error);
+    }
+    show();
+  });
 
   addEventListener('click', async (event) => {
     const platform = event.target?.dataset?.account;
@@ -71,23 +150,10 @@
     try {
       await act('unlink', { repo });
     } catch (error) {
-      document.getElementById('error').textContent = String(error);
+      failed(error);
     } finally {
       show();
     }
-  });
-
-  document.getElementById('link').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const error = document.getElementById('error');
-    error.textContent = '';
-    try {
-      await act('link', { repo: document.getElementById('repo').value, ...(document.getElementById('board').value ? { board: document.getElementById('board').value } : {}) });
-      document.getElementById('repo').value = '';
-    } catch (e) {
-      error.textContent = String(e);
-    }
-    show();
   });
 
   addEventListener('message', (event) => {

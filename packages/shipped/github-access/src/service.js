@@ -1,22 +1,30 @@
 // GitHub access: keeps the GitHub repositories linked in its spaces in step with who is in them. Its maintainers link
-// a repository (for everyone there, or a board's readers, or people they pick to write); members who proved their
-// GitHub account in the space (weave.account, checked by GitHub's verifier) get access; whoever leaves loses it. All
-// of it with its own token (an admin's): Weave only says who reads the space and whose accounts hold (readers,
-// accounts), and knows nothing of GitHub. Each change it records in the space (github.added), to take back what it
-// gave and nothing else.
+// a repository to a space (a repository to any number of spaces, a space to any number of repositories): linked, it
+// gives nobody anything yet. Then they say who there gets access (everyone, a board's readers, or people they pick to
+// write); members who proved their GitHub account in the space (weave.account, checked by GitHub's verifier) get it,
+// and whoever leaves loses it. All of it with its own sign-in (an admin's): Weave only says who reads the space and
+// whose accounts hold (readers, accounts), and knows nothing of GitHub. Each change it records in the space
+// (github.added), to take back what it gave and nothing else.
 import { accounts, answer, load, log, me, publish, readers, save, setting, tickEvery } from 'weave:service/host@0.1.0';
 
 const API = 'https://api.github.com';
 /** Its access: a maintainer's sign-in (renewed by Weave), or a token they gave. */
 const token = () => setting('GITHUB') ?? setting('GITHUB_TOKEN');
 const isRepo = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value);
+const ACCESS = ['none', 'read', 'write'];
+const NOT_SIGNED_IN = "it isn't signed in to GitHub yet: one of its maintainers signs it in, in its Settings (an admin of the repositories)";
 
 /**
- * What it keeps (in its own folder): links by space, whom it gave access by repository, and how each went. A round
- * may still wait for GitHub while another event comes: each change reads it afresh, changes only its own part and
- * keeps it at once (no await in between), so none undoes another's.
+ * What it keeps (in its own folder): links by space, whom it gave access by repository (and in which space), and how
+ * each went. A round may still wait for GitHub while another event comes: each change reads it afresh, changes only
+ * its own part and keeps it at once (no await in between), so none undoes another's.
  */
-const state = () => JSON.parse(load('state') ?? '{"links":{},"gave":{},"status":{}}');
+const state = () => {
+  const s = JSON.parse(load('state') ?? '{"links":{},"gave":{},"status":{}}');
+  // From before: whom it gave access, without where.
+  for (const [repo, gave] of Object.entries(s.gave)) if (Array.isArray(gave)) s.gave[repo] = Object.fromEntries(gave.map((login) => [login, '']));
+  return s;
+};
 const change = (edit) => {
   const s = state();
   edit(s);
@@ -30,95 +38,127 @@ async function github(method, path, body) {
     headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-access', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : method === 'POST' || method === 'PUT' ? { body: '{}' } : {}),
   });
+  if (res.status === 401) throw new Error("GitHub doesn't take its sign-in (any more): one of its maintainers signs it in again, in its Settings");
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${method} ${path}`);
   return res.status === 204 ? undefined : res.json().catch(() => undefined);
 }
 
-/** Bring one repository in step: invite who should be in, take back what it gave those who shouldn't. */
-async function syncRepo(space, repo, link) {
-  const proven = space ? JSON.parse(accounts(space, 'github')).filter((a) => a.verified) : [];
-  const allowed = new Set(link.access === 'write' ? (link.writers ?? []) : space ? JSON.parse(readers(space, link.board)) : []);
+/** Who should be in a repository by one space's link: their logins, with the space and whether they write. */
+function wantedBy(space, link, person) {
+  if (!link.access || link.access === 'none') return [];
+  const proven = JSON.parse(accounts(space, 'github')).filter((a) => a.verified);
+  const allowed = new Set(link.access === 'write' ? (link.writers ?? []) : JSON.parse(readers(space, link.board)));
   // Its person's repository: they're never invited to it.
-  const person = JSON.parse(me()).person;
-  const want = new Set(link.access === 'none' ? [] : proven.filter((a) => allowed.has(a.did) && a.did !== person).map((a) => a.handle.toLowerCase()));
-  const gave = new Set(state().gave[repo] ?? []);
+  return proven.filter((a) => allowed.has(a.did) && a.did !== person).map((a) => ({ login: a.handle.toLowerCase(), space, write: link.access === 'write' }));
+}
+
+/**
+ * Bring one repository in step with every space it's linked to: invite whom any of them lets in, take back what it
+ * gave those none does any more.
+ */
+async function syncRepo(repo, linked) {
+  const { person, spaces } = JSON.parse(me());
+  const want = new Map();
+  for (const { space, link } of linked)
+    for (const w of wantedBy(space, link, person)) {
+      const before = want.get(w.login);
+      if (!before || (w.write && !before.write)) want.set(w.login, w);
+    }
+  const gave = state().gave[repo] ?? {};
   const people = await github('GET', `/repos/${repo}/collaborators?affiliation=direct&per_page=100`);
   const invites = await github('GET', `/repos/${repo}/invitations?per_page=100`);
   const collaborators = new Set(people.map((p) => p.login.toLowerCase()));
   const invited = new Map(invites.filter((i) => i.invitee).map((i) => [i.invitee.login.toLowerCase(), i.id]));
   // Someone it invited who isn't in (or invited) any more declined or left on GitHub: not asked again.
-  const invite = [...want].filter((l) => !collaborators.has(l) && !invited.has(l) && !gave.has(l));
-  const remove = [...gave].filter((l) => !want.has(l) && (collaborators.has(l) || invited.has(l)));
-  const given = (login, on) =>
+  const invite = [...want.values()].filter((w) => !collaborators.has(w.login) && !invited.has(w.login) && !(w.login in gave));
+  const remove = Object.keys(gave).filter((l) => !want.has(l) && (collaborators.has(l) || invited.has(l)));
+  const here = new Set(spaces.map((s) => s.id));
+  const given = (login, space) =>
     change((s) => {
-      const now = new Set(s.gave[repo] ?? []);
-      if (on) now.add(login);
-      else now.delete(login);
-      s.gave[repo] = [...now];
+      const now = (s.gave[repo] ??= {});
+      if (space === undefined) delete now[login];
+      else now[login] = space;
     });
-  for (const login of invite) {
-    await github('PUT', `/repos/${repo}/collaborators/${login}`, { permission: link.access === 'write' ? 'push' : 'pull' });
-    given(login, true);
-    if (space) publish(space, 'github.added', JSON.stringify({ repo, login, on: true }));
+  for (const w of invite) {
+    await github('PUT', `/repos/${repo}/collaborators/${w.login}`, { permission: w.write ? 'push' : 'pull' });
+    given(w.login, w.space);
+    publish(w.space, 'github.added', JSON.stringify({ repo, login: w.login, on: true }));
   }
   for (const login of remove) {
     if (invited.has(login)) await github('DELETE', `/repos/${repo}/invitations/${invited.get(login)}`);
     else await github('DELETE', `/repos/${repo}/collaborators/${login}`);
-    given(login, false);
-    if (space) publish(space, 'github.added', JSON.stringify({ repo, login, on: false }));
+    given(login, undefined);
+    if (here.has(gave[login])) publish(gave[login], 'github.added', JSON.stringify({ repo, login, on: false }));
   }
   change((s) => {
-    if (!s.gave[repo]?.length) delete s.gave[repo];
-    s.status[repo] = { given: s.gave[repo]?.length ?? 0, time: new Date().toISOString() };
+    if (!Object.keys(s.gave[repo] ?? {}).length) delete s.gave[repo];
+    s.status[repo] = { given: Object.keys(s.gave[repo] ?? {}).length, time: new Date().toISOString() };
   });
 }
 
-/** Every repository of every space it's in; unlinked ones only take back what it gave. */
+/** Every repository linked in a space it's in, each with all its spaces; unlinked ones only take back what it gave. */
 async function syncAll() {
   if (!token()) return log('not signed in to GitHub: one of its maintainers signs it in (an admin of the repositories)');
-  const spaces = JSON.parse(me()).spaces;
   const { links, gave } = state();
-  for (const space of spaces) {
-    for (const [repo, link] of Object.entries(links[space.id] ?? {})) {
-      try {
-        await syncRepo(space.id, repo, link);
-      } catch (error) {
-        change((s) => void (s.status[repo] = { problem: error?.message ?? String(error), time: new Date().toISOString() }));
-      }
-    }
-  }
-  for (const repo of Object.keys(gave)) {
-    if (Object.values(links).some((l) => l[repo])) continue;
+  const byRepo = new Map(Object.keys(gave).map((repo) => [repo, []]));
+  for (const space of JSON.parse(me()).spaces) for (const [repo, link] of Object.entries(links[space.id] ?? {})) byRepo.set(repo, [...(byRepo.get(repo) ?? []), { space: space.id, link }]);
+  for (const [repo, linked] of byRepo) {
     try {
-      await syncRepo(spaces[0]?.id, repo, { access: 'none' });
+      await syncRepo(repo, linked);
     } catch (error) {
-      log(`${repo}: ${error?.message ?? error}`);
+      change((s) => void (s.status[repo] = { problem: error?.message ?? String(error), time: new Date().toISOString() }));
     }
   }
 }
 
-/** Link a repository (maintainers): checked with GitHub first. A person's repository gives no read-only access. */
+/** A repository as given: owner/name, or its page. */
+const repoOf = (value) => String(value ?? '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
+
+/** Link a repository to a space (maintainers): linked only, nobody gets anything by it until they say who does. */
 async function link(space, input) {
-  const repo = String(input?.repo ?? '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
+  const repo = repoOf(input.repo);
   if (!isRepo(repo)) throw new Error('a repository looks like owner/name');
-  if (!token()) throw new Error("it isn't signed in to GitHub yet: one of its maintainers signs it in, in its Settings (an admin of the repository)");
+  if (!token()) throw new Error(NOT_SIGNED_IN);
   const found = await github('GET', `/repos/${repo}`).catch(() => undefined);
-  if (!found) throw new Error(`its GitHub access doesn't reach ${repo}: is whoever signed it in an admin of that repository?`);
-  const access = input.access === 'write' || input.access === 'none' ? input.access : 'read';
-  if (access === 'read' && found.owner?.type !== 'Organization')
-    throw new Error(`${repo} belongs to a person, not an organization: GitHub gives its collaborators write access, never read-only. Move it to an organization (free; its Settings, Transfer), or link it for people you pick to write`);
-  const board = input.board ? String(input.board).trim() : undefined;
+  if (!found) throw new Error(`its GitHub sign-in doesn't reach ${repo}`);
+  if (state().links[space]?.[found.full_name]) return `${found.full_name} is linked here already`;
+  change((s) => void ((s.links[space] ??= {})[found.full_name] = { access: 'none' }));
+  if (input.access && input.access !== 'none') return setAccess(space, { ...input, repo: found.full_name });
+  return `${found.full_name} is linked here: nobody gets access by it yet`;
+}
+
+/** Who in a space gets access to a repository linked there (maintainers): nobody, everyone, a board's readers, or people picked to write. */
+async function setAccess(space, input) {
+  const repo = repoOf(input.repo);
+  if (!state().links[space]?.[repo]) throw new Error(`${repo} isn't linked here`);
+  const access = ACCESS.includes(input.access) ? input.access : undefined;
+  if (!access) throw new Error('access is none, read or write');
+  const board = access === 'read' && input.board ? String(input.board).trim() : undefined;
   // A board that isn't there: Weave says so.
   if (board) readers(space, board);
-  change((s) => void ((s.links[space] ??= {})[found.full_name] = { access, ...(board ? { board } : {}), ...(access === 'write' ? { writers: (input.writers ?? []).map(String) } : {}) }));
-  await syncAll();
-  return `${found.full_name} follows this space now`;
+  if (access === 'read') {
+    if (!token()) throw new Error(NOT_SIGNED_IN);
+    const found = await github('GET', `/repos/${repo}`).catch(() => undefined);
+    if (!found) throw new Error(`its GitHub sign-in doesn't reach ${repo}: is whoever signed it in an admin of that repository?`);
+    if (found.owner?.type !== 'Organization')
+      throw new Error(`${repo} belongs to a person, not an organization: GitHub gives its collaborators write access, never read-only. Move it to an organization (free; its Settings, Transfer), or let people you pick write`);
+  }
+  change((s) => void (s.links[space][repo] = { access, ...(board ? { board } : {}), ...(access === 'write' ? { writers: (input.writers ?? []).map(String) } : {}) }));
+  if (access === 'none') return `${repo} stays linked: nobody gets access by it`;
+  return `${repo}: ${access === 'write' ? 'the people picked write' : board ? `the readers of ${board} read` : 'everyone here reads'}, once they proved their GitHub account here`;
 }
 
 /** The repositories linked here, and how each is going. */
 function repos(space) {
   const s = state();
   return Object.entries(s.links[space] ?? {}).map(([repo, l]) => ({ repo, url: `https://github.com/${repo}`, ...l, ...(s.status[repo] ?? {}) }));
+}
+
+/** The repositories its sign-in reaches, to pick one to link (maintainers): those it administers first. */
+async function available() {
+  if (!token()) throw new Error(NOT_SIGNED_IN);
+  const all = (await github('GET', '/user/repos?per_page=100&sort=updated')) ?? [];
+  return all.map((r) => ({ repo: r.full_name, private: !!r.private, org: r.owner?.type === 'Organization', admin: !!r.permissions?.admin })).sort((a, b) => Number(b.admin) - Number(a.admin));
 }
 
 export async function onEvent(text) {
@@ -130,15 +170,24 @@ export async function onEvent(text) {
   const { action, data } = item.body ?? {};
   try {
     if (action === 'repos') return void answer(item.id, undefined, JSON.stringify(repos(item.space.id)), undefined);
-    if (action === 'link') return void answer(item.id, await link(item.space.id, data), undefined, undefined);
+    if (action === 'available') return void answer(item.id, undefined, JSON.stringify(await available()), undefined);
+    if (action === 'link') {
+      answer(item.id, await link(item.space.id, data ?? {}), undefined, undefined);
+      return syncAll().catch((error) => log(String(error?.message ?? error)));
+    }
+    // Who gets access changed: answered at once, then brought in step with GitHub.
+    if (action === 'access') {
+      answer(item.id, await setAccess(item.space.id, data ?? {}), undefined, undefined);
+      return syncAll().catch((error) => log(String(error?.message ?? error)));
+    }
     if (action === 'unlink') {
-      const repo = String(data?.repo ?? '');
+      const repo = repoOf(data?.repo);
       if (!state().links[item.space.id]?.[repo]) throw new Error(`${repo} isn't linked here`);
       change((s) => void delete s.links[item.space.id][repo]);
-      await syncAll();
-      return void answer(item.id, `${repo} unlinked: access it gave is taken back`, undefined, undefined);
+      answer(item.id, `${repo} unlinked: access it gave by it is taken back`, undefined, undefined);
+      return syncAll().catch((error) => log(String(error?.message ?? error)));
     }
-    throw new Error('it answers repos, link and unlink');
+    throw new Error('it answers repos, available, link, access and unlink');
   } catch (error) {
     answer(item.id, undefined, undefined, error?.message ?? String(error));
   }

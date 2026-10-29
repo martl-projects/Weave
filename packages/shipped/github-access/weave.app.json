@@ -5,13 +5,13 @@
     "reads": {"kinds": ["weave.account"]},
     "writes": ["github.added"],
     "net": ["api.github.com"],
-    "actions": [{"name": "repos", "label": "See the repositories", "who": "members"}, {"name": "link", "label": "Link a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}, {"name": "board", "label": "Only readers of board (optional)"}]}, {"name": "unlink", "label": "Unlink a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}]}],
+    "actions": [{"name": "repos", "label": "See the repositories", "who": "members"}, {"name": "available", "label": "See the repositories it reaches", "who": "maintainers"}, {"name": "link", "label": "Link a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}]}, {"name": "access", "label": "Say who gets access to a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}, {"name": "access", "label": "none, read or write"}, {"name": "board", "label": "Only readers of board (optional)"}]}, {"name": "unlink", "label": "Unlink a repository", "who": "maintainers", "input": [{"name": "repo", "label": "Repository (owner/name)"}]}],
     "version": "1.0"
   },
   "wasm": {
     "component": "github-access.wasm",
     "panel": "panel",
-    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html"}]
+    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html", "covers": ["repos", "available", "link", "access", "unlink"]}]
   },
   "env": [
     {"name": "GITHUB", "label": "GitHub", "oauth": {"device": "https://github.com/login/device/code", "token": "https://github.com/login/oauth/access_token", "client": "Ov23liWKLCViesJn7ICe", "scopes": ["repo"]}, "hint": "Sign in as an admin of the repositories: it invites and removes people with that access"},

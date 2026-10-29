@@ -408,6 +408,8 @@ export interface ServicePanelInfo {
   key: string;
   page: string;
   mine: boolean;
+  /** The actions it stands in for. */
+  covers?: string[];
 }
 
 /** One of a service's actions in a space: who may use it there (its contract's, or tighter), and whether you may. */

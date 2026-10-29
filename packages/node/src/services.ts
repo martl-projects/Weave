@@ -757,6 +757,7 @@ export class Services {
       who: p.who,
       key: `shipped-${s.name}`,
       page: p.page,
+      ...(p.covers ? { covers: p.covers } : {}),
       mine: mayAct(p.who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)),
     }));
   }
@@ -1365,9 +1366,14 @@ export class Services {
     const s = shippedHere(this.h).get(stored.shipped!.name);
     const problem = s ? shippedProblem(s) : `this Weave doesn't ship ${stored.shipped!.name} any more`;
     if (problem || !s) return void this.h.releases.jobs.set(key, { error: problem! });
-    if (s.digest !== stored.shipped!.digest || JSON.stringify(stored.asks ?? []) !== JSON.stringify(s.manifest.env ?? [])) {
-      // This Weave ships a new one: its settings as it asks for them now (its contract stays what was approved).
-      const after = { ...stored, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
+    // Its contract as this Weave ships it: taken as it is when it asks for no more than what was approved (its actions
+    // changed, say); otherwise it stays what was approved.
+    const shippedContract = this.artifactContract(s.manifest);
+    const rights = (c: ServiceContract) => JSON.stringify([c.reads ?? null, [...(c.writes ?? [])].sort(), [...(c.net ?? [])].sort(), [...(c.offers ?? [])].sort()]);
+    const contract = rights(shippedContract) === rights(stored.contract) ? shippedContract : stored.contract;
+    if (s.digest !== stored.shipped!.digest || JSON.stringify(stored.asks ?? []) !== JSON.stringify(s.manifest.env ?? []) || JSON.stringify(contract) !== JSON.stringify(stored.contract)) {
+      // This Weave ships a new one: its settings as it asks for them now.
+      const after = { ...stored, contract, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
       this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
       this.publishServiceProfile(after);
       stored = after;
