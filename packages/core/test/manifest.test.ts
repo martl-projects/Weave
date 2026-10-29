@@ -38,7 +38,8 @@ describe('a setting picked from what the service lists', () => {
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'nothing' } }])).toMatch(/has no such action/);
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, secret: true }])).toMatch(/neither a secret nor a sign-in/);
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: 'reachable' }])).toMatch(/"choose" names the action/);
-    expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, yours: true }])).toMatch(/the project's, not yours/);
+    // Picked by whoever runs it, per project.
+    expect(checkManifest({ app: 'access', name: 'Access', service, wasm, env: [{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, yours: true }] }).manifest?.env?.[0]).toMatchObject({ choose: { action: 'reachable' }, yours: true });
   });
   it('registers an app of yours with the provider: always yours, never typed in', () => {
     const register = { page: 'https://github.com/settings/apps/new', exchange: 'https://api.github.com/app-manifests/{code}/conversions', manifest: { name: 'Weave access {random}' }, keep: ['id', 'owner.login'], key: 'pem', then: '{html_url}/installations/new' };

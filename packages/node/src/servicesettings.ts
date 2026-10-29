@@ -123,7 +123,8 @@ export class ServiceSettings {
     // Its person's own: known only where it runs (yours), and never kept in the project.
     const mine = this.#mine(profile.did);
     const kept = set.filter((s) => !asks.some((a) => a.yours && a.name === s.name));
-    const isSet = (name: string) => kept.some((s) => s.name === name) || (!!mine && (mine.settings[name] !== undefined || mine.grants?.[name] !== undefined || mine.registered?.[name] !== undefined));
+    const picked = (name: string) => mine?.spaceSettings?.[space.id]?.[name];
+    const isSet = (name: string) => kept.some((s) => s.name === name) || (!!mine && (mine.settings[name] !== undefined || mine.grants?.[name] !== undefined || mine.registered?.[name] !== undefined || picked(name) !== undefined));
     const yours = asks.filter((a) => a.yours);
     return {
       space: { id: space.id, name: this.h.spaceName(space) },
@@ -136,7 +137,9 @@ export class ServiceSettings {
               // An app registered: what it is (never its key), and its next page (installing it, say).
               const app = mine?.registered?.[a.name];
               const next = app && a.register?.then ? filled(a.register.then, app.info) : undefined;
-              return { name: a.name, ...(mine ? { set: isSet(a.name) } : {}), ...(app ? { app: app.info } : {}), ...(next ? { next } : {}) };
+              // Picked per project (its repositories, say): what's picked here.
+              const value = a.choose ? picked(a.name) : undefined;
+              return { name: a.name, ...(mine ? { set: isSet(a.name) } : {}), ...(value !== undefined ? { value } : {}), ...(app ? { app: app.info } : {}), ...(next ? { next } : {}) };
             }),
           }
         : {}),
@@ -159,6 +162,15 @@ export class ServiceSettings {
     const asked = profile.settings?.find((s) => s.name === name);
     if (profile.settings?.length && !asked) throw new Error(`${profile.name} doesn't ask for ${name} (it asks for ${profile.settings.map((s) => s.name).join(', ')})`);
     // Yours (whoever runs it): kept with it on this computer, for every project it's in.
+    // Yours and picked from a list: per project, but only whoever runs it picks (what its access reaches is theirs to hand out).
+    if (asked?.yours && asked.choose) {
+      const stored = this.#mine(profile.did);
+      if (!stored) throw new Error(`only whoever runs ${profile.name} picks its ${asked.label.toLowerCase()}: its access is theirs`);
+      const value = input.value === null || input.value === undefined ? '' : String(input.value).slice(0, SETTING_VALUE_MAX);
+      await this.services.setService({ name: stored.name, spaceSettings: { [space.id]: { [name]: value || null } } });
+      this.services.restartSoon(stored.name);
+      return this.serviceSettings({ space: space.id, service: profile.did });
+    }
     if (asked?.yours) {
       const empty = input.value === null || input.value === undefined || input.value === '';
       if (!input.grant && !empty && asked.oauth) throw new Error(`${asked.label} is a sign-in: sign in with the provider instead of typing it`);

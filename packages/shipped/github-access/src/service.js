@@ -1,6 +1,7 @@
 // GitHub access: gives a project's members access to its GitHub repositories, and takes it back when they leave: the
-// project's own (where its releases come from), or those its maintainers chose for it (REPOS, a setting picked from
-// the repositories it reaches). A repository can be chosen in any number of projects: it gets everyone any of them
+// project's own (where the releases its person published come from), or those its person chose for it (REPOS, picked
+// from the repositories it reaches). Only its person hands out what its access reaches: never a project's other
+// maintainers. A repository can be chosen in any number of projects: it gets everyone any of them
 // lets in. Members get it with a GitHub account they proved and shared with the project (weave.account, checked by
 // GitHub's verifier): read access to an organization's repository, write access to a person's (GitHub has no
 // read-only collaborators there). All of it as whoever runs it, with their own GitHub App (GITHUB_APP: they create it
@@ -59,13 +60,15 @@ async function tokenFor(repo) {
 /** Whether it may act at all: its person made their App, or gave a token. */
 const signedIn = () => !!app() || !!setting('GITHUB_TOKEN');
 
-/** Its projects, each with its repositories: those chosen there, or else the project's own (its releases' source). */
-const projects = () =>
-  JSON.parse(me()).spaces.map((s) => {
+/** Its projects, each with its repositories: those its person chose there, or else the project's own (the source of releases its person published). */
+const projects = () => {
+  const { person, spaces } = JSON.parse(me());
+  return spaces.map((s) => {
     const chosen = [...new Set(String(s.settings?.REPOS ?? '').split(/[\s,]+/).filter(isRepo))];
-    const own = [...new Set((s.sources ?? []).filter((x) => x.provider === 'github' && isRepo(x.ref)).map((x) => x.ref))];
+    const own = [...new Set((s.sources ?? []).filter((x) => x.provider === 'github' && isRepo(x.ref) && x.by === person).map((x) => x.ref))];
     return { id: s.id, name: s.name, repos: chosen.length ? chosen : own, own: !chosen.length && own.length > 0 };
   });
+};
 
 /**
  * What it keeps (in its own folder): whom it gave access by repository (and in which project), and how each went. A
@@ -74,6 +77,8 @@ const projects = () =>
  */
 const state = () => {
   const s = JSON.parse(load('state') ?? '{"gave":{},"status":{}}');
+  // Invitations it's about to send (kept first, so a stop in between neither loses nor skips one).
+  s.asking ??= {};
   // From before: whom it gave access, without where.
   for (const [repo, gave] of Object.entries(s.gave)) if (Array.isArray(gave)) s.gave[repo] = Object.fromEntries(gave.map((login) => [login, '']));
   return s;
@@ -118,7 +123,8 @@ async function syncRepo(repo, chosen, token) {
   const collaborators = new Set(people.map((p) => p.login.toLowerCase()));
   const invited = new Map(invites.filter((i) => i.invitee).map((i) => [i.invitee.login.toLowerCase(), i.id]));
   // Someone it invited who isn't in (or invited) any more declined or left on GitHub: not asked again.
-  const invite = [...want.values()].filter((w) => !collaborators.has(w.login) && !invited.has(w.login) && !(w.login in gave));
+  const asking = state().asking[repo] ?? {};
+  const invite = [...want.values()].filter((w) => !collaborators.has(w.login) && !invited.has(w.login) && (!(w.login in gave) || asking[w.login]));
   const remove = Object.keys(gave).filter((l) => !want.has(l) && (collaborators.has(l) || invited.has(l)));
   const here = new Set(projects().map((p) => p.id));
   const given = (login, project) =>
@@ -128,8 +134,21 @@ async function syncRepo(repo, chosen, token) {
       else now[login] = project;
     });
   for (const w of invite) {
-    await github(token, 'PUT', `/repos/${repo}/collaborators/${w.login}`, { permission: personal ? 'push' : 'pull' });
+    // Kept before it's asked for, as still to ask: stopped in between (started again, say), it still knows to take
+    // it back, and asks again rather than taking a missing invitation for a declined one.
     given(w.login, w.project);
+    change((s) => void ((s.asking[repo] ??= {})[w.login] = true));
+    try {
+      await github(token, 'PUT', `/repos/${repo}/collaborators/${w.login}`, { permission: personal ? 'push' : 'pull' });
+    } catch (error) {
+      given(w.login, undefined);
+      throw error;
+    } finally {
+      change((s) => {
+        delete s.asking[repo]?.[w.login];
+        if (!Object.keys(s.asking[repo] ?? {}).length) delete s.asking[repo];
+      });
+    }
     publish(w.project, 'github.added', JSON.stringify({ repo, login: w.login, on: true }));
   }
   for (const login of remove) {

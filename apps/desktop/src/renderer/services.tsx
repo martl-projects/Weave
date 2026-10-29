@@ -576,7 +576,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         const asked = data.asks.find((a) => a.name === name);
         // Yours (whoever runs it): kept with it on their computer, for every project it's in; only they change it.
         const yours = asked?.yours ? (data.yours?.find((y) => y.name === name) ?? { name }) : undefined;
-        const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: true, value: undefined } : undefined) : data.settings.find((x) => x.name === name);
+        const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: !asked?.choose, value: 'value' in yours ? yours.value : undefined } : undefined) : data.settings.find((x) => x.name === name);
         // An app of yours registered with the provider: what it is, and installing it.
         const app = yours && 'app' in yours ? yours.app : undefined;
         const appName = app ? String(app.slug ?? app.id ?? 'your app') : undefined;

@@ -369,7 +369,7 @@ export interface ServiceSettingsInfo {
   /** You're a maintainer here: you may set them. */
   mayChange: boolean;
   /** What it asks for as its person's own (a sign-in as them), for every project it's in: whether it's set, known only where it runs. */
-  yours?: Array<{ name: string; set?: boolean; app?: Record<string, Json>; next?: string }>;
+  yours?: Array<{ name: string; set?: boolean; value?: string; app?: Record<string, Json>; next?: string }>;
   /** It runs here: its person's own settings are yours to set. */
   runsHere: boolean;
 }

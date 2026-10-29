@@ -263,9 +263,9 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
       // Repositories are optional: none chosen, it's the project's own (where its releases come from).
       expect(settings.missing).toEqual(['GITHUB_APP']);
-      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB_APP', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
+      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB_APP', set: false }, { name: 'REPOS', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
       // Lena, a member: it's martl's to keep, not hers or Site's maintainers'.
-      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB_APP' }, { name: 'GITHUB_TOKEN' }], missing: [] });
+      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB_APP' }, { name: 'REPOS' }, { name: 'GITHUB_TOKEN' }], missing: [] });
       await expect(lena.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: 'ghp_lena' })).rejects.toThrow(/only whoever runs it/);
       await expect(lena.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB_APP' })).rejects.toThrow(/only whoever runs/);
 
@@ -285,7 +285,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // On to installing it.
       expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);
       const made = await martl.finishServiceSignIn({ id: making.id });
-      expect(made.yours).toEqual([{ name: 'GITHUB_APP', set: true, app: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }, { name: 'GITHUB_TOKEN', set: true }]);
+      expect(made.yours).toEqual([{ name: 'GITHUB_APP', set: true, app: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }, { name: 'REPOS', set: false }, { name: 'GITHUB_TOKEN', set: true }]);
       expect(JSON.stringify(made)).not.toMatch(/PRIVATE KEY|shh-client/);
       await martl.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: null });
       expect((await martl.serviceSettings({ space: 'Docs', service: access.did })).missing).toEqual([]);
@@ -298,7 +298,14 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         await martl.setServiceSetting({ space, service: access.did, name: 'REPOS', value: repos.join('\n') });
         sync([martl, lena, kofi]);
       };
+      // Only martl hands out what his App reaches: Kofi, made a maintainer of Site, can't choose any of it for Site.
+      await martl.setMaintainer({ project: 'Site', who: kofi.identity.author, on: true });
+      sync([martl, lena, kofi]);
+      await expect(kofi.setServiceSetting({ space: 'Site', service: access.did, name: 'REPOS', value: 'martl/notes' })).rejects.toThrow(/only whoever runs github-access picks/);
+      await martl.setMaintainer({ project: 'Site', who: kofi.identity.author, on: false });
+      sync([martl, lena, kofi]);
       await choose('Site', ['acme/site', 'acme/secret']);
+      expect((await martl.serviceSettings({ space: 'Site', service: access.did })).yours).toContainEqual({ name: 'REPOS', set: true, value: 'acme/site\nacme/secret' });
 
       // Lena proves her GitHub account and shares it with Site; Kofi only says it's his (no proof, so nothing to check).
       gistFor(github, '0123456789abcdef01234567', 'lena-gh', lena);

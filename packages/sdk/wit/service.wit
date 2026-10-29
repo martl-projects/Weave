@@ -9,7 +9,8 @@ package weave:service@0.1.0;
 /// What Weave offers the service: who it is, and acting as itself within its contract.
 interface host {
   /// Who the service is: {name, did, person, contract, spaces: [{id, kind, name, settings, sources}]}. A space's
-  /// sources: where its maintainers' releases come from ([{provider, ref}], a GitHub repository say): its own code.
+  /// sources: where its maintainers' releases come from ([{provider, ref, by}], a GitHub repository say, and who
+  /// published from it): its own code.
   me: func() -> string;
   /// A setting its person gave it (sealed on the node that runs it), if there is one.
   setting: func(name: string) -> option<string>;
