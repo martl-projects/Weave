@@ -191,6 +191,44 @@ export interface AppSetting {
    * the service acts as its person there.
    */
   yours?: true;
+  /**
+   * An app of its own registered with the provider, as whoever runs the service (GitHub's App manifest flow): Weave
+   * hands the provider's page the app's manifest, the person creates it there, and Weave exchanges the code it gets
+   * back for the app. Always yours. The service reads what `keep` names (setting(), as JSON) and signs with the
+   * field `key` names (sign()); it never reads that key.
+   */
+  register?: AppRegister;
+}
+
+/** How an app is registered with a provider: its page, where its code becomes the app, and what's kept of it. */
+export interface AppRegister {
+  /** The provider's page the manifest is posted to (a form field "manifest"), with ?state=… */
+  page: string;
+  /** Where the code the provider sends back becomes the app ({code} in it): POSTed, JSON back. */
+  exchange: string;
+  /** The app's manifest, as the provider takes it: Weave adds where to come back to (redirect_url). */
+  manifest: Record<string, Json>;
+  /** The fields of the app kept for the service, like id or slug (owner.login reaches inside). */
+  keep: string[];
+  /** The field that holds the app's private key: Weave signs with it for the service. */
+  key: string;
+  /** Opened once it's there, with kept fields in braces: installing it, say ({html_url}/installations/new). */
+  then?: string;
+}
+
+/** An app registration as a manifest names it, checked. */
+export function parseRegister(value: unknown): { register?: AppRegister; problem?: string } {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const page = httpsUrl(o.page);
+  const exchange = httpsUrl(o.exchange);
+  const manifest = o.manifest && typeof o.manifest === 'object' && !Array.isArray(o.manifest) ? (o.manifest as Record<string, Json>) : undefined;
+  const field = (x: unknown) => typeof x === 'string' && /^[a-z_][a-z0-9_]{0,40}(\.[a-z_][a-z0-9_]{0,40})?$/i.test(x);
+  const keep = Array.isArray(o.keep) ? o.keep.filter(field).slice(0, 10) as string[] : [];
+  const key = field(o.key) ? (o.key as string) : '';
+  const then = typeof o.then === 'string' && /^https:\/\/|^\{[a-z_]+\}\//i.test(o.then) ? o.then.slice(0, 300) : undefined;
+  if (!page || !exchange?.includes('{code}') || !manifest || JSON.stringify(manifest).length > 8000 || !keep.length || !key)
+    return { problem: '"register" names the provider\'s page, where its code becomes the app, the app\'s manifest, what\'s kept and its key: {"page": "https://…", "exchange": "https://…/{code}/…", "manifest": {...}, "keep": ["id", "slug"], "key": "pem", "then": "{html_url}/installations/new"}' };
+  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}) } };
 }
 
 /** A setting's choices, checked: the action that lists them, and whether several are picked. */
@@ -233,7 +271,10 @@ export function appSettingsOf(value: unknown): AppSetting[] {
     const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim().slice(0, 60) : name;
     const hint = typeof e.hint === 'string' ? e.hint.trim().slice(0, 200) : '';
     const oauth = e.oauth === undefined ? undefined : parseOAuth(e.oauth).oauth;
-    const choose = oauth || e.secret === true || e.signing === true ? undefined : parseChoose(e.choose);
+    const register = e.register === undefined || oauth ? undefined : parseRegister(e.register).register;
+    const choose = oauth || register || e.secret === true || e.signing === true ? undefined : parseChoose(e.choose);
+    // An app registered is always yours, and signs.
+    if (register) { out.push({ name, label, secret: true, ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), register, yours: true }); continue; }
     out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}), ...(e.yours === true && !choose ? { yours: true as const } : {}) });
   }
   return out;
@@ -595,6 +636,13 @@ export function checkManifest(input: unknown): ManifestCheck {
         if (e.choose !== undefined && !choose) { problems.push(`${where}: "choose" names the action that lists its choices, like {"action": "repos", "many": true}`); continue; }
         if (choose && (oauth.oauth || e.secret === true || e.signing === true)) { problems.push(`${where}: a setting picked from a list is neither a secret nor a sign-in`); continue; }
         if (choose && e.yours === true) { problems.push(`${where}: a setting picked from a list is the project's, not yours`); continue; }
+        if (e.register !== undefined) {
+          const register = parseRegister(e.register);
+          if (register.problem) { problems.push(`${where}: ${register.problem}`); continue; }
+          if (oauth.oauth || choose || e.secret === true || e.signing === true) { problems.push(`${where}: an app registered is neither a sign-in, a pick, nor a secret typed in`); continue; }
+          env.push({ name, label, secret: true, ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), register: register.register!, yours: true });
+          continue;
+        }
         env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}), ...(e.yours === true && !choose ? { yours: true as const } : {}) });
       }
     }
@@ -658,7 +706,7 @@ export const MANIFEST_RULES = [
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. "expires" says how long a request counts, in seconds, by action or protocol ({"artifact.fetch": 300}): one older when the service gets to it (it was off) is answered by Weave as expired. Without, requests wait for it. What is asked and answered is sealed for the service and the asker. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',

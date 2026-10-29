@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { boxTo, openBox, isSettingName, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting, type AppOAuth } from '@weave/core';
+import { boxTo, openBox, isSettingName, type AppRegister, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting, type AppOAuth } from '@weave/core';
 import type { ServiceSettingsInfo } from './backend.ts';
 import { startDeviceSignIn, tokenRequest } from './devicecode.ts';
 import type { ServicesHost, StoredService } from './node.ts';
@@ -36,6 +36,25 @@ const isGrant = (value: unknown): value is Grant => {
   return !!g && typeof g.access === 'string' && typeof g.token === 'string' && typeof g.client === 'string';
 };
 
+/** An app registered with a provider as you (a GitHub App): what the service reads of it, and the key Weave signs with. */
+export interface Registered {
+  info: Record<string, Json>;
+  key: string;
+}
+
+/** A field of a provider's answer, maybe one level in (owner.login). */
+const fieldOf = (from: unknown, path: string): Json | undefined => path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), from) as Json | undefined;
+
+/** A page with fields in braces filled in, if it's an HTTPS page then. */
+const filled = (template: string, info: Record<string, Json>): string | undefined => {
+  const url = template.replace(/\{([a-z_.]+)\}/gi, (_, k: string) => String(info[k] ?? ''));
+  try {
+    return new URL(url).protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /** A sign-in's access token is renewed this long before it runs out. */
 const RENEW_BEFORE = 5 * 60_000;
 
@@ -67,17 +86,20 @@ export class ServiceSettings {
   }
 
   /** Set (or remove) one of your service's own settings, kept with it here: for every project it's in. */
-  #setYours(did: Did, name: string, change: { value?: string; grant?: Grant }): void {
+  #setYours(did: Did, name: string, change: { value?: string; grant?: Grant; registered?: Registered }): void {
     const stored = this.#mine(did);
     if (!stored) throw new Error("only whoever runs it keeps that: it's theirs, for every project it's in");
     const settings = { ...stored.settings };
     const grants = { ...(stored.grants ?? {}) };
+    const registered = { ...(stored.registered ?? {}) };
     delete settings[name];
     delete grants[name];
+    delete registered[name];
     if (change.grant) grants[name] = change.grant;
+    else if (change.registered) registered[name] = change.registered;
     else if (change.value !== undefined) settings[name] = change.value;
-    const { grants: _grants, ...rest } = stored;
-    const after: StoredService = { ...rest, settings, ...(Object.keys(grants).length ? { grants } : {}) };
+    const { grants: _grants, registered: _registered, ...rest } = stored;
+    const after: StoredService = { ...rest, settings, ...(Object.keys(grants).length ? { grants } : {}), ...(Object.keys(registered).length ? { registered } : {}) };
     this.services.saveServices(this.services.storedServices().map((s) => (s.name === stored.name ? after : s)));
     this.#renewed.delete(`${stored.name} yours ${name}`);
     this.services.restartSoon(stored.name);
@@ -101,14 +123,23 @@ export class ServiceSettings {
     // Its person's own: known only where it runs (yours), and never kept in the project.
     const mine = this.#mine(profile.did);
     const kept = set.filter((s) => !asks.some((a) => a.yours && a.name === s.name));
-    const isSet = (name: string) => kept.some((s) => s.name === name) || (!!mine && (mine.settings[name] !== undefined || mine.grants?.[name] !== undefined));
+    const isSet = (name: string) => kept.some((s) => s.name === name) || (!!mine && (mine.settings[name] !== undefined || mine.grants?.[name] !== undefined || mine.registered?.[name] !== undefined));
     const yours = asks.filter((a) => a.yours);
     return {
       space: { id: space.id, name: this.h.spaceName(space) },
       service: { did: profile.did, name: profile.name, person: profile.person },
       asks,
       settings: kept.map((s) => ({ name: s.name, secret: s.secret, ...(s.oauth ? { oauth: true as const } : {}), ...(s.value !== undefined ? { value: s.value } : {}), by: this.h.actor(s.by, s.by), time: s.time })),
-      ...(yours.length ? { yours: yours.map((a) => ({ name: a.name, ...(mine ? { set: isSet(a.name) } : {}) })) } : {}),
+      ...(yours.length
+        ? {
+            yours: yours.map((a) => {
+              // An app registered: what it is (never its key), and its next page (installing it, say).
+              const app = mine?.registered?.[a.name];
+              const next = app && a.register?.then ? filled(a.register.then, app.info) : undefined;
+              return { name: a.name, ...(mine ? { set: isSet(a.name) } : {}), ...(app ? { app: app.info } : {}), ...(next ? { next } : {}) };
+            }),
+          }
+        : {}),
       // Its person's own count as there where it runs elsewhere: only they know.
       missing: asks.filter((a) => !a.optional && !isSet(a.name) && (!a.yours || mine)).map((a) => a.name),
       mayChange: state.maintainers.has(this.h.identity.author),
@@ -181,7 +212,14 @@ export class ServiceSettings {
       if (values.size === 1) fromSpaces[name] = [...values][0];
     }
     const grants = Object.fromEntries(Object.entries(stored.grants ?? {}).map(([name, grant]) => [name, this.#renewed.get(`${stored.name} yours ${name}`)?.grant.access ?? grant.access]));
-    return { ...stored.settings, ...fromSpaces, ...grants };
+    // An app registered: what's kept of it, as JSON (its key only ever through signWith).
+    const apps = Object.fromEntries(Object.entries(stored.registered ?? {}).map(([name, app]) => [name, JSON.stringify(app.info)]));
+    return { ...stored.settings, ...fromSpaces, ...grants, ...apps };
+  }
+
+  /** What a service signs with, by name: an app's key, or a setting's value. */
+  signingKey(stored: StoredService, name: string): string | undefined {
+    return stored.registered?.[name]?.key ?? this.effective(stored)[name];
   }
 
   #open(stored: StoredService, space: string, s: SpaceServiceSetting, secretKey: Uint8Array, publicKey: Uint8Array): string | undefined {
@@ -258,6 +296,10 @@ export class ServiceSettings {
     const space = this.h.space(input.space);
     const profile = await this.#inSpace(space, input.service);
     const asked = profile.settings?.find((s) => s.name === input.name);
+    if (asked?.register) {
+      if (!this.#mine(profile.did)) throw new Error(`only whoever runs ${profile.name} creates its app: it's theirs`);
+      return this.#startRegister(space, profile.did, asked.name, asked.label, asked.register);
+    }
     if (!asked?.oauth) throw new Error(`${profile.name} doesn't ask for a sign-in named ${input.name}`);
     // Yours: whoever runs it signs in, as themselves. A project's: its maintainers.
     if (asked.yours ? !this.#mine(profile.did) : !this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(asked.yours ? `only whoever runs ${profile.name} signs it in: it acts as them` : `only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
@@ -326,6 +368,69 @@ export class ServiceSettings {
     done.catch(() => {});
     this.#signIns.set(id, { done });
     return { id, url: started.url, code: started.code };
+  }
+
+  /**
+   * Register an app of yours with the provider (GitHub's App manifest flow): a page on this computer posts its manifest
+   * to the provider's page, you create the app there, the provider comes back here with a code, and this node
+   * exchanges it for the app (its key kept here, for signing). Then the browser goes on to its next page (installing
+   * it on your repositories, say). finishSignIn waits for that (10 minutes at most).
+   */
+  async #startRegister(space: StoredSpace, service: Did, name: string, label: string, register: AppRegister): Promise<{ id: string; url: string }> {
+    const state = randomBytes(16).toString('base64url');
+    let finish!: (code: string) => void;
+    const coming = new Promise<string>((resolve) => (finish = resolve));
+    let made: Promise<ServiceSettingsInfo> | undefined;
+    const html = (text: string) => `<!doctype html><meta charset="utf-8"><title>Weave</title><body style="font:16px system-ui;margin:3em">${text}</body>`;
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.searchParams.get('state') !== state) return void res.writeHead(404).end();
+      if (url.pathname === '/') {
+        // Sent on at once: the provider's page, with the app's manifest (and where to come back to).
+        const random = randomBytes(3).toString('hex');
+        const named = Object.fromEntries(Object.entries(register.manifest).map(([k, v]) => [k, typeof v === 'string' ? v.replace('{random}', random) : v]));
+        const manifest = JSON.stringify({ ...named, redirect_url: `${base}back` });
+        const action = `${register.page}${register.page.includes('?') ? '&' : '?'}state=${encodeURIComponent(state)}`;
+        const esc = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+        return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`<form method="post" action="${esc(action)}"><input type="hidden" name="manifest" value="${esc(manifest)}"><p>Creating your ${esc(label)} on ${esc(new URL(register.page).hostname)}…</p><button>Go on</button></form><script>document.forms[0].submit()</script>`));
+      }
+      if (url.pathname === '/back' && url.searchParams.get('code')) {
+        finish(url.searchParams.get('code')!);
+        // Once it's here: on to its next page (installing it), or a word that it's done.
+        void made!.then(
+          (info) => {
+            const next = info.yours?.find((y) => y.name === name)?.next;
+            if (next) res.writeHead(302, { location: next }).end();
+            else res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`Your ${label} is there: you can close this page and go back to Weave.`));
+          },
+          (error: Error) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`It didn't work: ${error.message.replace(/[<>&]/g, '')}`)),
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    const id = state;
+    made = (async () => {
+      try {
+        const code = await Promise.race([coming, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`no ${label} created within 10 minutes`)), 10 * 60_000).unref())]);
+        const res = await this.#fetch()(register.exchange.replace('{code}', encodeURIComponent(code)), { method: 'POST', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+        const app = (await res.json().catch(() => undefined)) as unknown;
+        const key = fieldOf(app, register.key);
+        if (!res.ok || typeof key !== 'string') throw new Error(`the provider answered ${res.status}: no ${label}`);
+        // What the service reads of it; nothing else (no secrets of the provider's) is kept.
+        const info = Object.fromEntries(register.keep.flatMap((k) => (fieldOf(app, k) !== undefined ? [[k, fieldOf(app, k)!]] : [])));
+        this.#setYours(service, name, { registered: { info, key } });
+        return await this.serviceSettings({ space: space.id, service });
+      } finally {
+        setTimeout(() => server.close(), 5000).unref();
+        setTimeout(() => this.#signIns.delete(id), 60_000).unref();
+      }
+    })();
+    made.catch(() => {});
+    this.#signIns.set(id, { done: made });
+    return { id, url: `${base}?state=${encodeURIComponent(state)}` };
   }
 
   /** Wait for a sign-in startSignIn began: the service's settings once it's signed in, or why not. */

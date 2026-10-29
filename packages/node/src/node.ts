@@ -533,7 +533,7 @@ import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
-import type { Grant as ServiceGrant } from './servicesettings.ts';
+import type { Grant as ServiceGrant, Registered as ServiceRegistered } from './servicesettings.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -625,6 +625,8 @@ export interface StoredService {
   asks?: AppSetting[];
   /** Its sign-ins as you (settings it asks for as yours), by name: for every project it's in. */
   grants?: Record<string, ServiceGrant>;
+  /** Its apps registered as you (a GitHub App), by name: what it reads of each, and the key Weave signs with. */
+  registered?: Record<string, ServiceRegistered>;
   /** One Weave ships (shipped.ts): its name, and the digest it ran last. */
   shipped?: { name: string; digest: string };
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */

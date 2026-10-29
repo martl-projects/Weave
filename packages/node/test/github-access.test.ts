@@ -1,3 +1,4 @@
+import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -35,6 +36,8 @@ const sync = (all: WeaveNode[]) => {
 class OrgGitHub {
   repos = new Map<string, { owner: 'Organization' | 'User'; collaborators: Set<string>; invited: Map<string, { id: number; permission: string }> }>();
   gists = new Map<string, { owner: string; content: string }>();
+  /** The GitHub App made with a manifest (martl's): its public key, and the repositories it's installed on. */
+  app?: { publicKey: string; installed: Set<string>; manifest: Record<string, unknown> };
   calls: string[] = [];
   #next = 1;
   constructor() {
@@ -69,7 +72,30 @@ class OrgGitHub {
         return json(201, { id, html_url: `https://gist.github.com/martl/${id}` });
       }
     }
-    if (new Headers(init?.headers).get('authorization') !== 'Bearer ghp_admin') return json(404, { message: 'Not Found' });
+    // The App manifest flow: the code GitHub sent back becomes the App (its key only ever in this answer).
+    if (method === 'POST' && /^\/app-manifests\/[\w-]+\/conversions$/.test(url.pathname)) {
+      const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      this.app = { publicKey: publicKey.export({ type: 'spki', format: 'pem' }) as string, installed: new Set(), manifest: {} };
+      return json(201, { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', owner: { login: 'martl' }, pem: privateKey.export({ type: 'pkcs1', format: 'pem' }), client_secret: 'shh-client', webhook_secret: null });
+    }
+    const auth = new Headers(init?.headers).get('authorization') ?? '';
+    // The App itself: a JWT Weave signed with its key (checked here), for its installations.
+    const jwt = auth.match(/^Bearer ([\w-]+)\.([\w-]+)\.([\w-]+)$/);
+    if (jwt && this.app) {
+      const ok = cryptoVerify('sha256', Buffer.from(`${jwt[1]}.${jwt[2]}`), this.app.publicKey, Buffer.from(jwt[3], 'base64url'));
+      if (!ok || JSON.parse(Buffer.from(jwt[2], 'base64url').toString()).iss !== '42') return json(401, { message: 'Bad credentials' });
+      this.calls.push(`${method} ${url.pathname} (app)`);
+      if (url.pathname === '/app/installations') return json(200, this.app.installed.size ? [{ id: 7 }] : []);
+      if (url.pathname === '/app/installations/7/access_tokens' && method === 'POST') return json(201, { token: 'ghs_inst', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+      const at = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)\/installation$/);
+      return at && this.app.installed.has(at[1]) ? json(200, { id: 7 }) : json(404, { message: 'Not Found' });
+    }
+    // An installation's token: the repositories the App is installed on, and nothing else.
+    if (auth === 'Bearer ghs_inst') {
+      if (url.pathname === '/installation/repositories') return json(200, { repositories: [...this.repos].filter(([n]) => this.app?.installed.has(n)).map(([full_name, r]) => ({ full_name, private: full_name !== 'acme/site', owner: { type: r.owner } })) });
+      const at = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)/);
+      if (!at || !this.app?.installed.has(at[1])) return json(404, { message: 'Not Found' });
+    } else if (auth !== 'Bearer ghp_admin') return json(404, { message: 'Not Found' });
     this.calls.push(`${method} ${url.pathname}`);
     // Whose sign-in it is, and what it reaches.
     if (url.pathname === '/user') return json(200, { login: 'martl' });
@@ -236,21 +262,36 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       const settings = await martl.serviceSettings({ space: 'Site', service: access.did });
       expect(settings.asks.find((a) => a.name === 'REPOS')).toMatchObject({ choose: { action: 'reachable', many: true } });
       // Repositories are optional: none chosen, it's the project's own (where its releases come from).
-      expect(settings.missing).toEqual(['GITHUB']);
-      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
+      expect(settings.missing).toEqual(['GITHUB_APP']);
+      expect(settings).toMatchObject({ runsHere: true, yours: [{ name: 'GITHUB_APP', set: false }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
       // Lena, a member: it's martl's to keep, not hers or Site's maintainers'.
-      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB' }, { name: 'GITHUB_TOKEN' }], missing: [] });
+      expect(await lena.serviceSettings({ space: 'Site', service: access.did })).toMatchObject({ runsHere: false, yours: [{ name: 'GITHUB_APP' }, { name: 'GITHUB_TOKEN' }], missing: [] });
       await expect(lena.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: 'ghp_lena' })).rejects.toThrow(/only whoever runs it/);
-      // martl signs it in instead (a code on GitHub): his, at once, and its token is what it uses.
-      martl.oauthSetup.fetch = async (url) => {
-        const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
-        return String(url).endsWith('/device/code') ? json({ device_code: 'd-1', user_code: 'WXYZ-1234', verification_uri: 'https://github.com/login/device', interval: 0.01 }) : json({ access_token: 'ghp_admin', scope: 'repo' });
-      };
-      const signIn = await martl.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB' });
-      expect(await martl.finishServiceSignIn({ id: signIn.id })).toMatchObject({ yours: [{ name: 'GITHUB', set: true }, { name: 'GITHUB_TOKEN', set: true }], settings: [] });
+      await expect(lena.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB_APP' })).rejects.toThrow(/only whoever runs/);
+
+      // martl makes his own GitHub App instead (GitHub's App manifest flow): a page here sends its manifest on to
+      // GitHub, he creates it there, GitHub comes back with a code, and the App is his: its key kept here, for signing.
+      martl.oauthSetup.fetch = github.fetch;
+      const making = await martl.startServiceSignIn({ space: 'Site', service: access.did, name: 'GITHUB_APP' });
+      const page = await (await fetch(making.url)).text();
+      const unescape = (text: string) => text.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      const action = new URL(unescape(page.match(/action="([^"]+)"/)![1]));
+      const sent = JSON.parse(unescape(page.match(/name="manifest" value="([^"]+)"/)![1])) as { name: string; redirect_url: string; default_permissions: unknown };
+      expect(action.origin + action.pathname).toBe('https://github.com/settings/apps/new');
+      expect(sent).toMatchObject({ default_permissions: { administration: 'write', metadata: 'read' }, public: false });
+      expect(sent.name).toMatch(/^Weave access [0-9a-f]{6}$/);
+      const back = await fetch(`${sent.redirect_url}?code=c-1&state=${action.searchParams.get('state')}`, { redirect: 'manual' });
+      // On to installing it.
+      expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);
+      const made = await martl.finishServiceSignIn({ id: making.id });
+      expect(made.yours).toEqual([{ name: 'GITHUB_APP', set: true, app: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }, { name: 'GITHUB_TOKEN', set: true }]);
+      expect(JSON.stringify(made)).not.toMatch(/PRIVATE KEY|shh-client/);
       await martl.setServiceSetting({ space: 'Site', service: access.did, name: 'GITHUB_TOKEN', value: null });
       expect((await martl.serviceSettings({ space: 'Docs', service: access.did })).missing).toEqual([]);
       await expect(lena.askService({ space: 'Site', service: access.did, text: 'reachable', action: 'reachable' })).rejects.toThrow(/only maintainers/);
+      // Not installed anywhere yet; then on all three.
+      expect((await ask(martl, access.did, 'reachable')).error).toMatch(/isn't installed on any repository yet/);
+      github.app!.installed = new Set(['acme/site', 'acme/secret', 'martl/notes']);
       expect((await ask(martl, access.did, 'reachable')).data).toEqual([{ value: 'acme/site' }, { value: 'acme/secret', note: 'private' }, { value: 'martl/notes', note: "private · a person's: members get write access" }]);
       const choose = async (space: string, repos: string[]) => {
         await martl.setServiceSetting({ space, service: access.did, name: 'REPOS', value: repos.join('\n') });
@@ -270,7 +311,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         expect([...github.repos.get('acme/secret')!.invited.keys()]).toEqual(['lena-gh']);
       }, { timeout: 60_000, interval: 200 });
       expect(github.invited.get('lena-gh')?.permission).toBe('pull');
-      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, as: 'martl', me: { handle: 'lena-gh' } });
+      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], signedIn: true, as: "weave-access-t (martl's)", me: { handle: 'lena-gh' } });
       expect((await ask(kofi, access.did, 'status')).data).not.toHaveProperty('me');
 
       // A person's repository too: members write there (GitHub has no read-only collaborators for it).

@@ -343,7 +343,7 @@ export class Services {
     const yours = (name: string) => (asks ?? []).some((e) => e.name === name && e.yours);
     const settings = keptIn ? Object.fromEntries(Object.entries(given).filter(([n]) => yours(n))) : given;
     // A sign-in comes after: its provider's page opens once the service is there. So does a pick from what it lists.
-    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !given[e.name]);
+    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
@@ -1678,7 +1678,7 @@ export class Services {
             }
             return JSON.stringify(await this.fingerprint(String(args[0])));
           }
-          if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (call === 'sign') return signWith(this.settings.signingKey(current, String(args[0])), String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (call === 'tickEvery') {
             clearInterval(ticking.timer);
             const ms = Math.floor(Number(args[0]) || 0);

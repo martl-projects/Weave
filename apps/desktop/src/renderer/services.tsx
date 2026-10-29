@@ -577,6 +577,9 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         // Yours (whoever runs it): kept with it on their computer, for every project it's in; only they change it.
         const yours = asked?.yours ? (data.yours?.find((y) => y.name === name) ?? { name }) : undefined;
         const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: true, value: undefined } : undefined) : data.settings.find((x) => x.name === name);
+        // An app of yours registered with the provider: what it is, and installing it.
+        const app = yours && 'app' in yours ? yours.app : undefined;
+        const appName = app ? String(app.slug ?? app.id ?? 'your app') : undefined;
         const secret = asked?.secret ?? set?.secret ?? false;
         const mayChange = yours ? data.runsHere : data.mayChange;
         const runner = data.service.person.name ?? shortDid(data.service.person.did);
@@ -589,9 +592,11 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
             <p className="small">
               {yours && !data.runsHere
                 ? `${runner}'s, who runs it: kept with it on their computer, for every project they run it in`
-                : set
-                  ? set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>
-                  : asked?.oauth ? 'Not signed in' : asked?.choose ? 'None chosen yet' : 'Not set'}
+                : app && typeof app.html_url === 'string'
+                  ? <>Made: <a href={app.html_url} target="_blank" rel="noopener noreferrer">{appName}</a></>
+                  : set
+                    ? set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>
+                    : asked?.oauth ? 'Not signed in' : asked?.register ? 'Not made yet' : asked?.choose ? 'None chosen yet' : 'Not set'}
               {yours && data.runsHere && <span className="muted"> · yours, for every project you run it in</span>}
               {set && 'by' in set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
             </p>
@@ -600,7 +605,12 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
             )}
             {mayChange && !asked?.choose && (
               <div className="field-row">
-                {asked?.oauth ? (
+                {app && yours && 'next' in yours && yours.next && (
+                  <button className="default" onClick={() => window.open(yours.next, '_blank', 'noopener')}>
+                    Install it on repositories…
+                  </button>
+                )}
+                {asked?.oauth || asked?.register ? (
                   <AsyncButton
                     className="default"
                     onClick={() =>
@@ -619,10 +629,12 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
                           reload();
                           serviceChanged(service.did);
                         }
-                      }, `${service.name} is signed in`)
+                      }, asked.register ? `${asked.label} is made` : `${service.name} is signed in`)
                     }
                   >
-                    {set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth.authorize ?? asked.oauth.device ?? asked.oauth.token).hostname.replace(/^(www|api|accounts)\./, '')}…`}
+                    {asked.register
+                      ? `${set ? 'Make another' : `Make ${lowerFirst(asked.label)}`} on ${new URL(asked.register.page).hostname}…`
+                      : set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth!.authorize ?? asked.oauth!.device ?? asked.oauth!.token).hostname.replace(/^(www|api|accounts)\./, '')}…`}
                   </AsyncButton>
                 ) : (
                   <>

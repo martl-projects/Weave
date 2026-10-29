@@ -40,6 +40,13 @@ describe('a setting picked from what the service lists', () => {
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: 'reachable' }])).toMatch(/"choose" names the action/);
     expect(problems([{ name: 'REPOS', label: 'Repositories', choose: { action: 'reachable' }, yours: true }])).toMatch(/the project's, not yours/);
   });
+  it('registers an app of yours with the provider: always yours, never typed in', () => {
+    const register = { page: 'https://github.com/settings/apps/new', exchange: 'https://api.github.com/app-manifests/{code}/conversions', manifest: { name: 'Weave access {random}' }, keep: ['id', 'owner.login'], key: 'pem', then: '{html_url}/installations/new' };
+    expect(checkManifest({ app: 'access', name: 'Access', service, wasm, env: [{ name: 'GITHUB_APP', label: 'Your GitHub App', register }] }).manifest?.env).toEqual([{ name: 'GITHUB_APP', label: 'Your GitHub App', secret: true, register, yours: true }]);
+    const problems = (env: unknown[]) => checkManifest({ app: 'access', name: 'Access', service, wasm, env }).problems.join('\n');
+    expect(problems([{ name: 'GITHUB_APP', label: 'App', register: { ...register, exchange: 'https://api.github.com/conversions' } }])).toMatch(/"register" names/);
+    expect(problems([{ name: 'GITHUB_APP', label: 'App', register, secret: true }])).toMatch(/neither a sign-in, a pick, nor a secret/);
+  });
   it("keeps a sign-in as whoever runs it: theirs, for every project", () => {
     const oauth = { device: 'https://github.com/login/device/code', token: 'https://github.com/login/oauth/access_token', client: 'abc' };
     expect(checkManifest({ app: 'access', name: 'Access', service, wasm, env: [{ name: 'GITHUB', label: 'Your GitHub', yours: true, oauth }] }).manifest?.env).toEqual([{ name: 'GITHUB', label: 'Your GitHub', secret: true, oauth, yours: true }]);

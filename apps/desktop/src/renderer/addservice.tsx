@@ -150,7 +150,7 @@ function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { proje
               attempt(
                 () =>
                   api<ServiceInfo>('addService', { shipped: picked.shipped.name, spaces: [project.id], settings, ...(keep ? { settingsIn: project.id } : {}) }).then((service) => {
-                    if (keep && picked.shipped.settings.some((s) => (s.oauth || s.choose) && !settings[s.name])) setSetUp(service);
+                    if (keep && picked.shipped.settings.some((s) => (s.oauth || s.choose || s.register) && !settings[s.name])) setSetUp(service);
                     else added('')();
                   }),
                 `${picked.shipped.title} runs in p/${project.name}`,
@@ -197,7 +197,7 @@ function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { proje
 function SettingsForm({ project, maintainer, contract, note, settings, add }: { project: SpaceInfo; maintainer: boolean; contract: ServiceContract; note: string; settings: AppSetting[]; add(settings: Record<string, string>, keep: boolean): Promise<unknown> }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [keep, setKeep] = useState(maintainer);
-  const missing = settings.filter((s) => !s.optional && !s.oauth && !s.choose && !values[s.name]?.trim());
+  const missing = settings.filter((s) => !s.optional && !s.oauth && !s.choose && !s.register && !values[s.name]?.trim());
   return (
     <>
       <p className="small muted">
