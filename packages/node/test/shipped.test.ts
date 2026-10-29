@@ -124,6 +124,13 @@ describe('services Weave ships', { timeout: 120_000 }, () => {
       await restart();
       await new Promise((r) => setTimeout(r, 1500));
       expect((await ticker()).contract).toMatchObject({ writes: [], actions: [{ name: 'hello' }] });
+      // One that asks for no settings any more: its profile asks for none (not what it asked for before).
+      expect((await martl.serviceSettings({ space: 'Weave', service: 'ticker' })).asks.map((a) => a.name)).toEqual(['KEY']);
+      const listed = JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>;
+      delete listed.ticker.manifest.env;
+      writeFileSync(join(mine, 'shipped.json'), JSON.stringify(listed));
+      await restart();
+      await vi.waitFor(async () => expect((await martl.serviceSettings({ space: 'Weave', service: 'ticker' })).asks).toEqual([]), { timeout: 10_000, interval: 200 });
 
       // Code from others serves only its own port: never another of this computer (a database's, say).
       copyFileSync(component, join(mine, 'ticker.wasm'));

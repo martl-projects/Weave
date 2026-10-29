@@ -1377,7 +1377,9 @@ export class Services {
     const same = (a: unknown, b: unknown) => canonicalJson(JSON.parse(JSON.stringify(a ?? null)) as Json) === canonicalJson(JSON.parse(JSON.stringify(b ?? null)) as Json);
     if (s.digest !== stored.shipped!.digest || !same(stored.asks ?? [], s.manifest.env ?? []) || !same(contract, stored.contract) || description !== stored.description) {
       // This Weave ships a new one: its settings as it asks for them now.
-      const after = { ...stored, contract, description, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
+      // One that asks for nothing any more asks for nothing: not what it asked for before.
+      const { asks: _asks, ...rest } = stored;
+      const after: StoredService = { ...rest, contract, description, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
       this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
       this.publishServiceProfile(after);
       stored = after;
