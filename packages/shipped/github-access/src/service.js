@@ -145,9 +145,12 @@ function status(space, who) {
   const project = projects().find((p) => p.id === space);
   const s = state();
   const mine = JSON.parse(accounts(space, 'github')).find((a) => a.did === who && a.verified);
+  const repos = project?.repos ?? [];
   return {
-    repos: (project?.repos ?? []).map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
-    ...(mine ? { me: { handle: mine.handle } } : {}),
+    repos: repos.map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
+    // The one asking: its person (their repositories), or a member with access (and where it's given so far).
+    ...(who === JSON.parse(me()).person ? { yours: true } : {}),
+    ...(mine ? { me: { handle: mine.handle, given: repos.filter((r) => mine.handle.toLowerCase() in (s.gave[r] ?? {})) } } : {}),
   };
 }
 

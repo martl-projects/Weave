@@ -723,29 +723,34 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
   const extras: ScopedAction[] = [
-    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
+    // Asking it in words: only where it has no page of its own (its page is how one talks to it).
+    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true), withoutPage: true as const }] : []),
     ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true), replaces: ['publish', 'releases'] }] : []),
-    ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
     ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
-    ...(own && mine
-      ? [
-          {
-            key: 'out',
-            label: `Take out of p/${project.name}`,
-            who: 'runner' as const,
-            mine: true,
-            run: () =>
-              void (async () =>
-                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
-                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))(),
-          },
-        ]
-      : []),
   ];
   return (
     <fieldset className="project-service">
-      <legend>
+      <legend className="service-title">
         <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
+        {/* The same for every service: its settings (maintainers), and taking it out of the project (whoever runs it). */}
+        {maintainer && service.builtin !== 'website' && (
+          <button className="icon-button" title="Settings" onClick={() => setSetting(true)}>
+            <Icon name="gear" />
+          </button>
+        )}
+        {own && mine && (
+          <button
+            className="icon-button"
+            title={`Take out of p/${project.name}`}
+            onClick={() =>
+              void (async () =>
+                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
+                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))()
+            }
+          >
+            <Icon name="trash" />
+          </button>
+        )}
       </legend>
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />

@@ -699,6 +699,8 @@ export interface ScopedAction {
   run(): void;
   /** Its contract's actions this stands in for. */
   replaces?: string[];
+  /** Only where the service has no page of its own shown (asking it in words: its page is how one talks to it). */
+  withoutPage?: true;
 }
 
 /**
@@ -714,9 +716,9 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
   // one of its own pages, where it's shown.
   // And Weave's own view of what it does (a website service's running websites, say): `covered`.
   const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? [])]);
-  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && shown.length))];
   if (!all.length && !shown.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
@@ -839,11 +841,34 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
 
 
 /**
+ * The app's look around a service's page, for the page to follow (dark or light, the skin's colours): its text, a
+ * quieter text, links, lines, buttons, font, and whether it's dark.
+ */
+function themeAround(frame: HTMLElement | null): Record<string, string> | undefined {
+  const box = frame?.closest('fieldset');
+  if (!box) return undefined;
+  const css = getComputedStyle(box);
+  const button = box.querySelector('button');
+  const b = button ? getComputedStyle(button) : undefined;
+  const muted = box.querySelector('.muted');
+  const link = box.querySelector('a');
+  return {
+    scheme: getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light',
+    text: css.color,
+    muted: muted ? getComputedStyle(muted).color : css.color,
+    link: link ? getComputedStyle(link).color : css.color,
+    line: css.borderTopColor,
+    font: css.fontFamily,
+    ...(b ? { buttonBg: b.backgroundColor, buttonText: b.color, buttonBorder: b.borderTopColor, buttonRadius: b.borderTopLeftRadius } : {}),
+  };
+}
+
+/**
  * A service's own page in its card: its panel, sandboxed with no network (like a board's view). It learns where it is
  * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
  * and gets the service's answer back; it may say how tall it is.
  *
- *   to it:    {weave: 'view', panel, space, me, actions, boards} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
+ *   to it:    {weave: 'view', panel, space, me, actions, boards, theme} (again when something changed; theme: the app's look)   {weave: 'acted', id, text?, data?, error?}
  *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}   {weave: 'visit', website} (to Live)
  */
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
@@ -858,7 +883,7 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
   boardNames.current = (boards ?? []).map((b) => b.name);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () =>
-    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })), boards: boardNames.current });
+    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })), boards: boardNames.current, theme: themeAround(frame.current) });
   // Again whenever something changed here (a website opened, a setting changed): it shows what's current. Not for
   // requests to services and their answers: a page that asks its service on each view would ask on and on.
   useEffect(sendView, [actions, boards]);

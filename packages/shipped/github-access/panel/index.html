@@ -12,9 +12,20 @@
   .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
   .grow { flex: 1; }
   .empty { padding: 6px; color: #555; }
+  /* Following the app's look, once it says what it is. */
+  body.themed { color: var(--text); font-family: var(--font); }
+  .themed .muted, .themed .empty { color: var(--muted); }
+  .themed a { color: var(--link); }
+  .themed th, .themed td { border-color: var(--line); }
+  .themed button { background: var(--buttonBg); color: var(--buttonText); border: 1px solid var(--buttonBorder); border-radius: var(--buttonRadius); }
+  .lead { display: flex; gap: 10px; align-items: center; margin: 2px 0 10px; }
+  .lead .big { font-weight: bold; padding: 6px 14px; }
+  .lead b { font-weight: bold; }
+  .ok { color: #006400; font-weight: bold; }
+  h4 { margin: 4px 0; font-size: 12px; }
 </style>
+<div id="mine" class="lead"></div>
 <div id="list" class="empty">Looking…</div>
-<div id="mine" class="row"></div>
 <script>
   // Talks only to Weave: asks the service (its actions, checked by Weave) and shows the answer.
   let view;
@@ -35,19 +46,21 @@
     const mine = document.getElementById('mine');
     try {
       const s = (await act('status')).data ?? { repos: [] };
+      const names = s.repos.map((r) => r.repo).join(', ');
+      // First what almost everyone wants: their own access. Whoever runs it owns the repositories (and hands them out).
+      if (s.yours) mine.innerHTML = `<span class="grow muted">${s.repos.length ? 'Your repositories: you hand them to projects in your GitHub keyvault (Keys &amp; devices).' : 'Hand this project repositories of yours in your GitHub keyvault (Keys &amp; devices): its members get access to them.'}</span>`;
+      else if (!s.repos.length) mine.innerHTML = '<span class="grow muted">No repositories here yet: whoever runs it hands them to this project.</span>';
+      else if (s.me) mine.innerHTML = `<span class="grow"><span class="ok">✓</span> You have access as <b>${esc(s.me.handle)}</b> on GitHub${s.me.given.length < s.repos.length ? `: GitHub invites you (accept it there, from your email or github.com/notifications)` : ''}.</span>`;
+      else mine.innerHTML = `<button class="big" data-account="github">Get access with my GitHub…</button><span class="grow muted">You get ${s.repos.some((r) => r.personal) ? 'write' : 'read'} access to ${esc(names)}, with the GitHub account you proved.</span>`;
       if (!s.repos.length) {
-        list.className = 'empty';
-        list.textContent = 'No repositories yet: whoever runs it hands them to this project in their GitHub keyvault (Keys & devices).';
+        list.className = '';
+        list.innerHTML = '';
       } else {
         list.className = '';
-        list.innerHTML = `<table><tr><th>Repository</th><th>Members get</th><th>Given so far</th></tr>${s.repos
+        list.innerHTML = `<h4>Repositories</h4><table><tr><th>Repository</th><th>Members get</th><th>Given so far</th></tr>${s.repos
           .map((r) => `<tr><td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a>${r.problem ? `<div class="problem">${esc(r.problem)}</div>` : ''}</td><td class="muted">${r.personal === undefined ? '' : r.personal ? 'write access' : 'read access'}</td><td class="muted">${r.given ?? 0}</td></tr>`)
-          .join('')}</table><div class="empty">Handed to this project by whoever runs it, in their GitHub keyvault.</div>`;
+          .join('')}</table>`;
       }
-      // Your own access: by the GitHub account you proved and shared with this project.
-      mine.innerHTML = s.me
-        ? `<span class="grow muted">You get access as ${esc(s.me.handle)} on GitHub.</span>`
-        : `<span class="grow muted">To get access, share your proven GitHub account with this project.</span><button data-account="github">Share my GitHub account…</button>`;
     } catch (error) {
       list.className = 'empty';
       list.textContent = String(error);
@@ -65,6 +78,14 @@
     // Each view (again when something changed): show what's current, a moment later if views come in a burst.
     if (m?.weave === 'view') {
       view = m;
+      // The app's look: dark or light, its colours and font.
+      const t = m.theme;
+      if (t) {
+        const r = document.documentElement.style;
+        r.colorScheme = t.scheme;
+        for (const [k, v] of Object.entries(t)) if (v) r.setProperty(`--${k}`, v);
+        document.body.classList.add('themed');
+      }
       clearTimeout(soon);
       soon = setTimeout(show, 150);
     }
