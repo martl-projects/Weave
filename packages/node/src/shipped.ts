@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkManifest, type AppManifest } from '@weave/core';
+import { checkManifest, parsePack, type AppManifest, type Pack } from '@weave/core';
 
 /*
  * Services Weave ships: WebAssembly components built from packages/shipped by Weave's own build, next to the daemon
@@ -51,6 +51,17 @@ export function shippedServices(dir: string | undefined = SHIPPED_DIR): Map<stri
     out.set(name, { name, digest, manifest, ...(typeof entry.about === 'string' ? { about: entry.about.slice(0, 400) } : {}), file: join(dir, entry.component), ...(typeof entry.site === 'string' ? { site: join(dir, entry.site) } : {}), ...(typeof entry.panel === 'string' ? { panel: join(dir, entry.panel) } : {}) });
   }
   return out;
+}
+
+/** The setup packs this Weave ships (packs.json beside its services): checked as catalogs' are. */
+export function shippedPacks(dir: string | undefined = SHIPPED_DIR): Pack[] {
+  if (!dir || !existsSync(join(dir, 'packs.json'))) return [];
+  try {
+    const all = JSON.parse(readFileSync(join(dir, 'packs.json'), 'utf8')) as unknown[];
+    return all.flatMap((p) => (parsePack(p).pack ? [parsePack(p).pack!] : []));
+  } catch {
+    return [];
+  }
 }
 
 /** Why a shipped service's file can't run (it isn't there, or isn't what this Weave ships), or undefined: it can. */

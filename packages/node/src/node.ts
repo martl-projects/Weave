@@ -394,7 +394,9 @@ import {
   SERVICE_PREFIX,
   type ServiceContract,
   type Builtin,
+  type Pack,
 } from '@weave/core';
+import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
   HOME_SOURCES,
@@ -9466,6 +9468,10 @@ export class WeaveNode implements Backend {
     const added = await this.#clientApps.add({ kind, artifact: { project: project.id, id: artifact.id, tag: artifact.tag, manifest: artifact.manifest }, approved: releaseApproval(artifact), taken });
     if (kind === 'keyvault') return this.#keyvaultInfo(this.#keyvaults.add({ shipped: added.name }));
     return this.#fetcherInfo(this.#fetchers.add({ shipped: added.name, projects: [project.id] }));
+  }
+
+  async setupPacks(): Promise<Pack[]> {
+    return shippedPacks(this.wasmSetup.shippedDir ?? SHIPPED_DIR);
   }
 
   async removeClientApp(name: string): Promise<void> {

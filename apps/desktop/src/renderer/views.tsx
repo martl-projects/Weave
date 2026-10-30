@@ -15,6 +15,8 @@ import { HubAccounts } from './accounts.tsx';
 import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
+import { SetupPackDialog } from './packs.tsx';
+import type { Pack } from '@weave/core';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -1259,6 +1261,10 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
 export function NewDialog({ onClose }: { onClose(): void }) {
   const [tab, setTab] = useState<'project' | 'community' | 'group' | 'join'>('project');
   const form = useForm({ name: '', description: '', invite: '', note: '' });
+  // A new project can be set up at once with a pack (GitHub for it, say): walked through right after it's made.
+  const { data: packs } = useApi(() => api<Pack[]>('setupPacks').catch(() => [] as Pack[]), []);
+  const [withPack, setWithPack] = useState<string>();
+  const [packFor, setPackFor] = useState<{ project: SpaceInfo; pack: Pack }>();
   const go = (space?: SpaceInfo) => {
     if (!space) return;
     onClose();
@@ -1268,7 +1274,16 @@ export function NewDialog({ onClose }: { onClose(): void }) {
   const create = async (e: FormEvent) => {
     e.preventDefault();
     const { name, description, invite } = form.values;
-    if (tab === 'project') go(await attempt(() => api<ProjectInfo>('createProject', { name, description }), `Created p/${name}`));
+    if (tab === 'project') {
+      const made = await attempt(() => api<ProjectInfo>('createProject', { name, description }), `Created p/${name}`);
+      const pack = packs?.find((p) => p.name === withPack);
+      if (made && pack) {
+        bump();
+        navigate(spaceHref(made));
+        return setPackFor({ project: made, pack });
+      }
+      go(made);
+    }
     if (tab === 'community') go(await attempt(() => api<CommunityInfo>('createCommunity', { name, description }), `Created r/${name}`));
     if (tab === 'group') go(await attempt(() => api<SpaceInfo>('createGroup', name), `Created g/${name}`));
     if (tab === 'join') {
@@ -1294,6 +1309,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
     group: 'A circle of people with its own chat. You can invite a whole group into a project.',
     join: 'Paste an invite link someone sent you. Some links ask the person who sent them to let you in first.',
   }[tab];
+  if (packFor) return <SetupPackDialog project={packFor.project} pack={packFor.pack} onClose={onClose} />;
   return (
     <Modal title="New" onClose={onClose}>
       <menu role="tablist">
@@ -1336,6 +1352,15 @@ export function NewDialog({ onClose }: { onClose(): void }) {
                   <textarea id="new-description" rows={3} {...form.field('description')} />
                 </div>
               )}
+              {tab === 'project' &&
+                (packs ?? []).map((p) => (
+                  <div className="field-row" key={p.name}>
+                    <input type="checkbox" id={`new-pack-${p.name}`} checked={withPack === p.name} onChange={(e) => setWithPack(e.target.checked ? p.name : undefined)} />
+                    <label htmlFor={`new-pack-${p.name}`}>
+                      {p.title} <span className="small muted">(set up right after: {p.steps.length} steps)</span>
+                    </label>
+                  </div>
+                ))}
             </>
           )}
           <p className="small">

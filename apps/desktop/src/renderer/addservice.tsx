@@ -3,6 +3,8 @@ import type { ArtifactInfo, CatalogEntryInfo, ServiceInfo, ServiceOriginInfo, Sh
 import type { AppSetting, ServiceContract } from '@weave/core';
 import { InstallFromCatalog } from './catalog.tsx';
 import { Icon, isIconName, type IconName } from './icons.tsx';
+import { SetupPackDialog } from './packs.tsx';
+import type { Pack } from '@weave/core';
 import { api, bump, useApi } from './lib.ts';
 import { contractText, KeptSettingsDialog } from './services.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
@@ -69,6 +71,8 @@ const BUILTINS = {
 
 export function ServiceCatalog({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
   const { data: shipped } = useApi(() => api<ShippedServiceInfo[]>('shippedServices').catch(() => [] as ShippedServiceInfo[]), []);
+  const { data: packs } = useApi(() => api<Pack[]>('setupPacks').catch(() => [] as Pack[]), []);
+  const [packing, setPacking] = useState<Pack>();
   const { data: listed } = useApi(async () => {
     const spaces = await api<SpaceInfo[]>('spaces');
     const lists = await Promise.all(spaces.filter((s) => s.kind !== 'direct').map((s) => api<CatalogEntryInfo[]>('catalog', s.id).then((l) => l.map((e) => ({ e, s }))).catch(() => [])));
@@ -81,6 +85,8 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
   const here = (s: ServiceInfo) => s.spaces.some((x) => x.id === project.id);
 
   const entries: Entry[] = [
+    // Setup packs first: several parts set up in a few clicks (GitHub: its keyvault, app and services).
+    ...(packs ?? []).map((p): Entry => ({ key: `pack:${p.name}`, icon: 'zap', title: p.title, by: 'Weave', about: p.about ?? `${p.steps.length} steps`, badge: `setup · ${p.steps.length} steps`, source: FROM_WEAVE, open: () => setPacking(p) })),
     ...(shipped ?? [])
       .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
       .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'Weave ✓', source: FROM_WEAVE, open: () => setPicked({ kind: 'shipped', shipped: x }) })),
@@ -104,6 +110,7 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
   const loading = !shipped || !listed || !artifacts;
 
   if (fromCatalog) return <InstallFromCatalog space={fromCatalog.space} entry={fromCatalog.entry} onClose={onClose} />;
+  if (packing) return <SetupPackDialog project={project} pack={packing} onClose={onClose} />;
   return (
     <Modal title={`Add a service · p/${project.name}`} onClose={onClose} wide>
       {!picked ? (
