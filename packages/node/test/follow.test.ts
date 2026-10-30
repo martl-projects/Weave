@@ -47,7 +47,8 @@ describe('following the daemon', () => {
     await new Promise((r) => setTimeout(r, 2500));
     await node.publish({ kind: 'weave.post', body: { text: 'still here' } });
     await new Promise((r) => setTimeout(r, 300));
-    expect(seen.map((i) => (i.body as { text?: string }).text)).toContain('still here');
+    // Live signals (marks, hints) travel the same stream without a body.
+    expect(seen.map((i) => (i.body as { text?: string } | null)?.text)).toContain('still here');
 
     watching.abort();
     await api.close();
