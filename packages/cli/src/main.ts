@@ -2513,6 +2513,8 @@ ${postLine(p)}`);
       return out(t, () => treasuryLine(t));
     }
 
+    // A project's artifacts (any number, each from its own source): "app" is what they were called before.
+    case 'artifact':
     case 'app': {
       const [sub] = args;
       const b = await backend();
@@ -2521,6 +2523,10 @@ ${postLine(p)}`);
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
         const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
+      }
+      if (sub === 'list') {
+        const lines = await b.artifactLines(needProject());
+        return out(lines, () => lines.map((l) => `${l.id.padEnd(24)} ${l.name} · ${l.kind}${l.tag ? ` · ${l.tag}` : ''}${l.source ? ` · from ${l.source.provider}: ${l.source.ref}` : ''}`).join('\n') || '(no artifacts described yet)');
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
@@ -2556,10 +2562,10 @@ ${postLine(p)}`);
       }
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
-        const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
+        const app = await b.releaseArtifact({ project: needProject(), tag: args[1], ...(values.artifact ? { artifact: values.artifact } : {}), ...(values.repo ? { source: values.repo } : {}), assets });
         return out(app, () => `${app.name} ${app.install?.tag} is released from ${app.install?.source ? `${app.install.source.provider}: ${app.install.source.ref}` : 'its image'}: it installs as a service\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}${app.start?.image && !app.install?.image ? `\n  its image ${app.start.image} is left out: it's private or not tagged ${app.install?.tag} (hosts run the build files)` : app.install?.image ? `\n  image         ${app.install.image.ref}@${app.install.image.digest.slice(0, 19)}…` : ''}`);
       }
-      throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
+      throw new Error('usage: weave artifact publish|list|show|check|example|workflow|release <tag> [--artifact <id> | --repo <owner/name>] -p <project>');
     }
 
     // "rooms" and "room": what websites were called before.

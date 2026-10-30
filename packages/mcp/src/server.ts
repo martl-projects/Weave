@@ -896,9 +896,9 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   server.registerTool(
     'weave_app_publish',
     {
-      title: "Publish a project's app",
+      title: "Describe one of a project's artifacts",
       description:
-        "Maintainers: publish (or replace) a project's app manifest from its weave.app.json on this computer: the app's id and name, the ports a website may share, and start.command. Release files set by weave_app_release are kept. Needs the weave.app permission.",
+        "Maintainers: describe one of a project's artifacts from its weave.app.json on this computer (a new one, or the next description of one, by its id): a project has any number, each released from its own source. Release files set by weave_app_release are kept. Needs the weave.app permission.",
       inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
     },
     run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
@@ -907,9 +907,9 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   server.registerTool(
     'weave_app_manifest',
     {
-      title: "A project app's manifest: rules, example, check",
+      title: "An artifact's manifest: rules, example, check",
       description:
-        "weave.app.json describes a project's app: its id and name, the ports a website shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
       inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
       annotations: { readOnlyHint: true },
     },
@@ -943,12 +943,23 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   server.registerTool(
     'weave_app_releases',
     {
-      title: "A project app's GitHub releases",
-      description: "The releases of the project's repository, newest first, with how many files each has (a release workflow attaches them last). Use it to see whether a pushed tag has become a release yet.",
+      title: "An artifact's releases",
+      description: "The releases of one of a project's artifacts (or of a new source), as the project's provider sees them, newest first, with how many files each has (a release workflow attaches them last). Use it to see whether a pushed tag has become a release yet. Without artifact or source: the project's only artifact; weave_project lists none of them, weave_app_lines does.",
+      inputSchema: { project: z.string(), artifact: z.string().optional().describe('Its id (from weave_app_lines)'), source: z.string().optional().describe('Where its releases are, for a new one: a repository owner/name') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ project, artifact, source }: { project: string; artifact?: string; source?: string }) => backend.artifactReleases({ project, ...(artifact ? { artifact } : {}), ...(source ? { source } : {}) })),
+  );
+
+  server.registerTool(
+    'weave_app_lines',
+    {
+      title: "A project's artifacts",
+      description: 'Every artifact a project describes and releases (any number): its id, name, kind, where its releases come from, and its latest version.',
       inputSchema: { project: z.string() },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ project }: { project: string }) => backend.appReleases(project)),
+    run(async ({ project }: { project: string }) => backend.artifactLines(project)),
   );
 
   server.registerTool(
@@ -966,36 +977,38 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   server.registerTool(
     'weave_app_release',
     {
-      title: "Point a project's app at a GitHub release",
+      title: "Release one of a project's artifacts",
       description:
-        "Maintainers: after a release exists on GitHub, point the project's app at it by tag. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); websites then run it (anyone in a project with the website service opens one with it). Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
+        "Maintainers: after a release exists where an artifact's releases are (GitHub, say), release it in the project by tag: the artifact named (artifact), the one from that source (repo), or the project's only one; a new source starts a new artifact. Weave reads weave.app.json from the repository at that tag (so the release carries its own manifest) and downloads each file once to fingerprint it (SHA-256); websites then run it (anyone in a project with the website service opens one with it). Files are matched to platforms by name (win, mac, linux; x64, arm64), or give assets like {\"win32-x64\": \"Gameshow-win.zip\"}. Needs the weave.app permission.",
       inputSchema: {
         project: z.string(),
         tag: z.string().describe('The release tag, like v1.4'),
-        repo: z.string().optional().describe("owner/name; default: the project's linked repository"),
+        artifact: z.string().optional().describe('Which artifact (its id, from weave_app_lines)'),
+        repo: z.string().optional().describe('Where its releases are, owner/name: a new source starts a new artifact'),
         assets: z.record(z.string(), z.string()).optional(),
         wait: z.number().min(0).max(20).optional().describe('Minutes to wait for the release and its files, while a workflow builds it'),
       },
     },
-    run(async ({ project, tag, repo, assets, wait }: { project: string; tag: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
+    run(async ({ project, tag, artifact, repo, assets, wait }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
+      const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}) };
       // A pushed tag becomes a release with files a few minutes later, if a workflow makes it: look every 30 seconds.
       const until = Date.now() + (wait ?? 0) * 60_000;
       if (wait) {
-        const now = await backend.appReleases(project).catch(() => undefined);
+        const now = await backend.artifactReleases(which).catch(() => undefined);
         if (now && !now.releases.some((r) => r.tag === tag) && now.releaseWorkflow === false)
           throw new Error(
             `${now.repo} has no workflow that turns a pushed tag into a release, so waiting won't help: a tag alone isn't a release. Add Weave's release workflow (weave_release_workflow) and push the tag again, or ask your person to create the release with build files on github.com.`,
           );
       }
       while (Date.now() < until) {
-        const ready = await backend.appReleases(project).then(
+        const ready = await backend.artifactReleases(which).then(
           (r) => r.releases.some((x) => x.tag === tag && x.files > 0),
           () => false,
         );
         if (ready) break;
         await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, Math.max(0, until - Date.now()))));
       }
-      return backend.releaseApp({ project, tag, repo, assets, as });
+      return backend.releaseArtifact({ ...which, tag, ...(assets ? { assets } : {}), as });
     }),
   );
 

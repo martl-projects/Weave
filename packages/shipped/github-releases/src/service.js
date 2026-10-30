@@ -117,7 +117,7 @@ async function publishRelease(space, input) {
     return { text: `${name} ${found.tag_name} is available`, data: { id: item.id, manifest } };
   }
 
-  // The app: as weave.app.json says at the tag, or as published before.
+  // The artifact: as weave.app.json says at the tag, or as described before.
   const content = await github(`/repos/${repo}/contents/weave.app.json?ref=${encodeURIComponent(found.tag_name)}`, token);
   let app;
   if (content.ok) {
@@ -125,7 +125,8 @@ async function publishRelease(space, input) {
     app = JSON.parse(atob(String(body.content ?? '').replace(/\s/g, '')));
   } else if (input.previous) app = input.previous;
   else throw new Error(`${repo} has no weave.app.json at ${found.tag_name}: add one (app, name, services, start), tag again, and publish`);
-  if (input.previous && input.previous.app !== app.app) throw new Error(`${repo} at ${found.tag_name} holds the app "${app.app}", but the project's app is "${input.previous.app}"`);
+  // The same artifact as released from this source before (another is another source's, or a new one).
+  if (input.previous && input.previous.app !== app.app) throw new Error(`${repo} at ${found.tag_name} holds the artifact "${app.app}", but what's released from ${repo} so far is "${input.previous.app}"`);
 
   // Which file is for which platform: as given, or guessed from the names.
   const chosen = new Map();
