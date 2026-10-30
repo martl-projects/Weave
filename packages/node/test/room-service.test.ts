@@ -111,6 +111,8 @@ describe('the website service', { timeout: 60_000 }, () => {
       try {
         await expect(lena.openWebsite({ project: 'Horses', name: 'Board', port: boardPort })).rejects.toThrow(/website isn't in Horses/);
         const opened = await lena.openWebsite({ project: 'Party', name: 'Board', port: boardPort });
+        // Said in the project's chat, as a card to join it; unless she'd rather not.
+        expect((await lena.messages('Party')).filter((m) => m.announce)).toMatchObject([{ text: 'opened Board: come and join', announce: { kind: 'website', id: opened.id } }]);
         expect(opened).toMatchObject({ name: 'Board', mine: true, offeredBy: { name: 'website' }, open: true });
 
         // martl's release, installed as a service in Party (approved first): a web app without a contract reads and

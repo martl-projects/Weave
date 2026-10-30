@@ -9,6 +9,7 @@ import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, 
 import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
 import { NameBadges } from './badges.tsx';
+import { AnnounceCard } from './announce.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -58,7 +59,9 @@ function Message({
   mentionNames,
   onReply,
   moderating,
+  space,
 }: {
+  space: SpaceInfo;
   row: Extract<Row, { kind: 'msg' }>;
   meDid: string;
   mentionNames: string[];
@@ -114,6 +117,7 @@ function Message({
             </div>
           )}
           <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />
+          {m.announce && <AnnounceCard space={space} announce={m.announce} />}
           {m.reactions.length > 0 && (
             <div className="reactions">
               {m.reactions.map((r) => (
@@ -357,7 +361,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
                     <span>{row.label}</span>
                   </div>
                 ) : (
-                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} />
+                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} space={space} />
                 )}
               </div>
             );

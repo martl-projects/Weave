@@ -344,6 +344,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   const hosts = (services ?? []).filter((s) => (s.builtin === 'website' || s.contract.websites === 'host') && s.enabled && !s.node);
   const projects = [...new Map(hosts.flatMap((s) => s.spaces).filter((x) => x.kind === 'project').map((x) => [x.id, x])).values()];
   const [where, setWhere] = useState<string>();
+  const [announce, setAnnounce] = useState(true);
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
   const runs = artifact.command?.join(' ') ?? 'its program';
   return (
@@ -368,6 +369,10 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
             writes nothing in the project. Your Websites service makes it a running website{project ? ` everyone in p/${project.name} can visit` : ''}, in Live, until you close it.
           </p>
           <p className="small muted">It's other people's code: only launch it if you trust p/{artifact.project.name}.</p>
+          <div className="field-row">
+            <input type="checkbox" id="launch-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+            <label htmlFor="launch-announce">Announce it in the project's chat: people find it there, and come and join</label>
+          </div>
         </>
       )}
       <div className="buttons">
@@ -376,7 +381,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
           disabled={!project}
           onClick={() =>
             attempt(async () => {
-              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true });
+              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce });
               bump();
               onClose();
               location.hash = `#/p/${project!.id}/live`;
@@ -640,6 +645,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const [name, setName] = useState('');
   const [port, setPort] = useState('');
   const [busy, setBusy] = useState(false);
+  const [announce, setAnnounce] = useState(true);
   const ready = !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
   const open = async () => {
     setBusy(true);
@@ -652,7 +658,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
       if (!payments.on) payments.turn(true);
     }
     const access = who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
-    const room = await attempt(() => api<WebsiteInfo>('openWebsite', { service, project: project.id, name: name.trim(), port: Number(port), ...access }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: visitors reach port ${port}`);
+    const room = await attempt(() => api<WebsiteInfo>('openWebsite', { service, project: project.id, name: name.trim(), port: Number(port), ...access, announce }), away ? `"${name.trim()}" goes to ${away}: it opens once the node has it` : `"${name.trim()}" is open: visitors reach port ${port}`);
     setBusy(false);
     if (room) {
       bump();
@@ -727,6 +733,10 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
             </div>
           ))}
         </fieldset>
+        <div className="field-row">
+          <input type="checkbox" id="open-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+          <label htmlFor="open-announce">Announce it in the project's chat: people find it there, and come and join</label>
+        </div>
         <div className="buttons">
           <button onClick={onClose}>Cancel</button>
           <button className="default" disabled={!ready || busy} onClick={() => void open()}>

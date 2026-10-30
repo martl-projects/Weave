@@ -779,3 +779,6 @@ button.session-title:hover { text-decoration: underline; }
 /* Where a service comes from, in its card's title. */
 .origin-weave { color: #006400; }
 .origin-warn { color: #a00000; font-weight: bold; }
+
+/* Under a message announcing something live: the thing, as one row, with its button. */
+.announce-card { max-width: 560px; margin: 4px 0; padding: 2px 8px; border: 1px solid var(--line, #c0c0c0); border-radius: 6px; }

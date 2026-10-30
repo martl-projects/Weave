@@ -35,7 +35,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine' | 'live';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -1555,6 +1555,8 @@ export interface MessageInfo {
   /** The message this one answers, if it is still known. */
   replyTo?: { id: string; by: Actor; text: string };
   reactions: ReactionInfo[];
+  /** It announces something live: a website opened (its id, or the service hosting it) or a version offered (its artifact id). */
+  announce?: { kind: 'website' | 'release'; id: string };
 }
 
 export interface IssueInfo {

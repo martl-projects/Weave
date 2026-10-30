@@ -493,6 +493,8 @@ import {
   type AccountInfo,
   type MyAccountInfo,
   type FetcherInfo,
+  type ServiceInfo,
+  type WebsiteInfo,
   type KeyvaultInfo,
   type ArtifactLine,
   type AppReleases,
@@ -3748,13 +3750,16 @@ export class WeaveNode implements Backend {
    * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
    * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
    */
-  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
+  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; announce?: boolean; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const from = this.#releaseLine(project, input);
-    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(from.previous ? { previous: from.previous as unknown as Json } : {}) }, input.as, from.provider)) as { manifest?: unknown };
-    return parseManifest(data.manifest);
+    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(from.previous ? { previous: from.previous as unknown as Json } : {}) }, input.as, from.provider)) as { id?: string; manifest?: unknown };
+    const manifest = parseManifest(data.manifest);
+    // Offered: said in the project's chat, as a card to get it from (unless announce is false).
+    if (input.announce !== false && data.id) await this.#announce(project.id, { kind: 'release', id: data.id }, `${manifest.name} ${manifest.install?.tag ?? input.tag} is available`);
+    return manifest;
   }
 
   /** Before artifact lines: releasing a project's app (repo: where from). */
@@ -3777,7 +3782,8 @@ export class WeaveNode implements Backend {
     const checked = checkServiceLabel((await imageLabels(ref, digest, options))[SERVICE_LABEL]);
     if (!checked.manifest) throw new Error(`${ref}:${tag} isn't a Weave service: ${checked.problems.join('; ')}`);
     const manifest = parseManifest({ ...checked.manifest, start: { image: ref }, install: { tag, image: { ref, tag, digest, packaged: true } } });
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    const item = await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    await this.#announce(project.id, { kind: 'release', id: item.id }, `${manifest.name} ${tag} is available`);
     return manifest;
   }
 
@@ -5743,6 +5749,8 @@ export class WeaveNode implements Backend {
       const channel = text('channel') || 'general';
       const open = post ? { space, post: post.id } : { space, channel };
       const place = post ? `“${post.title}”` : `${where} #${channel}`;
+      // Something live announced (a website opened, a version offered): news for everyone following the project.
+      if (body.announce && space.kind === 'project' && !this.#homeHidden().has(space.id)) return { type: 'live', category: 'activity', title: `${who} ${snippet(text('text'))}`, text: where, open };
       const name = this.nameOf(me)?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (name && new RegExp(`@${name}(?![\\w-])`, 'i').test(text('text')))
         return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(text('text')), open };
@@ -9129,7 +9137,20 @@ export class WeaveNode implements Backend {
       channel: m.channel,
       ...(parent ? { replyTo: { id: parent.id, by: this.#actor(parent.author, parent.signer), text: parent.text.slice(0, 140) } } : {}),
       reactions: m.reactions.map(this.#reactionInfo),
+      ...(m.announce ? { announce: m.announce } : {}),
     };
+  }
+
+  /**
+   * Announce something live in a project's chat (#general): a website opened, a version offered. A message like any
+   * (its text says it), carrying what it's about, so Weave shows it as a card that knows whether it's still on.
+   */
+  async #announce(project: string, announce: { kind: 'website' | 'release'; id: string }, text: string): Promise<void> {
+    try {
+      await this.publish({ kind: KIND_MSG, body: { text, announce }, space: project });
+    } catch (error) {
+      console.error(`weave: couldn't announce it: ${(error as Error).message}`);
+    }
   }
 
   #replyInfo = (r: Reply): ReplyInfo => ({ id: r.id, by: this.#actor(r.author, r.signer), text: r.text, time: r.time });
@@ -9399,8 +9420,12 @@ export class WeaveNode implements Backend {
     return this.#services.serviceProfiles(...args);
   }
 
-  launchWebsite(...args: Parameters<Services['launchWebsite']>): ReturnType<Services['launchWebsite']> {
-    return this.#services.launchWebsite(...args);
+  /** Launch a website artifact in a project, and (unless announce is false) say so in its chat. */
+  async launchWebsite(input: Parameters<Services['launchWebsite']>[0] & { announce?: boolean }): Promise<ServiceInfo> {
+    const { announce, ...rest } = input;
+    const service = await this.#services.launchWebsite(rest);
+    if (announce !== false) await this.#announce(this.#project(input.project).id, { kind: 'website', id: service.did }, `started ${service.artifact?.name ?? service.name}: come and join`);
+    return service;
   }
 
   withdrawArtifact(...args: Parameters<Services['withdrawArtifact']>): ReturnType<Services['withdrawArtifact']> {
@@ -9419,6 +9444,7 @@ export class WeaveNode implements Backend {
     const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as, from.provider)) as { id?: string };
     const found = (await this.artifacts(project.id)).find((a) => a.id === data.id);
     if (!found) throw new Error(`${input.file} was published, but isn't an artifact of ${project.name} here: is its provider's person a maintainer?`);
+    await this.#announce(project.id, { kind: 'release', id: found.id }, `${found.name} ${found.tag} is available`);
     return found;
   }
 
@@ -9615,8 +9641,12 @@ export class WeaveNode implements Backend {
     this.#services.locateWait = ms;
   }
 
-  openWebsite(...args: Parameters<Website['openWebsite']>): ReturnType<Website['openWebsite']> {
-    return this.#website.openWebsite(...args);
+  /** Open a website in a project, and (unless announce is false) say so in its chat: people find it there. */
+  async openWebsite(input: Parameters<Website['openWebsite']>[0] & { announce?: boolean }): Promise<WebsiteInfo> {
+    const { announce, ...rest } = input;
+    const site = await this.#website.openWebsite(rest);
+    if (announce !== false) await this.#announce(site.project.id, { kind: 'website', id: site.id }, `opened ${site.name}: come and join`);
+    return site;
   }
 }
 
