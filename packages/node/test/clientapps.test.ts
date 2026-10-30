@@ -44,16 +44,20 @@ describe('keyvaults and fetchers from releases', { timeout: 300_000 }, () => {
       await lena.joinSpace(await martl.invite('Acme'));
       // Someone else's keyvault (for a platform Weave knows nothing of) and fetcher, released like any artifact.
       await publishRelease(martl, { project: 'Acme', repo: 'acme/vault', tag: 'v1', manifest: { app: 'acme-vault', name: 'Acme vault', keyvault: { platform: 'acme', net: ['api.acme.example'], resources: 'buckets' }, wasm: { component: 'acme-vault.wasm' } }, files: { wasm: { name: 'acme-vault.wasm', bytes: vault } } });
+      await publishRelease(martl, { project: 'Acme', repo: 'acme/vault2', tag: 'v1', manifest: { app: 'acme-vault-2', name: 'Acme vault 2', keyvault: { platform: 'acme', net: ['evil.example'] }, wasm: { component: 'acme-vault.wasm' } }, files: { wasm: { name: 'acme-vault.wasm', bytes: vault } } });
       await publishRelease(martl, { project: 'Acme', repo: 'acme/fetch', tag: 'v1', manifest: { app: 'acme-fetch', name: 'Acme fetch', fetcher: { net: ['files.acme.example'] }, wasm: { component: 'acme-fetch.wasm' } }, files: { wasm: { name: 'acme-fetch.wasm', bytes: fetcher } } });
       sync([martl, lena]);
-      expect((await lena.artifacts('Acme')).map((a) => [a.name, a.kind]).sort()).toEqual([['Acme fetch', 'fetcher'], ['Acme vault', 'keyvault']]);
+      expect((await lena.artifacts('Acme')).map((a) => [a.name, a.kind]).sort()).toEqual([['Acme fetch', 'fetcher'], ['Acme vault 2', 'keyvault'], ['Acme vault', 'keyvault']]);
 
       // Approved first: what it would run, as what, reaching where.
-      const [vaultRelease] = (await lena.artifacts('Acme')).filter((a) => a.kind === 'keyvault');
+      const vaultRelease = (await lena.artifacts('Acme')).find((a) => a.name === 'Acme vault')!;
       await expect(lena.addClientApp({ project: 'Acme', artifact: vaultRelease.id })).rejects.toThrow(/approve it first: Weave would run Acme vault v1, released in Acme, as your keyvault for acme \(it holds your access there\); it reaches api\.acme\.example/);
       const added = await lena.addClientApp({ project: 'Acme', artifact: vaultRelease.id, approve: true });
       expect(added).toMatchObject({ name: 'acme-vault', title: 'Acme vault', platform: 'acme', resources: 'buckets', added: true });
       expect((await lena.keyvaults()).find((k) => k.name === 'acme-vault')).toMatchObject({ added: true, apps: [] });
+      // One keyvault per platform: another for acme (anyone's) never stands in quietly.
+      const second = (await lena.artifacts('Acme')).find((a) => a.name === 'Acme vault 2')!;
+      await expect(lena.addClientApp({ project: 'Acme', artifact: second.id, approve: true })).rejects.toThrow(/you have a keyvault for acme already \(acme-vault\): remove it first/);
 
       // A fetcher too: for the project it came from.
       const [fetchRelease] = (await lena.artifacts('Acme')).filter((a) => a.kind === 'fetcher');
@@ -64,6 +68,12 @@ describe('keyvaults and fetchers from releases', { timeout: 300_000 }, () => {
       const wasm = readdirSync(file, { recursive: true }).map(String).find((f) => f.endsWith('acme-vault.wasm'))!;
       appendFileSync(join(file, wasm), 'changed');
       expect((await lena.keyvaults()).find((k) => k.name === 'acme-vault')?.problem).toMatch(/isn't what this Weave ships|acme-vault's component/);
+
+      // Weave's own names are its own: a release can't take one (here, its fetcher's).
+      await publishRelease(martl, { project: 'Acme', repo: 'acme/fake', tag: 'v1', manifest: { app: 'github-checkout', name: 'GitHub checkout', fetcher: { net: ['evil.example'] }, wasm: { component: 'acme-fetch.wasm' } }, files: { wasm: { name: 'acme-fetch.wasm', bytes: fetcher } } });
+      sync([martl, lena]);
+      const fake = (await lena.artifacts('Acme')).find((a) => a.name === 'GitHub checkout')!;
+      await expect(lena.addClientApp({ project: 'Acme', artifact: fake.id, approve: true })).rejects.toThrow(/github-checkout is the name of one Weave ships/);
 
       // Taken out: gone from both.
       await lena.removeClientApp('acme-vault');

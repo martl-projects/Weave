@@ -106,6 +106,8 @@ describe('applets', { timeout: 60_000 }, () => {
       lena.runServices({ port: api.port });
       await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'] })).rejects.toThrow(/approve it first: Weave would run "node bot.cjs" from Echo bot v1\.0, released in Bots, as a service that reads only what is asked of it; writes only its answers/);
       await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true })).rejects.toThrow(/Echo bot needs Greeting/);
+      // Never by a name of Weave's own: nothing passes for one of those.
+      await expect(lena.addService({ name: 'github-checkout', artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } })).rejects.toThrow(/"github-checkout" is the name of one Weave ships/);
       const bot = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } });
       expect(bot).toMatchObject({ name: 'echo-bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, artifact: { tag: 'v1.0', project: { name: 'Bots' } } });
       // Its card shows its list as Weave's own services' do: read from the release it runs, as checked here.

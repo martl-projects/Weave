@@ -8,7 +8,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, askAndWait, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { ActionScopes, askAndWait, contractText, OriginBadge, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -739,7 +739,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   return (
     <fieldset className="project-service">
       <legend className="service-title">
-        <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
+        <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span> <OriginBadge origin={service.origin} />
         {/* The same for every service: its settings (maintainers), and taking it out of the project (whoever runs it). */}
         {maintainer && service.builtin !== 'website' && (
           <button className="icon-button" title="Settings" onClick={() => setSetting(true)}>

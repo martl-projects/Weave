@@ -775,3 +775,7 @@ button.session-title:hover { text-decoration: underline; }
 .item-row:last-child { border-bottom: 0; }
 .item-list .icon-button { min-width: 0; min-height: 0; padding: 0 3px; line-height: 1; }
 .item-list .item-add { font-weight: bold; font-size: 14px; padding: 0 6px; }
+
+/* Where a service comes from, in its card's title. */
+.origin-weave { color: #006400; }
+.origin-warn { color: #a00000; font-weight: bold; }

@@ -335,6 +335,8 @@ export class Services {
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
+    // The names of what Weave ships are its own: nothing else goes by them, so nothing passes for them.
+    if (this.reservedName(name) && shipped?.name !== name) throw new Error(`"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
     const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
@@ -791,6 +793,11 @@ export class Services {
       }));
   }
 
+  /** Whether a name is one of what Weave ships (a service, keyvault, fetcher or verifier): never anyone else's. */
+  reservedName(name: string): boolean {
+    return shippedHere(this.h).has(name);
+  }
+
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
     return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.verifier).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
@@ -986,9 +993,9 @@ export class Services {
     const no = this.artifactRefusal(from, a.id, this.h.identity.author);
     if (no) throw new Error(no);
     if (!this.storedServices().some((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id))) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
-    // Its own name, unlike any service of yours.
+    // Its own name, unlike any service of yours (or one Weave ships).
     const base = serviceName(a.manifest.app) ? a.manifest.app : 'website';
-    const taken = new Set(this.storedServices().map((s) => s.name));
+    const taken = new Set([...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
     let name = base;
     for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
     const added = await this.addService({ name, artifact: { project: from.id, tag: a.id }, spaces: [project.id], ...(input.approve ? { approve: true } : {}) });
@@ -1335,7 +1342,7 @@ export class Services {
         else if (handler.artifact && this.h.isLinkedNode) next = { ...room, note: `Weave no longer runs ${handler.artifact.manifest.name} ${handler.artifact.tag} for this website: install it as a service from one of your computers (with --node), and it serves its website again` };
         else if (handler.artifact) {
           const a = handler.artifact;
-          const taken = new Set(this.h.agents.map((k) => k.name));
+          const taken = new Set([...this.h.agents.map((k) => k.name), ...shippedHere(this.h).keys()]);
           const base = serviceName(a.manifest.app) ?? 'app';
           const name = [base, ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${base}-${n}`)].find((n) => !taken.has(n)) ?? `${base}-${room.id.slice(0, 6).toLowerCase()}`;
           // The website first, so the service finds it when it serves its page.

@@ -9460,6 +9460,9 @@ export class WeaveNode implements Backend {
     const reaches = (artifact.manifest.keyvault?.net ?? artifact.manifest.fetcher?.net ?? []).join(', ') || 'nothing';
     if (!input.approve) throw new Error(`approve it first: Weave would run ${artifact.manifest.name} ${artifact.tag}, released in ${this.#spaceName(project)}, as your ${kind}${kind === 'keyvault' ? ` for ${artifact.manifest.keyvault!.platform} (it holds your access there)` : ''}; it reaches ${reaches} over HTTPS`);
     const taken = new Set([...this.#keyvaults.shipped(), ...this.#fetchers.shipped()].filter((s) => !this.#clientApps.list().some((c) => c.name === s.name)).map((s) => s.name));
+    // One keyvault per platform: said before anything is fetched.
+    const already = kind === 'keyvault' ? this.#keyvaults.forPlatform(artifact.manifest.keyvault!.platform) : undefined;
+    if (already && already.name !== artifact.manifest.app) throw new Error(`you have a keyvault for ${artifact.manifest.keyvault!.platform} already (${already.name}): remove it first to use ${artifact.manifest.name} instead`);
     const added = await this.#clientApps.add({ kind, artifact: { project: project.id, id: artifact.id, tag: artifact.tag, manifest: artifact.manifest }, approved: releaseApproval(artifact), taken });
     if (kind === 'keyvault') return this.#keyvaultInfo(this.#keyvaults.add({ shipped: added.name }));
     return this.#fetcherInfo(this.#fetchers.add({ shipped: added.name, projects: [project.id] }));

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ArtifactInfo, CatalogEntryInfo, ServiceInfo, ShippedServiceInfo, SpaceInfo } from '@weave/node/client';
+import type { ArtifactInfo, CatalogEntryInfo, ServiceInfo, ServiceOriginInfo, ShippedServiceInfo, SpaceInfo } from '@weave/node/client';
 import type { AppSetting, ServiceContract } from '@weave/core';
 import { InstallFromCatalog } from './catalog.tsx';
 import { Icon, isIconName, type IconName } from './icons.tsx';
@@ -14,11 +14,15 @@ import { InstallRelease, SettingInput, useArtifacts } from './websites.tsx';
  * this computer, and your own services elsewhere. Picking one shows what it does and asks for its settings.
  */
 
-/** An icon for a service, by what it is: its kind, the platform it uses or hands out from (where Weave has its icon), or its name. */
-export function serviceIcon(s: { name: string; builtin?: string; contract?: ServiceContract }): IconName {
+/**
+ * An icon for a service, by what it is: its kind, the platform it uses or hands out from (where Weave has its icon), or
+ * its name. A platform's icon only for one Weave ships (as checked): anyone else's could look like it otherwise.
+ */
+export function serviceIcon(s: { name: string; builtin?: string; shipped?: string; origin?: ServiceOriginInfo; contract?: ServiceContract }): IconName {
   const name = s.name.toLowerCase();
   if (s.builtin === 'website' || s.contract?.website || s.contract?.websites === 'host') return 'globe';
-  const platform = [...Object.keys(s.contract?.uses ?? {}), ...(s.contract?.sources ?? [])].find(isIconName);
+  const weaves = !!s.builtin || !!s.shipped || (s.origin?.kind === 'shipped' && s.origin.checked === 'verified');
+  const platform = weaves ? [...Object.keys(s.contract?.uses ?? {}), ...(s.contract?.sources ?? [])].find(isIconName) : undefined;
   if (platform) return platform;
   if (/s3|storage|bucket|backup/.test(name)) return 'database';
   if (/file|drive|docs/.test(name)) return 'folder';
@@ -63,7 +67,7 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
   const entries: Entry[] = [
     ...(shipped ?? [])
       .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
-      .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
+      .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
     ...(['website'] as const)
       // Websites ship with Weave now: the built-in one only where this Weave ships none.
       .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
@@ -140,7 +144,7 @@ function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { proje
       <button onClick={onBack}>← All services</button>
       {picked.kind === 'shipped' && (
         <>
-          {head(serviceIcon({ name: picked.shipped.name, contract: picked.shipped.contract }), picked.shipped.title, 'Weave', picked.shipped.about ?? '')}
+          {head(serviceIcon({ name: picked.shipped.name, shipped: picked.shipped.name, contract: picked.shipped.contract }), picked.shipped.title, 'Weave', picked.shipped.about ?? '')}
           <SettingsForm
             project={project}
             maintainer={maintainer}
