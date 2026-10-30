@@ -15,9 +15,10 @@ A folder whose manifest says `marks` is a mark service (docs/v2-stage19.md): wha
 (`badges`, `from-weave`) are everyone's, in their own domain, until they turn one off (View → Marks…, or `weave marks
 remove`); only these may show a bare check. Their source is bundled with what it imports of Weave's core.
 
-A folder whose manifest says `hints` is a hint service (docs/v2-stage20.md): numbers about your own state next to
-places, built the same way. Weave's own (`unread`) is everyone's until they turn it off (View → Notifications…, or
-`weave hints remove`); its settings are the rules for what counts.
+A folder whose manifest says `hints` is a hint service (docs/v2-stage20.md): numbers, tints and signs about your own
+state next to places and on messages, built the same way. Weave's own (`unread`, `spotlight`) are everyone's until they
+turn one off (View → Notifications…, or `weave hints remove`); Unread's settings are the rules for what counts,
+Spotlight's say which boards and people stand out (it shows nothing until they do).
 
 A folder whose manifest says `fetcher` instead of `service` is a fetcher: a client app of each person, not a project's
 service (`weave fetcher add <name> --spaces <project>`). A provider names it in its contract (`"fetcher":

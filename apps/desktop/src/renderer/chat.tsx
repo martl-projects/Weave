@@ -9,6 +9,7 @@ import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, 
 import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
 import { Marks } from './marks.tsx';
+import { HintSigns, useHints } from './notify.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -79,6 +80,8 @@ function Message({
     loadEmbeds(textRef.current);
   }, [html]);
   const mentionsMe = mentionNames.some((name) => new RegExp(`@${name}\\b`, 'i').test(m.text));
+  // What your hint services say about it (Spotlight: someone close to you, your contacts); asks of all rows go in one batch.
+  const [hint] = useHints('message', [{ message: { space, id: m.id } }]);
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));
   const mayDelete = m.by.did === meDid || moderating;
   const remove = async () => {
@@ -89,6 +92,7 @@ function Message({
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
       <a href={`#/space/${encodeURIComponent(m.by.did)}`}>{nameOf(m.by, meDid)}</a>
       {!m.by.agent && <Marks did={m.by.did} slot="author" space={space} />}
+      <HintSigns signs={hint.signs} />
       {m.by.agent && (
         <span className="agent-tag" title={`${m.by.name ?? 'Someone'}'s agent, signing with its own key`}>
           {m.by.agent} · AGENT
@@ -98,7 +102,7 @@ function Message({
   );
 
   return (
-    <div className={`msg-row${compact ? ' compact' : ''}${mentionsMe ? ' mentioned' : ''}`}>
+    <div className={`msg-row${compact ? ' compact' : ''}${mentionsMe ? ' mentioned' : ''}${hint.tone ? ` tint-${hint.tone}` : ''}`} title={hint.tooltip}>
       {m.replyTo && (
         <div className="reply-ref">
           <span className="reply-line" />

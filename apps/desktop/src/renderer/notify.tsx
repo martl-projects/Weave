@@ -178,11 +178,36 @@ export function ruleFor(notice: Notice, rules = loadRules()): NoticeRule | undef
   return best;
 }
 
-// ---------------------------------------------------------------- counts next to places in Places (hints)
+// ---------------------------------------------------------------- hints: next to places in Places, on messages
 
 type HintSubject = HintsAnswer['subject'];
+type HintSlot = 'place' | 'message';
 
-const hintKey = (s: HintSubject): string => ('space' in s ? `space:${s.space}` : 'board' in s ? `board:${s.board.space}/${s.board.name}` : `channel:${s.channel.space}/${s.channel.name}`);
+const hintKey = (s: HintSubject): string =>
+  'space' in s ? `space:${s.space}` : 'board' in s ? `board:${s.board.space}/${s.board.name}` : 'channel' in s ? `channel:${s.channel.space}/${s.channel.name}` : `message:${s.message.space}/${s.message.id}`;
+
+/** What your hint services say about one place or message, together: counts add up, the first tint wins, signs side by side. */
+export interface Shown {
+  count: number;
+  tone?: string;
+  signs: Array<{ sign: string; tooltip?: string }>;
+  /** Why it's tinted. */
+  tooltip?: string;
+}
+const NOTHING: Shown = { count: 0, signs: [] };
+
+function together(hints: HintsAnswer['hints']): Shown {
+  const tint = hints.find((h) => h.kind === 'tint');
+  const signs = hints.filter((h) => h.kind === 'sign' && h.sign).map((h) => ({ sign: h.sign!, ...(h.tooltip ? { tooltip: h.tooltip } : {}) }));
+  return {
+    count: hints.reduce((sum, h) => sum + (h.count ?? 0), 0),
+    ...(tint ? { tone: tint.tone, ...(tint.tooltip ? { tooltip: tint.tooltip } : {}) } : {}),
+    signs: signs.filter((x, i) => signs.findIndex((y) => y.sign === x.sign) === i).slice(0, 3),
+  };
+}
+
+/** Something to show: a number, a tint or a sign. */
+export const showsAnything = (s: Shown): boolean => !!s.count || !!s.tone || s.signs.length > 0;
 
 /*
  * Asked again only when the node says what the hint services say may have changed (weave.hints: a notice came in,
@@ -204,25 +229,27 @@ const useHintsVersion = () =>
     () => version,
   );
 
-/** The latest counts per place, as last answered. */
-const counts = new Map<string, number>();
+/** The latest per place or message, as last answered (the keys say which: space:, board:, channel:, message:). */
+const shown = new Map<string, Shown>();
+const answeredAt = new Map<string, number>();
 type Batch = { subjects: Map<string, HintSubject>; done: Array<() => void> };
-let batch: Batch | undefined;
-let answeredAt = -1;
+const batches = new Map<HintSlot, Batch>();
 
-function askHints(tick: number, subjects: HintSubject[]): Promise<void> {
-  if (tick === answeredAt && subjects.every((s) => counts.has(hintKey(s)))) return Promise.resolve();
+function askHints(slot: HintSlot, tick: number, subjects: HintSubject[]): Promise<void> {
+  if (subjects.every((s) => answeredAt.get(hintKey(s)) === tick)) return Promise.resolve();
   return new Promise((resolve) => {
-    let b = batch;
+    let b = batches.get(slot);
     if (!b) {
-      const fresh: Batch = (b = batch = { subjects: new Map(), done: [] });
+      const fresh: Batch = (b = { subjects: new Map(), done: [] });
+      batches.set(slot, fresh);
       queueMicrotask(() => {
-        batch = undefined;
-        const asked = tick;
-        api<HintsAnswer[]>('hints', { slot: 'place', subjects: [...fresh.subjects.values()] })
+        batches.delete(slot);
+        api<HintsAnswer[]>('hints', { slot, subjects: [...fresh.subjects.values()] })
           .then((answers) => {
-            answeredAt = asked;
-            for (const a of answers) counts.set(hintKey(a.subject), a.hints.reduce((sum, h) => sum + (h.count ?? 0), 0));
+            for (const a of answers) {
+              shown.set(hintKey(a.subject), together(a.hints));
+              answeredAt.set(hintKey(a.subject), tick);
+            }
           })
           .catch(() => {})
           .finally(() => fresh.done.forEach((done) => done()));
@@ -233,20 +260,36 @@ function askHints(tick: number, subjects: HintSubject[]): Promise<void> {
   });
 }
 
-/** The counts your hint services give these places (Unread: notices waiting there), in the same order. */
-export function useHintCounts(subjects: HintSubject[]): number[] {
+/** What your hint services say about these places or messages (Unread: notices waiting there), in the same order. */
+export function useHints(slot: HintSlot, subjects: HintSubject[]): Shown[] {
   const tick = useHintsVersion();
   const keys = subjects.map(hintKey);
   const [, rerender] = useState(0);
   useEffect(() => {
     let alive = true;
-    void askHints(tick, subjects).then(() => alive && rerender((n) => n + 1));
+    void askHints(slot, tick, subjects).then(() => alive && rerender((n) => n + 1));
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, keys.join('|')]);
-  return keys.map((k) => counts.get(k) ?? 0);
+  }, [slot, tick, keys.join('|')]);
+  return keys.map((k) => shown.get(k) ?? NOTHING);
+}
+
+const SIGN_CHARS: Record<string, string> = { heart: '\u2665', star: '\u2605', flag: '\u2691', bell: '\u{1F514}' };
+
+/** The signs your hint services give a place or a message, drawn in the app's look. */
+export function HintSigns({ signs }: { signs: Shown['signs'] }) {
+  if (!signs.length) return null;
+  return (
+    <span className="hint-signs">
+      {signs.map((s) => (
+        <span key={s.sign} className={`hint-sign sign-${s.sign}`} title={s.tooltip}>
+          {SIGN_CHARS[s.sign] ?? ''}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 const route = () => decodeURIComponent(location.hash).replace(/^#\/?/, '').split('/').filter(Boolean);
@@ -257,7 +300,7 @@ const route = () => decodeURIComponent(location.hash).replace(/^#\/?/, '').split
  */
 function clearSeen([kind, id, view, arg, post]: string[], force = false): void {
   if (!id || !['d', 'p', 'r', 'g'].includes(kind)) return;
-  if (!force && !counts.get(`space:${id}`)) return;
+  if (!force && !showsAnything(shown.get(`space:${id}`) ?? NOTHING)) return;
   const seen =
     kind === 'd'
       ? { view: 'all' }
@@ -371,8 +414,32 @@ function HintOrigin({ service: s }: { service: HintServiceInfo }) {
   return <span className="tag" title={`A release of ${s.project?.name ? `p/${s.project.name}` : "a project you aren't in"}, version ${s.tag}`}>{s.project?.name ? `p/${s.project.name}` : 'another project'}</span>;
 }
 
-/** The hint services whose counts show in Places: Weave's Unread, and any a project released that you took in. */
+/** A hint service's settings as JSON (Unread's are the rules above): sealed to you, so every device of yours shows alike. */
+function HintSettings({ service, onSaved }: { service: HintServiceInfo; onSaved(): void }) {
+  const [text, setText] = useState(() => JSON.stringify(service.settings ?? {}, null, 2));
+  const [problem, setProblem] = useState('');
+  const save = async () => {
+    let settings: unknown;
+    try {
+      settings = JSON.parse(text);
+    } catch {
+      return setProblem('That is not JSON.');
+    }
+    setProblem('');
+    await attempt(() => api('setHints', { service: service.service, settings }), `${service.name}: saved`).then(onSaved);
+  };
+  return (
+    <div className="hint-settings">
+      <textarea rows={8} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} />
+      {problem && <div className="small error">{problem}</div>}
+      <AsyncButton onClick={save}>Save</AsyncButton>
+    </div>
+  );
+}
+
+/** The hint services whose counts, tints and signs show in Places and chats: Weave's own, and any a project released that you took in. */
 function HintServices() {
+  const [editing, setEditing] = useState('');
   const mine = useApi(() => api<HintServiceInfo[]>('hintServices', { off: true }), []);
   const spaces = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const [project, setProject] = useState('');
@@ -389,8 +456,8 @@ function HintServices() {
   };
   return (
     <fieldset>
-      <legend>Counts</legend>
-      <p className="small muted">Numbers next to places come from these, counted on your Weave; what you open counts no more on all your devices.</p>
+      <legend>Counts and highlights</legend>
+      <p className="small muted">Numbers, tints and signs next to places and on messages come from these, worked out on your Weave; what you open counts no more on all your devices.</p>
       {mine.error && <p className="error">{mine.error}</p>}
       {(mine.data ?? []).map((s) => (
         <div className="marks-row" key={s.service}>
@@ -406,8 +473,12 @@ function HintServices() {
           {s.off ? (
             <AsyncButton onClick={() => attempt(() => api('addHints', { shipped: s.service }), `${s.name} is back`).then(mine.reload)}>Turn on</AsyncButton>
           ) : (
-            <AsyncButton onClick={() => attempt(() => api('removeHints', { service: s.service }), `${s.name} removed`).then(mine.reload)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>
+            <span>
+              {s.service !== UNREAD && <button onClick={() => setEditing(editing === s.service ? '' : s.service)}>Settings…</button>}{' '}
+              <AsyncButton onClick={() => attempt(() => api('removeHints', { service: s.service }), `${s.name} removed`).then(mine.reload)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>
+            </span>
           )}
+          {editing === s.service && !s.off && <HintSettings service={s} onSaved={() => (setEditing(''), mine.reload())} />}
         </div>
       ))}
       <div className="marks-row">

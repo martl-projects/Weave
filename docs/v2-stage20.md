@@ -57,6 +57,32 @@ The hint service Weave ships (`packages/shipped/unread`).
 - **Its settings are the rules** that used to be this computer's (View → Notifications…): `{rules: [{who?, space?, board?, count, notify}]}`, the most specific one winning. Without a rule, messages to you count.
 - **What the app does with the rules:** `notify` is still the app's to act on (system notifications), read from these settings.
 
+## 5. Tints, signs and messages
+
+From the same day: "Projekt hat Nachricht vom internal board: gelber Hintergrund, meine Freundin hat ein Herz unter der Nummer", and people standing out in the chat (favorites, contacts). Built as a second service Weave ships, Spotlight, to find where the model had to grow:
+
+- **Vocabulary:** besides `count`, `{kind: "tint", tone}` (the place's or message's background) and `{kind: "sign", sign}` (a small symbol under the number, or next to the author). Tones (`yellow`, `green`, `blue`, `red`, `purple`) and signs (`heart`, `star`, `flag`, `bell`) are names the app draws in its own look, in every skin: a service never picks a color or an image, so it can't imitate Weave's own marks or anything else.
+- **Several at once:** an answer entry is `{subject, hint}` or `{subject, hints: [...]}`, at most one of each kind per service. The app puts services together: counts add up, the first tint wins, signs side by side (up to three).
+- **Slot `message`:** subject `{message: {space, id}}`, tints and signs only (a number on a message says nothing). The chat asks for every row it shows, in one batch.
+- **Your address book as input:** `weave.contact` (sealed to you) is read like any kind; a hint service is about you, so it may.
+- **Settings in `ask`:** the marks world's `ask` gets no settings. A change of settings folds again from the start (they're part of the fold's key), so a service keeps what it needs of them in its state.
+
+**Spotlight** (`packages/shipped/spotlight`) shows nothing until its settings say who and what:
+
+```
+{"boards": [{"board": "internal", "tone": "yellow"}],
+ "people": [{"who": "did:key:…", "name": "Mia", "sign": "heart", "tone": "red"}],
+ "contacts": {"tone": "blue"}}
+```
+
+A place with something you haven't opened from such a board gets its tone, one where such a person wrote gets their sign; their messages get their tone and sign in the chat, and your contacts' messages too. Its settings are edited as JSON in View → Notifications… → Counts and highlights (`Settings…`), or `weave hints set Spotlight --settings <json>`.
+
+**Where the model may grow next:**
+- **Picking people:** `who` is a did:key in JSON; a person's menu ("Highlight Mia…") would write the settings of a service that says it takes people.
+- **Settings a service describes:** a hint service could declare its settings (as a website's `settings`), so the app draws a form instead of JSON.
+- **Agents:** a message an agent signs has the agent's key as author; a person's sign doesn't cover their agents yet.
+- **Posts and the Inbox** as subjects; the phone.
+
 ## As built
 
 - **Core** (`packages/core/src/hints.ts`):
@@ -80,4 +106,5 @@ The hint service Weave ships (`packages/shipped/unread`).
   - a starter (`service new --hints`);
   - bold "unread" names in Places, which still compare against this computer's `localStorage`;
   - counts for posts and the Inbox.
-- **Tests:** `packages/node/test/hints.test.ts`.
+- **Tints, signs, messages (section 5):** `HINT_TONES`, `HINT_SIGNS`, `checkHint(raw, slot)`, `checkHintAnswer(raw, asked, slot)` returning a list per subject; Places draws them in `TreeLink`, the chat on `msg-row` and next to the author (`HintSigns`, `useHints(slot, subjects)` in notify.tsx).
+- **Tests:** `packages/node/test/hints.test.ts` (Unread; Spotlight's internal board, someone close to you, contacts; the vocabulary).

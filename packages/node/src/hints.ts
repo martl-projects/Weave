@@ -1,4 +1,4 @@
-import { artifactsOf, checkHintAnswer, hintKey, HINT_SLOTS, KIND_APP, KIND_HINTS_MINE, KIND_NOTICE, KIND_SEEN, markServicesOf, parseHintSubject, parseSeen, SEEN_VIEWS, type Hint, type HintSlot, type HintSubject, type Json, type MarkService } from '@weave/core';
+import { artifactsOf, checkHintAnswer, hintKey, hintSubjectKind, HINT_SLOTS, KIND_APP, KIND_HINTS_MINE, KIND_NOTICE, KIND_SEEN, markServicesOf, parseHintSubject, parseSeen, SEEN_VIEWS, type Hint, type HintSlot, type HintSubject, type Json, type MarkService } from '@weave/core';
 import type { HintInfo, HintsAnswer, HintServiceInfo, Notice } from './backend.ts';
 import { Folder, MARKS_TIMING, orderKey, timeout } from './marks.ts';
 import type { Decoded, ServicesHost } from './node.ts';
@@ -27,7 +27,7 @@ export class Hints {
   readonly #folder: Folder;
   readonly #notices: (since: string) => Promise<HeldNotice[]>;
   /** Answers per fold version and subject. */
-  #asked = new Map<string, Hint | null>();
+  #asked = new Map<string, Hint[]>();
   #started = false;
 
   constructor(host: ServicesHost, notices: (since: string) => Promise<HeldNotice[]>) {
@@ -165,7 +165,7 @@ export class Hints {
     const services = this.#mine().filter((s) => s.manifest.hints!.slots.includes(slot));
     await Promise.all(
       services.map(async (service) => {
-        const asked = unique.filter((s) => service.manifest.hints!.subjects.includes(Object.keys(s)[0] as never));
+        const asked = unique.filter((s) => service.manifest.hints!.subjects.includes(hintSubjectKind(s)));
         if (!asked.length) return;
         const key = this.#key(service);
         const folding = this.#folder.fold(service, key, JSON.stringify({ kind: 'user', id: this.h.identity.author }), () => this.#items(service), (d) => d.feed);
@@ -186,14 +186,13 @@ export class Hints {
           } catch {
             return;
           }
-          const checked = checkHintAnswer(parsed, missing);
+          const checked = checkHintAnswer(parsed, missing, slot);
           if (this.#asked.size > 20_000) this.#asked.clear();
-          for (const s of missing) this.#asked.set(cacheKey(s), checked.get(hintKey(s)) ?? null);
+          for (const s of missing) this.#asked.set(cacheKey(s), checked.get(hintKey(s)) ?? []);
         }
         const issuer = { service: service.service, name: service.name, ...(service.shipped ? { weave: true as const } : {}) };
         for (const s of asked) {
-          const hint = this.#asked.get(cacheKey(s));
-          if (hint) out.get(hintKey(s))!.push({ ...hint, issuer });
+          for (const hint of this.#asked.get(cacheKey(s)) ?? []) out.get(hintKey(s))!.push({ ...hint, issuer });
         }
       }),
     );

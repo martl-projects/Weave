@@ -5,7 +5,7 @@ import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionReque
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
-import { NotificationSettings, startNotifications, useHintCounts } from './notify.tsx';
+import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
@@ -47,13 +47,20 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind:
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
+  // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
+  const count = (badge ?? 0) + (hint?.count ?? 0);
   return (
     <li style={{ paddingLeft: depth * 14 }}>
-      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
+      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
         {sprite ? image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
-        {!!badge && <span className="badge">{badge}</span>}
+        {(!!count || !!hint?.signs.length) && (
+          <span className="tree-hints">
+            {!!count && <span className="badge">{count}</span>}
+            {hint && <HintSigns signs={hint.signs} />}
+          </span>
+        )}
       </a>
     </li>
   );
@@ -73,16 +80,16 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
   const shownBoards = open && space.kind === 'project' ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
-  const [here, ...under] = useHintCounts([{ space: space.id }, ...shownBoards.map((b) => ({ board: { space: space.id, name: b.name } })), ...shownChannels.map((c) => ({ channel: { space: space.id, name: c.name } }))]);
-  const boardCount = (name: string) => under[shownBoards.findIndex((b) => b.name === name)] ?? 0;
-  const channelCount = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)] ?? 0;
+  const [here, ...under] = useHints('place', [{ space: space.id }, ...shownBoards.map((b) => ({ board: { space: space.id, name: b.name } })), ...shownChannels.map((c) => ({ channel: { space: space.id, name: c.name } }))]);
+  const boardHint = (name: string) => under[shownBoards.findIndex((b) => b.name === name)];
+  const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting + here} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
       {open && (
         <>
           {space.kind === 'project' &&
-            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} badge={boardCount(b.name)} />)}
+            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
               key={c.name}
@@ -92,7 +99,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               label={c.name}
               on={space.kind === 'project' && c.name === 'general' ? false : view === 'c' && (arg ?? 'general') === c.name}
               unread={isUnread(`${space.id}/${c.name}`, c.last)}
-              badge={channelCount(c.name)}
+              hint={channelHint(c.name)}
             />
           ))}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
@@ -112,7 +119,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
 
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useTick(); // unread state lives in localStorage
-  const chatCounts = useHintCounts(chats.map((c) => ({ space: c.space.id })));
+  const chatHints = useHints('place', chats.map((c) => ({ space: c.space.id })));
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
     const list = spaces.filter((s) => s.kind === kind && !s.closed);
     return (
@@ -152,7 +159,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
             label={c.peer.name ?? shortDid(c.peer.did)}
             on={route[0] === 'd' && route[1] === c.space.id}
             unread={!!c.last && !c.last.mine && route[1] !== c.space.id && isUnread(`${c.space.id}/general`, c.last.time)}
-            badge={chatCounts[i]}
+            hint={chatHints[i]}
           />
         ))}
         {chats.length === 0 && <li className="tree-none">friends show up here</li>}

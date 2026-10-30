@@ -1,0 +1,10 @@
+{
+  "app": "weave-spotlight",
+  "name": "Spotlight",
+  "hints": {
+    "component": "spotlight.wasm",
+    "reads": ["weave.seen", "weave.msg", "weave.post", "weave.contact"],
+    "slots": ["place", "message"],
+    "subjects": ["space", "board", "channel", "message"]
+  }
+}

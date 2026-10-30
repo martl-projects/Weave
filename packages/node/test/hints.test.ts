@@ -31,11 +31,15 @@ let SHIPPED: string;
 beforeAll(async () => {
   MARKS_TIMING.askMs = 20_000;
   MARKS_TIMING.foldWaitMs = 60_000;
-  const component = await buildComponent(join(SHIPPED_SRC, 'unread', 'src', 'service.js'), 'marks', { bundle: true });
   SHIPPED = tempDir('weave-hints-shipped-');
-  const manifest = JSON.parse(readFileSync(join(SHIPPED_SRC, 'unread', 'weave.app.json'), 'utf8')) as { hints: { component: string } };
-  copyFileSync(component, join(SHIPPED, manifest.hints.component));
-  writeFileSync(join(SHIPPED, 'shipped.json'), JSON.stringify({ unread: { component: manifest.hints.component, digest: digestOf(component), manifest } }));
+  const list: Record<string, unknown> = {};
+  for (const name of ['unread', 'spotlight']) {
+    const component = await buildComponent(join(SHIPPED_SRC, name, 'src', 'service.js'), 'marks', { bundle: true });
+    const manifest = JSON.parse(readFileSync(join(SHIPPED_SRC, name, 'weave.app.json'), 'utf8')) as { hints: { component: string } };
+    copyFileSync(component, join(SHIPPED, manifest.hints.component));
+    list[name] = { component: manifest.hints.component, digest: digestOf(component), manifest };
+  }
+  writeFileSync(join(SHIPPED, 'shipped.json'), JSON.stringify(list));
 }, 300_000);
 
 function person(name: string): WeaveNode {
@@ -60,7 +64,10 @@ describe('hint services', { timeout: 240_000 }, () => {
     const count = async (subject: unknown) => (await martl.hints({ slot: 'place', subjects: [subject] }))[0].hints.map((h) => [h.kind, h.count, h.issuer.name, h.issuer.weave]);
 
     // Weave's own, everyone's from the start; nothing old counts (the first start says everything before was seen).
-    expect(await martl.hintServices()).toMatchObject([{ service: 'weave-unread', name: 'Unread', shipped: true, settings: {} }]);
+    expect(await martl.hintServices()).toMatchObject([
+      { service: 'weave-unread', name: 'Unread', shipped: true, settings: {} },
+      { service: 'weave-spotlight', name: 'Spotlight', shipped: true, settings: {} },
+    ]);
     expect(await count({ space: climb.id })).toEqual([]);
     await tick();
 
@@ -84,7 +91,7 @@ describe('hint services', { timeout: 240_000 }, () => {
     await lena.say({ space: 'Climb', text: '@martl who brings the chalk?' });
     sync([martl, lena]);
     expect(await count({ space: climb.id })).toEqual([]);
-    expect((await martl.hintServices())[0].settings).toEqual(muted);
+    expect((await martl.hintServices()).find((s) => s.service === 'weave-unread')!.settings).toEqual(muted);
     await martl.setHints({ service: 'Unread', settings: {} });
     expect(await count({ space: climb.id })).toEqual([['count', 1, 'Unread', true]]);
 
@@ -92,13 +99,59 @@ describe('hint services', { timeout: 240_000 }, () => {
     await martl.setHints({ service: 'Unread', settings: { rules: [{ space: climb.id, count: true, notify: true }] } });
     await martl.removeHints({ service: 'Unread' });
     expect(await count({ space: climb.id })).toEqual([]);
-    expect(await martl.hintServices({ off: true })).toMatchObject([{ service: 'weave-unread', off: true }]);
+    expect((await martl.hintServices({ off: true })).find((s) => s.service === 'weave-unread')).toMatchObject({ off: true });
     await martl.addHints({ shipped: 'Unread' });
-    expect((await martl.hintServices())[0].settings).toEqual({ rules: [{ space: climb.id, count: true, notify: true }] });
+    expect((await martl.hintServices()).find((s) => s.service === 'weave-unread')!.settings).toEqual({ rules: [{ space: climb.id, count: true, notify: true }] });
     expect(await count({ space: climb.id })).toEqual([['count', 1, 'Unread', true]]);
 
     // A project's release is taken in only with a yes, and none is here.
     await expect(martl.addHints({ project: 'Climb' })).rejects.toThrow();
+  });
+
+  it('make what matters to you stand out: a board you care about, someone close to you, your contacts', async () => {
+    const martl = person('martl');
+    const lena = person('Lena');
+    const mia = person('Mia');
+    const ops = await martl.createProject({ name: 'Ops' });
+    await martl.setBoard({ project: 'Ops', name: 'internal', title: 'Internal' });
+    const friends = await martl.createGroup('Friends');
+    await lena.joinSpace(await martl.invite('Ops'));
+    await mia.joinSpace(await martl.invite('Friends'));
+    await lena.joinSpace(await martl.invite('Friends'));
+    sync([martl, lena, mia]);
+    const say = async (slot: 'place' | 'message', subject: unknown) =>
+      (await martl.hints({ slot, subjects: [subject] }))[0].hints.filter((h) => h.issuer.name === 'Spotlight').map((h) => [h.kind, h.tone ?? h.sign]);
+
+    // Nothing until its settings say who and what.
+    await martl.hints({ slot: 'place', subjects: [{ space: ops.id }] });
+    await tick();
+    await lena.submit({ space: 'Ops', board: 'internal', title: 'Server move on Friday' });
+    sync([martl, lena, mia]);
+    expect(await say('place', { space: ops.id })).toEqual([]);
+
+    // Internal posts tint the project, Mia's messages bring her heart, and are hers in the chat.
+    await martl.setHints({
+      service: 'Spotlight',
+      settings: { boards: [{ board: 'internal', tone: 'yellow' }], people: [{ who: mia.identity.author, name: 'Mia', sign: 'heart', tone: 'red' }], contacts: { tone: 'blue' } },
+    });
+    expect(await say('place', { space: ops.id })).toEqual([['tint', 'yellow']]);
+    expect(await say('place', { board: { space: ops.id, name: 'internal' } })).toEqual([['tint', 'yellow']]);
+    expect(await say('place', { board: { space: ops.id, name: 'ideas' } })).toEqual([]);
+    const fromMia = await mia.say({ space: 'Friends', text: 'dinner tonight?' });
+    const fromLena = await lena.say({ space: 'Friends', text: 'count me in' });
+    sync([martl, lena, mia]);
+    expect(await say('place', { space: friends.id })).toEqual([['sign', 'heart']]);
+    expect(await say('message', { message: { space: friends.id, id: fromMia.id } })).toEqual([['tint', 'red'], ['sign', 'heart']]);
+    expect(await say('message', { message: { space: friends.id, id: fromLena.id } })).toEqual([]);
+
+    // Opened: the place stands out no more; Mia's message still does. Lena in your contacts: hers stand out too.
+    await martl.seen({ space: friends.id, view: 'all' });
+    await martl.seen({ space: ops.id, view: 'board', name: 'internal' });
+    expect(await say('place', { space: friends.id })).toEqual([]);
+    expect(await say('place', { space: ops.id })).toEqual([]);
+    expect(await say('message', { message: { space: friends.id, id: fromMia.id } })).toEqual([['tint', 'red'], ['sign', 'heart']]);
+    await martl.addContact(await lena.contactLink());
+    expect(await say('message', { message: { space: friends.id, id: fromLena.id } })).toEqual([['tint', 'blue']]);
   });
 
   it('keeps answers to the vocabulary and to what was asked', () => {
@@ -112,7 +165,16 @@ describe('hint services', { timeout: 240_000 }, () => {
       ],
       asked,
     );
-    expect([...checked]).toEqual([['space:aaaa', { kind: 'count', count: 3, tooltip: 'three' }]]);
+    expect([...checked]).toEqual([['space:aaaa', [{ kind: 'count', count: 3, tooltip: 'three' }]]]);
     expect(checkHintAnswer([{ subject: { space: 'aaaa' }, hint: { kind: 'count', count: 0 } }], asked).size).toBe(0);
+    // Several kinds at once, one of each; tones and signs only from the vocabulary; no number on a message.
+    const message = { message: { space: 'aaaa', id: 'm1' } };
+    const many = checkHintAnswer(
+      [{ subject: { space: 'aaaa' }, hints: [{ kind: 'tint', tone: 'yellow' }, { kind: 'tint', tone: 'red' }, { kind: 'sign', sign: 'skull' }, { kind: 'sign', sign: 'heart' }] }],
+      [{ space: 'aaaa' }],
+    );
+    expect([...many]).toEqual([['space:aaaa', [{ kind: 'tint', tone: 'yellow' }, { kind: 'sign', sign: 'heart' }]]]);
+    const onMessage = checkHintAnswer([{ subject: message, hints: [{ kind: 'count', count: 2 }, { kind: 'tint', tone: '#ff0' }, { kind: 'sign', sign: 'star' }] }], [message], 'message');
+    expect([...onMessage]).toEqual([['message:aaaa/m1', [{ kind: 'sign', sign: 'star' }]]]);
   });
 });
