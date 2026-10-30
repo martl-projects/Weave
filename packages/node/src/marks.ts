@@ -23,7 +23,7 @@ const domainKey = (d: Domain) => (d.kind === 'user' ? 'user' : d.id);
 /** A service's state per release, domain and settings: changed settings fold again from the start. */
 const foldKey = (s: MarkService, d: Domain) => `${s.origin.release}|${domainKey(d)}|${JSON.stringify(s.settings ?? {})}`;
 
-interface Folded {
+export interface Folded {
   /** The ids folded so far, and the latest one's order key. */
   ids: Set<string>;
   last: string;
@@ -35,21 +35,126 @@ interface Folded {
 /** Where a slot shows, in words. */
 const SLOT_WORDS: Record<MarkSlot, string> = { member: 'in member lists', author: 'next to authors', chat: 'in chats', profile: 'on profiles', gate: 'at gates' };
 
-const orderKey = (d: Decoded) => `${d.event.time}\u0000${d.id}`;
+export const orderKey = (d: { event: { time: string }; id: string }) => `${d.event.time}\u0000${d.id}`;
 
-export class Marks {
-  readonly h: ServicesHost;
+/** An item as it's ordered before a service of the marks world is fed it. */
+export type FoldItem = { id: string; event: { time: string } };
+
+/**
+ * Running services of the marks world (mark services, and hint services: docs/v2-stage20.md): each fetched once (or
+ * the component Weave ships, exactly that file), started, and folded incrementally per key.
+ */
+export class Folder {
+  readonly #h: ServicesHost;
+  readonly #part: 'marks' | 'hints';
+  readonly #shipped: () => Map<string, ShippedService>;
   /** Components being made ready, by release. */
   #ready = new Map<string, Promise<string>>();
   #folded = new Map<string, Folded>();
   #folding = new Map<string, Promise<Folded>>();
+  /** Why a service shows nothing, by fold key. */
+  #problems = new Map<string, string>();
+
+  constructor(host: ServicesHost, part: 'marks' | 'hints', shipped: () => Map<string, ShippedService>) {
+    this.#h = host;
+    this.#part = part;
+    this.#shipped = shipped;
+  }
+
+  /** Fetch a service's release (once), or take the component Weave ships (exactly that file), and start it. */
+  prepare(s: MarkService): Promise<string> {
+    const key = `${this.#part}:${s.origin.release}`;
+    const before = this.#ready.get(s.origin.release);
+    if (before && this.#h.runtime.running(key)) return before;
+    const ready = (async () => {
+      const dir = joinPath(this.#h.home.dir, this.#part, s.shipped ? `${s.service}-${s.origin.release.slice(7, 23)}` : s.origin.release.slice(0, 40));
+      let component: string;
+      if (s.shipped) {
+        const shipped = this.#shipped().get(s.service);
+        const problem = !shipped ? `this Weave doesn't ship ${s.name} any more` : shippedProblem(shipped);
+        if (problem) throw new Error(problem);
+        component = shipped!.file;
+      } else component = joinPath(await releaseFolder(this.#h, dir, s), s.manifest[this.#part]!.component);
+      const entry = await prepareWasm(component, joinPath(dir, 'wasm'));
+      this.#h.runtime.startWasm(
+        key,
+        {
+          dir: joinPath(dir, 'wasm'),
+          entry,
+          data: joinPath(dir, 'data'),
+          log: joinPath(dir, `${this.#part}.log`),
+          name: s.name,
+          host: () => {
+            throw new Error(`a ${this.#part === 'marks' ? 'mark' : 'hint'} service calls nothing: it only folds and answers`);
+          },
+        },
+        () => {},
+      );
+      return key;
+    })();
+    this.#ready.set(s.origin.release, ready);
+    ready.catch(() => this.#ready.delete(s.origin.release));
+    return ready;
+  }
+
+  /**
+   * Fold what's new into the service's state under a key: only the new items, or all again when one came in older.
+   * items: in order (orderKey); feed: each as the service gets it.
+   */
+  fold<T extends FoldItem>(s: MarkService, key: string, domain: string, items: () => T[] | Promise<T[]>, feed: (item: T) => Record<string, Json>): Promise<Folded> {
+    const running = this.#folding.get(key);
+    if (running) return running;
+    const folding = (async () => {
+      const ready = await this.prepare(s);
+      const all = await items();
+      let before = this.#folded.get(key);
+      const fresh = all.filter((d) => !before?.ids.has(d.id));
+      if (before && !fresh.length) return before;
+      if (before && fresh.some((d) => orderKey(d) < before!.last)) before = undefined;
+      const fed = before ? fresh : all;
+      const state = String(await this.#h.runtime.callWasm(ready, 'fold', [domain, JSON.stringify(s.settings ?? {}), before?.state ?? null, JSON.stringify(fed.map(feed))]));
+      if (state.length > MARK_LIMITS.state) throw new Error(`its state grew larger than ${MARK_LIMITS.state / 1_000_000} MB`);
+      const folded: Folded = { ids: new Set([...(before?.ids ?? []), ...fed.map((d) => d.id)]), last: all.length ? orderKey(all[all.length - 1]) : '', state, version: (before?.version ?? 0) + 1 };
+      this.#folded.set(key, folded);
+      this.#problems.delete(key);
+      return folded;
+    })();
+    this.#folding.set(key, folding);
+    folding.then(
+      () => this.#folding.delete(key),
+      (error: Error) => {
+        this.#folding.delete(key);
+        this.#problems.set(key, error.message);
+      },
+    );
+    return folding;
+  }
+
+  /** Ask a service that's folded, within a time: its raw answer, or undefined. */
+  async ask(s: MarkService, args: string[], ms: number): Promise<unknown> {
+    const ready = await this.prepare(s);
+    return Promise.race([this.#h.runtime.callWasm(ready, 'ask', args), timeout(ms)]).catch(() => undefined);
+  }
+
+  /** Why a service shows nothing under a fold key. */
+  problem(key: string): string | undefined {
+    return this.#problems.get(key);
+  }
+
+  reset(): void {
+    this.#folded.clear();
+  }
+}
+
+export class Marks {
+  readonly h: ServicesHost;
+  readonly #folder: Folder;
   /** Answers per fold version, slot and subject. */
   #asked = new Map<string, Mark[]>();
-  /** Why a service shows nothing, by release and domain. */
-  #problems = new Map<string, string>();
 
   constructor(host: ServicesHost) {
     this.h = host;
+    this.#folder = new Folder(host, 'marks', () => this.#shipped());
   }
 
   // ---------------------------------------------------------------- which services, where
@@ -146,42 +251,6 @@ export class Marks {
 
   // ---------------------------------------------------------------- running
 
-  /** Fetch a service's release (once), or take the component Weave ships (exactly that file), and start it. */
-  #prepare(s: MarkService): Promise<string> {
-    const key = `marks:${s.origin.release}`;
-    const before = this.#ready.get(s.origin.release);
-    if (before && this.h.runtime.running(key)) return before;
-    const ready = (async () => {
-      const dir = joinPath(this.h.home.dir, 'marks', s.shipped ? `${s.service}-${s.origin.release.slice(7, 23)}` : s.origin.release.slice(0, 40));
-      let component: string;
-      if (s.shipped) {
-        const shipped = this.#shipped().get(s.service);
-        const problem = !shipped ? `this Weave doesn't ship ${s.name} any more` : shippedProblem(shipped);
-        if (problem) throw new Error(problem);
-        component = shipped!.file;
-      } else component = joinPath(await releaseFolder(this.h, dir, s), s.manifest.marks!.component);
-      const entry = await prepareWasm(component, joinPath(dir, 'wasm'));
-      this.h.runtime.startWasm(
-        key,
-        {
-          dir: joinPath(dir, 'wasm'),
-          entry,
-          data: joinPath(dir, 'data'),
-          log: joinPath(dir, 'marks.log'),
-          name: s.name,
-          host: () => {
-            throw new Error('a mark service calls nothing: it only folds and answers');
-          },
-        },
-        () => {},
-      );
-      return key;
-    })();
-    this.#ready.set(s.origin.release, ready);
-    ready.catch(() => this.#ready.delete(s.origin.release));
-    return ready;
-  }
-
   /**
    * What a service is fed in a domain: the kinds it reads, from public events and the domain (yours: everything this
    * node holds; a space's: that space), oldest first. "home": in the project it comes from, by one of its maintainers.
@@ -203,36 +272,10 @@ export class Marks {
     return { id: d.id, kind: d.inner.kind, body: d.inner.body, author: d.event.author, signer: d.event.signer, seq: d.event.seq, ...(name ? { authorName: name } : {}), time: d.event.time, ...(d.space ? { space: d.space.id } : {}), ...(home ? { home: true } : {}) };
   }
 
-  /** Fold what's new into the service's state in a domain: only the new items, or all again when one came in older. */
+  /** Fold what's new into the service's state in a domain. */
   #fold(s: MarkService, domain: Domain): Promise<Folded> {
-    const key = foldKey(s, domain);
-    const running = this.#folding.get(key);
-    if (running) return running;
-    const folding = (async () => {
-      const ready = await this.#prepare(s);
-      const items = this.#items(s, domain);
-      let before = this.#folded.get(key);
-      const fresh = items.filter((d) => !before?.ids.has(d.id));
-      if (before && !fresh.length) return before;
-      if (before && fresh.some((d) => orderKey(d) < before!.last)) before = undefined;
-      const feed = before ? fresh : items;
-      const domainJson = JSON.stringify(domain.kind === 'user' ? { kind: 'user', id: this.h.identity.author } : domain);
-      const state = String(await this.h.runtime.callWasm(ready, 'fold', [domainJson, JSON.stringify(s.settings ?? {}), before?.state ?? null, JSON.stringify(feed.map((d) => this.#item(s, d)))]));
-      if (state.length > MARK_LIMITS.state) throw new Error(`its state grew larger than ${MARK_LIMITS.state / 1_000_000} MB`);
-      const folded: Folded = { ids: new Set([...(before?.ids ?? []), ...feed.map((d) => d.id)]), last: items.length ? orderKey(items[items.length - 1]) : '', state, version: (before?.version ?? 0) + 1 };
-      this.#folded.set(key, folded);
-      this.#problems.delete(key);
-      return folded;
-    })();
-    this.#folding.set(key, folding);
-    folding.then(
-      () => this.#folding.delete(key),
-      (error: Error) => {
-        this.#folding.delete(key);
-        this.#problems.set(key, error.message);
-      },
-    );
-    return folding;
+    const domainJson = JSON.stringify(domain.kind === 'user' ? { kind: 'user', id: this.h.identity.author } : domain);
+    return this.#folder.fold(s, foldKey(s, domain), domainJson, () => this.#items(s, domain), (d) => this.#item(s, d));
   }
 
   // ---------------------------------------------------------------- asking
@@ -271,8 +314,7 @@ export class Marks {
       const cacheKey = (s: MarkSubject) => `${key}|${folded.version}|${slot.kind}|${slot.space ?? ''}|${subjectKey(s)}`;
       const missing = asked.filter((s) => !this.#asked.has(cacheKey(s)));
       if (missing.length) {
-        const ready = await this.#prepare(service);
-        const raw = await Promise.race([this.h.runtime.callWasm(ready, 'ask', [JSON.stringify(slot), JSON.stringify(missing), folded.state, viewer]), timeout(MARKS_TIMING.askMs)]).catch(() => undefined);
+        const raw = await this.#folder.ask(service, [JSON.stringify(slot), JSON.stringify(missing), folded.state, viewer], MARKS_TIMING.askMs);
         if (raw === undefined) return;
         let parsed: unknown;
         try {
@@ -329,7 +371,7 @@ export class Marks {
     const issuer = this.#issuer(s, domain);
     const project = s.shipped ? undefined : this.h.spaces.get(s.origin.project);
     const newest = s.shipped ? undefined : this.#releases(s.origin.project, s.service)[0];
-    const problem = this.#problems.get(foldKey(s, domain));
+    const problem = this.#folder.problem(foldKey(s, domain));
     return {
       service: s.service,
       name: s.name,
@@ -421,9 +463,9 @@ export class Marks {
 
   /** Forget what was folded (a service's state can't be trusted any more, or tests start over). */
   reset(): void {
-    this.#folded.clear();
+    this.#folder.reset();
     this.#asked.clear();
   }
 }
 
-const timeout = (ms: number) => new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms).unref());
+export const timeout = (ms: number) => new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms).unref());

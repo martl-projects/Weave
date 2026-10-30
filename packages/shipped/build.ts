@@ -1,5 +1,5 @@
 // Builds the services Weave ships into dist/: each folder here with a weave.app.json and src/service.js becomes its
-// component (manifest's wasm.component, or marks.component for a mark service, bundled with what it imports of Weave's
+// component (manifest's wasm.component, or marks.component / hints.component for a mark or hint service, bundled with what it imports of Weave's
 // core), and dist/shipped.json lists each one's digest and manifest. The packaged
 // daemon has the digests built in (apps/desktop/package.ts), so a component changed next to it doesn't start.
 //
@@ -22,16 +22,17 @@ const shipped: Record<string, { component: string; digest: string; manifest: unk
 for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'weave.app.json')))) {
   const raw = JSON.parse(readFileSync(join(here, name, 'weave.app.json'), 'utf8')) as unknown;
   const { manifest, problems } = checkManifest(raw);
-  if (!manifest?.wasm && !manifest?.marks) throw new Error(`${name}/weave.app.json: ${problems.join('; ') || 'a shipped service is a WebAssembly component (wasm, or marks)'}`);
-  // A mark service: pure (nothing reaches out, no clock), its imports bundled in.
-  if (manifest.marks) {
+  if (!manifest?.wasm && !manifest?.marks && !manifest?.hints) throw new Error(`${name}/weave.app.json: ${problems.join('; ') || 'a shipped service is a WebAssembly component (wasm, marks or hints)'}`);
+  // A mark or hint service: pure (nothing reaches out, no clock), its imports bundled in.
+  const pure = manifest.marks ?? manifest.hints;
+  if (pure) {
     const bundled = join(dist, `${name}.js`);
     await build({ entryPoints: [join(here, name, 'src', 'service.js')], outfile: bundled, bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', mainFields: ['module', 'main'], logLevel: 'warning' });
     const { component } = await componentize({ sourcePath: bundled, witWorld: wit, worldName: 'marks', disableFeatures: ['all'] } as unknown as Parameters<typeof componentize>[0]);
     rmSync(bundled);
-    writeFileSync(join(dist, manifest.marks.component), component);
+    writeFileSync(join(dist, pure.component), component);
     const about = readmeAbout(name);
-    shipped[name] = { component: manifest.marks.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
+    shipped[name] = { component: pure.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
     console.log(`${name}: ${shipped[name].digest}`);
     continue;
   }

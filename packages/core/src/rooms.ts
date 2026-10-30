@@ -3,6 +3,7 @@ import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
 import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
 import { parseAppMarks, type AppMarks } from './marks.ts';
+import { parseAppHints, type AppHints } from './hints.ts';
 import { parseWho, type ActionWho } from './serviceactions.ts';
 
 /*
@@ -89,6 +90,11 @@ export interface AppManifest {
    * packages/sdk/wit/service.wit; docs/v2-stage19.md). Pure like a client service, run by every node that took it in.
    */
   marks?: AppMarks;
+  /**
+   * A hint service: numbers about your own state next to places, from a service you chose (the marks world too;
+   * docs/v2-stage20.md). Pure, yours only, never a claim about anyone.
+   */
+  hints?: AppHints;
   /**
    * A fetcher: a client app that fetches artifacts for its person, on their node, with what a provider grants them
    * (artifact.fetch) and their own access. It answers no requests and has no key: Weave runs it when something is
@@ -532,7 +538,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'marks', 'lists']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'marks', 'hints', 'lists']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -562,7 +568,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined && m.marks === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined && m.marks === undefined && m.hints === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -710,8 +716,17 @@ export function checkManifest(input: unknown): ManifestCheck {
     if (parsed.problem) problems.push(parsed.problem);
     else marks = parsed.marks;
   }
-  if (!m.wasm && !m.client && !m.marks && rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
-  if (!m.wasm && !m.client && !m.marks && (rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
+  // A hint service: the same, answering with counts.
+  let hints: AppHints | undefined;
+  if (m.hints !== undefined) {
+    const raw = (m.hints && typeof m.hints === 'object' ? m.hints : {}) as Record<string, unknown>;
+    const parsed = parseAppHints(raw, packagePath(raw.component));
+    if (parsed.problem) problems.push(parsed.problem);
+    else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
+    else hints = parsed.hints;
+  }
+  if (!m.wasm && !m.client && !m.marks && !m.hints && rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
+  if (!m.wasm && !m.client && !m.marks && !m.hints && (rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
   const start =
     hint || command || release || image
       ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}), ...(image ? { image } : {}) }
@@ -765,7 +780,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(lists.length && service ? { lists } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(hints ? { hints } : {}), ...(lists.length && service ? { lists } : {}) } };
 }
 
 /**
@@ -828,6 +843,7 @@ export const MANIFEST_RULES = [
   'lists: what a service hands out, shown by Weave the same way in every card, however it runs (WebAssembly, a container, a program), whoever made it (search, pages, each button only for who may): its lists come first, before any page of its own. Each names the action that answers its items, + (add: an action, or {"hand": "github"}: whoever runs it hands one from their keyvault), the trash can (remove: an action, given {id}) and each item’s main button (use: an action and a label, or {"account": "github", "label": "Get access"}), and "covers" for other actions its items offer: [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github"}, "remove": {"action": "decline"}, "use": {"account": "github", "label": "Get access"}}]. Its list action answers [{id, icon?, title, badge?, detail?, url?, done? (said instead of the main button: "✓ You have access"), use?: false, remove?: false, more?: [{action, label, icon?, confirm?}]}], or, for a long list it pages itself, {items, next}, asked again with {query, cursor}. A page of its own (wasm.panels) only for what isn’t a list: a form of several steps, a live view.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
   'marks: a mark service, which shows marks next to names (the marks world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --marks): {"component": "marks.wasm", "reads": ["weave.badge"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"]}. Released like wasm. You take it into your own domain (weave marks add), shown everywhere you look; or a space\'s maintainers pin it (weave marks add --space), shown in that space only. Every node that took it in runs it with no key and no network. "reads": the kinds it folds. It answers with check, label, count, symbol or image, and Weave shows who says so.',
+  'hints: a hint service, which shows numbers about its person\'s own state next to places, like unread counts (the marks world too): {"component": "hints.wasm", "reads": ["weave.notice", "weave.seen"], "slots": ["place"], "subjects": ["space", "board", "channel"]}. Released like wasm; its person takes it in (weave hints add) and its counts show in their Places. It folds what their node holds of the kinds it reads, what\'s sealed to them too, and the notices their node works out (weave.notice), with no key and no network. It answers with a count, never a claim about anyone.',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
@@ -843,11 +859,12 @@ export const startCommand = (app: AppManifest | undefined, platform: string, rel
  * mark service (what shows next to names: yours, or pinned to a space), an app (its person runs it on their
  * computer, in a room), or a file (something to get).
  */
-export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'keyvault' | 'marks' | 'app' | 'file';
+export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'keyvault' | 'marks' | 'hints' | 'app' | 'file';
 
 export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (m.file) return 'file';
   if (m.marks) return 'marks';
+  if (m.hints) return 'hints';
   if (m.fetcher) return 'fetcher';
   if (m.keyvault) return 'keyvault';
   if (m.client) return 'board-view';

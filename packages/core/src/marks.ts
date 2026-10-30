@@ -110,8 +110,11 @@ export function parseAppMarks(raw: unknown, component: string | undefined): { ma
 
 const field = (body: Json, key: string): unknown => (body && typeof body === 'object' && !Array.isArray(body) ? body[key] : undefined);
 
-/** A mark service from a pin's (or your own) body, or undefined when it isn't one (a released mark service). */
-export function parseMarkService(body: Json, by: Did, time: string): MarkService | undefined {
+/**
+ * A mark service from a pin's (or your own) body, or undefined when it isn't one (a released mark service). part
+ * "hints": a hint service (docs/v2-stage20.md), kept the same way.
+ */
+export function parseMarkService(body: Json, by: Did, time: string, part: 'marks' | 'hints' = 'marks'): MarkService | undefined {
   const origin = field(body, 'origin') as Record<string, unknown> | undefined;
   const project = typeof origin?.project === 'string' ? origin.project : '';
   const release = typeof origin?.release === 'string' ? origin.release : '';
@@ -122,7 +125,7 @@ export function parseMarkService(body: Json, by: Did, time: string): MarkService
   } catch {
     return undefined;
   }
-  if (!manifest.marks || !manifest.install?.tag || !(manifest.install.image || manifest.install.assets?.wasm)) return undefined;
+  if (!manifest[part] || !manifest.install?.tag || !(manifest.install.image || manifest.install.assets?.wasm)) return undefined;
   const settings = field(body, 'settings');
   return {
     service: manifest.app,
@@ -141,7 +144,7 @@ export function parseMarkService(body: Json, by: Did, time: string): MarkService
  * The mark services in a list of events (a space's pins, by its maintainers; or your own): the latest per service
  * counts, and `on: false` takes it away. In time order.
  */
-export function markServicesOf(entries: Array<{ kind: string; body: Json; event: { author: Did; time: string; signer?: string; seq?: number } }>, kind: string, by?: Set<Did>): MarkService[] {
+export function markServicesOf(entries: Array<{ kind: string; body: Json; event: { author: Did; time: string; signer?: string; seq?: number } }>, kind: string, by?: Set<Did>, part: 'marks' | 'hints' = 'marks'): MarkService[] {
   const out = new Map<string, MarkService>();
   const sorted = entries.filter((e) => e.kind === kind && (!by || by.has(e.event.author))).sort((a, b) => a.event.time.localeCompare(b.event.time) || (a.event.seq ?? 0) - (b.event.seq ?? 0));
   for (const e of sorted) {
@@ -151,7 +154,7 @@ export function markServicesOf(entries: Array<{ kind: string; body: Json; event:
       out.delete(service);
       continue;
     }
-    const parsed = parseMarkService(e.body, e.event.author, e.event.time);
+    const parsed = parseMarkService(e.body, e.event.author, e.event.time, part);
     if (parsed && parsed.service === service) out.set(service, parsed);
   }
   return [...out.values()];

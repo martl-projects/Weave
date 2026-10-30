@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
-import type { AppImage, AppManifest, AppSetting, Pack, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -650,6 +650,40 @@ export interface MarkServiceInfo {
   /** A newer release of it (its tag): it runs only with another yes. */
   newer?: string;
   /** Why it shows nothing (it couldn't be fetched, its fold failed, its state grew too large). */
+  problem?: string;
+  by: Actor;
+  time: string;
+}
+
+/** A hint (docs/v2-stage20.md): a number about your own state next to a place, and which service says so. */
+export interface HintInfo extends Hint {
+  issuer: { service: string; name: string; weave?: true };
+}
+
+export interface HintsAnswer {
+  subject: HintSubject;
+  hints: HintInfo[];
+}
+
+/** A hint service of yours: one Weave ships, or a project's release you said yes to. */
+export interface HintServiceInfo {
+  service: string;
+  name: string;
+  tag: string;
+  release: string;
+  digest: string;
+  /** The project it comes from; none when Weave ships it. */
+  project?: { id: string; name?: string };
+  /** Its rules (Unread's: {rules: [{who?, space?, board?, count, notify}]}). */
+  settings: Json;
+  reads: string[];
+  /** Weave ships it: yours unless you turn it off. */
+  shipped?: true;
+  /** One Weave ships that you turned off (hintServices with off). */
+  off?: true;
+  /** A newer release of it (its tag): it runs only with another yes. */
+  newer?: string;
+  /** Why it shows nothing. */
   problem?: string;
   by: Actor;
   time: string;
@@ -2075,6 +2109,18 @@ export interface Backend {
   removeMarks(input: { service: string; space?: string; as?: string }): Promise<void>;
   /** Maintainers of the Weave project: say that something comes from Weave (on: false, no longer). From Weave shows it. */
   setOfficial(input: { subject: unknown; note?: string; on?: boolean; as?: string }): Promise<FeedItem>;
+  /** What your hint services say about these places ({space}, {board: {space, name}}, {channel: {space, name}}): unread counts, say. */
+  hints(input: { slot: string; subjects: unknown[] }): Promise<HintsAnswer[]>;
+  /** Your hint services (off: also the ones Weave ships you turned off). */
+  hintServices(input?: { off?: boolean }): Promise<HintServiceInfo[]>;
+  /** Take a project's hint service in (approve: your yes to exactly that release), or one Weave ships back (shipped). */
+  addHints(input: { project?: string; shipped?: string; app?: string; tag?: string; settings?: Json; approve?: boolean }): Promise<HintServiceInfo>;
+  /** Change a hint service's settings (Unread's rules): sealed to you, so every device of yours has them. */
+  setHints(input: { service: string; settings: Json }): Promise<HintServiceInfo>;
+  /** Take a hint service out (one Weave ships: turn it off). */
+  removeHints(input: { service: string }): Promise<void>;
+  /** You opened a place (a whole chat or space, a channel, a board, a post): what waited there counts no more, on every device of yours. */
+  seen(input: { space: string; view?: 'all' | 'channel' | 'board' | 'post'; name?: string }): Promise<void>;
 
   // projects
   project(ref: string): Promise<ProjectInfo>;
@@ -2309,7 +2355,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
-  'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial',
+  'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',
   'walletMessage', 'linkWallet', 'wallet', 'treasury', 'splitContract', 'announceTreasury', 'sweepRetired', 'setSplit', 'label', 'labels', 'createShow', 'cancelShow', 'shows', 'buyTicket', 'tickets', 'settleShow', 'proposeSafeTx', 'signSafeTx', 'safeProposals', 'paymentRequest', 'findPayment',
   'chats', 'openChat',
   'channels', 'createChannel', 'messages', 'say', 'deleteMessage', 'react',

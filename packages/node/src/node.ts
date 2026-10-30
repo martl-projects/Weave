@@ -555,6 +555,7 @@ import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
 import { Marks } from './marks.ts';
+import { Hints, type HeldNotice } from './hints.ts';
 import { RemoteAccess } from './remote.ts';
 import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchain.ts';
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
@@ -903,6 +904,18 @@ export class WeaveNode implements Backend {
   #liveListeners = new Set<(notice?: Notice) => void>();
   #marksListeners = new Set<() => void>();
   #marksTimer?: ReturnType<typeof setTimeout>;
+  #hintsListeners = new Set<() => void>();
+  #hintsTimer?: ReturnType<typeof setTimeout>;
+
+  /** Tell watchers what the hint services say may have changed (debounced, as marks are). */
+  #hintsChanged(): void {
+    if (this.#hintsTimer) return;
+    this.#hintsTimer = setTimeout(() => {
+      this.#hintsTimer = undefined;
+      for (const listener of this.#hintsListeners) listener();
+    }, 150);
+    this.#hintsTimer.unref?.();
+  }
 
   /** Tell watchers what the mark services say may have changed (debounced: a burst of badge events is one). */
   #marksChanged(): void {
@@ -1001,6 +1014,7 @@ export class WeaveNode implements Backend {
   #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services);
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
   #marks: Marks = new Marks(WeaveNode.servicesHost(this));
+  #hints: Hints = new Hints(WeaveNode.servicesHost(this), (since) => this.#heldNotices(since));
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
   #decoded?: Decoded[];
   /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
@@ -1529,9 +1543,12 @@ export class WeaveNode implements Backend {
     const unsubscribe = this.replica.onAppend((event) => {
       const item = this.itemFor(event);
       if (item && this.#marks.reads(item.kind)) this.#marksChanged();
+      if (item && this.#hints.reads(item.kind)) this.#hintsChanged();
       if (!item || this.#hiddenAuthors().has(item.author)) return;
       queue = queue.then(async () => {
         const notice = await this.#noticeFor(item).catch(() => undefined);
+        // A notice counts (Unread folds them): what the hint services say may have changed.
+        if (notice) this.#hintsChanged();
         onItem(notice ? { ...item, notice } : item);
       });
     });
@@ -1551,8 +1568,12 @@ export class WeaveNode implements Backend {
     // What the mark services say may have changed: views showing marks ask again (and only then).
     const onMarks = () => onItem({ id: `marks-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.marks', scope: 'live', body: null, author: me, signer: me, seq: 0 });
     this.#marksListeners.add(onMarks);
+    // And what the hint services say (unread counts): views showing them ask again.
+    const onHints = () => onItem({ id: `hints-${Date.now()}`, time: new Date().toISOString(), kind: 'weave.hints', scope: 'live', body: null, author: me, signer: me, seq: 0 });
+    this.#hintsListeners.add(onHints);
     await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
     this.#marksListeners.delete(onMarks);
+    this.#hintsListeners.delete(onHints);
     this.#liveListeners.delete(onLive);
     this.#openListeners.delete(onOpen);
     this.#mentionListeners.delete(onMention);
@@ -5706,8 +5727,8 @@ export class WeaveNode implements Backend {
    * Your own events (from any of your devices or agents) never do, and
    * neither do older ones arriving while catching up (over a day old).
    */
-  async #noticeFor(item: FeedItem): Promise<Notice | undefined> {
-    const notice = await this.#noticeOf(item);
+  async #noticeFor(item: FeedItem, anyAge = false): Promise<Notice | undefined> {
+    const notice = await this.#noticeOf(item, anyAge);
     if (!notice) return undefined;
     // Who and which board, for the rules that say what counts where (see the app's notify.tsx).
     const stored = notice.open.space && this.#spaces.get(notice.open.space.id);
@@ -5715,9 +5736,9 @@ export class WeaveNode implements Backend {
     return { ...notice, from: item.author, ...(board ? { board } : {}) };
   }
 
-  async #noticeOf(item: FeedItem): Promise<Notice | undefined> {
+  async #noticeOf(item: FeedItem, anyAge = false): Promise<Notice | undefined> {
     const me = this.identity.author;
-    if (item.author === me || item.private || Date.now() - Date.parse(item.time) > 86_400_000) return undefined;
+    if (item.author === me || item.private || (!anyAge && Date.now() - Date.parse(item.time) > 86_400_000)) return undefined;
     const body = (item.body && typeof item.body === 'object' && !Array.isArray(item.body) ? item.body : {}) as Record<string, Json>;
     const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
     const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
@@ -5788,6 +5809,30 @@ export class WeaveNode implements Backend {
       if (request) return { type: 'membership', category: 'requests', title: `${request.name ?? who} asks for ${request.tier.name}`, text: snippet(request.note), open: { inbox: true } };
     }
     return undefined;
+  }
+
+  /** Notices worked out per event (or none), for hint services: an event's notice doesn't change once it's here. */
+  #heldNoticeCache = new Map<string, Notice | null>();
+
+  /**
+   * The notices for you in the events this node holds since a time (any age, unlike notifications), oldest first:
+   * what hint services that read weave.notice fold (Unread counts them).
+   */
+  async #heldNotices(since: string): Promise<HeldNotice[]> {
+    const kinds = new Set([KIND_MSG, KIND_REPLY, KIND_POST, KIND_ISSUE, KIND_PROPOSAL, KIND_KNOCK, KIND_BADGE, KIND_BADGE_TRANSFER, KIND_MEMBERSHIP_REQUEST]);
+    const me = this.identity.author;
+    const hidden = this.#hiddenAuthors();
+    const out: HeldNotice[] = [];
+    for (const d of this.#decodeAll()) {
+      if (d.private || !kinds.has(d.inner.kind) || d.event.author === me || hidden.has(d.event.author) || d.event.time <= since) continue;
+      let notice = this.#heldNoticeCache.get(d.id);
+      if (notice === undefined) {
+        notice = (await this.#noticeFor(this.#toItem(d), true).catch(() => undefined)) ?? null;
+        this.#heldNoticeCache.set(d.id, notice);
+      }
+      if (notice) out.push({ id: d.id, time: d.event.time, notice });
+    }
+    return out;
   }
 
   /** The event as this node can read it, or undefined if it can't (someone else's space or private data). */
@@ -9208,6 +9253,7 @@ export class WeaveNode implements Backend {
       entries: n.#entries.bind(n),
       find: n.#find.bind(n),
       marksChanged: n.#marksChanged.bind(n),
+      hintsChanged: n.#hintsChanged.bind(n),
       memo: n.#memo.bind(n),
       get home() {
         return n.home;
@@ -9392,6 +9438,30 @@ export class WeaveNode implements Backend {
   setOfficial(input: Parameters<Marks['setOfficial']>[0]): ReturnType<Marks['setOfficial']> {
     if (input.as) this.#agentMay(input.as, KIND_OFFICIAL);
     return this.#marks.setOfficial(input);
+  }
+
+  hints(...args: Parameters<Hints['hints']>): ReturnType<Hints['hints']> {
+    return this.#hints.hints(...args);
+  }
+
+  hintServices(...args: Parameters<Hints['hintServices']>): ReturnType<Hints['hintServices']> {
+    return this.#hints.hintServices(...args);
+  }
+
+  addHints(input: Parameters<Hints['addHints']>[0]): ReturnType<Hints['addHints']> {
+    return this.#hints.addHints(input);
+  }
+
+  setHints(input: Parameters<Hints['setHints']>[0]): ReturnType<Hints['setHints']> {
+    return this.#hints.setHints(input);
+  }
+
+  removeHints(input: Parameters<Hints['removeHints']>[0]): ReturnType<Hints['removeHints']> {
+    return this.#hints.removeHints(input);
+  }
+
+  seen(input: Parameters<Hints['seen']>[0]): ReturnType<Hints['seen']> {
+    return this.#hints.seen(input);
   }
 
   catalogArtifact(...args: Parameters<Services['catalogArtifact']>): ReturnType<Services['catalogArtifact']> {

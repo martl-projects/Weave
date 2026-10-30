@@ -329,6 +329,7 @@ export class Services {
     if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
     if (shipped?.manifest.verifier) throw new Error(`${shipped.manifest.name} is a verifier: every Weave runs it when it checks accounts, nobody's service`);
     if (shipped?.manifest.marks) throw new Error(`${shipped.manifest.name} is a mark service: everyone's own already, not a project's`);
+    if (shipped?.manifest.hints) throw new Error(`${shipped.manifest.name} is a hint service: everyone's own already, not a project's`);
     if (shipped?.manifest.keyvault) throw new Error(`${shipped.manifest.name} is a keyvault: yours, in Keys & devices, never a project's service`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
@@ -821,7 +822,7 @@ export class Services {
 
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
-    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.verifier && !s.manifest.marks && !s.manifest.keyvault).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.verifier && !s.manifest.marks && !s.manifest.hints && !s.manifest.keyvault).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */

@@ -215,7 +215,7 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
 /** What an artifact is, in a word. */
-const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', app: 'App', file: 'File' };
+const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', hints: 'Hint service', app: 'App', file: 'File' };
 const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.website ? 'Website and service' : KIND_WORDS[a.kind]);
 const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.kind === 'keyvault' ? 'lock' : a.packaged ? 'store' : 'plug');
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
@@ -264,7 +264,17 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
                   Take in…
                 </AsyncButton>
               )}
-              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'keyvault' && a.kind !== 'marks' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
+              {a.mine && a.kind === 'hints' && (
+                <AsyncButton
+                  onClick={async () =>
+                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, what's sealed to you too, with no key and no network, and shows its counts in your Places.`, 'Take it in')) &&
+                    attempt(() => api('addHints', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Notifications…`)
+                  }
+                >
+                  Take in…
+                </AsyncButton>
+              )}
+              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'keyvault' && a.kind !== 'marks' && a.kind !== 'hints' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
               {/* Yours, beside Weave's own: approved once, pinned to what was released. */}
               {a.mine && (a.kind === 'fetcher' || a.kind === 'keyvault') && (
                 <AsyncButton
@@ -492,6 +502,7 @@ const KIND_GROUPS: Array<{ kind: ArtifactInfo['kind']; title: string; about: str
   { kind: 'fetcher', title: 'Fetchers', about: 'Client apps that fetch artifacts for you.' },
   { kind: 'keyvault', title: 'Keyvaults', about: 'Client apps that hold your access to a platform: your services get only what they derive from it.' },
   { kind: 'marks', title: 'Mark services', about: 'Take one in: what it says shows next to names, everywhere you look.' },
+  { kind: 'hints', title: 'Hint services', about: 'Take one in: its counts show next to places in your Places.' },
   { kind: 'app', title: 'Apps', about: 'Programs its people run on their computers, in rooms.' },
 ];
 

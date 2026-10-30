@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import type { BoardInfo, ChatInfo, MemberInfo, Notice, NoticeCategory, PostInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
-import { api, bridge, bump, navigate, onItem, shortDid, useApi } from './lib.ts';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { BoardInfo, ChatInfo, HintServiceInfo, HintsAnswer, MemberInfo, Notice, NoticeCategory, PostInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
+import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
-import { Modal } from './ui.tsx';
+import { ask, AsyncButton, attempt, Modal } from './ui.tsx';
 
 /*
  * System notifications for live events the node marked as a notice (see
@@ -11,8 +11,11 @@ import { Modal } from './ui.tsx';
  * (catching up after being offline) becomes one summary.
  *
  * Notices also count: a number next to the chat, project or board in Places
- * until you open it, so you see who wrote after a notification went by.
- * Rules say, for a person, a place or a board, whether it counts and notifies.
+ * until you open it, so you see who wrote after a notification went by. The
+ * numbers are hints (docs/v2-stage20.md): Unread, a hint service Weave ships,
+ * counts on the node, and what you opened is sealed to you, so every device of
+ * yours counts alike. Rules say, for a person, a place or a board, whether it
+ * counts and notifies: Unread's settings, kept the same way.
  */
 
 export const NOTICE_CATEGORIES: Record<NoticeCategory, { label: string; hint: string }> = {
@@ -93,15 +96,17 @@ export function startNotifications(): void {
   if (started || typeof Notification === 'undefined') return;
   started = true;
   // What you open stops counting; so does what was open while the window was in the background.
-  const clear = () => clearSeen(route());
-  window.addEventListener('hashchange', clear);
-  window.addEventListener('focus', clear);
+  window.addEventListener('hashchange', () => clear());
+  window.addEventListener('focus', () => clear());
   if (Notification.permission === 'default') void Notification.requestPermission();
+  void loadRulesFromNode();
   onItem((item) => {
+    if (item.kind === 'weave.hints') void loadRulesFromNode();
     const notice = item.notice;
     if (!notice) return;
     const rule = ruleFor(notice);
-    if ((rule ? rule.count : notice.category === 'messages') && !looking(notice.open)) count(notice);
+    // Counted on the node: what you're looking at is seen at once.
+    if (looking(notice.open)) clear(true);
     if (!(rule ? rule.notify : loadSettings()[notice.category]) || Notification.permission !== 'granted' || looking(notice.open)) return;
     // An agent's request shows as a popup in the app (see agents.tsx): a notification only when Weave is in the background.
     if (notice.type === 'permission' && document.hasFocus()) return;
@@ -126,21 +131,39 @@ export interface NoticeRule {
   notify: boolean;
 }
 
-const RULES_KEY = 'weave.notify.rules';
+/** The hint service Weave ships that counts notices: its settings are the rules. */
+const UNREAD = 'weave-unread';
+/** Where rules were kept before they were Unread's (this computer only): moved over once. */
+const OLD_RULES_KEY = 'weave.notify.rules';
 
-export function loadRules(): NoticeRule[] {
+let rules: NoticeRule[] = [];
+let unread: HintServiceInfo | undefined;
+
+/** The rules as Unread keeps them (sealed to you); ones this computer kept before move over once. */
+async function loadRulesFromNode(): Promise<void> {
+  const services = await api<HintServiceInfo[]>('hintServices').catch(() => undefined);
+  if (!services) return;
+  unread = services.find((s) => s.service === UNREAD);
+  const kept = (unread?.settings as { rules?: unknown } | undefined)?.rules;
+  rules = Array.isArray(kept) ? (kept as NoticeRule[]) : [];
+  let old: unknown = [];
   try {
-    const rules = JSON.parse(localStorage.getItem(RULES_KEY) ?? '[]');
-    return Array.isArray(rules) ? rules : [];
-  } catch {
-    return [];
-  }
+    old = JSON.parse(localStorage.getItem(OLD_RULES_KEY) ?? '[]');
+  } catch {}
+  if (unread && !rules.length && Array.isArray(old) && old.length) await saveRules(old as NoticeRule[]);
+  try {
+    localStorage.removeItem(OLD_RULES_KEY);
+  } catch {}
 }
 
-function saveRules(rules: NoticeRule[]): void {
-  try {
-    localStorage.setItem(RULES_KEY, JSON.stringify(rules));
-  } catch {}
+export function loadRules(): NoticeRule[] {
+  return rules;
+}
+
+async function saveRules(next: NoticeRule[]): Promise<void> {
+  rules = next;
+  const settings = (unread?.settings && typeof unread.settings === 'object' && !Array.isArray(unread.settings) ? unread.settings : {}) as Record<string, unknown>;
+  unread = await api<HintServiceInfo>('setHints', { service: UNREAD, settings: { ...settings, rules: next } });
 }
 
 /** The rule for a notice: the most specific one that matches (a person over a place, a board over its space); a later one wins a tie. */
@@ -155,63 +178,104 @@ export function ruleFor(notice: Notice, rules = loadRules()): NoticeRule | undef
   return best;
 }
 
-// ---------------------------------------------------------------- counts next to names in Places
+// ---------------------------------------------------------------- counts next to places in Places (hints)
 
-interface Counted {
-  space: string;
-  board?: string;
-  channel?: string;
-  post?: string;
-  time: string;
+type HintSubject = HintsAnswer['subject'];
+
+const hintKey = (s: HintSubject): string => ('space' in s ? `space:${s.space}` : 'board' in s ? `board:${s.board.space}/${s.board.name}` : `channel:${s.channel.space}/${s.channel.name}`);
+
+/*
+ * Asked again only when the node says what the hint services say may have changed (weave.hints: a notice came in,
+ * you opened something, the services or their rules changed); each render's asks go in one batch.
+ */
+let version = 0;
+const versionListeners = new Set<() => void>();
+onItem((item) => {
+  if (item.kind !== 'weave.hints') return;
+  version++;
+  for (const listener of versionListeners) listener();
+});
+const useHintsVersion = () =>
+  useSyncExternalStore(
+    (listener) => {
+      versionListeners.add(listener);
+      return () => versionListeners.delete(listener);
+    },
+    () => version,
+  );
+
+/** The latest counts per place, as last answered. */
+const counts = new Map<string, number>();
+type Batch = { subjects: Map<string, HintSubject>; done: Array<() => void> };
+let batch: Batch | undefined;
+let answeredAt = -1;
+
+function askHints(tick: number, subjects: HintSubject[]): Promise<void> {
+  if (tick === answeredAt && subjects.every((s) => counts.has(hintKey(s)))) return Promise.resolve();
+  return new Promise((resolve) => {
+    let b = batch;
+    if (!b) {
+      const fresh: Batch = (b = batch = { subjects: new Map(), done: [] });
+      queueMicrotask(() => {
+        batch = undefined;
+        const asked = tick;
+        api<HintsAnswer[]>('hints', { slot: 'place', subjects: [...fresh.subjects.values()] })
+          .then((answers) => {
+            answeredAt = asked;
+            for (const a of answers) counts.set(hintKey(a.subject), a.hints.reduce((sum, h) => sum + (h.count ?? 0), 0));
+          })
+          .catch(() => {})
+          .finally(() => fresh.done.forEach((done) => done()));
+      });
+    }
+    for (const s of subjects) b.subjects.set(hintKey(s), s);
+    b.done.push(() => resolve());
+  });
 }
 
-const COUNTS_KEY = 'weave.counts';
-
-function readCounted(): Counted[] {
-  try {
-    const list = JSON.parse(localStorage.getItem(COUNTS_KEY) ?? '[]');
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCounted(list: Counted[]): void {
-  try {
-    localStorage.setItem(COUNTS_KEY, JSON.stringify(list.slice(-500)));
-  } catch {}
-  bump();
-}
-
-function count(notice: Notice): void {
-  const { space, channel, post } = notice.open;
-  if (!space) return;
-  writeCounted([...readCounted(), { space: space.id, ...(notice.board ? { board: notice.board } : {}), ...(channel ? { channel } : {}), ...(post ? { post } : {}), time: new Date().toISOString() }]);
-}
-
-/** How many notices wait in a space, or in one board or channel of it. */
-export function countIn(space: string, where: { board?: string; channel?: string } = {}): number {
-  return readCounted().filter((c) => c.space === space && (!where.board || c.board === where.board) && (!where.channel || (!c.post && (c.channel ?? 'general') === where.channel))).length;
+/** The counts your hint services give these places (Unread: notices waiting there), in the same order. */
+export function useHintCounts(subjects: HintSubject[]): number[] {
+  const tick = useHintsVersion();
+  const keys = subjects.map(hintKey);
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void askHints(tick, subjects).then(() => alive && rerender((n) => n + 1));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, keys.join('|')]);
+  return keys.map((k) => counts.get(k) ?? 0);
 }
 
 const route = () => decodeURIComponent(location.hash).replace(/^#\/?/, '').split('/').filter(Boolean);
 
-/** Forget the counts for what this route shows: a chat, a channel, a board or a post. */
-function clearSeen([kind, id, view, arg, post]: string[]): void {
+/**
+ * You opened what this route shows: a chat, a channel, a board or a post. Said to the node only when something waits
+ * there (or, force, a notice for it just came in: its count may not be here yet).
+ */
+function clearSeen([kind, id, view, arg, post]: string[], force = false): void {
   if (!id || !['d', 'p', 'r', 'g'].includes(kind)) return;
-  const shown = (c: Counted): boolean => {
-    if (c.space !== id) return false;
-    if (kind === 'd') return true;
-    if (!view) return !c.post && (c.channel ?? 'general') === 'general';
-    if (view === 'c') return !c.post && (c.channel ?? 'general') === arg;
-    if (view === 'b') return post ? c.post === post : c.board === arg;
-    if (view === 'post') return c.post === arg;
-    return false;
-  };
-  const list = readCounted();
-  const rest = list.filter((c) => !shown(c));
-  if (rest.length !== list.length) writeCounted(rest);
+  if (!force && !counts.get(`space:${id}`)) return;
+  const seen =
+    kind === 'd'
+      ? { view: 'all' }
+      : !view
+        ? { view: 'channel', name: 'general' }
+        : view === 'c'
+          ? { view: 'channel', name: arg ?? 'general' }
+          : view === 'b'
+            ? post
+              ? { view: 'post', name: post }
+              : { view: 'board', name: arg }
+            : view === 'post'
+              ? { view: 'post', name: arg }
+              : undefined;
+  if (seen) void api('seen', { space: id, ...seen }).catch(() => {});
 }
+
+const clear = (force = false) => clearSeen(route(), force);
 
 const DOES = { both: 'Count and notify', count: 'Count only', notify: 'Notify only', none: 'Nothing' } as const;
 type Does = keyof typeof DOES;
@@ -268,17 +332,18 @@ function RuleRow({ rule, spaces, people, onChange, onRemove }: { rule: NoticeRul
 /** Rules for who and where: counts next to names, notifications, or neither. */
 function NoticeRules() {
   const [rules, setRules] = useState(loadRules);
+  useEffect(() => void loadRulesFromNode().then(() => setRules(loadRules())), []);
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const people = new Map((chats ?? []).map((c) => [c.peer.did, c.peer.name ?? shortDid(c.peer.did)]));
   const change = (next: NoticeRule[]) => {
     setRules(next);
-    saveRules(next);
+    void saveRules(next).catch(() => setRules(loadRules()));
   };
   return (
     <>
       <p>
-        Rules <span className="small muted">· the most specific one wins: a person over a place, a board over its project</span>
+        Rules <span className="small muted">· the most specific one wins: a person over a place, a board over its project; kept with Unread, so all your devices count alike</span>
       </p>
       {rules.map((rule, i) => (
         <RuleRow
@@ -297,6 +362,68 @@ function NoticeRules() {
         </button>
       </div>
     </>
+  );
+}
+
+/** Where a hint service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
+function HintOrigin({ service: s }: { service: HintServiceInfo }) {
+  if (s.shipped) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
+  return <span className="tag" title={`A release of ${s.project?.name ? `p/${s.project.name}` : "a project you aren't in"}, version ${s.tag}`}>{s.project?.name ? `p/${s.project.name}` : 'another project'}</span>;
+}
+
+/** The hint services whose counts show in Places: Weave's Unread, and any a project released that you took in. */
+function HintServices() {
+  const mine = useApi(() => api<HintServiceInfo[]>('hintServices', { off: true }), []);
+  const spaces = useApi(() => api<SpaceInfo[]>('spaces'), []);
+  const [project, setProject] = useState('');
+  const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
+  // Your yes to exactly that release, as for a keyvault or fetcher: a newer one asks again.
+  const yes = (what: string) => ask(`Take in ${what}? Weave runs exactly that release over what your Weave holds, what's sealed to you too, with no key and no network, and shows its counts in your Places.`, 'Take it in');
+  const add = async () => {
+    if (!(await yes(`the newest hint service p/${projects.find((p) => p.id === project)?.name ?? 'the project'} released`))) return;
+    await attempt(() => api('addHints', { project, approve: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
+  };
+  const update = async (s: HintServiceInfo) => {
+    if (!s.project || !s.newer || !(await yes(`${s.name} ${s.newer}, released in p/${s.project.name ?? s.project.id}`))) return;
+    await attempt(() => api('addHints', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), `${s.name} ${s.newer} is yours now`).then(mine.reload);
+  };
+  return (
+    <fieldset>
+      <legend>Counts</legend>
+      <p className="small muted">Numbers next to places come from these, counted on your Weave; what you open counts no more on all your devices.</p>
+      {mine.error && <p className="error">{mine.error}</p>}
+      {(mine.data ?? []).map((s) => (
+        <div className="marks-row" key={s.service}>
+          <div>
+            <b>{s.name}</b> <HintOrigin service={s} /> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : s.tag}</span>
+            {s.problem && <div className="small error">Counts nothing: {s.problem}</div>}
+            {s.newer && (
+              <div className="small">
+                {s.newer} is out: it runs only with your yes. <AsyncButton onClick={() => update(s)}>Update…</AsyncButton>
+              </div>
+            )}
+          </div>
+          {s.off ? (
+            <AsyncButton onClick={() => attempt(() => api('addHints', { shipped: s.service }), `${s.name} is back`).then(mine.reload)}>Turn on</AsyncButton>
+          ) : (
+            <AsyncButton onClick={() => attempt(() => api('removeHints', { service: s.service }), `${s.name} removed`).then(mine.reload)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>
+          )}
+        </div>
+      ))}
+      <div className="marks-row">
+        <select value={project} onChange={(e) => setProject(e.target.value)}>
+          <option value="">Take one in from a project…</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <AsyncButton onClick={add} disabled={!project}>
+          Add
+        </AsyncButton>
+      </div>
+    </fieldset>
   );
 }
 
@@ -322,6 +449,7 @@ export function NotificationSettings({ onClose }: { onClose(): void }) {
         </div>
       ))}
       <NoticeRules />
+      <HintServices />
       <p className="small">
         Nothing shows for the chat or post you're looking at. Closing the window keeps Weave running in the tray, so notifications keep coming; quit from the tray icon.
       </p>

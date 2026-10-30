@@ -55,6 +55,7 @@ import {
   type BadgeInfo,
   type MarkInfo,
   type MarkServiceInfo,
+  type HintServiceInfo,
   type BadgeSeriesInfo,
   type LabelInfo,
   type SafeProposalInfo,
@@ -319,6 +320,12 @@ From Weave) are yours until you remove them:
                              (maintainers), shown in that project only   [--gate: the one its gates ask]
   marks add --shipped <name> take one Weave ships back after removing it
   marks remove <service>     take it out of your own domain; --space <project>: unpin it there
+  hints                      what waits for you where: the counts your hint services give your places (Unread: notices)
+  hints list                 your hint services (Weave's own Unread counts notices until you open the place)
+  hints add <project>        take a project's hint service in   [--app <id>] [--tag 1.0] [--approve: yes to exactly that release]
+  hints add --shipped <name> take one Weave ships back after removing it
+  hints set <service> --settings <json>   its settings (Unread's: {"rules": [{who?, space?, board?, count, notify}]})
+  hints remove <service>     take it out (one Weave ships: turn it off)
   official <who>             say a person (did), space (id) or post (--post) comes from Weave (maintainers of the Weave
                              project)   [--text <note>] [--off: no longer]
 
@@ -856,6 +863,16 @@ const markLine = (m: MarkInfo): string => {
   const where = m.issuer.domain.kind === 'user' ? 'yours' : m.issuer.domain.name;
   return `${shown}  ${m.tooltip ?? ''}  — ${m.issuer.name}${m.issuer.weave ? ' (Weave)' : ''}, ${where}`;
 };
+
+/** A hint service as text. */
+const hintServiceLine = (s: HintServiceInfo): string =>
+  [
+    `${s.name} (${s.service}) ${s.shipped ? `Weave ships it${s.off ? ', turned off' : ''}` : `${s.tag}  from ${s.project?.name ?? s.project?.id}`}`,
+    `  reads ${s.reads.join(', ') || 'nothing'}; settings ${JSON.stringify(s.settings)}`,
+    `  ${s.digest}`,
+    ...(s.newer ? [`  newer: ${s.newer}, runs only with your yes: weave hints add ${s.project?.name ?? s.project?.id} --app ${s.service} --tag ${s.newer} --approve`] : []),
+    ...(s.problem ? [`  shows nothing: ${s.problem}`] : []),
+  ].join('\n');
 
 /** A mark service as text. */
 const markServiceLine = (s: MarkServiceInfo): string =>
@@ -2461,6 +2478,38 @@ ${postLine(p)}`);
       const who = (await b.profile(sub)).did;
       const [answer] = await b.marks({ slot: values.slot ?? 'profile', space: values.space, subjects: [{ did: who }] });
       return out(answer ?? { marks: [] }, () => answer?.marks.map(markLine).join('\n') || '(no marks)');
+    }
+
+    case 'hints': {
+      const [sub, ref] = args;
+      const b = await backend();
+      const settings = values.settings === undefined ? undefined : (JSON.parse(values.settings) as HintServiceInfo['settings']);
+      if (sub === 'list') {
+        const list = await b.hintServices({ off: true });
+        return out(list, () => list.map(hintServiceLine).join('\n\n') || '(no hint services: weave hints add <project>)');
+      }
+      if (sub === 'add' && (ref || values.shipped)) {
+        const s = await b.addHints({ ...(values.shipped ? { shipped: values.shipped } : { project: ref }), app: values.app, tag: values.tag, settings, approve: values.approve });
+        return out(s, () => `yours now: ${hintServiceLine(s)}`);
+      }
+      if (sub === 'set' && ref && settings) {
+        const s = await b.setHints({ service: ref, settings });
+        return out(s, () => hintServiceLine(s));
+      }
+      if (sub === 'remove' && ref) {
+        await b.removeHints({ service: ref });
+        return out({ removed: ref }, () => `${ref}: no longer yours`);
+      }
+      if (sub) throw new Error('usage: weave hints [list] | weave hints add <project> --approve | weave hints add --shipped <name> | weave hints set <service> --settings <json> | weave hints remove <service>');
+      // What waits where: each place you're in, with its count.
+      const spaces = (await b.spaces()).filter((x) => !x.closed);
+      const answers = await b.hints({ slot: 'place', subjects: spaces.map((x) => ({ space: x.id })) });
+      const counted = answers.flatMap((a) => {
+        const n = a.hints.reduce((sum, h) => sum + (h.count ?? 0), 0);
+        const space = spaces.find((x) => 'space' in a.subject && x.id === a.subject.space);
+        return n && space ? [{ space: space.name, kind: space.kind, count: n }] : [];
+      });
+      return out(counted, () => counted.map((c) => `${String(c.count).padStart(4)}  ${c.space} (${c.kind})`).join('\n') || '(nothing waits for you)');
     }
 
     case 'official': {
