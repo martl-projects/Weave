@@ -248,36 +248,39 @@ export const providesArtifact = (s: ServiceProfileInfo, a: ArtifactInfo): boolea
   !!s.contract.offers?.includes('artifact.fetch') && !!a.source && a.source.provider !== 'oci' && (!s.contract.sources || s.contract.sources.includes(a.source.provider));
 
 /** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
-function ArtifactList({ artifacts, maintainer, via }: { artifacts: ArtifactInfo[]; maintainer: boolean; via?: (a: ArtifactInfo) => string | undefined }) {
+function ArtifactList({ title, artifacts, maintainer, via, add }: { title: string; artifacts: ArtifactInfo[]; maintainer: boolean; via?: (a: ArtifactInfo) => string | undefined; add?: { label: string; run(): void } }) {
   const [adding, setAdding] = useState<ArtifactInfo>();
   const [access, setAccess] = useState<ArtifactInfo>();
   const [launching, setLaunching] = useState<ArtifactInfo>();
   // Yours to get; maintainers see them all, and set who may get each.
   const shown = artifacts.filter((a) => a.mine || maintainer);
-  if (!shown.length) return <p className="small muted">Nothing yet.</p>;
   return (
-    <div className="service-releases">
-      {shown.map((a) => (
-        <div className="service-release" key={a.id}>
-          <Icon name={artifactIcon(a)} />
-          <span className="grow">
-            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
-            {via?.(a) && <div className="small muted">{via(a)}</div>}
-          </span>
-          {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
-          {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
-          {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
-          {maintainer && (
-            <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
-              <Icon name="gear" />
-            </button>
-          )}
-        </div>
-      ))}
+    <>
+      <ItemList
+        title={title}
+        {...(add ? { add } : {})}
+        empty="Nothing yet."
+        rows={shown.map((a) => ({
+          key: a.id,
+          icon: artifactIcon(a),
+          title: a.name,
+          badge: a.tag,
+          search: `${a.name} ${a.tag} ${artifactKind(a)}`,
+          detail: [`${artifactKind(a)}${a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}${a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}`, via?.(a)].filter(Boolean).join(' · '),
+          main: (
+            <>
+              {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
+              {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
+              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
+            </>
+          ),
+          ...(maintainer ? { tools: [{ icon: 'gear' as const, label: 'Who may get it', run: () => setAccess(a) }] } : {}),
+        }))}
+      />
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
       {launching && <LaunchDialog artifact={launching} onClose={() => setLaunching(undefined)} />}
       {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
-    </div>
+    </>
   );
 }
 
@@ -449,12 +452,11 @@ function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onCl
 }
 
 /** What a service provides here: its artifacts; maintainers publish more from GitHub. */
-function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
+function ServiceReleases({ project, artifacts, app, maintainer, publish }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean; publish?(): void }) {
   const [describing, setDescribing] = useState(false);
   return (
     <>
-      <div className="small"><b>Available</b></div>
-      <ArtifactList artifacts={artifacts} maintainer={maintainer} />
+      <ArtifactList title="Released" artifacts={artifacts} maintainer={maintainer} {...(publish ? { add: { label: 'Publish a new version', run: publish } } : {})} />
       {maintainer && app === null && !describing && (
         <p className="small muted">
           <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Make this project's code available…</a>
@@ -513,7 +515,7 @@ export function ProjectAvailableView({ project }: { project: SpaceInfo }) {
           <fieldset key={g.kind}>
             <legend>{g.title}</legend>
             <p className="small muted">{g.about}</p>
-            <ArtifactList artifacts={these} maintainer={maintainer} via={via} />
+            <ArtifactList title="" artifacts={these} maintainer={maintainer} via={via} />
           </fieldset>
         );
       })}
@@ -726,7 +728,6 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const extras: ScopedAction[] = [
     // Asking it in words: only where it has no page of its own (its page is how one talks to it).
     ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true), withoutPage: true as const }] : []),
-    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true), replaces: ['publish', 'releases'] }] : []),
   ];
   return (
     <fieldset className="project-service">
@@ -756,9 +757,9 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <OriginText origin={service.origin} />
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
       {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
-      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} />}
+      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} {...(maintainer && app && handsOutGitHub(service) ? { publish: () => setPublishing(true) } : {})} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
-      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : undefined} />
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : handsOutGitHub(service) ? ['publish', 'releases'] : undefined} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}

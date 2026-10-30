@@ -3,6 +3,7 @@ import type { KeyvaultInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
+import { ItemList } from './lists.tsx';
 
 /**
  * In Keys & devices: your keyvaults. Each holds your access to a platform (your GitHub App); your services get only
@@ -49,64 +50,56 @@ export function KeyvaultsBox() {
             </div>
             {v.added && (
               <div className="keyvault-body">
-                {app ? (
-                  <p className="small">
-                    Your app:{' '}
-                    <a href={String(app.info.html_url ?? '')} target="_blank" rel="noopener noreferrer">
-                      {String(app.info.slug ?? app.info.id)}
-                    </a>
-                    {app.next && (
-                      <>
-                        {' '}
-                        · <a href={app.next} target="_blank" rel="noopener noreferrer">install it on more {what}</a>
-                      </>
-                    )}
-                  </p>
-                ) : (
-                  appSetting && (
-                    <div className="field-row">
-                      <span className="small grow">{appSetting.hint}</span>
-                      <AsyncButton
-                        className="default"
-                        onClick={() =>
-                          attempt(async () => {
-                            const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting: appSetting.name });
-                            window.open(url, '_blank', 'noopener');
-                            await api('finishKeyvaultApp', { id });
-                            bump();
-                          }, `${appSetting.label} is made: install it on your ${what}`)
-                        }
-                      >
-                        Make {appSetting.label.charAt(0).toLowerCase() + appSetting.label.slice(1)} on {new URL(appSetting.register!.page).hostname}…
-                      </AsyncButton>
-                    </div>
-                  )
-                )}
-                <div className="small">
-                  <b>Handed to projects</b>
-                  {projects.length ? (
-                    <table className="release-list">
-                      <tbody>
-                        {projects.map((p) => {
-                          const resources = v.handed.find((h) => h.project.id === p.id)?.resources ?? [];
-                          return (
-                            <tr key={p.id}>
-                              <td>p/{p.name}</td>
-                              <td className="muted">{resources.length ? resources.join(', ') : `no ${what}`}</td>
-                              <td>
-                                <button disabled={!app} onClick={() => setHanding({ vault: v, project: p, resources })}>
-                                  Change…
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p className="muted">None yet: add a service that uses it to a project (GitHub access, GitHub releases), then hand that project its {what} here.</p>
-                  )}
-                </div>
+                {/* Its app, and what it hands to projects: lists like every service's. */}
+                <ItemList
+                  title="Your app"
+                  empty={appSetting?.hint ?? 'None yet.'}
+                  {...(!app && appSetting
+                    ? {
+                        add: {
+                          label: `Make ${appSetting.label.charAt(0).toLowerCase() + appSetting.label.slice(1)} on ${new URL(appSetting.register!.page).hostname}`,
+                          run: () =>
+                            void attempt(async () => {
+                              const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting: appSetting.name });
+                              window.open(url, '_blank', 'noopener');
+                              await api('finishKeyvaultApp', { id });
+                              bump();
+                            }, `${appSetting.label} is made: install it on your ${what}`),
+                        },
+                      }
+                    : {})}
+                  rows={v.apps.map((a) => ({
+                    key: a.setting,
+                    icon: 'lock' as const,
+                    title: (
+                      <a href={String(a.info.html_url ?? '')} target="_blank" rel="noopener noreferrer">
+                        {String(a.info.slug ?? a.info.id)}
+                      </a>
+                    ),
+                    search: String(a.info.slug ?? ''),
+                    detail: `${a.info['owner.login'] ? `${String(a.info['owner.login'])}'s · ` : ''}its key stays sealed on this computer`,
+                    ...(a.next ? { main: <button onClick={() => window.open(a.next, '_blank', 'noopener')}>Install on more {what}…</button> } : {}),
+                  }))}
+                />
+                <ItemList
+                  title="Handed to projects"
+                  empty={`None yet: add a service that uses it to a project (GitHub access, GitHub releases), then hand that project its ${what} here.`}
+                  rows={projects.map((p) => {
+                    const resources = v.handed.find((h) => h.project.id === p.id)?.resources ?? [];
+                    return {
+                      key: p.id,
+                      icon: 'folder' as const,
+                      title: `p/${p.name}`,
+                      search: `${p.name} ${resources.join(' ')}`,
+                      detail: resources.length ? resources.join(', ') : `no ${what}`,
+                      main: (
+                        <button disabled={!app} onClick={() => setHanding({ vault: v, project: p, resources })}>
+                          Change…
+                        </button>
+                      ),
+                    };
+                  })}
+                />
                 {v.users.length > 0 && (
                   <p className="small">
                     <b>Used by</b> {v.users.map((u) => `${u.service} (${Object.entries(u.rights).map(([k, r]) => `${k.replace(/_/g, ' ')}: ${r}`).join(', ')})`).join(' · ')}
