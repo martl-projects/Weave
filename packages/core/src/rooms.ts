@@ -46,18 +46,12 @@ export interface AppManifest {
   /** The only ports a room may ever forward. */
   services: AppService[];
   /**
-   * How to start the app on the host's computer. `hint` is shown to people;
-   * `command` (program and arguments, no shell) can be run by Weave in the
-   * host's own copy of the app, after the host has seen and approved it.
+   * How it starts. `hint` and `command` (program and arguments, no shell) are for people and agents starting a
+   * checkout by hand: Weave never runs a program from a release, only its container (image) or its WebAssembly (wasm).
    */
   start?: {
     hint?: string;
     command?: string[];
-    /**
-     * For release builds Weave installed (see install): the command per platform, like
-     * {"win32-x64": ["./band-ab.exe"], "linux-x64": ["./band-ab"]}. `command` stays for source checkouts.
-     */
-    release?: Record<string, string[]>;
     /**
      * A container image (stage: Weave and Docker), like "ghcr.io/martldennl/gameshow", without tag or digest:
      * weave app release pins the release's image by its digest (install.image), and hosts with Docker run it
@@ -605,20 +599,8 @@ export function checkManifest(input: unknown): ManifestCheck {
     return parts as string[];
   };
   const command = rawStart.command !== undefined ? commandOf(rawStart.command, 'start.command') : undefined;
-  let release: Record<string, string[]> | undefined;
-  if (rawStart.release !== undefined) {
-    if (!rawStart.release || typeof rawStart.release !== 'object' || Array.isArray(rawStart.release)) problems.push('"start.release" maps platforms to commands, like {"win32-x64": ["./band-ab.exe"]}');
-    else {
-      release = {};
-      for (const [platform, parts] of Object.entries(rawStart.release as Record<string, unknown>).slice(0, 12)) {
-        if (!PLATFORM.test(platform)) problems.push(`"start.release" names platforms like win32-x64, darwin-arm64, darwin-x64, linux-x64 (not "${platform}")`);
-        else {
-          const c = commandOf(parts, `start.release.${platform}`);
-          if (c) release[platform] = c;
-        }
-      }
-    }
-  }
+  // Programs built per platform: Weave runs none from a release any more (a container or WebAssembly instead).
+  if (rawStart.release !== undefined) warnings.push('"start.release" is ignored: Weave runs no programs from releases, only a container image (start.image) or WebAssembly (wasm)');
   let image: string | undefined;
   if (rawStart.image !== undefined) {
     const ref = text(rawStart.image, 255);
@@ -725,12 +707,8 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
     else hints = parsed.hints;
   }
-  if (!m.wasm && !m.client && !m.marks && !m.hints && rawStart.command === undefined && rawStart.release === undefined && rawStart.image === undefined) warnings.push('no "start": hosts have to start the app themselves (add start.command, and start.release or start.image for releases)');
-  if (!m.wasm && !m.client && !m.marks && !m.hints && (rawStart.release !== undefined || rawStart.image !== undefined) && rawStart.command === undefined) warnings.push('no "start.command": a checkout of the repository (rather than a release build) can\'t be started by Weave');
-  const start =
-    hint || command || release || image
-      ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}), ...(image ? { image } : {}) }
-      : undefined;
+  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: its releases need a container image (start.image) or WebAssembly (wasm); without, whoever wants it runs it themselves and opens a website by its port');
+  const start = hint || command || image ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(image ? { image } : {}) } : undefined;
 
   let install: AppInstall | undefined;
   try {
@@ -819,7 +797,7 @@ export const MANIFEST_EXAMPLE = {
   start: {
     hint: 'node server.js',
     command: ['node', 'server.js'],
-    release: { 'win32-x64': ['./band-ab.exe'], 'darwin-arm64': ['./band-ab'], 'darwin-x64': ['./band-ab'], 'linux-x64': ['./band-ab'] },
+    image: 'ghcr.io/martl/band-ab',
   },
   install: { steps: ['git clone the repository', 'npm ci', 'npm start'] },
   env: [{ name: 'DEEPSEEK_API_KEY', label: 'DeepSeek API key', secret: true, optional: true, hint: 'platform.deepseek.com → API keys' }],
@@ -831,9 +809,8 @@ export const MANIFEST_RULES = [
   'app: a short id, lowercase letters, digits and dashes (it stays the same across versions). name: what people see.',
   'services: the ports the app listens on, at most 8. A room shares exactly these ports and nothing else on the host\'s computer. Each has a port, an optional id, and protocol "http" (default) or "tcp".',
   'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label. Without open, everyone opens "/". Either way anyone can type any path: to tell host and players apart for real, ask Weave with @weave/sdk.',
-  'start.command: how to start the app from a checkout of the repository, as a list (program, then arguments, no shell), run in the app\'s folder after whoever opens a room with it approves it.',
-  'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
-  'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
+  'start.command: how to start it from a checkout of the repository, as a list (program, then arguments, no shell), for people and agents doing it by hand. Weave never runs a program from a release: only its container (start.image) or its WebAssembly (wasm), sealed off from the computer. (start.release, programs per platform, is ignored.)',
+  'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow (weave_release_workflow) builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A setting picked from a list and yours is per project, but only whoever runs it picks (the repositories its access reaches, say: theirs to hand out). "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service needing access to a platform declares it in its contract ("uses": {"github": {"contents": "read"}}) and gets it only from its person’s keyvault (token(), in the WIT), cut to those rights and to what they handed each project: it asks for no access of its own. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. "expires" says how long a request counts, in seconds, by action or protocol ({"artifact.fetch": 300}): one older when the service gets to it (it was off) is answered by Weave as expired. Without, requests wait for it. What is asked and answered is sealed for the service and the asker. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
@@ -844,22 +821,18 @@ export const MANIFEST_RULES = [
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
   'marks: a mark service, which shows marks next to names (the marks world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --marks): {"component": "marks.wasm", "reads": ["weave.badge"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"]}. Released like wasm. You take it into your own domain (weave marks add), shown everywhere you look; or a space\'s maintainers pin it (weave marks add --space), shown in that space only. Every node that took it in runs it with no key and no network. "reads": the kinds it folds. It answers with check, label, count, symbol or image, and Weave shows who says so.',
   'hints: a hint service, which shows numbers about its person\'s own state next to places, like unread counts (the marks world too): {"component": "hints.wasm", "reads": ["weave.notice", "weave.seen"], "slots": ["place"], "subjects": ["space", "board", "channel"]}. Released like wasm; its person takes it in (weave hints add) and its counts show in their Places. It folds what their node holds of the kinds it reads, what\'s sealed to them too, and the notices their node works out (weave.notice), with no key and no network. It answers with a count, never a claim about anyone.',
-  'install.steps: how to install it by hand, for agents (where there is no release build). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
+  'install.steps: how to install it by hand, for agents (from a checkout). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
 ];
 
-/** The command that starts an app: a release build's own for this platform, when Weave installed one, or the one for source checkouts. */
-export const startCommand = (app: AppManifest | undefined, platform: string, releaseBuild: boolean): string[] | undefined =>
-  (releaseBuild ? app?.start?.release?.[platform] : undefined) ?? app?.start?.command;
-
 /**
  * What an artifact is, which says who can use it: a service (Weave runs it, with its contract), a website (the
  * website service launches it), a board view (pinned to boards), a fetcher (a client app that fetches artifacts), a
- * mark service (what shows next to names: yours, or pinned to a space), an app (its person runs it on their
- * computer, in a room), or a file (something to get).
+ * mark service (what shows next to names: yours, or pinned to a space), or a file (something to get). There are no
+ * programs: what only has ports (tcp ones too) is a website.
  */
-export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'keyvault' | 'marks' | 'hints' | 'app' | 'file';
+export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'keyvault' | 'marks' | 'hints' | 'file';
 
 export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (m.file) return 'file';
@@ -872,8 +845,7 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   // A website reads nothing and writes nothing: it only shows its page (and holds its visitors' game).
   if (site && (!m.service || (m.service.reads === 'nothing' && !m.service.writes.length))) return 'website';
   if (m.service || m.install?.image?.packaged) return 'service';
-  if (site) return 'website';
-  return 'app';
+  return 'website';
 }
 
 /** Where an artifact's files are: its source, or its image (pulled by Weave itself). */

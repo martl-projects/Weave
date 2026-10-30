@@ -1494,11 +1494,10 @@ export class Services {
     }
     const container = a && this.h.runtime.runs(a.manifest) === 'container' ? `weave-service-${stored.name}` : undefined;
     let run: string[] | undefined = stored.command;
-    let cwd = dir;
+    const cwd = dir;
     if (a) {
       run = this.h.runtime.command(container ?? 'weave', a.manifest);
-      if (!run) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} has nothing to run on this computer (${platformKey()})` });
-      if (!container) cwd = this.h.releases.folder(stored.name, a);
+      if (!run || !container) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: this.h.runtime.whyNot(a.manifest) });
     }
     if (!run?.length) return;
     const project = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');

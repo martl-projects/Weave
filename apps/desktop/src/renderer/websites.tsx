@@ -259,7 +259,7 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
 /** What an artifact is, in a word. */
-const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', hints: 'Hint service', app: 'App', file: 'File' };
+const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', hints: 'Hint service', file: 'File' };
 const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.website ? 'Website and service' : KIND_WORDS[a.kind]);
 const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.kind === 'keyvault' ? 'lock' : a.packaged ? 'store' : 'plug');
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
@@ -297,7 +297,11 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
           main: (
             <>
               {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
-              {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
+              {a.mine && a.kind === 'website' && (
+                <button disabled={!a.runs} title={a.runs ? undefined : a.source?.provider === 'oci' || a.packaged ? 'It runs in a container: start Docker on this computer first' : 'It has nothing Weave runs here: no container image, no WebAssembly'} onClick={() => setLaunching(a)}>
+                  Launch…
+                </button>
+              )}
               {a.mine && a.kind === 'marks' && (
                 <AsyncButton
                   onClick={async () =>
@@ -366,7 +370,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   const [where, setWhere] = useState<string>();
   const [announce, setAnnounce] = useState(true);
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
-  const runs = artifact.command?.join(' ') ?? 'its program';
+  const runs = artifact.command?.join(' ') ?? artifact.name;
   return (
     <Modal title={`Launch ${artifact.name} ${artifact.tag}`} onClose={onClose}>
       {services && !projects.length ? (
@@ -385,7 +389,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
             </select>
           </div>
           <p className="small">
-            Weave runs <code>{runs}</code> from {artifact.name} {artifact.tag}, released in p/{artifact.project.name}, on this computer. It only shows its page: it reads nothing and
+            Weave runs <code>{runs}</code> from {artifact.name} {artifact.tag}, released in p/{artifact.project.name}, {artifact.runs === 'wasm' ? 'in Weave, as WebAssembly' : 'in a container, sealed off from your files'}. It only shows its page: it reads nothing and
             writes nothing in the project. Your Websites service makes it a running website{project ? ` everyone in p/${project.name} can visit` : ''}, in Live, until you close it.
           </p>
           <p className="small muted">It's other people's code: only launch it if you trust p/{artifact.project.name}.</p>
@@ -552,7 +556,6 @@ const KIND_GROUPS: Array<{ kind: ArtifactInfo['kind']; title: string; about: str
   { kind: 'keyvault', title: 'Keyvaults', about: 'Client apps that hold your access to a platform: your services get only what they derive from it.' },
   { kind: 'marks', title: 'Mark services', about: 'Take one in: what it says shows next to names, everywhere you look.' },
   { kind: 'hints', title: 'Hint services', about: 'Take one in: its counts show next to places in your Places.' },
-  { kind: 'app', title: 'Programs', about: 'Programs its people run on their computers, in rooms.' },
 ];
 
 /**
@@ -940,7 +943,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
                   ? `Weave will run ${chosen.name} ${chosen.tag} in its sandbox: a container that can't change its own files or reach yours, with limits on memory and CPU, and a folder of its own for what it keeps:`
                   : chosen.runs === 'container'
                   ? `Weave will run ${chosen.name} ${chosen.tag} in a container, sealed off from your files:`
-                  : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it on this computer, as you:`}
+                  : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it in Weave, as WebAssembly, with only what its contract allows:`}
               </p>
               <pre className="launch-command">{(chosen.command ?? []).join(' ')}</pre>
               <p className="small">

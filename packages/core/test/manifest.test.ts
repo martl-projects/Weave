@@ -24,6 +24,18 @@ describe('app settings in a manifest', () => {
   });
 });
 
+describe('no programs', () => {
+  it('ignores programs per platform: a release runs as its container or its WebAssembly, and what only has ports is a website', () => {
+    const old = checkManifest({ ...base, services: [{ port: 7000, protocol: 'tcp' }], start: { command: ['node', 'server.js'], release: { 'win32-x64': ['./band-ab.exe'] } } });
+    expect(old.problems).toEqual([]);
+    expect(old.warnings.join('\n')).toMatch(/"start.release" is ignored: Weave runs no programs from releases/);
+    expect(old.warnings.join('\n')).toMatch(/nothing for Weave to run/);
+    expect(old.manifest?.start).toEqual({ command: ['node', 'server.js'] });
+    expect(artifactKindOf(old.manifest!)).toBe('website');
+    expect(checkManifest({ ...base, start: { image: 'ghcr.io/martl/band-ab' } }).warnings.join('\n')).not.toMatch(/nothing for Weave to run/);
+  });
+});
+
 describe('a setting picked from what the service lists', () => {
   const service = { reads: 'addressed', writes: [], actions: [{ name: 'reachable', label: 'List the repositories', who: 'maintainers' }], version: '1.0' };
   const wasm = { component: 'access.wasm', panel: 'panel', panels: [{ name: 'repos', title: 'Repositories', who: 'members', page: 'index.html', covers: ['reachable', 'Bad Name'] }] };

@@ -1,14 +1,13 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
-import { platformKey } from '../src/appinstall.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
-import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
+import { dockerRunning, testImage } from './helpers/docker.ts';
+import { publishRelease } from './helpers/releases.ts';
 import { readSecretJson, writeSecretJson } from '../src/vault.ts';
 
 /*
@@ -47,15 +46,13 @@ http.createServer(async (req, res) => {
 }).listen(Number(process.env.PORT), '127.0.0.1');
 `;
 
-/** A release archive with that server in it. */
-function buildArchive(version: string): Buffer {
-  const dir = tempDir('weave-artifact-');
-  mkdirSync(join(dir, 'Horses'));
-  writeFileSync(join(dir, 'Horses', 'server.cjs'), serverCode(version));
-  const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
-  const run = spawnSync(tar, ['-czf', 'Horses.tar.gz', 'Horses'], { cwd: dir });
-  if (run.status !== 0) throw new Error(`tar failed: ${run.stderr}`);
-  return readFileSync(join(dir, 'Horses.tar.gz'));
+/** The release's image: a container running that server (by its ref@digest), and the manifest pinning it. */
+function horsesRelease(version: string, racePort: number) {
+  const image = testImage('ghcr.io/martl/horses', version);
+  const file = join(tempDir('weave-artifact-'), 'server.cjs');
+  writeFileSync(file, serverCode(version));
+  const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { image: image.ref }, install: { image }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
+  return { manifest, script: { [`${image.ref}@${image.digest}`]: file } };
 }
 
 function person(name: string): WeaveNode {
@@ -77,19 +74,16 @@ const answers = (port: number) => vi.waitFor(() => getJson(port), { timeout: 15_
 
 describe('the website service', { timeout: 60_000 }, () => {
   it('makes ports reachable in its projects: services serve their web pages, and programs of yours get a website by port', async () => {
-    const github = new PublicGitHub();
     const racePort = await freePort();
-    const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
-    const horses = { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
-    github.add('martl/horses', 'v1.0', horses);
-    const githubPort = await github.serve();
+    const { manifest, script } = horsesRelease('v1.0', racePort);
 
     const martl = person('martl');
     const lena = person('Lena');
-    await fetchesFrom(lena, githubPort);
+    const docker = tempDir('weave-room-docker-');
+    dockerRunning(lena, docker, script);
     await martl.createProject({ name: 'Horses' });
     await lena.joinSpace(await martl.invite('Horses'));
-    await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest, files: { [platformKey()]: horses } });
+    await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest });
     syncAll([martl, lena]);
     await lena.createProject({ name: 'Party' });
 
@@ -117,7 +111,7 @@ describe('the website service', { timeout: 60_000 }, () => {
 
         // martl's release, installed as a service in Party (approved first): a web app without a contract reads and
         // writes nothing, and serves its web page.
-        await expect(lena.addService({ artifact: { project: 'Horses' }, spaces: ['Party'] })).rejects.toThrow(/approve it first: Weave would run "node server.cjs" from Horse race v1\.0, released in Horses/);
+        await expect(lena.addService({ artifact: { project: 'Horses' }, spaces: ['Party'] })).rejects.toThrow(/approve it first: Weave would run "[^"]* run [^"]*ghcr\.io\/martl\/horses@sha256:[0-9a-f]{64}" from Horse race v1\.0, released in Horses/);
         const horses = await lena.addService({ artifact: { project: 'Horses' }, spaces: ['Party'], settings: { API_KEY: 'k-123' }, approve: true });
         expect(horses).toMatchObject({ name: 'horses', contract: { reads: 'nothing', writes: [], website: true } });
         await lena.serviceReady('horses');
@@ -131,17 +125,16 @@ describe('the website service', { timeout: 60_000 }, () => {
         // Its port answers that website: another can't take it.
         await expect(lena.openWebsite({ project: 'Party', name: 'Race 2', port: racePort })).rejects.toThrow(new RegExp(`port ${racePort} already answers the website "Horse race"`));
 
-        // Stopped, its website ends; started again, the same website comes back, without fetching the release again.
+        // Stopped, its website ends; started again, the same website comes back, from the same image.
         const before = (await lena.websites('Party')).find((r) => r.name === 'Horse race')!.id;
         await lena.setService({ name: 'horses', enabled: false });
         expect(await sites()).toEqual([['Board', 'Party', 'address', true]]);
         await vi.waitFor(async () => expect(await getJson(racePort).then(() => 'up', () => 'down')).toBe('down'), { timeout: 10_000, interval: 200 });
-        const downloads = github.delivered.length;
         await lena.setService({ name: 'horses', enabled: true });
         await lena.serviceReady('horses');
         await answers(racePort);
         await vi.waitFor(async () => expect(await sites()).toEqual([['Board', 'Party', 'address', true], ['Horse race', 'Party', 'horses', true]]), { timeout: 10_000, interval: 200 });
-        expect(github.delivered.length).toBe(downloads);
+        expect(readFileSync(join(docker, 'docker.log'), 'utf8').match(/^run .*ghcr\.io\/martl\/horses@/gm)).toHaveLength(2);
 
         // In a project without a website service it serves nothing there, and says why; once one comes, it does.
         await lena.setService({ name: 'horses', spaces: ['Party', 'Horses'] });
@@ -171,18 +164,15 @@ describe('the website service', { timeout: 60_000 }, () => {
 
 describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
   it('keeps a release running as a service of its own, at the same website; a command is yours to start now', async () => {
-    const github = new PublicGitHub();
     const racePort = await freePort();
-    const manifest = { app: 'horses', name: 'Horse race', version: 1, services: [{ port: racePort }], start: { release: { [platformKey()]: ['node', 'server.cjs'] } }, env: [{ name: 'API_KEY', label: 'API key', secret: true, optional: true }] };
-    const horses = { name: `Horses-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
-    github.add('martl/horses', 'v1.0', horses);
-    const githubPort = await github.serve();
+    const { manifest, script } = horsesRelease('v1.0', racePort);
     const martl = person('martl');
     const lena = person('Lena');
-    await fetchesFrom(lena, githubPort);
+    const docker = tempDir('weave-room-docker-');
+    dockerRunning(lena, docker, script);
     await martl.createProject({ name: 'Horses' });
     await lena.joinSpace(await martl.invite('Horses'));
-    const released = await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest, files: { [platformKey()]: horses } });
+    const released = await publishRelease(martl, { project: 'Horses', tag: 'v1.0', repo: 'martl/horses', manifest });
     syncAll([martl, lena]);
     const party = await lena.createProject({ name: 'Party' });
     await lena.addService({ builtin: 'website', spaces: ['Party'] });
