@@ -145,7 +145,8 @@ ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknow
 
 /** Bring the window back (from the tray, minimized or behind others): a notification was clicked. */
 function showWindow(): void {
-  if (!window) return;
+  // While quitting the window is already gone, and a second start or a link may still come in.
+  if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
@@ -500,6 +501,10 @@ async function createWindow(): Promise<void> {
       event.preventDefault();
       window?.hide();
     }
+  });
+  window.on('closed', () => {
+    window = undefined;
+    loaded = false;
   });
   if (!values.screenshot) createTray();
   // Links in messages open in the system browser, never inside the app; Weave links open here.
