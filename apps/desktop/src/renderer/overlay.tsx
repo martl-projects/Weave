@@ -26,7 +26,7 @@ export function kindOf(p: PostInfo): string {
 /** Who pointed to it: an agent's weave_show, or a link in a Claude Code session. */
 function source(m: MentionInfo): string {
   if (m.source === 'agent') return m.agent ? `${m.agent} showed it` : 'shown';
-  return `in Claude Code${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
+  return `in ${m.session?.name ?? 'Claude Code'}${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
 }
 
 
@@ -89,10 +89,11 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
       <div className="panel-heading">Session</div>
       <div className="panel-foldout-session">
         <span className="grow">
-          <b>{session.title ?? 'Untitled session'}</b>
+          <b title={session.description}>{session.title ?? 'Untitled session'}</b>
           <span className="panel-line-note">
             {[folderName(session.folder), focused ? 'open in Claude' : running(session) ? 'running' : session.active ? `active ${ago(session.active)}` : ''].filter(Boolean).join(' · ')}
           </span>
+          {session.description && <span className="panel-line-note">{session.description}</span>}
         </span>
         {session.host && bridge.showSession && (
           <button onClick={() => void attempt(() => bridge.showSession!(session.host!))} title="Bring it to the front in the Claude app">

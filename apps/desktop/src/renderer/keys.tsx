@@ -4,7 +4,8 @@ import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
-import { LinkedAccountsBox } from './github.tsx';
+import { LinkedAccountsBox } from './accounts.tsx';
+import { KeyvaultsBox } from './keyvaults.tsx';
 import { AgentAppsBox } from './agents.tsx';
 import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
@@ -596,6 +597,7 @@ export function KeysView() {
       {!bridge.phone && <PhonesBox />}
       <AlwaysOnNodes keys={keys} />
       <ServicesBox keys={keys} />
+      <KeyvaultsBox />
       <FetchersBox />
       <AgentAppsBox />
       <LinkedAccountsBox />

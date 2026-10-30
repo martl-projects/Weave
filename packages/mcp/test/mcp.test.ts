@@ -58,37 +58,61 @@ describe('Weave over MCP', () => {
   it('tells the harness how Weave works, including what only the person can do', async () => {
     const { client, close } = await setup();
     const instructions = client.getInstructions() ?? '';
-    expect(instructions).toContain('weave_github_connect');
-    expect(instructions).toContain('Only select repositories');
+    expect(instructions).toContain('weave_link_account');
+    expect(instructions).toContain('GitHub access service');
     expect(instructions).toMatch(/Things only the person does/);
+    expect(instructions).toMatch(/permanent name.*weave_name_session/s);
     close();
   });
 
-  it('links repositories and publishes apps only with the permissions for it', async () => {
-    const { node, call, close } = await setup();
-    // A GitHub sign-in on this node, and a GitHub where the app may manage martl/weave.
-    writeFileSync(join(node.home.dir, 'github.json'), JSON.stringify({ token: 't', login: 'martl' }));
-    node.githubSetup = {
-      ...node.githubSetup,
-      fetch: (async (input: string | URL | Request) => {
-        const path = new URL(String(input)).pathname;
-        const body = path === '/user/installations' ? { installations: [{ id: 1 }] } : path === '/user/installations/1/repositories' ? { repositories: [{ full_name: 'martl/weave', permissions: { admin: true } }] } : path.endsWith('/collaborators') || path.endsWith('/invitations') ? [] : path === '/repos/martl/weave' ? { full_name: 'martl/weave', owner: { type: 'Organization' } } : { message: 'Not Found' };
-        return new Response(JSON.stringify(body), { status: 'message' in body ? 404 : 200 });
-      }) as typeof fetch,
+  it('has the session name itself once, and tells it the title to go by', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-'));
+    dirs.push(dir);
+    const node = WeaveNode.init('Martin', dir);
+    await node.createProject({ name: 'Weave' });
+    await node.addAgent('claude', ['weave.post']);
+    await node.nameSession({ session: { id: 'other-session' }, name: 'Skala', about: 'Reviews' });
+    const session = sessionFromEnv({ CLAUDE_CODE_SESSION_ID: 'e360e3d1-named', CLAUDE_CODE_HOST_SESSION_ID: 'local_named' }, 'C:\\code\\weave');
+    const { server, close } = createWeaveMcp(node, { as: 'claude', session });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test-harness', version: '1.0.0' });
+    await client.connect(clientSide);
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = (await client.callTool({ name, arguments: args })) as { content: Array<{ text: string }>; isError?: boolean };
+      const text = result.content[0].text;
+      return { error: result.isError ? text : undefined, data: result.isError ? undefined : JSON.parse(text) };
     };
 
-    const refused = await call('weave_link_repo', { space: 'Weave', repo: 'martl/weave' });
-    expect(refused.error).toMatch(/may not sign weave\.github\.repo; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.github\.repo/);
+    // New here: whoami and the stack both say it has no name, and what to do.
+    expect((await call('weave_whoami')).data.session).toMatchObject({ name: null, nameIt: expect.stringMatching(/weave_name_session/) });
+    expect((await call('weave_session')).data).toMatchObject({ id: 'e360e3d1-named', name: null, stack: [] });
+    // Taken names are refused with the names around; then it's named, for good.
+    expect((await call('weave_name_session', { name: 'skala', about: 'Weave naming feature' })).error).toMatch(/"Skala" is taken; names around you: claude, Martin, Skala/);
+    const named = (await call('weave_name_session', { name: 'Shuttle', about: 'Weave naming feature', description: 'Builds the session naming feature.' })).data;
+    expect(named).toMatchObject({ id: 'e360e3d1-named', name: 'Shuttle', about: 'Weave naming feature', title: 'Shuttle · Weave naming feature', setTitle: expect.stringMatching(/set it to "Shuttle · Weave naming feature"/) });
+    expect((await call('weave_whoami')).data.session).toMatchObject({ name: 'Shuttle', title: 'Shuttle · Weave naming feature' });
+    expect((await call('weave_name_session', { name: 'Heddle' })).error).toMatch(/this session is Shuttle: a name is permanent/);
+    expect((await call('weave_name_session', { about: 'Sessions and their names' })).data.title).toBe('Shuttle · Sessions and their names');
+    // The driver hands work to it by name.
+    await node.setSessionRole({ session: { id: 'e360e3d1-named' }, role: 'worker' });
+    const item = await node.submit({ space: 'Weave', board: 'issues', title: 'Name sessions' });
+    expect((await call('weave_assign', { post: item.url, worker: 'Shuttle' })).data).toMatchObject({ id: 'e360e3d1-named', stack: [{ post: { title: 'Name sessions' } }] });
+    expect((await call('weave_workers')).data.map((w: { title: string }) => w.title)).toEqual(['Shuttle · Sessions and their names']);
+    close();
+  });
+
+  it('says accounts elsewhere and publishes apps only with the permissions for it', async () => {
+    const { node, call, close } = await setup();
+    // Without its proof, it says what the proof holds; saying one is the person's needs weave.account.
+    const how = await call('weave_link_account', { platform: 'github' });
+    expect(how.data?.proofText?.text ?? how.error).toMatch(/My Weave id: did:key:|nothing here checks accounts on github/);
+    const refused = await call('weave_link_account', { platform: 'github', handle: 'martl', proof: '0123456789abcdef0123' });
+    expect(refused.error).toMatch(/may not sign weave\.account; its person can allow it in Keys & devices in the Weave app, or with: weave agent can forge .*weave\.account/);
     writeFileSync(join(node.home.dir, 'weave.app.json'), JSON.stringify({ app: 'weave', services: [{ port: 7777 }] }));
     const app = await call('weave_app_publish', { project: 'Weave', file: join(node.home.dir, 'weave.app.json') });
     expect(app.error).toMatch(/may not sign weave\.app/);
 
-    await node.updateAgent({ name: 'forge', permissions: ['weave.post', 'weave.github.repo'] });
-    const linked = await call('weave_link_repo', { space: 'Weave', repo: 'https://github.com/martl/weave' });
-    expect(linked.data.repos).toMatchObject([{ repo: 'martl/weave', by: { name: 'Martin' } }]);
-    // Signed by the agent, on the person's behalf.
-    const event = (await node.feed({ space: 'Weave', kinds: ['weave.github.repo'] })).at(-1)!;
-    expect(event.signerName).toBe('forge');
     close();
   });
 
@@ -118,19 +142,19 @@ describe('Weave over MCP', () => {
     close();
   });
 
-  it('brings the app to the front at the link dialog, without it landing in the agent inbox', async () => {
+  it('brings the app to the front at a space, without it landing in the agent inbox', async () => {
     const { node, call, close } = await setup();
     const seen: Array<{ kind: string; body: unknown }> = [];
     const watching = new AbortController();
     void node.watch((item) => seen.push(item), watching.signal);
     await new Promise((r) => setTimeout(r, 30));
-    const opened = await call('weave_open_in_app', { what: 'link-repo', space: 'Weave', repo: 'https://github.com/martldennl/gameshow' });
-    expect(opened.data).toMatchObject({ what: 'link-repo', space: { kind: 'project', name: 'Weave' }, repo: 'martldennl/gameshow' });
+    const opened = await call('weave_open_in_app', { what: 'space', space: 'Weave' });
+    expect(opened.data).toMatchObject({ what: 'space', space: { kind: 'project', name: 'Weave' } });
     await new Promise((r) => setTimeout(r, 30));
     watching.abort();
-    expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'link-repo', repo: 'martldennl/gameshow' });
+    expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'space' });
     expect((await call('weave_inbox', {})).data.items ?? []).toEqual([]);
-    expect((await call('weave_open_in_app', { what: 'link-repo' })).error).toMatch(/say which space/);
+    expect((await call('weave_open_in_app', { what: 'space' })).error).toMatch(/say which space/);
     close();
   });
 

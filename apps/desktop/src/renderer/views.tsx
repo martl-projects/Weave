@@ -11,7 +11,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
-import { HubGitHubLink, RepoBanner, RepoSettings } from './github.tsx';
+import { HubAccounts } from './accounts.tsx';
 import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
@@ -139,7 +139,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
                 {p.posts} public post{p.posts === 1 ? '' : 's'}
               </span>
             </div>
-            <HubGitHubLink profile={p} />
+            <HubAccounts profile={p} />
           </div>
           {p.me && (
             <div className="space-actions">
@@ -534,7 +534,6 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
           </button>
         </span>
       </header>
-      <RepoBanner space={project} />
       <div className="project-split">
         <div className={`hero${page?.banner ? ' has-banner' : ''}`}>
           {page?.banner && <BlobImage src={page.banner} className="hero-bg" />}
@@ -903,7 +902,6 @@ const SETTINGS_TABS = [
   ['page', 'Page'],
   ['boards', 'Boards'],
   ['people', 'People'],
-  ['github', 'GitHub'],
   ['payments', 'Payments'],
   ['ownership', 'Ownership'],
 ] as const;
@@ -951,7 +949,6 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
       )}
-      {tab === 'github' && <RepoSettings space={project} />}
       {tab === 'payments' && <PaymentsSettings project={project} spaces={spaces} />}
       {tab === 'ownership' && <SpaceOwnership space={project} members={members} meDid={meDid} canClose={info.maintainer} />}
     </Page>
@@ -1158,7 +1155,6 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
-      <RepoSettings space={group} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
@@ -1250,7 +1246,6 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
           );
         })}
       </fieldset>
-      <RepoSettings space={community} />
       <CommunityRule community={community} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
       <VisitorsSettings space={community} canSet={info.moderator} />

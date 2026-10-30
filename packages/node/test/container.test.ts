@@ -7,6 +7,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { checkManifest, checkServiceLabel, SERVICE_LABEL } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, type Fetch, closeOpenStores } from '../src/index.ts';
+import { publishRelease } from './helpers/releases.ts';
 import { imageDigest, imageLocation } from '../src/registry.ts';
 import { registry } from './helpers/registry.ts';
 
@@ -65,7 +66,7 @@ function fakes(manifest: unknown, options: { privateImage?: boolean } = {}): Fet
 
 function person(name: string, fetchImpl: Fetch): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-container-'));
-  node.githubSetup = { clientId: 'Iv1.test', fetch: fetchImpl, sleep: async () => {} };
+  node.githubSetup = { fetch: fetchImpl };
   node.containerSetup = { fetch: fetchImpl, docker: [process.execPath, join(import.meta.dirname, 'helpers', 'fake-docker.mjs')] };
   return node;
 }
@@ -109,8 +110,8 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     await martl.createProject({ name: 'Gameshow' });
     await lena.joinSpace(await martl.invite('Gameshow'));
 
-    // A release with an image and no build files: pinned by digest.
-    const released = await martl.releaseApp({ project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow' });
+    // A release with an image and no build files: pinned by digest (as GitHub releases pins it, publishing).
+    const released = await publishRelease(martl, { project: 'Gameshow', tag: 'v1.4', repo: 'martl/gameshow', manifest: { ...manifest, install: { image: { ref: 'ghcr.io/martl/gameshow', tag: '1.4', digest: DIGEST } } } });
     expect(released.install?.image).toEqual({ ref: 'ghcr.io/martl/gameshow', tag: '1.4', digest: DIGEST });
     expect(released.install?.assets).toBeUndefined();
     syncAll([martl, lena]);

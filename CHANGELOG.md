@@ -2,6 +2,52 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.23.0 · 2026-10-28
+
+- Release: draft and publish with a Node script, not gh, so it runs on every runner
+- Release: set up Node in the draft job, the runner has none of its own
+- Artifacts say where their files are (install.source), not GitHub
+- Weave knows nothing of GitHub: accounts elsewhere, verifiers, and GitHub access as a service
+- Weave signs in to GitHub nowhere: services have their own access
+- GitHub access as a service of its own, with its own token
+- Publish through the project's GitHub releases service, and fetch open releases directly
+
+## v0.22.0 · 2026-10-28
+
+- Requests sealed for the service and the asker, and how long they count
+- Attach release files straight to a draft release, not through Actions artifacts
+- Available: everything a project offers, grouped by kind
+- Launch a website artifact as a running website, in Live, gone when closed
+- Artifacts have a kind and a source: files join services, websites and board views
+- Fetchers: the asker's side of artifact.fetch, a client app of their own
+- Who may get each artifact: a gear beside it, enforced where its files are handed out
+- Live: a project's running websites in a place of their own; a service's card offers, shows, then lets you act
+- Websites as a service Weave ships, hosting a project's websites under its own contract
+- Service panels: a service's own pages in its card, in the section of who may see them
+- Let code from others serve only its own port as a website
+- Everything one can do with a service, in sections by who may; who may in its settings
+- Show a service's actions by who may use them, and let maintainers move one in place
+- Actions: what people may ask a service to do, and who may, checked by Weave
+- Plainer project services: what's available, and Add to…
+- Show a project's releases under the service that hands them out
+- Add a service from a catalog of tiles, and list a project's services in the sidebar
+- Offer the services Weave ships in a project's Add a service
+- Ship GitHub releases: the first service Weave ships, as a WebAssembly component
+- Ticks and signatures for WebAssembly services, and services Weave ships, checked by digest
+- Invite only GitHub accounts a member proves are theirs
+- Keep a service's settings in its space, for its maintainers: secrets blind, sign-ins renewed
+- Sessions: start a new Claude Code session with a job, from the Sessions page
+- Sessions: compact two-line rows, grouped by job
+- Let WebAssembly services reach the hosts their contract names, over HTTPS
+- Sessions: Claude sessions and Weave projects side by side, linked by lines
+- Restart a daemon that holds the home but doesn't answer, and say why it didn't start
+- Take over a home's lock from before the computer last started
+- Build the server image with rootless Podman on the self-hosted runner
+- Panel: drop the unused footer style
+- Panel: Stack foldout in the header, no footer, no session name
+- A leaner panel: one bar, the post edge to edge, no footer
+- Workers and the daily driver: sessions get a job, Ctrl+click picks who works on an item
+
 ## v0.21.2 · 2026-10-27
 
 - Leave out empty signing variables when packaging

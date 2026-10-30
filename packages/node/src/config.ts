@@ -9,8 +9,6 @@ export interface Config {
   pendingMemberships: Array<{ tier: string; creator: string; note?: string }>;
   /** You've been asked once whether to tell your agent harnesses about Weave. */
   agentsOffered?: boolean;
-  /** Your own GitHub App to sign in through, instead of Weave Connect. */
-  githubApp?: { clientId: string; slug: string; name: string; owner: string };
   /** This node is a company's attestor (stage 6): it checks employees' sign-ins with this OIDC provider and vouches for them. */
   attestor?: { issuer: string; audience: string; hours?: number };
   /** An archive node (stage 6): it keeps everything of its spaces, never forgets or lets go of anything. */
@@ -37,7 +35,6 @@ export function loadConfig(home: Home): Config {
     topics: stored.topics ?? [],
     bootstrap: stored.bootstrap ?? [],
     pendingMemberships: stored.pendingMemberships ?? [],
-    ...(stored.githubApp ? { githubApp: stored.githubApp } : {}),
     ...(stored.agentsOffered ? { agentsOffered: true } : {}),
     // A company's node (stages 6 and 12): written by weave company create and friends, read back here.
     ...(stored.attestor && typeof stored.attestor.issuer === 'string' && typeof stored.attestor.audience === 'string'

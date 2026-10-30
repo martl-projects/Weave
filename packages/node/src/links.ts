@@ -9,12 +9,6 @@ export interface LinkServer {
   close(): Promise<void>;
 }
 
-/** Setting up a GitHub App from this computer's pages (see Services.githubAppSetup): what only the browser reaches. */
-export interface GitHubAppFlow {
-  manifest(state: string): { action: string; manifest: string; org?: string; service: string };
-  created(input: { code: string; state: string }): Promise<{ name: string; install: string; service: string }>;
-}
-
 /**
  * Post addresses on this computer: http://weave.localhost:7710/<project~id/board/post/title>
  * shows that post, read-only, so a link an agent writes in Claude Code (or anywhere)
@@ -32,12 +26,10 @@ export interface GitHubAppFlow {
  *
  *   GET  /<address>              the post and its chat, or a person (@name~key)
  *   POST /open/<address>         bring the Weave app to it (same-origin forms only)
- *   GET  /github/new-app?state   the App's description, sent to GitHub with one click
- *   GET  /github/app-created?code&state   GitHub's way back: the App's ID and key go to the GitHub service
  */
-export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?: GitHubAppFlow): Promise<LinkServer> {
+export async function startLinks(backend: Backend, port = LINK_PORT): Promise<LinkServer> {
   const server: Server = createServer((req, res) => {
-    handle(backend, req, res, githubApp).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
+    handle(backend, req, res).catch((error: Error) => page(res, 500, 'Weave', `<p class="note">${escape(error.message)}</p>`));
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -56,34 +48,11 @@ export async function startLinks(backend: Backend, port = LINK_PORT, githubApp?:
   };
 }
 
-async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse, githubApp?: GitHubAppFlow): Promise<void> {
+async function handle(backend: Backend, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const host = req.headers.host ?? '';
   if (host.split(':')[0] !== LINK_HOST) return page(res, 403, 'Weave', '<p class="note">Open Weave links as http://weave.localhost:…</p>');
   const url = new URL(req.url ?? '/', `http://${host}`);
   const path = decodeURIComponent(url.pathname).replace(/^\/+/, '');
-
-  if (req.method === 'GET' && githubApp && (path === 'github/new-app' || path === 'github/app-created')) {
-    const state = url.searchParams.get('state') ?? '';
-    try {
-      if (path === 'github/new-app') {
-        const { action, manifest, org, service } = githubApp.manifest(state);
-        // No scripts here: one button sends GitHub the App's description (and only GitHub may receive it).
-        return page(
-          res,
-          200,
-          'Your GitHub App',
-          `<h1>Your own GitHub App</h1><p>Weave's GitHub service (${escape(service)}) will act as an App of yours${org ? ` in <b>${escape(org)}</b>` : ''}: it keeps your linked repositories' access in step with your spaces and hands their release files to participants, without anyone signing in.</p><p class="note">It asks for Administration (read and write), Contents (read) and Metadata (read), and no webhooks. You confirm it on GitHub, then install it on the repositories it should manage.</p><form method="post" action="${escape(action)}"><input type="hidden" name="manifest" value="${escape(manifest)}"><button>Continue on GitHub</button></form>`,
-          'https://github.com',
-        );
-      }
-      const created = await githubApp.created({ code: url.searchParams.get('code') ?? '', state });
-      // Next and last: installing it, on GitHub.
-      res.writeHead(303, { location: created.install, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
-      return void res.end();
-    } catch (error) {
-      return page(res, 400, 'Your GitHub App', `<h1>Your own GitHub App</h1><p class="note">${escape((error as Error).message)}</p>`);
-    }
-  }
 
   if (req.method === 'POST' && path.startsWith('open/')) {
     // A form on one of these pages, nothing else: browsers send Origin with every POST.

@@ -1,7 +1,6 @@
 import type { Json } from './bytes.ts';
 import type { Did } from './keys.ts';
 import { isDid } from './keys.ts';
-import { isRepoName } from './github.ts';
 import { isNetHost, lowerHost, parseContract, type ServiceContract } from './services.ts';
 import { parseAppMarks, type AppMarks } from './marks.ts';
 import { parseWho, type ActionWho } from './serviceactions.ts';
@@ -98,6 +97,27 @@ export interface AppManifest {
   fetcher?: AppFetcher;
   /** A file: something to get, not to run (a document, a dataset, a model). Its one release file is install.assets.file. */
   file?: AppFile;
+  /**
+   * A verifier: a client app that checks people's accounts on platforms (weave.account), run by whoever looks, so
+   * nobody has to trust anyone's word that an account is theirs.
+   */
+  verifier?: AppVerifier;
+  /**
+   * A keyvault: a client app of its person's that holds their access to a platform (their GitHub App, say) and hands
+   * their services only access derived from it, cut to what each declared (uses, in its contract) and to what its
+   * person handed each project. Shown in Keys & devices, never in a project.
+   */
+  keyvault?: AppKeyvault;
+}
+
+/** What a keyvault holds access to, and where it may reach. */
+export interface AppKeyvault {
+  /** The platform it holds access to (github…): services name it in "uses". */
+  platform: string;
+  /** Hosts it may reach over HTTPS. */
+  net?: string[];
+  /** What it hands to projects, in words: "repositories". */
+  resources?: string;
 }
 
 /** A client service's parts in its package, and the kinds its actions may propose. */
@@ -108,6 +128,22 @@ export interface AppClient {
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
+export interface AppVerifier {
+  /** The platforms it checks accounts on (github, x…). */
+  platforms: string[];
+  /** Hosts it may reach over HTTPS, as a service's contract names them. */
+  net?: string[];
+  /** How to make a proof there, for people (where, and that it holds your Weave id). */
+  howto?: string;
+  /** An account's page there, with {handle} in it: https://github.com/{handle}. */
+  page?: string;
+  /**
+   * It makes the proof itself (prove in the WIT), with a sign-in with a code there, used once and forgotten: one click
+   * instead of making a proof by hand.
+   */
+  prove?: AppOAuth;
+}
+
 export interface AppFile {
   /** What it is, as a media type (application/pdf), if known. */
   type?: string;
@@ -128,6 +164,58 @@ export interface AppWasm {
    * network: they act only through its actions (checked as buttons are), and get what they show by asking one.
    */
   panels?: AppPanel[];
+  /**
+   * Its lists, shown by Weave in its card the same way for every service: what's in each (an action answers its
+   * items), + to add one, a trash can to remove one, and each item's main button: each only for who may (as its
+   * action says, or whoever runs it for what's theirs).
+   */
+  lists?: AppList[];
+}
+
+/**
+ * A list of a service's things (running websites, repositories offered, releases, files). Its items, as `list`
+ * answers them: [{id, title, detail?, url?, done?, use?: false, remove?: false, more?: [{action, label}]}], where done
+ * is said instead of the main button (you have it), and more are each item's other buttons.
+ */
+export interface AppList {
+  name: string;
+  title: string;
+  /** What one is, in words: "website", "access offer". */
+  item?: string;
+  /** The action that answers its items. */
+  list: string;
+  /** Adding one: an action of its own, or whoever runs it handing one from their keyvault for a platform (hand). */
+  add?: { action: string; label?: string } | { hand: string; label?: string };
+  /** Removing one: an action, given {id}. */
+  remove?: { action: string; label?: string };
+  /** Each item's main button: an action given {id}, or sharing your proven account on a platform with the project (account). */
+  use?: { action: string; label: string } | { account: string; label: string };
+  /** Other actions its items offer (more): shown on them, not as buttons of their own. */
+  covers?: string[];
+}
+
+/** A list as a manifest names it, checked: or why not. */
+function parseList(value: unknown): AppList | string {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const name = (v: unknown) => (typeof v === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(v) ? v : undefined);
+  const part = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
+  const label = (v: unknown) => text(v, 40) || undefined;
+  const add = part(o.add);
+  const remove = part(o.remove);
+  const use = part(o.use);
+  const list: AppList = {
+    name: name(o.name) ?? '',
+    title: text(o.title, 60),
+    ...(text(o.item, 40) ? { item: text(o.item, 40) } : {}),
+    list: name(o.list) ?? '',
+    ...(add && name(add.action) ? { add: { action: name(add.action)!, ...(label(add.label) ? { label: label(add.label) } : {}) } } : add && name(add.hand) ? { add: { hand: name(add.hand)!, ...(label(add.label) ? { label: label(add.label) } : {}) } } : {}),
+    ...(remove && name(remove.action) ? { remove: { action: name(remove.action)!, ...(label(remove.label) ? { label: label(remove.label) } : {}) } } : {}),
+    ...(use && label(use.label) && name(use.action) ? { use: { action: name(use.action)!, label: label(use.label)! } } : use && label(use.label) && name(use.account) ? { use: { account: name(use.account)!, label: label(use.label)! } } : {}),
+    ...(Array.isArray(o.covers) && o.covers.some((c) => name(c)) ? { covers: o.covers.flatMap((c) => (name(c) ? [name(c)!] : [])).slice(0, 10) } : {}),
+  };
+  if (!list.name || !list.title || !list.list) return '{"name": "websites", "title": "Running websites", "list": "list", "add": {"action": "open"}, "remove": {"action": "close"}, "use": {"action": "visit", "label": "Visit"}}';
+  if ((o.add !== undefined && !list.add) || (o.remove !== undefined && !list.remove) || (o.use !== undefined && !list.use)) return 'add is {"action"} or {"hand": platform}, remove {"action"}, use {"action", "label"} or {"account": platform, "label"}';
+  return list;
 }
 
 export interface AppPanel {
@@ -136,6 +224,8 @@ export interface AppPanel {
   who: ActionWho;
   /** Its page in the panel folder, like index.html. */
   page: string;
+  /** The actions it stands in for: the app shows no button of their own where the panel is shown. */
+  covers?: string[];
 }
 
 /** A path inside a package: relative (a leading / is dropped, as in an image), and never out of it. */
@@ -165,6 +255,70 @@ export interface AppSetting {
   oauth?: AppOAuth;
   /** A key the service signs with (sign, in the WIT) but never reads: setting() doesn't return it. */
   signing?: true;
+  /**
+   * Picked from a list rather than typed: one of its actions (for maintainers) answers the choices, as
+   * [{value, label?, note?}] (a repository its sign-in reaches, say). With many, several, one per line.
+   */
+  choose?: { action: string; many?: true };
+  /**
+   * Kept by whoever runs the service, once for every project it's in (a sign-in as them, say), never in a project:
+   * the service acts as its person there.
+   */
+  yours?: true;
+  /**
+   * (Mind: picked from a list and yours, it's per project, but only whoever runs it picks: what its own access reaches
+   * is theirs to hand to a project, not the project's maintainers'.)
+   *
+   * An app of its own registered with the provider, as whoever runs the service (GitHub's App manifest flow): Weave
+   * hands the provider's page the app's manifest, the person creates it there, and Weave exchanges the code it gets
+   * back for the app. Always yours. The service reads what `keep` names (setting(), as JSON) and signs with the
+   * field `key` names (sign()); it never reads that key.
+   */
+  register?: AppRegister;
+}
+
+/** How an app is registered with a provider: its page, where its code becomes the app, and what's kept of it. */
+export interface AppRegister {
+  /** The provider's page the manifest is posted to (a form field "manifest"), with ?state=… */
+  page: string;
+  /** Where the code the provider sends back becomes the app ({code} in it): POSTed, JSON back. */
+  exchange: string;
+  /**
+   * The app's manifest, as the provider takes it: Weave adds where to come back to (redirect_url). In its name,
+   * {account} becomes whose it is (the account they proved on `platform`, else their name), {random} a few letters.
+   */
+  manifest: Record<string, Json>;
+  /** The platform whose proven account names the app ({account}): github, say. */
+  platform?: string;
+  /** The fields of the app kept for the service, like id or slug (owner.login reaches inside). */
+  keep: string[];
+  /** The field that holds the app's private key: Weave signs with it for the service. */
+  key: string;
+  /** Opened once it's there, with kept fields in braces: installing it, say ({html_url}/installations/new). */
+  then?: string;
+}
+
+/** An app registration as a manifest names it, checked. */
+export function parseRegister(value: unknown): { register?: AppRegister; problem?: string } {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const page = httpsUrl(o.page);
+  const exchange = httpsUrl(o.exchange);
+  const manifest = o.manifest && typeof o.manifest === 'object' && !Array.isArray(o.manifest) ? (o.manifest as Record<string, Json>) : undefined;
+  const field = (x: unknown) => typeof x === 'string' && /^[a-z_][a-z0-9_]{0,40}(\.[a-z_][a-z0-9_]{0,40})?$/i.test(x);
+  const keep = Array.isArray(o.keep) ? o.keep.filter(field).slice(0, 10) as string[] : [];
+  const key = field(o.key) ? (o.key as string) : '';
+  const then = typeof o.then === 'string' && /^https:\/\/|^\{[a-z_]+\}\//i.test(o.then) ? o.then.slice(0, 300) : undefined;
+  const platform = typeof o.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(o.platform) ? o.platform : undefined;
+  if (!page || !exchange?.includes('{code}') || !manifest || JSON.stringify(manifest).length > 8000 || !keep.length || !key)
+    return { problem: '"register" names the provider\'s page, where its code becomes the app, the app\'s manifest, what\'s kept and its key: {"page": "https://…", "exchange": "https://…/{code}/…", "manifest": {...}, "keep": ["id", "slug"], "key": "pem", "then": "{html_url}/installations/new"}' };
+  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}) } };
+}
+
+/** A setting's choices, checked: the action that lists them, and whether several are picked. */
+export function parseChoose(value: unknown): { action: string; many?: true } | undefined {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const action = typeof o.action === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(o.action) ? o.action : undefined;
+  return action ? { action, ...(o.many === true ? { many: true as const } : {}) } : undefined;
 }
 
 /**
@@ -173,8 +327,13 @@ export interface AppSetting {
  * and hands the service only a current access token.
  */
 export interface AppOAuth {
-  /** Where people allow it, like https://accounts.google.com/o/oauth2/v2/auth. */
-  authorize: string;
+  /** Where people allow it, like https://accounts.google.com/o/oauth2/v2/auth (a sign-in through the browser). */
+  authorize?: string;
+  /**
+   * Or a sign-in with a code (RFC 8628's device flow): where the code is asked for, like
+   * https://github.com/login/device/code. People enter the code on the provider's page; no secret, no redirect.
+   */
+  device?: string;
   /** Where the code (and later the refresh token) becomes an access token. */
   token: string;
   /** The app's client ID with the provider, registered with a loopback redirect (http://127.0.0.1). */
@@ -195,7 +354,11 @@ export function appSettingsOf(value: unknown): AppSetting[] {
     const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim().slice(0, 60) : name;
     const hint = typeof e.hint === 'string' ? e.hint.trim().slice(0, 200) : '';
     const oauth = e.oauth === undefined ? undefined : parseOAuth(e.oauth).oauth;
-    out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}) });
+    const register = e.register === undefined || oauth ? undefined : parseRegister(e.register).register;
+    const choose = oauth || register || e.secret === true || e.signing === true ? undefined : parseChoose(e.choose);
+    // An app registered is always yours, and signs.
+    if (register) { out.push({ name, label, secret: true, ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), register, yours: true }); continue; }
+    out.push({ name, label, ...(e.secret === true || e.signing === true || oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth ? { oauth } : {}), ...(e.signing === true && !oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}), ...(e.yours === true ? { yours: true as const } : {}) });
   }
   return out;
 }
@@ -216,12 +379,13 @@ const httpsUrl = (value: unknown): string | undefined => {
 export function parseOAuth(value: unknown): { oauth?: AppOAuth; problem?: string } {
   const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
   const authorize = httpsUrl(o.authorize);
+  const device = httpsUrl(o.device);
   const token = httpsUrl(o.token);
   const client = typeof o.client === 'string' ? o.client.trim().slice(0, 300) : '';
-  if (!authorize || !token || !client) return { problem: '"oauth" names the provider’s pages and the app’s client: {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]}' };
+  if ((!authorize && !device) || !token || !client) return { problem: '"oauth" names the provider’s pages and the app’s client: {"authorize": "https://…" (or "device": "https://…", for a sign-in with a code), "token": "https://…", "client": "<client id>", "scopes": [...]}' };
   const scopes = Array.isArray(o.scopes) ? o.scopes.filter((x): x is string => typeof x === 'string' && /^[!-~]{1,200}$/.test(x)).slice(0, 30) : [];
   const clientSecret = typeof o.clientSecret === 'string' ? o.clientSecret.trim().slice(0, 300) : '';
-  return { oauth: { authorize, token, client, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) } };
+  return { oauth: { ...(authorize ? { authorize } : {}), ...(device ? { device } : {}), token, client, ...(clientSecret ? { clientSecret } : {}), ...(scopes.length ? { scopes } : {}) } };
 }
 
 /** Variables an app may not ask hosts for: they change how programs start or what they load. */
@@ -229,29 +393,33 @@ const ENV_RESERVED = /^(WEAVE_|NODE_|LD_|DYLD_|PATH$|PATHEXT$|COMSPEC$|SYSTEMROO
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 /**
- * Getting the app: release files on GitHub, one per platform, each with the
- * SHA-256 a maintainer published here (Weave refuses a file that doesn't
- * match, whatever GitHub serves), and steps for an agent where there's no
- * file for your computer (building from source and the like).
+ * Getting the app: release files where its source says (a provider of that source hands them out), one per platform,
+ * each with the SHA-256 a maintainer published here (Weave refuses a file that doesn't match, whoever delivers it),
+ * and steps for an agent where there's no file for your computer (building from source and the like).
  */
 export interface AppInstall {
-  /** owner/name of the repository whose release holds the files. */
-  github?: string;
   /** The release's tag, like v1.4: also the version people see. */
   tag?: string;
   /** By platform, as Node names it (win32-x64, darwin-arm64, linux-x64…): the release file. */
   assets?: Record<string, AppAsset>;
   /** For an agent installing it by hand. */
   steps?: string[];
-  /** The GitHub App (its slug) the release is reached through, when not Weave's default: a private repo's files only download through an app installed on it. */
-  app?: string;
   /** The release's container image, pinned by its digest (weave app release reads it from the registry). */
   image?: AppImage;
   /**
-   * Where its files are, for a provider that knows that source (its contract's sources): {"provider": "s3", "ref":
-   * "<what that provider understands>"}. Without, a GitHub release (github) or the image is its source.
+   * Where its files are, for a provider that knows that source (its contract's sources): {"provider": "github", "ref":
+   * "owner/name"}, {"provider": "s3", "ref": "…"}: what that provider understands, nothing Weave reads. An image is
+   * its own source.
    */
   source?: ArtifactSource;
+  /** The fetcher that gets its files directly (access: direct), when its provider isn't asked: as a contract names one. */
+  fetcher?: string;
+  /**
+   * How one gets at its files: only through a grant of its provider (closed code: the provider holds the only
+   * access, and must be there when someone fetches), or directly, by the fetcher alone (public, or open to the
+   * project's members through their own access). Without, through a grant.
+   */
+  access?: 'grant' | 'direct';
 }
 
 /** Where an artifact's files are: a kind of place (github, oci, s3…) and what a provider of it understands. */
@@ -320,9 +488,11 @@ export function parseInstall(input: unknown): AppInstall | undefined {
     image = { ref, tag: imageTag, digest, ...(raw.packaged === true ? { packaged: true as const } : {}) };
   }
   const has = Object.keys(assets).length > 0;
-  const github = text(i.github, 140);
   const tag = text(i.tag, 100);
   let source: ArtifactSource | undefined;
+  // From before sources: a GitHub repository.
+  const legacy = text(i.github, 140);
+  if (i.source === undefined && legacy) source = { provider: 'github', ref: legacy };
   if (i.source !== undefined) {
     const raw = (i.source && typeof i.source === 'object' ? i.source : {}) as Record<string, unknown>;
     const provider = text(raw.provider, 40);
@@ -330,19 +500,19 @@ export function parseInstall(input: unknown): AppInstall | undefined {
     if (!SOURCE.test(provider) || !ref) throw new Error('"install.source" is {"provider": "s3", "ref": "…"}: a kind of place, and what its provider understands');
     source = { provider, ref };
   }
-  // A Weave service is its image: it needs no repository to come from (provenance says more, later). Files come from a
-  // GitHub release, or from another source.
-  if ((has || (image && !image.packaged)) && !isRepoName(github) && !source) throw new Error('"install.github" is the repository, owner/name (or "install.source" says where its files are)');
+  // A Weave service is its image: it needs no source to come from (provenance says more, later). Files do.
+  if ((has || (image && !image.packaged)) && !source) throw new Error('"install.source" says where its files are: {"provider": "github", "ref": "owner/name"}, or another provider\'s');
+  const fetcher = typeof i.fetcher === 'string' && /^([a-z][a-z0-9-]{0,39}|sha256:[0-9a-f]{64})$/.test(i.fetcher) ? i.fetcher : undefined;
   if ((has || image) && !TAG.test(tag)) throw new Error('"install.tag" is the tag of the release, like v1.4');
   if (!has && !image && !steps.length) return undefined;
-  const app = text(i.app, 100);
   return {
-    ...(has || image ? { ...(isRepoName(github) ? { github } : {}), tag } : {}),
+    ...(has || image ? { tag } : {}),
     ...(source ? { source } : {}),
+    ...(has && fetcher ? { fetcher } : {}),
+    ...(has && (i.access === 'grant' || i.access === 'direct') ? { access: i.access } : {}),
     ...(has ? { assets } : {}),
     ...(image ? { image } : {}),
     ...(steps.length ? { steps } : {}),
-    ...((has || image) && /^[a-z0-9][a-z0-9-]{0,99}$/.test(app) ? { app } : {}),
   };
 }
 
@@ -360,7 +530,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'marks']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'marks']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -390,7 +560,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.marks === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined && m.marks === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -461,13 +631,21 @@ export function checkManifest(input: unknown): ManifestCheck {
       const who = parseWho(o.who);
       const page = packagePath(o.page);
       const name = text(o.name, 40);
+      // The actions it stands in for, by name.
+      const covers = (Array.isArray(o.covers) ? o.covers : []).filter((c): c is string => typeof c === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(c)).slice(0, 20);
       if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
-      else panels.push({ name, title: text(o.title, 60) || name, who, page });
+      else panels.push({ name, title: text(o.title, 60) || name, who, page, ...(covers.length ? { covers } : {}) });
+    }
+    const lists: AppList[] = [];
+    for (const [i, l] of (Array.isArray(raw.lists) ? raw.lists : []).slice(0, 6).entries()) {
+      const got = parseList(l);
+      if (typeof got === 'string') problems.push(`wasm.lists[${i}] is ${got}`);
+      else lists.push(got);
     }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
     else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
-    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
+    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}), ...(lists.length ? { lists } : {}) };
   }
   // A fetcher: a component (wasm) that fetches artifacts for its person, reaching only the hosts it names.
   let fetcher: AppFetcher | undefined;
@@ -478,6 +656,29 @@ export function checkManifest(input: unknown): ManifestCheck {
     if (raw.net !== undefined && (!Array.isArray(raw.net) || bad.length)) problems.push('"fetcher.net" lists the hosts it reaches over HTTPS, by name: like ["api.github.com", "*.githubusercontent.com"]');
     else if (!m.wasm) problems.push('a fetcher is a WebAssembly component: say where it is ("wasm": {"component": "fetcher.wasm"})');
     else fetcher = { ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}) };
+  }
+  // A verifier: the platforms it checks, where it may reach, and how people make a proof.
+  let verifier: AppVerifier | undefined;
+  if (m.verifier !== undefined) {
+    const raw = (m.verifier && typeof m.verifier === 'object' && !Array.isArray(m.verifier) ? m.verifier : {}) as Record<string, unknown>;
+    const platforms = Array.isArray(raw.platforms) ? raw.platforms.filter((p): p is string => typeof p === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(p)).slice(0, 10) : [];
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost).filter(isNetHost) : [];
+    const page = text(raw.page, 200);
+    const prove = raw.prove === undefined ? undefined : parseOAuth(raw.prove);
+    if (prove?.problem) problems.push(`"verifier.prove" is a sign-in with a code: ${prove.problem}`);
+    if (!platforms.length) problems.push('"verifier.platforms" names the platforms it checks accounts on, like ["github"]');
+    else if (!m.wasm) problems.push('a verifier is a WebAssembly component: say where it is ("wasm": {"component": "verifier.wasm"})');
+    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}), ...(prove?.oauth?.device ? { prove: prove.oauth } : {}) };
+  }
+  // A keyvault: the platform it holds access to, and where it may reach.
+  let keyvault: AppKeyvault | undefined;
+  if (m.keyvault !== undefined) {
+    const raw = (m.keyvault && typeof m.keyvault === 'object' && !Array.isArray(m.keyvault) ? m.keyvault : {}) as Record<string, unknown>;
+    const platform = typeof raw.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(raw.platform) ? raw.platform : '';
+    const net = Array.isArray(raw.net) ? raw.net.map(lowerHost).filter(isNetHost) : [];
+    if (!platform) problems.push('"keyvault.platform" names the platform it holds access to, like "github"');
+    else if (!m.wasm) problems.push('a keyvault is a WebAssembly component: say where it is ("wasm": {"component": "keyvault.wasm"})');
+    else keyvault = { platform, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.resources, 40) ? { resources: text(raw.resources, 40) } : {}) };
   }
   // A file: its media type, if it says.
   let file: AppFile | undefined;
@@ -538,13 +739,29 @@ export function checkManifest(input: unknown): ManifestCheck {
         const hint = text(e.hint, 200);
         const oauth = e.oauth === undefined ? {} : parseOAuth(e.oauth);
         if (oauth.problem) { problems.push(`${where}: ${oauth.problem}`); continue; }
-        env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}) });
+        const choose = e.choose === undefined ? undefined : parseChoose(e.choose);
+        if (e.choose !== undefined && !choose) { problems.push(`${where}: "choose" names the action that lists its choices, like {"action": "repos", "many": true}`); continue; }
+        if (choose && (oauth.oauth || e.secret === true || e.signing === true)) { problems.push(`${where}: a setting picked from a list is neither a secret nor a sign-in`); continue; }
+        if (e.register !== undefined) {
+          const register = parseRegister(e.register);
+          if (register.problem) { problems.push(`${where}: ${register.problem}`); continue; }
+          if (oauth.oauth || choose || e.secret === true || e.signing === true) { problems.push(`${where}: an app registered is neither a sign-in, a pick, nor a secret typed in`); continue; }
+          env.push({ name, label, secret: true, ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), register: register.register!, yours: true });
+          continue;
+        }
+        env.push({ name, label, ...(e.secret === true || e.signing === true || oauth.oauth ? { secret: true as const } : {}), ...(e.optional === true ? { optional: true as const } : {}), ...(hint ? { hint } : {}), ...(oauth.oauth ? { oauth: oauth.oauth } : {}), ...(e.signing === true && !oauth.oauth ? { signing: true as const } : {}), ...(choose ? { choose } : {}), ...(e.yours === true ? { yours: true as const } : {}) });
       }
     }
   }
 
+  for (const l of wasm?.lists ?? []) {
+    const named = [l.list, ...(l.add && 'action' in l.add ? [l.add.action] : []), ...(l.remove ? [l.remove.action] : []), ...(l.use && 'action' in l.use ? [l.use.action] : []), ...(l.covers ?? [])];
+    for (const a of named) if (!service?.actions?.some((x) => x.name === a)) problems.push(`wasm.lists: ${l.name} names the action ${a}, but its service has no such action`);
+  }
+  for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
+
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(marks ? { marks } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}) } };
 }
 
 /**
@@ -599,13 +816,14 @@ export const MANIFEST_RULES = [
   'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for release builds Weave installs; with weave_release_workflow these are ["./<app>.exe"] on Windows and ["./<app>"] elsewhere.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
-  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
-  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
+  'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A setting picked from a list and yours is per project, but only whoever runs it picks (the repositories its access reaches, say: theirs to hand out). "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service needing access to a platform declares it in its contract ("uses": {"github": {"contents": "read"}}) and gets it only from its person’s keyvault (token(), in the WIT), cut to those rights and to what they handed each project: it asks for no access of its own. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
+  'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. "expires" says how long a request counts, in seconds, by action or protocol ({"artifact.fetch": 300}): one older when the service gets to it (it was off) is answered by Weave as expired. Without, requests wait for it. What is asked and answered is sealed for the service and the asker. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
+  'wasm.lists: what a service hands out, shown by Weave the same way in every card (search, pages, each button only for who may): its lists come first, before any page of its own. Each names the action that answers its items, + (add: an action, or {"hand": "github"}: whoever runs it hands one from their keyvault), the trash can (remove: an action, given {id}) and each item’s main button (use: an action and a label, or {"account": "github", "label": "Get access"}), and "covers" for other actions its items offer: [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github"}, "remove": {"action": "decline"}, "use": {"account": "github", "label": "Get access"}}]. Its list action answers [{id, icon?, title, badge?, detail?, url?, done? (said instead of the main button: "✓ You have access"), use?: false, remove?: false, more?: [{action, label, icon?, confirm?}]}], or, for a long list it pages itself, {items, next}, asked again with {query, cursor}. A page of its own (wasm.panels) only for what isn’t a list: a form of several steps, a live view.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
   'marks: a mark service, which shows marks next to names (the marks world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --marks): {"component": "marks.wasm", "reads": ["weave.badge"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"]}. Released like wasm. You take it into your own domain (weave marks add), shown everywhere you look; or a space\'s maintainers pin it (weave marks add --space), shown in that space only. Every node that took it in runs it with no key and no network. "reads": the kinds it folds. It answers with check, label, count, symbol or image, and Weave shows who says so.',
-  'install.steps: how to install it by hand, for agents (where there is no release build). install.github, tag and assets are added by weave app release: don\'t write them.',
+  'install.steps: how to install it by hand, for agents (where there is no release build). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',
   "Who is who: players reach the app from 127.0.0.1, so it can't tell them apart by itself. When Weave starts the app it sets WEAVE_API, WEAVE_TOKEN and WEAVE_PROJECT; @weave/sdk (one file, no dependencies) turns them into weave.who(req) → {did, name, host, member, maintainer}, weave.project() and weave.access(did, {group}). Use the did as the player's id instead of asking for a name.",
 ];
@@ -635,13 +853,11 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   return 'app';
 }
 
-/** Where an artifact's files are: its own source, a GitHub release, or its image. */
+/** Where an artifact's files are: its source, or its image (pulled by Weave itself). */
 export function artifactSourceOf(m: AppManifest): ArtifactSource | undefined {
-  if (m.install?.source) return m.install.source;
-  if (m.install?.github && m.install.assets) return { provider: 'github', ref: m.install.github };
+  if (m.install?.source && m.install.assets) return m.install.source;
   if (m.install?.image) return { provider: 'oci', ref: `${m.install.image.ref}@${m.install.image.digest}` };
-  if (m.install?.github) return { provider: 'github', ref: m.install.github };
-  return undefined;
+  return m.install?.source;
 }
 
 /**
@@ -666,8 +882,13 @@ export interface Artifact {
  * GitHub release or another source. The project's app (weave.app) stays what it is.
  */
 export const KIND_ARTIFACT = 'weave.artifact';
+/**
+ * A release withdrawn by a maintainer ({artifact: its id}): no longer listed, launched or handed out from then on.
+ * Signed events stay (who got it keeps what they have); a new release of the same tag counts again.
+ */
+export const KIND_ARTIFACT_WITHDRAWN = 'weave.artifact.withdrawn';
 
-/** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get. */
+/** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get, never one withdrawn. */
 export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
   const byTag = new Map<string, Artifact>();
   for (const e of [...entries].filter((x) => x.kind === KIND_APP || x.kind === KIND_ARTIFACT).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
@@ -686,7 +907,8 @@ export function artifactsOf(entries: Array<{ id: string; kind: string; body: Jso
     const source = artifactSourceOf(manifest);
     byTag.set(`${manifest.app}\0${tag}`, { id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
   }
-  return [...byTag.values()].sort((a, b) => b.time.localeCompare(a.time));
+  const withdrawn = new Set(entries.filter((e) => e.kind === KIND_ARTIFACT_WITHDRAWN && maintainers.has(e.event.author)).map((e) => (e.body as { artifact?: unknown } | null)?.artifact));
+  return [...byTag.values()].filter((a) => !withdrawn.has(a.id)).sort((a, b) => b.time.localeCompare(a.time));
 }
 
 export interface Room {

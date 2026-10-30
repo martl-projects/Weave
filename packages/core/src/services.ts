@@ -94,6 +94,17 @@ export interface ServiceContract {
   fetcher?: string;
   /** The sources whose artifacts it hands out (artifact.fetch): github, s3… Without, any. */
   sources?: string[];
+  /**
+   * Its person's keyvaults it uses, by platform, with the rights it wants there ({"github": {"contents": "read"}}):
+   * it gets access only through them (token() in the WIT), cut to these rights and to what its person handed each
+   * of its projects. It keeps no access of its own.
+   */
+  uses?: Record<string, Record<string, string>>;
+  /**
+   * How long a request counts, in seconds, by action or protocol ({"artifact.fetch": 120}): one older than that when
+   * the service gets to it is answered by Weave as expired, and never reaches it. Without, a request waits for it.
+   */
+  expires?: Record<string, number>;
   /** The contract's version, e.g. 1.0. */
   version: string;
 }
@@ -183,6 +194,18 @@ export const netAllows = (net: string[] | undefined, host: string): boolean =>
 /** A fetcher a contract names: one Weave ships ("github-checkout"), or a component by its digest ("sha256:…"). */
 export const isFetcherRef = (value: string): boolean => /^[a-z][a-z0-9-]{0,39}$/.test(value) || /^sha256:[0-9a-f]{64}$/.test(value);
 
+/** A contract's keyvaults, checked: platforms (github…), each with rights by name (contents: read). */
+export function parseUses(value: unknown): Record<string, Record<string, string>> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, Record<string, string>> = {};
+  for (const [platform, rights] of Object.entries(value as Record<string, unknown>).slice(0, 5)) {
+    if (!/^[a-z][a-z0-9-]{0,30}$/.test(platform) || !rights || typeof rights !== 'object' || Array.isArray(rights)) continue;
+    const kept = Object.fromEntries(Object.entries(rights as Record<string, unknown>).filter(([k, v]) => /^[a-z][a-z0-9_]{0,40}$/.test(k) && typeof v === 'string' && /^[a-z]{1,12}$/.test(v)).slice(0, 20)) as Record<string, string>;
+    if (Object.keys(kept).length) out[platform] = kept;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function parseContract(value: unknown): ServiceContract | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
@@ -202,8 +225,12 @@ export function parseContract(value: unknown): ServiceContract | undefined {
   // Actions are requests: a service that reads nothing takes none.
   const actions = reads !== 'nothing' ? parseActions(c.actions) : [];
   const fetcher = offers.length && typeof c.fetcher === 'string' && isFetcherRef(c.fetcher) ? c.fetcher : undefined;
+  const expires = reads !== 'nothing' && c.expires && typeof c.expires === 'object' && !Array.isArray(c.expires)
+    ? Object.fromEntries(Object.entries(c.expires as Record<string, unknown>).filter(([k, v]) => /^[a-z][a-z0-9.-]{0,59}$/.test(k) && Number.isInteger(v) && (v as number) >= 10 && (v as number) <= 30 * 86400).slice(0, 20))
+    : {};
   const sources = offers.length && Array.isArray(c.sources) ? [...new Set(c.sources.filter((x): x is string => typeof x === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(x)))].slice(0, 10) : [];
-  return { reads, writes, ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
+  const uses = parseUses(c.uses);
+  return { reads, writes, ...(uses ? { uses } : {}), ...(c.website === true ? { website: true } : {}), ...(offers.length ? { offers } : {}), ...(fetcher ? { fetcher } : {}), ...(sources.length ? { sources } : {}), ...(Object.keys(expires).length ? { expires: expires as Record<string, number> } : {}), ...(net.length ? { net } : {}), ...(actions.length ? { actions } : {}), ...(c.websites === 'host' ? { websites: 'host' as const } : {}), version };
 }
 
 /**
@@ -221,7 +248,7 @@ export function contractWords(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.websites === 'host' ? "; hosts its projects' websites" : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.fetcher ? `; fetched with ${c.fetcher.startsWith('sha256:') ? `the fetcher ${c.fetcher.slice(0, 19)}…` : c.fetcher}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.uses ? Object.entries(c.uses).map(([p, r]) => `; uses your ${p} keyvault (${Object.entries(r).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(', ')})`).join('') : ''}${c.actions?.length ? `; ${c.actions.map((a) => `${whoWords(a.who)} can ${a.label.charAt(0).toLowerCase()}${a.label.slice(1)}`).join(', ')}` : ''} (contract ${c.version})`;
 }
 
 /** Whether a service with this contract gets to see an event of this kind (addressed requests are judged separately). */

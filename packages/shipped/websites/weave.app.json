@@ -12,8 +12,6 @@
     "version": "1.0"
   },
   "wasm": {
-    "component": "websites.wasm",
-    "panel": "panel",
-    "panels": [{ "name": "overview", "title": "Websites", "who": "members", "page": "index.html" }]
+    "component": "websites.wasm"
   }
 }

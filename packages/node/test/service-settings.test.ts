@@ -163,4 +163,64 @@ describe('a service whose settings its space keeps', { timeout: 120_000 }, () =>
       await api.close();
     }
   });
+
+  it('signs a service in with a code: no secret, nothing coming back to this computer', async () => {
+    const DEVICE = { device: 'https://provider.test/device', token: 'https://provider.test/token', client: 'weave-test', scopes: ['repo'] };
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Code' });
+    await lena.joinSpace(await martl.invite('Code'));
+    sync([martl, lena]);
+    // The provider: a code, then "not yet" twice and "slower" once before the token; or, the second time, a no.
+    const asked: Array<{ url: string; params: URLSearchParams }> = [];
+    let declined = false;
+    martl.oauthSetup.fetch = async (url, init) => {
+      const params = new URLSearchParams(String(init?.body));
+      asked.push({ url: String(url), params });
+      const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+      if (String(url) === DEVICE.device) return json({ device_code: 'd-1', user_code: 'WDJB-MJHT', verification_uri: 'https://provider.test/login/device', expires_in: 60, interval: 0.01 });
+      if (declined) return json({ error: 'access_denied', error_description: 'The user has denied your application access.' });
+      const polls = asked.filter((a) => a.url === DEVICE.token).length;
+      if (polls <= 2) return json({ error: 'authorization_pending', error_description: 'The authorization request is still pending.' });
+      if (polls === 3) return json({ error: 'slow_down', interval: 1 });
+      return json({ access_token: 'gho-device', token_type: 'bearer', scope: 'repo' });
+    };
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    try {
+      await martl.addService({ name: 'bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Code'], wasm: component, asks: [{ name: 'GH', label: 'GitHub', oauth: DEVICE }] });
+      await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
+      // Only maintainers sign it in.
+      sync([martl, lena]);
+      await expect(lena.startServiceSignIn({ space: 'Code', service: 'martl/bot', name: 'GH' })).rejects.toThrow(/only the maintainers/);
+
+      const started = await martl.startServiceSignIn({ space: 'Code', service: 'martl/bot', name: 'GH' });
+      expect(started).toMatchObject({ url: 'https://provider.test/login/device', code: 'WDJB-MJHT' });
+      expect(asked[0].params.get('client_id')).toBe('weave-test');
+      expect(asked[0].params.get('scope')).toBe('repo');
+      const signedIn = await martl.finishServiceSignIn({ id: started.id });
+      expect(signedIn.settings.find((x) => x.name === 'GH')).toMatchObject({ secret: true, oauth: true });
+      const polls = asked.filter((a) => a.url === DEVICE.token);
+      expect(polls.map((p) => p.params.get('grant_type'))).toEqual(Array(4).fill('urn:ietf:params:oauth:grant-type:device_code'));
+      expect(polls[0].params.get('device_code')).toBe('d-1');
+      expect(polls.every((p) => !p.params.has('client_secret'))).toBe(true);
+
+      // The service gets the token; nobody else reads it.
+      sync([martl, lena]);
+      await lena.askService({ space: 'Code', service: 'martl/bot', text: 'setting:GH' });
+      await vi.waitFor(async () => {
+        sync([martl, lena]);
+        expect((await lena.serviceRequests({ space: 'Code', service: 'martl/bot' }))[0]?.results[0]?.text).toBe('gho-device');
+      }, { timeout: 30_000, interval: 300 });
+      expect(JSON.stringify(lena.replica.events())).not.toContain('gho-device');
+
+      // Declined on the provider's page: it says so.
+      declined = true;
+      const again = await martl.startServiceSignIn({ space: 'Code', service: 'martl/bot', name: 'GH' });
+      await expect(martl.finishServiceSignIn({ id: again.id })).rejects.toThrow(/declined/);
+    } finally {
+      await martl.removeService('bot').catch(() => {});
+      await api.close();
+    }
+  });
 });

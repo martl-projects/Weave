@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { boxTo, openBox, isSettingName, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting } from '@weave/core';
+import { boxTo, openBox, isSettingName, type AppRegister, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, sealFor, serviceSettingsOf, type Did, type Json, type SpaceServiceSetting, type AppOAuth } from '@weave/core';
 import type { ServiceSettingsInfo } from './backend.ts';
+import { startDeviceSignIn, tokenRequest } from './devicecode.ts';
+import { filled, startRegistration, type Registered } from './register.ts';
 import type { ServicesHost, StoredService } from './node.ts';
 import type { Services } from './services.ts';
 import type { StoredSpace } from './spacestore.ts';
@@ -13,13 +15,14 @@ import type { StoredSpace } from './spacestore.ts';
  * out), and hands the service only values: a sign-in as its current access token.
  *
  * What a service gets, by name: its person's own setting, unless one of its spaces' maintainers set it (theirs
- * counts); per space, in me().spaces, each space's own.
+ * counts); per space, in me().spaces, each space's own. A setting it asks for as yours (a sign-in as its person) is
+ * only ever its person's, kept with the service on their computer for every project it's in.
  */
 
 type Fetch = typeof fetch;
 
 /** What a sign-in's box holds: the grant, and how to renew it. */
-interface Grant {
+export interface Grant {
   access: string;
   refresh?: string;
   /** When the access token runs out (ms since 1970). */
@@ -54,6 +57,53 @@ export class ServiceSettings {
     return this.#services();
   }
 
+  /** The service by its key, if it runs here: yours. */
+  #mine(did: Did): StoredService | undefined {
+    return this.services.storedServices().find((s) => this.services.serviceKey(s.name).did === did);
+  }
+
+  /** The names of the settings a service asks for as its person's own. */
+  #yours(stored: StoredService): Set<string> {
+    return new Set((stored.asks ?? stored.artifact?.manifest.env ?? []).filter((a) => a.yours).map((a) => a.name));
+  }
+
+  /** Set (or remove) one of your service's own settings, kept with it here: for every project it's in. */
+  #setYours(did: Did, name: string, change: { value?: string; grant?: Grant; registered?: Registered }): void {
+    const stored = this.#mine(did);
+    if (!stored) throw new Error("only whoever runs it keeps that: it's theirs, for every project it's in");
+    const settings = { ...stored.settings };
+    const grants = { ...(stored.grants ?? {}) };
+    const registered = { ...(stored.registered ?? {}) };
+    delete settings[name];
+    delete grants[name];
+    delete registered[name];
+    if (change.grant) grants[name] = change.grant;
+    else if (change.registered) registered[name] = change.registered;
+    else if (change.value !== undefined) settings[name] = change.value;
+    const { grants: _grants, registered: _registered, ...rest } = stored;
+    const after: StoredService = { ...rest, settings, ...(Object.keys(grants).length ? { grants } : {}), ...(Object.keys(registered).length ? { registered } : {}) };
+    this.services.saveServices(this.services.storedServices().map((s) => (s.name === stored.name ? after : s)));
+    this.#renewed.delete(`${stored.name} yours ${name}`);
+    this.services.restartSoon(stored.name);
+  }
+
+  /** Apps of yours registered for services (by setting name): taken out of them, to move into a keyvault. */
+  takeApps(names: string[]): Record<string, Registered> {
+    const out: Record<string, Registered> = {};
+    const all = this.services.storedServices();
+    let changed = false;
+    for (const s of all)
+      for (const name of names) {
+        if (!s.registered?.[name]) continue;
+        out[name] ??= s.registered[name];
+        delete s.registered[name];
+        if (!Object.keys(s.registered).length) delete s.registered;
+        changed = true;
+      }
+    if (changed) this.services.saveServices(all);
+    return out;
+  }
+
   /** The service in this space, by its key or name: its profile, and the settings it asks for. */
   async #inSpace(space: StoredSpace, ref: string) {
     const did = await this.services.serviceDid(ref);
@@ -69,13 +119,33 @@ export class ServiceSettings {
     const state = this.h.state(space);
     const set = serviceSettingsOf(this.h.entries(space), state.maintainers, profile.did);
     const asks = profile.settings ?? [];
+    // Its person's own: known only where it runs (yours), and never kept in the project.
+    const mine = this.#mine(profile.did);
+    const kept = set.filter((s) => !asks.some((a) => a.yours && a.name === s.name));
+    const picked = (name: string) => mine?.spaceSettings?.[space.id]?.[name];
+    const isSet = (name: string) => kept.some((s) => s.name === name) || (!!mine && (mine.settings[name] !== undefined || mine.grants?.[name] !== undefined || mine.registered?.[name] !== undefined || picked(name) !== undefined));
+    const yours = asks.filter((a) => a.yours);
     return {
       space: { id: space.id, name: this.h.spaceName(space) },
       service: { did: profile.did, name: profile.name, person: profile.person },
       asks,
-      settings: set.map((s) => ({ name: s.name, secret: s.secret, ...(s.oauth ? { oauth: true as const } : {}), ...(s.value !== undefined ? { value: s.value } : {}), by: this.h.actor(s.by, s.by), time: s.time })),
-      missing: asks.filter((a) => !a.optional && !set.some((s) => s.name === a.name)).map((a) => a.name),
+      settings: kept.map((s) => ({ name: s.name, secret: s.secret, ...(s.oauth ? { oauth: true as const } : {}), ...(s.value !== undefined ? { value: s.value } : {}), by: this.h.actor(s.by, s.by), time: s.time })),
+      ...(yours.length
+        ? {
+            yours: yours.map((a) => {
+              // An app registered: what it is (never its key), and its next page (installing it, say).
+              const app = mine?.registered?.[a.name];
+              const next = app && a.register?.then ? filled(a.register.then, app.info) : undefined;
+              // Picked per project (its repositories, say): what's picked here.
+              const value = a.choose ? picked(a.name) : undefined;
+              return { name: a.name, ...(mine ? { set: isSet(a.name) } : {}), ...(value !== undefined ? { value } : {}), ...(app ? { app: app.info } : {}), ...(next ? { next } : {}) };
+            }),
+          }
+        : {}),
+      // Its person's own count as there where it runs elsewhere: only they know.
+      missing: asks.filter((a) => !a.optional && !isSet(a.name) && (!a.yours || mine)).map((a) => a.name),
       mayChange: state.maintainers.has(this.h.identity.author),
+      runsHere: !!mine,
     };
   }
 
@@ -85,12 +155,29 @@ export class ServiceSettings {
    */
   async setServiceSetting(input: { space: string; service: string; name: string; value?: string | null; secret?: boolean; grant?: Grant }): Promise<ServiceSettingsInfo> {
     const space = this.h.space(input.space);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
     const profile = await this.#inSpace(space, input.service);
     const name = input.name?.trim() ?? '';
     if (!isSettingName(name)) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${name}`);
     const asked = profile.settings?.find((s) => s.name === name);
     if (profile.settings?.length && !asked) throw new Error(`${profile.name} doesn't ask for ${name} (it asks for ${profile.settings.map((s) => s.name).join(', ')})`);
+    // Yours (whoever runs it): kept with it on this computer, for every project it's in.
+    // Yours and picked from a list: per project, but only whoever runs it picks (what its access reaches is theirs to hand out).
+    if (asked?.yours && asked.choose) {
+      const stored = this.#mine(profile.did);
+      if (!stored) throw new Error(`only whoever runs ${profile.name} picks its ${asked.label.toLowerCase()}: its access is theirs`);
+      const value = input.value === null || input.value === undefined ? '' : String(input.value).slice(0, SETTING_VALUE_MAX);
+      await this.services.setService({ name: stored.name, spaceSettings: { [space.id]: { [name]: value || null } } });
+      this.services.restartSoon(stored.name);
+      return this.serviceSettings({ space: space.id, service: profile.did });
+    }
+    if (asked?.yours) {
+      const empty = input.value === null || input.value === undefined || input.value === '';
+      if (!input.grant && !empty && asked.oauth) throw new Error(`${asked.label} is a sign-in: sign in with the provider instead of typing it`);
+      if (!input.grant && !empty && String(input.value).length > SETTING_VALUE_MAX) throw new Error(`at most ${SETTING_VALUE_MAX} characters`);
+      this.#setYours(profile.did, name, input.grant ? { grant: input.grant } : empty ? {} : { value: String(input.value) });
+      return this.serviceSettings({ space: space.id, service: profile.did });
+    }
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
     let body: Json;
     if (input.grant) body = { service: profile.did, name, box: boxTo(profile.did, input.grant as unknown as Json) as unknown as Json, oauth: true };
     else if (input.value === null || input.value === undefined || input.value === '') body = { service: profile.did, name };
@@ -113,11 +200,13 @@ export class ServiceSettings {
   /** What a service's spaces' maintainers set for it, opened with its key: by space id, then name (sign-ins as their access token). */
   valuesOf(stored: StoredService): Record<string, Record<string, string>> {
     const key = this.services.serviceKey(stored.name);
+    const yours = this.#yours(stored);
     const out: Record<string, Record<string, string>> = {};
     for (const id of stored.spaces) {
       const space = this.h.spaces.get(id);
       if (!space) continue;
-      for (const s of serviceSettingsOf(this.h.entries(space), this.h.state(space).maintainers, key.did)) {
+      // What it asks for as its person's own isn't a project's to set.
+      for (const s of serviceSettingsOf(this.h.entries(space), this.h.state(space).maintainers, key.did).filter((x) => !yours.has(x.name))) {
         const value = s.box ? this.#open(stored, id, s, key.keys.secretKey, key.keys.publicKey) : s.value;
         if (value !== undefined) (out[id] ??= {})[s.name] = value;
       }
@@ -133,7 +222,15 @@ export class ServiceSettings {
       const values = new Set(bySpace.flatMap((v) => (v[name] !== undefined ? [v[name]] : [])));
       if (values.size === 1) fromSpaces[name] = [...values][0];
     }
-    return { ...stored.settings, ...fromSpaces };
+    const grants = Object.fromEntries(Object.entries(stored.grants ?? {}).map(([name, grant]) => [name, this.#renewed.get(`${stored.name} yours ${name}`)?.grant.access ?? grant.access]));
+    // An app registered: what's kept of it, as JSON (its key only ever through signWith).
+    const apps = Object.fromEntries(Object.entries(stored.registered ?? {}).map(([name, app]) => [name, JSON.stringify(app.info)]));
+    return { ...stored.settings, ...fromSpaces, ...grants, ...apps };
+  }
+
+  /** What a service signs with, by name: an app's key, or a setting's value. */
+  signingKey(stored: StoredService, name: string): string | undefined {
+    return stored.registered?.[name]?.key ?? this.effective(stored)[name];
   }
 
   #open(stored: StoredService, space: string, s: SpaceServiceSetting, secretKey: Uint8Array, publicKey: Uint8Array): string | undefined {
@@ -153,6 +250,19 @@ export class ServiceSettings {
   async renew(running: StoredService[]): Promise<string[]> {
     const changed: string[] = [];
     for (const stored of running) {
+      // Its sign-ins as its person first.
+      for (const [name, kept] of Object.entries(stored.grants ?? {})) {
+        const slot = `${stored.name} yours ${name}`;
+        const grant = this.#renewed.get(slot)?.grant ?? kept;
+        if (!grant.refresh || !grant.expires || grant.expires - Date.now() > RENEW_BEFORE) continue;
+        try {
+          const next = await this.#tokenRequest(grant, { grant_type: 'refresh_token', refresh_token: grant.refresh });
+          this.#renewed.set(slot, { from: 'yours', grant: { ...grant, ...next, refresh: next.refresh ?? grant.refresh } });
+          changed.push(stored.name);
+        } catch (error) {
+          console.error(`weave: ${stored.name}'s sign-in for ${name} couldn't be renewed: ${(error as Error).message}`);
+        }
+      }
       const key = this.services.serviceKey(stored.name);
       for (const id of stored.spaces) {
         const space = this.h.spaces.get(id);
@@ -180,17 +290,10 @@ export class ServiceSettings {
     return [...new Set(changed)];
   }
 
-  async #tokenRequest(oauth: { token: string; client: string; clientSecret?: string }, params: Record<string, string>): Promise<Pick<Grant, 'access' | 'refresh' | 'expires'>> {
-    const body = new URLSearchParams({ ...params, client_id: oauth.client, ...(oauth.clientSecret ? { client_secret: oauth.clientSecret } : {}) });
-    const res = await this.#fetch()(oauth.token, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body, signal: AbortSignal.timeout(20_000) });
-    const data = (await res.json().catch(() => ({}))) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown };
-    if (!res.ok || typeof data.access_token !== 'string') throw new Error(String(data.error_description ?? data.error ?? `the provider answered ${res.status}`));
-    return {
-      access: data.access_token,
-      ...(typeof data.refresh_token === 'string' ? { refresh: data.refresh_token } : {}),
-      ...(typeof data.expires_in === 'number' ? { expires: Date.now() + data.expires_in * 1000 } : {}),
-    };
+  #tokenRequest(oauth: { token: string; client: string; clientSecret?: string }, params: Record<string, string>): Promise<Pick<Grant, 'access' | 'refresh' | 'expires'>> {
+    return tokenRequest(oauth, params, this.#fetch());
   }
+
 
   /** Sign-ins under way: what each waits for (the provider coming back) and what it signs in. */
   #signIns = new Map<string, { done: Promise<ServiceSettingsInfo> }>();
@@ -200,13 +303,19 @@ export class ServiceSettings {
    * the provider comes back to this computer (a loopback address, with PKCE), and the grant is boxed to the service;
    * finishSignIn waits for that (5 minutes at most).
    */
-  async startSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string }> {
+  async startSignIn(input: { space: string; service: string; name: string }): Promise<{ id: string; url: string; code?: string }> {
     const space = this.h.space(input.space);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
     const profile = await this.#inSpace(space, input.service);
     const asked = profile.settings?.find((s) => s.name === input.name);
+    if (asked?.register) {
+      if (!this.#mine(profile.did)) throw new Error(`only whoever runs ${profile.name} creates its app: it's theirs`);
+      return this.#startRegister(space, profile.did, asked.name, asked.label, asked.register);
+    }
     if (!asked?.oauth) throw new Error(`${profile.name} doesn't ask for a sign-in named ${input.name}`);
+    // Yours: whoever runs it signs in, as themselves. A project's: its maintainers.
+    if (asked.yours ? !this.#mine(profile.did) : !this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(asked.yours ? `only whoever runs ${profile.name} signs it in: it acts as them` : `only the maintainers of ${this.h.spaceName(space)} set its services' settings`);
     const oauth = asked.oauth;
+    if (!oauth.authorize) return this.#startDevice(space, profile.did, asked.name, asked.label, oauth as AppOAuth & { device: string });
     const verifier = randomBytes(32).toString('base64url');
     const state = randomBytes(16).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -228,7 +337,7 @@ export class ServiceSettings {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const redirect = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-    const page = new URL(oauth.authorize);
+    const page = new URL(oauth.authorize!);
     for (const [k, v] of Object.entries({ response_type: 'code', client_id: oauth.client, redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: 'S256', ...(oauth.scopes?.length ? { scope: oauth.scopes.join(' ') } : {}) })) page.searchParams.set(k, v);
     // Google gives a refresh token only when asked for offline access; other providers ignore these.
     page.searchParams.set('access_type', 'offline');
@@ -248,6 +357,46 @@ export class ServiceSettings {
     done.catch(() => {});
     this.#signIns.set(id, { done });
     return { id, url: page.toString() };
+  }
+
+  /**
+   * A sign-in with a code (RFC 8628's device flow): the provider gives a code, the person enters it on its page and
+   * allows it there, and this node asks for the token until it comes (as often as the provider lets it). Nothing comes
+   * back to this computer, and no secret is needed.
+   */
+  async #startDevice(space: StoredSpace, service: Did, name: string, label: string, oauth: AppOAuth & { device: string }): Promise<{ id: string; url: string; code: string }> {
+    const started = await startDeviceSignIn(oauth, this.#fetch(), label);
+    const id = randomBytes(16).toString('base64url');
+    const done = (async () => {
+      try {
+        const got = await started.grant;
+        const grant: Grant = { ...got, token: oauth.token, client: oauth.client, ...(oauth.clientSecret ? { clientSecret: oauth.clientSecret } : {}) };
+        return await this.setServiceSetting({ space: space.id, service, name, grant });
+      } finally {
+        setTimeout(() => this.#signIns.delete(id), 60_000).unref();
+      }
+    })();
+    done.catch(() => {});
+    this.#signIns.set(id, { done });
+    return { id, url: started.url, code: started.code };
+  }
+
+  /**
+   * Register an app of yours with the provider (GitHub's App manifest flow): a page on this computer posts its manifest
+   * to the provider's page, you create the app there, the provider comes back here with a code, and this node
+   * exchanges it for the app (its key kept here, for signing). Then the browser goes on to its next page (installing
+   * it on your repositories, say). finishSignIn waits for that (10 minutes at most).
+   */
+  async #startRegister(space: StoredSpace, service: Did, name: string, label: string, register: AppRegister): Promise<{ id: string; url: string }> {
+    // Whose it is: the account you proved there, else your name here.
+    const proven = register.platform ? await this.h.myAccount(register.platform).catch(() => undefined) : undefined;
+    const account = proven ?? this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'your';
+    const started = await startRegistration({ register, label, account, fetch: this.#fetch(), keep: (app) => this.#setYours(service, name, { registered: app }) });
+    const id = randomBytes(16).toString('base64url');
+    const done = started.done.then(() => this.serviceSettings({ space: space.id, service })).finally(() => setTimeout(() => this.#signIns.delete(id), 60_000).unref());
+    done.catch(() => {});
+    this.#signIns.set(id, { done });
+    return { id, url: started.url };
   }
 
   /** Wait for a sign-in startSignIn began: the service's settings once it's signed in, or why not. */

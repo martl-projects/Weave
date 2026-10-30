@@ -1,13 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, BoardInfo, SpaceRepos, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
-import { ago, api, bridge, bump, clock, shortDid, useApi } from './lib.ts';
+import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
+import { ItemList } from './lists.tsx';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { ActionScopes, askAndWait, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -237,7 +238,7 @@ const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
 
 /** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
-export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && (s.builtin === 'github' || (s.origin.kind === 'shipped' && s.origin.name === 'github-releases'));
+export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && !!s.contract.actions?.some((a) => a.name === 'publish') && (!s.contract.sources || s.contract.sources.includes('github'));
 
 /**
  * Whether a service hands out an artifact: it offers artifact.fetch for where the artifact's files are (any source, if
@@ -247,37 +248,52 @@ export const providesArtifact = (s: ServiceProfileInfo, a: ArtifactInfo): boolea
   !!s.contract.offers?.includes('artifact.fetch') && !!a.source && a.source.provider !== 'oci' && (!s.contract.sources || s.contract.sources.includes(a.source.provider));
 
 /** What's available: each artifact with what it is, and adding it to a project of yours (or a board, for a board view). */
-function ArtifactList({ artifacts, maintainer, via }: { artifacts: ArtifactInfo[]; maintainer: boolean; via?: (a: ArtifactInfo) => string | undefined }) {
+function ArtifactList({ title, artifacts, maintainer, via, add }: { title: string; artifacts: ArtifactInfo[]; maintainer: boolean; via?: (a: ArtifactInfo) => string | undefined; add?: { label: string; run(): void } }) {
   const [adding, setAdding] = useState<ArtifactInfo>();
   const [access, setAccess] = useState<ArtifactInfo>();
   const [launching, setLaunching] = useState<ArtifactInfo>();
   // Yours to get; maintainers see them all, and set who may get each.
   const shown = artifacts.filter((a) => a.mine || maintainer);
-  if (!shown.length) return <p className="small muted">Nothing yet.</p>;
   return (
-    <div className="service-releases">
-      {shown.map((a) => (
-        <div className="service-release" key={a.id}>
-          <Icon name={artifactIcon(a)} />
-          <span className="grow">
-            {a.name} <span className="muted small">{a.tag} · {artifactKind(a)}{a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}{a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}</span>
-            {via?.(a) && <div className="small muted">{via(a)}</div>}
-          </span>
-          {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
-          {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
-          {a.mine && a.kind === 'marks' && <AsyncButton onClick={() => attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag }), `${a.name} is yours: View → Marks…`)}>Take in</AsyncButton>}
-          {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && a.kind !== 'marks' && <button onClick={() => setAdding(a)}>Add to…</button>}
-          {maintainer && (
-            <button className="icon-button" title="Who may get it" onClick={() => setAccess(a)}>
-              <Icon name="gear" />
-            </button>
-          )}
-        </div>
-      ))}
+    <>
+      <ItemList
+        title={title}
+        {...(add ? { add } : {})}
+        empty="Nothing yet."
+        rows={shown.map((a) => ({
+          key: a.id,
+          icon: artifactIcon(a),
+          title: a.name,
+          badge: a.tag,
+          search: `${a.name} ${a.tag} ${artifactKind(a)}`,
+          detail: [`${artifactKind(a)}${a.file?.size ? ` · ${sizeText(a.file.size)}` : ''}${a.who !== 'members' ? ` · only ${lowerFirst(whoLabel(a.who, `p/${a.project.name}`, []))}` : ''}`, via?.(a)].filter(Boolean).join(' · '),
+          main: (
+            <>
+              {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
+              {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
+              {a.mine && a.kind === 'marks' && <AsyncButton onClick={() => attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag }), `${a.name} is yours: View → Marks…`)}>Take in</AsyncButton>}
+              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && a.kind !== 'marks' && <button onClick={() => setAdding(a)}>Add to…</button>}
+            </>
+          ),
+          ...(maintainer
+            ? {
+                tools: [{ icon: 'gear' as const, label: 'Who may get it', run: () => setAccess(a) }],
+                // Withdrawn: no longer listed, launched or handed out; who got it keeps what they have.
+                remove: {
+                  label: 'Withdraw this release',
+                  run: () =>
+                    void (async () =>
+                      (await ask(`Withdraw ${a.name} ${a.tag}? It's no longer listed, launched or handed out in p/${a.project.name}. Who got it already keeps what they have; releasing ${a.tag} again brings it back.`, 'Withdraw')) &&
+                      attempt(() => api('withdrawArtifact', { project: a.project.id, artifact: a.id }).then(bump), `${a.name} ${a.tag} is withdrawn`))(),
+                },
+              }
+            : {}),
+        }))}
+      />
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
       {launching && <LaunchDialog artifact={launching} onClose={() => setLaunching(undefined)} />}
       {access && <ArtifactAccessDialog artifact={access} onClose={() => setAccess(undefined)} />}
-    </div>
+    </>
   );
 }
 
@@ -377,7 +393,7 @@ function ArtifactAccessDialog({ artifact, onClose }: { artifact: ArtifactInfo; o
         </select>
       </div>
       <p className="small muted">
-        {artifact.from && 'image' in artifact.from
+        {artifact.source?.provider === 'oci'
           ? `Only they see it here. Its image comes from its registry, though: whoever can reach it there still can.`
           : `Its providers' nodes hand it only to them: nobody else gets its files through p/${project.name}, nor sees it here.`}
       </p>
@@ -449,12 +465,11 @@ function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onCl
 }
 
 /** What a service provides here: its artifacts; maintainers publish more from GitHub. */
-function ServiceReleases({ project, artifacts, app, maintainer }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean }) {
+function ServiceReleases({ project, artifacts, app, maintainer, publish }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean; publish?(): void }) {
   const [describing, setDescribing] = useState(false);
   return (
     <>
-      <div className="small"><b>Available</b></div>
-      <ArtifactList artifacts={artifacts} maintainer={maintainer} />
+      <ArtifactList title="Released" artifacts={artifacts} maintainer={maintainer} {...(publish ? { add: { label: 'Publish a new version', run: publish } } : {})} />
       {maintainer && app === null && !describing && (
         <p className="small muted">
           <a href="#" onClick={(e) => (e.preventDefault(), setDescribing(true))}>Make this project's code available…</a>
@@ -514,7 +529,7 @@ export function ProjectAvailableView({ project }: { project: SpaceInfo }) {
           <fieldset key={g.kind}>
             <legend>{g.title}</legend>
             <p className="small muted">{g.about}</p>
-            <ArtifactList artifacts={these} maintainer={maintainer} via={via} />
+            <ArtifactList title="" artifacts={these} maintainer={maintainer} via={via} />
           </fieldset>
         );
       })}
@@ -541,7 +556,23 @@ export function SettingInput({ setting, value, onChange }: { setting: ArtifactIn
     return (
       <div className="app-setting">
         <label>{setting.label}</label>
-        <div className="small muted">A sign-in with {new URL(setting.oauth.authorize).hostname}: once it's installed, sign it in from its Settings.</div>
+        <div className="small muted">A sign-in with {new URL(setting.oauth.authorize ?? setting.oauth.device ?? setting.oauth.token).hostname}: once it's added, sign it in from its Settings (one click).</div>
+      </div>
+    );
+  // An app of yours, made on the provider's page: right after it's added.
+  if (setting.register)
+    return (
+      <div className="app-setting">
+        <label>{setting.label}</label>
+        <div className="small muted">Yours, made on {new URL(setting.register.page).hostname} with one click right after adding it.</div>
+      </div>
+    );
+  // Picked from what it lists (a repository its sign-in reaches): once it runs, right after it's added.
+  if (setting.choose)
+    return (
+      <div className="app-setting">
+        <label>{setting.label}</label>
+        <div className="small muted">{setting.hint ?? 'Picked from a list it makes'}: you pick {setting.choose.many ? 'them' : 'it'} right after adding it.</div>
       </div>
     );
   return (
@@ -697,7 +728,7 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
 const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.builtin === 'github' ? "Gives the project's members access to its repositories" : s.description);
+const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? "A way to join in with the project's participants" : s.description);
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, app, boards }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; boards: string[] }) {
@@ -708,58 +739,76 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const own = service.person.did === meDid;
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
-  // Getting access to a GitHub service's repositories: your GitHub account, shared with this project.
-  const { data: repos, reload: reloadRepos } = useApi(() => (service.builtin === 'github' ? api<SpaceRepos>('spaceRepos', project.id).catch(() => undefined) : Promise.resolve(undefined)), [project.id, service.builtin]);
   const extras: ScopedAction[] = [
-    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true) }] : []),
-    ...(service.builtin === 'github' && repos?.repos.length
-      ? [{ key: 'github', label: repos.shared ? 'Give back my repository access' : 'Get access to the repositories', who: 'members' as const, mine: true, run: () => void attempt(() => api('shareGithub', { space: project.id, on: !repos.shared }).then(reloadRepos), repos.shared ? 'Your access goes' : `Your GitHub account is shared with p/${project.name}: you'll get an invitation`) }]
-      : []),
-    ...(maintainer && app && handsOutGitHub(service) ? [{ key: 'publish', label: 'Publish a new version…', who: 'maintainers' as const, mine: true, run: () => setPublishing(true) }] : []),
-    ...(maintainer && service.builtin !== 'website' ? [{ key: 'settings', label: 'Settings…', who: 'maintainers' as const, mine: true, run: () => setSetting(true) }] : []),
-    ...(hostsSites(service) && own && mine ? [{ key: 'open', label: 'Open a website…', who: 'runner' as const, mine: true, run: () => setOpening(true) }] : []),
-    ...(own && mine
-      ? [
-          {
-            key: 'out',
-            label: `Take out of p/${project.name}`,
-            who: 'runner' as const,
-            mine: true,
-            run: () =>
-              void (async () =>
-                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
-                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))(),
-          },
-        ]
-      : []),
+    // Asking it in words: only a service one talks to (no actions, list or page of its own: those are how one uses it).
+    ...(!hostsSites(service) && service.contract.reads !== 'nothing' && !service.contract.actions?.length && !service.contract.offers?.length ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true), withoutPage: true as const }] : []),
   ];
   return (
     <fieldset className="project-service">
-      <legend>
+      <legend className="service-title">
         <Icon name={serviceIcon(service)} /> {service.name} <span className="muted small">· {by}</span>
+        {/* The same for every service: its settings (maintainers), and taking it out of the project (whoever runs it). */}
+        {maintainer && service.builtin !== 'website' && (
+          <button className="icon-button" title="Settings" onClick={() => setSetting(true)}>
+            <Icon name="gear" />
+          </button>
+        )}
+        {own && mine && (
+          <button
+            className="icon-button"
+            title={`Take out of p/${project.name}`}
+            onClick={() =>
+              void (async () =>
+                (await ask(`Take ${service.name} out of p/${project.name}?${its.length ? ' Its websites here close.' : ''}`, 'Take it out')) &&
+                attempt(() => api('setService', { name: mine.name, spaces: mine.spaces.filter((s) => s.id !== project.id).map((s) => s.id) }).then(bump), `${service.name} left p/${project.name}`))()
+            }
+          >
+            <Icon name="trash" />
+          </button>
+        )}
       </legend>
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
-      {/* What it hosts runs in Live: a link there (one with its own page shows its overview below). */}
-      {hostsSites(service) && (
-        <p className="small">
-          {its.length ? (
-            <a href={`#/p/${project.id}/live`}>
-              Hosts {its.length} running website{its.length === 1 ? '' : 's'} → Live
-            </a>
-          ) : (
-            <span className="muted">No running websites{own ? '' : ` from ${by}`}.</span>
-          )}
-        </p>
-      )}
-      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} />}
+      {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
+      {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
+      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} {...(maintainer && app && handsOutGitHub(service) ? { publish: () => setPublishing(true) } : {})} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
-      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} />
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : handsOutGitHub(service) ? ['publish', 'releases'] : undefined} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}
       {publishing && app && <ReleasePicker project={project} app={app} onClose={() => setPublishing(false)} />}
     </fieldset>
+  );
+}
+
+/**
+ * A website service's running websites, as Weave knows them: each a website artifact running (or a page of a service),
+ * who may visit, who opened it; your own you close, and maintainers close any (asking the service that hosts it).
+ */
+function RunningWebsites({ project, service, rooms, shows, maintainer, open }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; maintainer: boolean; open?(): void }) {
+  const visitors = (room: WebsiteInfo) => {
+    const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
+    const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
+    return who.length ? who.join(' or ') : room.open ? 'everyone here' : 'people invited';
+  };
+  const close = (room: WebsiteInfo) =>
+    void (async () =>
+      (await ask(`Close "${room.name}"? Everyone on it is disconnected, and what answers it stops.`, 'Close website')) &&
+      attempt(() => (room.mine ? api('closeWebsite', room.id) : askAndWait(project.id, service, 'close', { id: room.id }, `Close ${room.name}`)).then(bump), 'Website closed'))();
+  return (
+    <ItemList
+      title="Running websites"
+      {...(open ? { add: { label: 'Open a website', run: open } } : {})}
+      empty="No running websites yet."
+      rows={rooms.map((room) => ({
+        key: room.id,
+        title: room.name,
+        detail: [room.from ? `${room.from.name ?? 'a release'} ${room.from.tag}${room.from.project.name && room.from.project.id !== project.id ? ` from p/${room.from.project.name}` : ''}` : '', `for ${visitors(room)}`, `opened by ${room.host.name ?? shortDid(room.host.did)}`].filter(Boolean).join(' · '),
+        main: <button onClick={() => navigate(`#/p/${project.id}/live`)}>Visit</button>,
+        ...(room.mine || maintainer ? { remove: { label: 'Close website', run: () => close(room) } } : {}),
+      }))}
+    />
   );
 }
 

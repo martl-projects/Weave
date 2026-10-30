@@ -1,16 +1,16 @@
-import { b64u, LINK_HOST, KIND_GITHUB_ADDED, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
-import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { signWith } from './register.ts';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
-import { prepareWasm, releaseApproval } from './runtime.ts';
-import { imageLabels } from './registry.ts';
-import { GitHubAppAuth, type GitHub } from './github.ts';
+import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
+import { imageDigest, imageLabels } from './registry.ts';
 import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
@@ -32,42 +32,26 @@ export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
 export const NODE_PREFIX = 'node:';
 
-/** The services Weave ships: what each does, as its contract and in words, and the settings it takes. */
-const BUILTIN: Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }> = {
+/**
+ * The services built into Weave: what each does, as its contract and in words, and the settings it takes. Weave's
+ * GitHub service was one: GitHub releases and GitHub access, services Weave ships, do what it did, with their own
+ * access; one from before runs no more (it says so).
+ */
+const BUILTIN: Partial<Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }>> = {
   // Reads nothing and writes its websites.
   website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
-  // Reads what's asked of it and answers where to download a release's files; with a GitHub App of the person's own,
-  // it also keeps linked repositories' access in step with their spaces, and records whom it gave access.
-  github: {
-    contract: { reads: 'addressed', writes: [KIND_GITHUB_ADDED], offers: [PROTOCOL_ARTIFACT_FETCH], sources: ['github'], version: '1.0' },
-    description: 'GitHub: hands the project’s release files to its participants, and keeps linked repositories’ access in step with their spaces',
-    settings: [
-      { name: 'GITHUB_APP_ID', label: 'GitHub App ID', optional: true, hint: 'Your own GitHub App, installed on the organization: it acts without anyone signing in' },
-      { name: 'GITHUB_APP_KEY', label: 'GitHub App private key (.pem)', secret: true, optional: true, hint: 'The App needs Administration (read and write), Contents (read) and Metadata (read)' },
-    ],
-  },
 };
 
+/** What replaced Weave's own GitHub service. */
+export const GITHUB_SERVICE_GONE = "Weave's GitHub service is gone: add GitHub releases (it hands out releases) and GitHub access (it gives repository access) instead, each with its own GitHub access";
+
 /** What a service Weave ships accepts as settings, as a manifest would say it. */
-const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin].settings ?? [] });
+const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env: BUILTIN[builtin]?.settings ?? [] });
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
-/** A signature with a key among a service's settings (it never sees the key): RS256, ES256 (r||s) or HS256. */
-function signWith(key: string | undefined, name: string, algorithm: string, data: Uint8Array): Uint8Array {
-  if (!key) throw new Error(`no setting ${name} to sign with`);
-  const bytes = Buffer.from(data);
-  try {
-    if (algorithm === 'HS256') return new Uint8Array(createHmac('sha256', key).update(bytes).digest());
-    if (algorithm === 'RS256') return new Uint8Array(cryptoSign('sha256', bytes, key));
-    if (algorithm === 'ES256') return new Uint8Array(cryptoSign('sha256', bytes, { key, dsaEncoding: 'ieee-p1363' }));
-  } catch (error) {
-    throw new Error(`${name} isn't a key for ${algorithm}: ${(error as Error).message}`);
-  }
-  throw new Error(`it signs with RS256, ES256 or HS256, not ${algorithm}`);
-}
 
 /** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
-const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin].settings : s.asks);
+const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin]?.settings : s.asks);
 
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
 export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
@@ -207,7 +191,6 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
-        ...(a.manifest.install?.github ? { from: { github: a.manifest.install.github } } : a.manifest.install?.image ? { from: { image: a.manifest.install.image.ref } } : {}),
         ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
@@ -329,6 +312,7 @@ export class Services {
     if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
     if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
+    if (shipped?.manifest.verifier) throw new Error(`${shipped.manifest.name} is a verifier: every Weave runs it when it checks accounts, nobody's service`);
     if (shipped?.manifest.marks) throw new Error(`${shipped.manifest.name} is a mark service: everyone's own already, not a project's`);
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
@@ -339,23 +323,25 @@ export class Services {
     // What it asks for: its manifest's settings, or (your own code) what you say it asks for.
     const asks = manifest?.env ?? (builtin ? undefined : appSettingsOf(input.asks));
     this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : asks?.length ? { name: 'it', env: asks } : undefined), given);
-    if (builtin === 'github') this.githubAppOf(given);
+    if (builtin === 'github') throw new Error(GITHUB_SERVICE_GONE);
     // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
     if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
     if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
-    const settings = keptIn ? {} : given;
-    // A sign-in comes after: its provider's page opens once the service is there.
-    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !given[e.name]);
+    // Except what it asks for as yours: that stays with you, for every project it's in.
+    const yours = (name: string) => (asks ?? []).some((e) => e.name === name && e.yours);
+    const settings = keptIn ? Object.fromEntries(Object.entries(given).filter(([n]) => yours(n))) : given;
+    // A sign-in comes after: its provider's page opens once the service is there. So does a pick from what it lists.
+    const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
-    const contract = parseContract(builtin ? BUILTIN[builtin].contract : manifest ? this.artifactContract(manifest) : input.contract);
+    const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
-    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? BUILTIN[builtin].description : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
+    const description = input.description?.trim().slice(0, 1000) ?? (builtin ? (BUILTIN[builtin]?.description ?? '') : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
@@ -387,14 +373,13 @@ export class Services {
     this.saveServices([...this.storedServices(), stored]);
     this.publishServiceProfile(stored);
     if (keptIn) {
-      for (const [name, value] of Object.entries(given)) this.settings.write(keptIn, key.did, name, value, (asks ?? []).find((e) => e.name === name)?.secret === true);
+      for (const [name, value] of Object.entries(given)) if (!yours(name)) this.settings.write(keptIn, key.did, name, value, (asks ?? []).find((e) => e.name === name)?.secret === true);
     }
     this.announceService(key.did, [], stored.spaces);
     // Services start once the app API runs (it gives them WEAVE_API).
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(stored);
     if (hostsWebsites(stored)) this.serveRunning();
-    if (builtin === 'github') this.provide();
     return this.serviceInfo(this.storedService(name));
   }
 
@@ -627,7 +612,6 @@ export class Services {
       if (value === null) delete settings[key];
       else settings[key] = String(value);
     }
-    if (before.builtin === 'github') this.githubAppOf(settings);
     const spaces = input.spaces ? this.serviceSpaces(input.spaces) : before.spaces;
     // Per-space settings: only for spaces it's in; a space it leaves takes its settings along.
     const spaceSettings: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(before.spaceSettings ?? {}).filter(([id]) => spaces.includes(id)));
@@ -764,13 +748,43 @@ export class Services {
       who: p.who,
       key: `shipped-${s.name}`,
       page: p.page,
+      ...(p.covers ? { covers: p.covers } : {}),
       mine: mayAct(p.who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)),
     }));
   }
 
+  /**
+   * A shipped service's lists in a space, those you may see (its list action is yours), with which buttons are yours:
+   * an action's as its who says there; handing from a keyvault, whoever runs it (what's handed is theirs); sharing
+   * your account, everyone's.
+   */
+  async serviceLists(input: { space: string; service: string }): Promise<ServiceListInfo[]> {
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    if (profile?.origin.kind !== 'shipped' || profile.origin.checked !== 'verified') return [];
+    const s = shippedHere(this.h).get(profile.origin.name);
+    const lists = s?.manifest.wasm?.lists ?? [];
+    if (!lists.length) return [];
+    const actions = await this.serviceActions(input);
+    const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
+    const runner = profile.person.did === this.h.identity.author && this.storedServices().some((x) => this.serviceKey(x.name).did === did);
+    return lists
+      .filter((l) => mine(l.list))
+      .map((l) => ({
+        name: l.name,
+        title: l.title,
+        ...(l.item ? { item: l.item } : {}),
+        list: l.list,
+        ...(l.add ? { add: { ...l.add, mine: 'hand' in l.add ? runner : mine(l.add.action) } } : {}),
+        ...(l.remove ? { remove: { ...l.remove, mine: mine(l.remove.action) } } : {}),
+        ...(l.use ? { use: { ...l.use, mine: 'account' in l.use ? true : mine(l.use.action) } } : {}),
+        ...(l.covers ? { covers: l.covers } : {}),
+      }));
+  }
+
   /** The services this Weave ships, as the app offers them. */
   shippedServices(): ShippedServiceInfo[] {
-    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.marks).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
+    return [...shippedHere(this.h).values()].filter((s) => !s.manifest.fetcher && !s.manifest.verifier && !s.manifest.marks).map((s) => ({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), contract: this.artifactContract(s.manifest), settings: s.manifest.env ?? [], digest: s.digest }));
   }
 
   /** A shipped service's claim, checked against what this Weave ships: the same digest, or another. */
@@ -789,7 +803,7 @@ export class Services {
     throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
   }
 
-  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string }): Promise<ServiceRequestInfo> {
+  async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string; within?: number }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === to);
     if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
@@ -799,13 +813,67 @@ export class Services {
     }
     const text = input.text?.trim() ?? '';
     if (!text && input.data === undefined) throw new Error('ask with some text or data');
-    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) }, space: input.space, as: input.as });
+    // What's asked is for the service (and me) alone: the others see that it was asked, of whom, not what.
+    const asked: Json = { ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) };
+    const sealed = [boxTo(to, asked), boxTo(this.h.encryptionKeyOf(this.h.identity.author), asked)] as unknown as Json[];
+    const until = input.within ? new Date(this.h.clock() + Math.min(Math.max(input.within, 10), 30 * 86400) * 1000).toISOString() : undefined;
+    const item = await this.h.publish({ kind: KIND_SERVICE_REQUEST, body: { to, for: sealed, ...(until ? { until } : {}) }, space: input.space, as: input.as });
     return (await this.serviceRequests({ space: item.space?.id ?? input.space })).find((r) => r.id === item.id)!;
+  }
+
+  /**
+   * A request as the one it's for (or who asked) reads it: opened with a key of this node's services or mine. Sealed
+   * for others: only whom it's for, and that it's private.
+   */
+  openRequest(body: unknown): Record<string, Json> {
+    const b = (body && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, Json>;
+    if (!Array.isArray(b.for)) return b;
+    const boxes = b.for as unknown as Box[];
+    const service = this.h.agents.find((a) => a.did === b.to);
+    for (const box of boxes) {
+      let opened: Json | undefined;
+      try {
+        if (service) opened = openBox(service.keys.secretKey, service.keys.publicKey, box);
+      } catch {
+        opened = undefined;
+      }
+      opened ??= this.#openAnswer([box]);
+      if (opened && typeof opened === 'object' && !Array.isArray(opened)) return { to: b.to, ...(b.until !== undefined ? { until: b.until } : {}), ...(opened as Record<string, Json>) };
+    }
+    return { to: b.to, ...(b.until !== undefined ? { until: b.until } : {}), sealed: true };
+  }
+
+  /**
+   * Requests and answers as opened here, by event id: a sealed box never changes, and opening one is slow (pages ask
+   * their services on every view, and asking waits by looking again), so each is opened once.
+   */
+  #opened = new Map<string, Json | null>();
+  #openedOnce<T extends Json | null>(id: string, open: () => T): T {
+    if (this.#opened.has(id)) return this.#opened.get(id) as T;
+    const got = open();
+    if (this.#opened.size > 20_000) this.#opened.clear();
+    this.#opened.set(id, got);
+    return got;
+  }
+
+  /** A space's entries, its requests opened where they're for us (requestsOf reads them as anyone's). */
+  #openedEntries(space: StoredSpace) {
+    return this.h.entries(space).map((e) => (e.kind === KIND_SERVICE_REQUEST ? { ...e, body: this.#openedOnce(`request ${e.id}`, () => this.openRequest(e.body)) as Json } : e));
+  }
+
+  /** Until when a request counts: as its asker said, or as its service's contract says for its action or protocol. */
+  requestDeadline(contract: ServiceContract, body: Record<string, Json>, asked: string): number | undefined {
+    const until = typeof body.until === 'string' ? Date.parse(body.until) : NaN;
+    const key = typeof body.action === 'string' ? body.action : (body.data as { protocol?: unknown } | undefined)?.protocol;
+    const seconds = typeof key === 'string' ? contract.expires?.[key] : undefined;
+    const fromContract = seconds ? Date.parse(asked) + seconds * 1000 : NaN;
+    const all = [until, fromContract].filter((t) => !Number.isNaN(t));
+    return all.length ? Math.min(...all) : undefined;
   }
 
   async serviceRequests(input: { space: string; service?: string }): Promise<ServiceRequestInfo[]> {
     const space = this.h.space(input.space);
-    const entries = this.h.entries(space);
+    const entries = this.#openedEntries(space);
     const to = input.service ? await this.serviceDid(input.service) : undefined;
     const results = entries.filter((e) => e.kind === KIND_SERVICE_RESULT);
     return requestsOf(entries, to).map((r) => ({
@@ -815,6 +883,7 @@ export class Services {
       text: r.text,
       ...(r.data !== undefined ? { data: r.data as Json } : {}),
       ...(r.action ? { action: r.action } : {}),
+      ...((entries.find((e) => e.id === r.id)?.body as { sealed?: unknown } | undefined)?.sealed ? { private: true as const } : {}),
       time: r.time,
       // Only the service it was for answers it.
       results: results
@@ -823,7 +892,7 @@ export class Services {
           const sealed = (e.body ?? {}) as Record<string, Json>;
           // An answer for who asked: opened if that's me (or my service's), else only that it came.
           const boxes = Array.isArray(sealed.for) ? (sealed.for as unknown as Box[]) : undefined;
-          const body = (boxes ? this.#openAnswer(boxes) : sealed) as Record<string, Json> | undefined;
+          const body = (boxes ? (this.#openedOnce(`answer ${e.id}`, () => this.#openAnswer(boxes) ?? null) ?? undefined) : sealed) as Record<string, Json> | undefined;
           if (!body) return { id: e.id, text: '', private: true as const, time: e.event.time };
           return { id: e.id, text: typeof body.text === 'string' ? body.text : '', ...(body.data !== undefined ? { data: body.data } : {}), ...(typeof body.error === 'string' ? { error: body.error } : {}), time: e.event.time };
         }),
@@ -852,10 +921,15 @@ export class Services {
   serviceSees(stored: StoredService, did: Did, d: Decoded): boolean {
     if (d.private || !d.space || !stored.spaces.includes(d.space.id)) return false;
     if (d.inner.kind === KIND_SERVICE_REQUEST) {
-      const body = d.inner.body as { to?: unknown; action?: unknown } | null;
+      const body = this.openRequest(d.inner.body) as { to?: unknown; action?: unknown; sealed?: unknown };
       if (!takesRequests(stored.contract) || body?.to !== did) return false;
       // Refused once (Weave answered no): it stays that, even if who may changes later.
       if (this.#refused.has(d.id)) return false;
+      // Answered already (before a restart, say): never handed to it again.
+      if (this.h.entries(d.space).some((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did && (e.body as { request?: unknown } | null)?.request === d.id)) return false;
+      // Older than it counts (the service was off): Weave says so, and the service never sees it.
+      const deadline = this.requestDeadline(stored.contract, body as Record<string, Json>, d.event.time);
+      if (deadline !== undefined && this.h.clock() > deadline) return (this.#refuse(stored, d.id, `it expired before ${stored.name} got to it: ask again`), false);
       const fetching = (body as { data?: { protocol?: unknown; artifact?: unknown } }).data;
       if (fetching?.protocol === PROTOCOL_ARTIFACT_FETCH && typeof fetching.artifact === 'string') {
         const no = this.artifactRefusal(d.space, fetching.artifact, d.event.author);
@@ -868,6 +942,11 @@ export class Services {
       return !why;
     }
     return serviceReads(stored.contract, d.inner.kind);
+  }
+
+  /** A feed item for a service: a request to it, opened. */
+  itemFor(d: Decoded): FeedItem {
+    return this.h.toItem(d.inner.kind === KIND_SERVICE_REQUEST ? { ...d, inner: { ...d.inner, body: this.openRequest(d.inner.body) as Json } } : d);
   }
 
   /** Why someone may not use an action of a service in a space, or undefined: they may. */
@@ -908,6 +987,35 @@ export class Services {
     return (await this.services()).find((s) => s.name === added.name) ?? added;
   }
 
+  /**
+   * A file's SHA-256 and size at an HTTPS address, for a provider pinning a release: downloaded here, nothing of it
+   * kept. Never from this computer's networks; redirects followed only to HTTPS addresses that aren't either.
+   */
+  async fingerprint(address: string): Promise<{ sha256: string; size: number }> {
+    let url = new URL(address);
+    for (let hop = 0; ; hop++) {
+      if (url.protocol !== 'https:') throw new Error('only an HTTPS address');
+      await publicHost(url.hostname, this.h.testHosts());
+      const res = await this.h.githubFetch()(url.href, { redirect: 'manual', headers: { 'user-agent': 'weave' } });
+      const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+      if (next && hop < 5) {
+        url = new URL(next, url);
+        continue;
+      }
+      if (!res.ok || !res.body) throw new Error(`${url.hostname} said ${res.status}`);
+      const hash = createHash('sha256');
+      let size = 0;
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        hash.update(value);
+        size += value.byteLength;
+      }
+      return { sha256: hash.digest('hex'), size };
+    }
+  }
+
   /** Why someone may not get a project's artifact (its maintainers narrowed who may), or undefined: they may. */
   artifactRefusal(project: StoredSpace, artifact: string, person: Did): string | undefined {
     const state = this.h.state(project);
@@ -923,6 +1031,15 @@ export class Services {
     const who = input.who === null ? 'members' : parseWho(input.who);
     if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_ACCESS, body: { artifact: input.artifact, who: who as unknown as Json } }));
+    return this.artifacts(project.id);
+  }
+
+  /** Maintainers: withdraw a release. It's no longer listed, launched or handed out; who got it keeps what they have. */
+  async withdrawArtifact(input: { project: string; artifact: string }): Promise<ArtifactInfo[]> {
+    const project = this.h.project(input.project);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such release (withdrawn already?)`);
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: input.artifact } }));
     return this.artifacts(project.id);
   }
 
@@ -988,20 +1105,28 @@ export class Services {
         contract: current().contract,
         spaces: (() => {
           const kept = this.settings.valuesOf(current());
-          return this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: { ...(current().spaceSettings?.[id] ?? {}), ...(kept[id] ?? {}) } }));
+          // And where each space's releases come from (its own repository, say).
+          const sources = (id: string) => {
+            const space = this.h.spaces.get(id);
+            // With who published each (the one releasing from a repository): a service may count only its person's.
+            const all = space ? artifactsOf(this.h.entries(space), this.h.state(space).maintainers).flatMap((a) => (a.source ? [{ ...a.source, by: a.author }] : [])) : [];
+            return [...new Map(all.map((s) => [`${s.provider} ${s.ref} ${s.by}`, s])).values()];
+          };
+          return this.serviceInfo(current()).spaces.map(({ id, kind, name: spaceName }) => ({ id, kind, name: spaceName, settings: { ...(current().spaceSettings?.[id] ?? {}), ...(kept[id] ?? {}) }, sources: sources(id) }));
         })(),
       }),
       events: (since) =>
         this.h.decodeAll()
           .filter((d) => (!since || d.event.time > since) && this.serviceSees(current(), key.did, d))
           .sort((a, b) => a.event.time.localeCompare(b.event.time))
-          .map((d) => this.h.toItem(d)),
+          .map((d) => this.itemFor(d)),
       watch: async (onItem, signal) => {
         const unsubscribe = this.h.replica.onAppend((event) => {
           const decoded = this.h.decode(event);
-          if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.h.toItem(decoded));
+          if (decoded && this.serviceSees(current(), key.did, decoded)) onItem(this.itemFor(decoded));
         });
-        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+        // Stopped already (before it got going): it watches nothing.
+        if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         unsubscribe();
       },
       publish: async ({ space, kind, body }) => {
@@ -1119,15 +1244,49 @@ export class Services {
   /** How long to wait for a provider's answer (it has to reach the node the provider runs on, and back). */
   locateWait = 60_000;
 
+  /** How long publishing through a provider may take: it fingerprints every file of the release. */
+  publishWait = 10 * 60_000;
+
+  /**
+   * Ask the project's provider of GitHub releases to do something (publish, releases) and wait for its answer: what
+   * it answered (data), or why not. It acts with its own GitHub access.
+   */
+  async askProvider(project: StoredSpace, action: string, data: Json, as?: string, source?: string): Promise<Json> {
+    // One that hands out artifacts and takes this action: for the source its releases come from, if one says.
+    const providers = (await this.servicesIn(project.id)).filter((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && p.contract.actions?.some((a) => a.name === action));
+    const provider = providers.find((p) => !source || !p.contract.sources || p.contract.sources.includes(source)) ?? (source ? undefined : providers[0]);
+    if (!provider) throw new Error(`${this.h.spaceName(project)} has no service that ${action === 'publish' ? 'publishes' : 'lists'} releases${source ? ` from ${source}` : ''}: add one (GitHub releases, say: Services, Add a service)`);
+    const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
+    const wait = action === 'publish' ? this.publishWait : this.locateWait;
+    const asked = await this.askService({ space: project.id, service: provider.did, text: action === 'publish' ? `publish ${String((data as { tag?: unknown }).tag ?? '')}` : action, action, data, ...(as ? { as } : {}), within: Math.ceil(wait / 1000) });
+    const until = Date.now() + wait;
+    for (;;) {
+      const result = (await this.serviceRequests({ space: project.id })).find((r) => r.id === asked.id)?.results[0];
+      if (result?.error) throw new Error(`${by}: ${result.error}`);
+      if (result) return result.data ?? null;
+      if (Date.now() > until) throw new Error(`${by} didn't answer in time: is the node it runs on online?`);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
   async locateArtifact(a: StoredArtifact, platform = platformKey()): Promise<Located | undefined> {
     if (!this.h.spaces.has(a.project)) return undefined;
     // One that hands out artifacts from where this one's files are (any source, if its contract names none).
     const source = artifactSourceOf(a.manifest)?.provider;
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
+    // Open code: the fetcher gets it as it is, with nobody's grant (the provider needn't be there).
+    const asset = a.manifest.install?.assets?.[platform];
+    const where = a.manifest.install?.source;
+    if (a.manifest.install?.access === 'direct' && where && asset) {
+      // The fetcher its provider names, or (the provider away) the one the artifact names.
+      const fetcher = provider?.contract.fetcher ?? a.manifest.install.fetcher;
+      if (fetcher) return { grant: { source: where.provider, ref: where.ref, tag: a.tag, file: asset.file }, fetcher, by: `${where.provider}, directly` };
+    }
     if (!provider) return undefined;
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
-    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag}${platform === 'file' ? '' : ` for ${platform}`}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform } });
+    // Only worth answering while this node waits for it.
+    const asked = await this.askService({ space: a.project, service: provider.did, text: `${a.manifest.name} ${a.tag}${platform === 'file' ? '' : ` for ${platform}`}`, data: { protocol: PROTOCOL_ARTIFACT_FETCH, artifact: a.id, platform }, within: Math.ceil(this.locateWait / 1000) + 30 });
     const until = Date.now() + this.locateWait;
     for (;;) {
       const result = (await this.serviceRequests({ space: a.project })).find((r) => r.id === asked.id)?.results[0];
@@ -1147,149 +1306,6 @@ export class Services {
     }
   }
 
-  /** The GitHub App a GitHub service's settings name (both, or neither); a half-given one is refused. */
-  githubAppOf(settings: Record<string, string>): GitHubAppAuth | undefined {
-    const id = settings.GITHUB_APP_ID;
-    const key = settings.GITHUB_APP_KEY;
-    if (!id && !key) return undefined;
-    if (!id || !key) throw new Error('a GitHub App takes both its ID (GITHUB_APP_ID) and its private key (GITHUB_APP_KEY)');
-    const kept = this.#apps.get(`${id}:${key}`);
-    if (kept) return kept;
-    const app = new GitHubAppAuth(id, key.replace(/\\n/g, '\n'), this.h.githubFetch(), this.h.clock);
-    this.#apps.set(`${id}:${key}`, app);
-    return app;
-  }
-
-  #apps = new Map<string, GitHubAppAuth>();
-
-  /** The GitHub service on this node that acts as its person's own GitHub App, if one does. */
-  githubApp(): { service: StoredService; app: GitHubAppAuth } | undefined {
-    for (const s of this.storedServices().filter((x) => x.builtin === 'github' && x.enabled)) {
-      const app = this.githubAppOf(s.settings);
-      if (app) return { service: s, app };
-    }
-    return undefined;
-  }
-
-  /** Whether a GitHub service with an App of its own runs somewhere else (an always-on node): it keeps access in step then. */
-  githubAppAway(): string | undefined {
-    if (this.h.isLinkedNode) return undefined;
-    const away = [...this.handedOver().values()].find((h) => h.builtin === 'github' && h.enabled !== false && (h.settingNames ?? []).includes('GITHUB_APP_KEY'));
-    return away ? this.nodeKey(away.node).name : undefined;
-  }
-
-  /** GitHub for a repository: as the person's own App when it's installed there, else with this node's sign-in. */
-  async githubFor(repo: string): Promise<GitHub> {
-    const own = this.githubApp();
-    const client = own ? await own.app.clientFor(repo) : undefined;
-    return client ?? this.h.github();
-  }
-
-  // Setting up the person's own GitHub App in one go (GitHub's App-manifest flow): Weave opens a page on this
-  // computer that sends GitHub the App's description, the person confirms on GitHub, GitHub sends them back with a
-  // one-time code, and Weave exchanges it for the App's ID and key: they go into the GitHub service's settings.
-
-  /** The port of this computer's local pages (http://weave.localhost:…), where GitHub sends the person back. */
-  linkPort?: number;
-  /** Setups started here, by their secret state: valid for an hour, once. */
-  #appSetups = new Map<string, { service: string; org?: string; at: number }>();
-
-  /** Start setting up a GitHub App for a GitHub service: the address to open in the browser. */
-  githubAppSetup(input: { service?: string; org?: string }): { url: string } {
-    const here = this.storedServices().filter((s) => s.builtin === 'github').map((s) => s.name);
-    const away = this.h.isLinkedNode ? [] : [...this.handedOver().values()].filter((h) => h.builtin === 'github').map((h) => h.service);
-    const all = [...here, ...away];
-    const service = input.service ?? (all.length === 1 ? all[0] : undefined);
-    if (!service || !all.includes(service)) throw new Error(all.length ? `which GitHub service? (${all.join(', ')})` : 'add the GitHub service first (weave service add github --builtin github)');
-    const org = input.org?.trim();
-    if (org && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(org)) throw new Error('an organization is its GitHub name, like acme');
-    if (!this.linkPort) throw new Error("this computer's Weave doesn't serve its local pages (another Weave has their port): set the App's ID and key by hand instead");
-    const state = b64u.encode(randomBytes(18));
-    for (const [key, s] of this.#appSetups) if (this.h.clock() - s.at > 3600_000) this.#appSetups.delete(key);
-    this.#appSetups.set(state, { service, ...(org ? { org } : {}), at: this.h.clock() });
-    return { url: `http://${LINK_HOST}:${this.linkPort}/github/new-app?state=${state}` };
-  }
-
-  /** What the start page sends GitHub: where (the organization's or the person's App settings) and the App's description. */
-  githubAppManifest(state: string): { action: string; manifest: string; org?: string; service: string } {
-    const setup = this.#appSetups.get(state);
-    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup link has expired or was used: start again in Weave');
-    const back = `http://${LINK_HOST}:${this.linkPort}`;
-    const person = (this.h.actor(this.h.identity.author, this.h.identity.author).name ?? 'my').replace(/[^A-Za-z0-9 -]/g, '').slice(0, 14).trim();
-    const manifest = {
-      // App names are unique on GitHub: a few random letters keep it free. It can be renamed on GitHub.
-      name: `Weave ${person} ${b64u.encode(randomBytes(3)).replace(/[^A-Za-z0-9]/g, 'x')}`.slice(0, 34),
-      description: 'Weave: keeps repository access in step with your Weave spaces, and hands their release files to participants.',
-      url: back,
-      redirect_url: `${back}/github/app-created`,
-      public: false,
-      default_permissions: { administration: 'write', contents: 'read', metadata: 'read' },
-      default_events: [],
-    };
-    const action = setup.org ? `https://github.com/organizations/${setup.org}/settings/apps/new?state=${state}` : `https://github.com/settings/apps/new?state=${state}`;
-    return { action, manifest: JSON.stringify(manifest), ...(setup.org ? { org: setup.org } : {}), service: setup.service };
-  }
-
-  /** GitHub sent the person back with a code: the App's ID and key go into the service; next, installing it. */
-  async githubAppCreated(input: { code: string; state: string }): Promise<{ name: string; install: string; service: string }> {
-    const setup = this.#appSetups.get(input.state);
-    this.#appSetups.delete(input.state);
-    if (!setup || this.h.clock() - setup.at > 3600_000) throw new Error('this setup has expired or was used: start again in Weave');
-    if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.code)) throw new Error('GitHub sent no code back');
-    const res = await this.h.githubFetch()(`https://api.github.com/app-manifests/${input.code}/conversions`, { method: 'POST', headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' } });
-    const app = (await res.json().catch(() => ({}))) as { id?: number; slug?: string; name?: string; pem?: string; message?: string };
-    if (!res.ok || !app.id || !app.pem || !app.slug) throw new Error(`GitHub didn't hand over the App${app.message ? `: ${app.message}` : ''}`);
-    await this.setService({ name: setup.service, settings: { GITHUB_APP_ID: String(app.id), GITHUB_APP_KEY: app.pem } });
-    return { name: app.name ?? app.slug, install: `https://github.com/apps/${app.slug}/installations/new`, service: setup.service };
-  }
-
-  /** Requests the node is answering now, so each is answered once. */
-  #answering = new Set<string>();
-
-  /** Weave's services that answer in the node (the GitHub service): each request addressed to them, once. */
-  provide(): void {
-    for (const stored of this.storedServices().filter((s) => s.builtin === 'github' && s.enabled)) {
-      const did = this.serviceKey(stored.name).did;
-      for (const id of stored.spaces) {
-        const space = this.h.spaces.get(id);
-        if (!space) continue;
-        const entries = this.h.entries(space);
-        const answered = new Set(entries.filter((e) => e.kind === KIND_SERVICE_RESULT && e.event.signer === did).map((e) => (e.body as { request?: unknown } | null)?.request));
-        for (const r of requestsOf(entries, did)) {
-          if (answered.has(r.id) || this.#answering.has(r.id)) continue;
-          this.#answering.add(r.id);
-          void this.answerFetch(stored, space, r).finally(() => this.#answering.delete(r.id));
-        }
-      }
-    }
-  }
-
-  /** The GitHub service answers artifact.fetch: the release must be its space's, and the file its maintainer fingerprinted. */
-  async answerFetch(stored: StoredService, space: StoredSpace, r: { id: string; from: Did; data?: unknown }): Promise<void> {
-    const gate = this.serviceGate(stored.token);
-    if (!gate) return;
-    const data = (r.data && typeof r.data === 'object' ? r.data : {}) as { protocol?: unknown; artifact?: unknown; platform?: unknown };
-    try {
-      if (data.protocol !== PROTOCOL_ARTIFACT_FETCH) throw new Error(`${stored.name} answers ${PROTOCOL_ARTIFACT_FETCH} only`);
-      const artifact = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === data.artifact);
-      if (!artifact) throw new Error(`${this.h.spaceName(space)} has no such release`);
-      const no = this.artifactRefusal(space, artifact.id, r.from);
-      if (no) throw new Error(no);
-      const asset = typeof data.platform === 'string' ? artifact.manifest.install?.assets?.[data.platform] : undefined;
-      if (!asset) throw new Error(`${artifact.manifest.name} ${artifact.tag} has no file for ${String(data.platform)}`);
-      const repo = artifact.manifest.install?.github;
-      if (!repo) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't released on GitHub`);
-      const client = await this.githubFor(repo);
-      const found = (await client.release(repo, artifact.tag)).assets.find((x) => x.name === asset.file);
-      if (!found) throw new Error(`the release ${artifact.tag} on GitHub has no file ${asset.file}`);
-      const url = await client.downloadUrl(repo, found.id);
-      await gate.answer({ request: r.id, data: { url, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
-    } catch (error) {
-      await gate.answer({ request: r.id, error: (error as Error).message }).catch(() => {});
-    }
-  }
-
-  #providing = false;
 
   serviceApi?: string;
 
@@ -1333,13 +1349,16 @@ export class Services {
     this.saveServices(this.storedServices().map((s) => (s.name === site ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
   }
 
+  #restarts = false;
+  /** Start a running service again, a moment from now (its settings changed): once services run. */
+  restartSoon: (name: string) => void = () => {};
+
   /** Start the enabled services (those with a web page serve it), now that the local API is up (the daemon calls this). */
   runServices(api: { port: number }): void {
     this.serviceApi = `http://127.0.0.1:${api.port}/v1/service`;
-    // Weave's own providers answer as requests arrive (in a moment, so a burst of events is looked at once).
-    if (!this.#providing) {
-      this.#providing = true;
-      let soon: ReturnType<typeof setTimeout> | undefined;
+    // Once: services' settings changing restart them.
+    if (!this.#restarts) {
+      this.#restarts = true;
       // A service's setting changed in one of its spaces: it starts again with it (a sign-in renewed here likewise).
       const restarting = new Set<string>();
       const restart = (name: string) => {
@@ -1353,17 +1372,13 @@ export class Services {
           this.startService(now);
         }, 200);
       };
+      this.restartSoon = restart;
       this.h.replica.onAppend((event) => {
-        soon ??= setTimeout(() => {
-          soon = undefined;
-          this.provide();
-        }, 50);
         const d = this.h.decode(event);
         if (d?.inner.kind !== KIND_SERVICE_SETTING) return;
         const of = (d.inner.body as { service?: unknown } | null)?.service;
         for (const stored of this.storedServices()) if (stored.spaces.includes(d.space?.id ?? '') && this.serviceKey(stored.name).did === of) restart(stored.name);
       });
-      this.provide();
       setInterval(() => {
         const running = this.storedServices().filter((x) => x.enabled && this.h.runtime.running(`service:${x.name}`));
         // A WebAssembly service asks for its settings as it goes; a process got them when it started.
@@ -1379,6 +1394,8 @@ export class Services {
   }
 
   startService(stored: StoredService): void {
+    // Weave's own GitHub service from before: it runs no more, and says what replaced it.
+    if (stored.builtin === 'github') return void this.h.releases.jobs.set(`service:${stored.name}`, { error: GITHUB_SERVICE_GONE });
     if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
     const a = stored.artifact;
     if (stored.shipped) return this.startShipped(stored);
@@ -1401,8 +1418,20 @@ export class Services {
     const s = shippedHere(this.h).get(stored.shipped!.name);
     const problem = s ? shippedProblem(s) : `this Weave doesn't ship ${stored.shipped!.name} any more`;
     if (problem || !s) return void this.h.releases.jobs.set(key, { error: problem! });
-    if (s.digest !== stored.shipped!.digest) {
-      const after = { ...stored, shipped: { name: s.name, digest: s.digest } };
+    // Its contract as this Weave ships it: taken as it is when it asks for no more than what was approved (its actions
+    // changed, say); otherwise it stays what was approved.
+    const shippedContract = this.artifactContract(s.manifest);
+    const rights = (c: ServiceContract) => JSON.stringify([c.reads ?? null, [...(c.writes ?? [])].sort(), [...(c.net ?? [])].sort(), [...(c.offers ?? [])].sort()]);
+    const contract = rights(shippedContract) === rights(stored.contract) ? shippedContract : stored.contract;
+    // What it does, as this Weave says it now.
+    const description = s.about?.split(/(?<=\.)\s/)[0] ?? s.manifest.name;
+    // Compared as values, whatever order their keys were kept in.
+    const same = (a: unknown, b: unknown) => canonicalJson(JSON.parse(JSON.stringify(a ?? null)) as Json) === canonicalJson(JSON.parse(JSON.stringify(b ?? null)) as Json);
+    if (s.digest !== stored.shipped!.digest || !same(stored.asks ?? [], s.manifest.env ?? []) || !same(contract, stored.contract) || description !== stored.description) {
+      // This Weave ships a new one: its settings as it asks for them now.
+      // One that asks for nothing any more asks for nothing: not what it asked for before.
+      const { asks: _asks, ...rest } = stored;
+      const after: StoredService = { ...rest, contract, description, shipped: { name: s.name, digest: s.digest }, ...(s.manifest.env?.length ? { asks: s.manifest.env } : {}) };
       this.saveServices(this.storedServices().map((x) => (x.name === stored.name ? after : x)));
       this.publishServiceProfile(after);
       stored = after;
@@ -1586,6 +1615,9 @@ export class Services {
    * Run a WebAssembly service: transpiled once, then in a worker of its own, answered through its gate, and handed
    * what it may read, one item at a time: first what came while it was off (from where it got to), then as it comes.
    */
+  /** What each running WebAssembly service watches with, by its key. */
+  #watchers = new Map<string, AbortController>();
+
   async spawnWasm(stored: StoredService, component: string, site = stored.site): Promise<void> {
     const name = stored.name;
     const key = `service:${name}`;
@@ -1609,6 +1641,9 @@ export class Services {
     let cursor = existsSync(cursorFile) ? readFileSync(cursorFile, 'utf8').trim() : (stored.since ?? new Date(this.h.clock()).toISOString());
     if (!existsSync(cursorFile)) writeFileSync(cursorFile, cursor);
     const watching = new AbortController();
+    // One watcher per service: one of a run that was stopped (not crashed) would hand the new one everything twice.
+    this.#watchers.get(key)?.abort();
+    this.#watchers.set(key, watching);
     this.#watching.get(name)?.abort();
     this.#watching.set(name, watching);
     const handed = new Set<string>();
@@ -1616,7 +1651,8 @@ export class Services {
     const ticking: { timer?: ReturnType<typeof setInterval>; pending: boolean } = { pending: false };
     watching.signal.addEventListener('abort', () => clearInterval(ticking.timer));
     const hand = (item: FeedItem) => {
-      if (handed.has(item.id)) return;
+      // A run that was replaced hands nothing on.
+      if (watching.signal.aborted || handed.has(item.id)) return;
       handed.add(item.id);
       this.h.runtime.deliver(key, JSON.stringify(item));
     };
@@ -1669,7 +1705,35 @@ export class Services {
             const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
             return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
           }
-          if (call === 'sign') return signWith(this.settings.effective(current)[String(args[0])], String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (call === 'readers' || call === 'accounts') {
+            // Only its spaces: who is in one (or reads one of its boards), and the accounts elsewhere said there.
+            const space = this.h.spaces.get(String(args[0]));
+            if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
+            if (call === 'readers') return JSON.stringify(this.h.readers(space, args[1] ? String(args[1]) : undefined));
+            return JSON.stringify((await this.h.accounts(space, String(args[1]))).map((a) => ({ did: a.who.did, name: a.who.name, handle: a.handle, ...(a.verified !== undefined ? { verified: a.verified } : {}) })));
+          }
+          if (call === 'fingerprint' || call === 'pinImage') {
+            // For a provider publishing what it hands out: only what it needs to pin a release, never more.
+            if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it publishes no releases`);
+            if (call === 'pinImage') {
+              const tags = (Array.isArray(args[1]) ? args[1] : []).map(String).slice(0, 5);
+              return JSON.stringify(await imageDigest(String(args[0]), tags, { fetch: this.h.registryFetch() }));
+            }
+            return JSON.stringify(await this.fingerprint(String(args[0])));
+          }
+          if (call === 'sign') return signWith(this.settings.signingKey(current, String(args[0])), String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (call === 'token' || call === 'handed') {
+            // Access through its person's keyvault: only one it declares (uses, agreed to when it was added), only for
+            // one of its spaces, and only what its person handed that space there. Never by an event: this call alone.
+            const platform = String(args[0]);
+            const rights = current.contract.uses?.[platform];
+            if (!rights) throw new Error(`${name}'s contract doesn't use a ${platform} keyvault`);
+            const space = this.h.spaces.get(String(args[1]));
+            if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
+            if (call === 'handed') return JSON.stringify(this.h.keyvaults().handedTo(platform, space.id));
+            const resources = (Array.isArray(args[2]) ? args[2] : []).map(String).slice(0, 100);
+            return JSON.stringify(await this.h.keyvaults().mint({ platform, service: name, project: space.id, resources, rights }));
+          }
           if (call === 'tickEvery') {
             clearInterval(ticking.timer);
             const ms = Math.floor(Number(args[0]) || 0);
@@ -1705,7 +1769,8 @@ export class Services {
         ready: () => {
           // Taken out while it was starting: nothing to hand it.
           if (!this.storedServices().some((s) => s.name === name)) return;
-          // What it missed first, then as it comes.
+          // Its start first (for work of its own: ticking), then what it missed, then as it comes.
+          this.h.runtime.deliver(key, JSON.stringify({ kind: 'weave.start', time: new Date(this.h.clock()).toISOString() }));
           void gate.watch(hand, watching.signal);
           for (const item of gate.events(cursor)) hand(item);
         },
@@ -1720,7 +1785,9 @@ export class Services {
           : {}),
         handled: (text) => {
           // A tick moves nothing on: the next one may come.
-          if ((JSON.parse(text) as { kind?: string }).kind === 'weave.tick') return void (ticking.pending = false);
+          const kind = (JSON.parse(text) as { kind?: string }).kind;
+          if (kind === 'weave.tick') return void (ticking.pending = false);
+          if (kind === 'weave.start') return;
           const time = (JSON.parse(text) as FeedItem).time;
           if (time > cursor) {
             cursor = time;

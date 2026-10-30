@@ -9,7 +9,7 @@ import type { ComponentizeOptions } from '@bytecodealliance/componentize-js';
  * seconds, so it's kept per machine by the source's and the WIT's hash. `bundle`: what it imports goes in with it
  * (esbuild), as packages/shipped/build.ts does for mark services.
  */
-export async function buildComponent(source: string, world: 'service' | 'website' | 'board' | 'fetcher' | 'marks', features: { http?: boolean; bundle?: boolean } = {}): Promise<string> {
+export async function buildComponent(source: string, world: 'service' | 'website' | 'board' | 'fetcher' | 'verifier' | 'keyvault' | 'marks', features: { http?: boolean; bundle?: boolean } = {}): Promise<string> {
   const wit = join(import.meta.dirname, '..', '..', '..', 'sdk', 'wit', 'service.wit');
   const cache = join(tmpdir(), 'weave-test-components');
   mkdirSync(cache, { recursive: true });

@@ -229,6 +229,7 @@
 :root[data-skin='arcade'] :is(input[type='checkbox'], input[type='radio']):focus + label { outline: none; }
 
 :root[data-skin='arcade'] fieldset { background: var(--ar-panel); color: var(--ar-text); border: 2px solid var(--ar-line); padding: 10px 12px; }
+:root[data-skin='arcade'] .choose-list { background: var(--ar-bg); color: var(--ar-text); border: 2px solid var(--ar-line); }
 :root[data-skin='arcade'] legend { padding: 0 6px; background: var(--ar-panel); color: var(--t-o); font: 9px var(--ar-pixel); }
 
 :root[data-skin='arcade'] menu[role='tablist'] { gap: 4px; padding-left: 0; margin-bottom: 8px; }

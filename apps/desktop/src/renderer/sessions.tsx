@@ -43,21 +43,30 @@ function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode 
   const title = (p: SessionInfo['stack'][number]['post']) => ('missing' in p ? 'a post you can’t see' : p.title);
   const meta = [folderName(session.folder), !running(session) && status(session), top && `on: ${title(top.post)}`, waiting.length && `${waiting.length} waiting`].filter(Boolean).join(' · ');
   const show = session.host && bridge.showSession ? () => void attempt(() => bridge.showSession!(session.host!)) : undefined;
+  const [naming, setNaming] = useState(false);
+  // A named session's title is its own; the Claude app's title is the note under it.
+  const about = [session.description, session.name && session.providerTitle && session.providerTitle !== session.title ? `In Claude: ${session.providerTitle}` : ''].filter(Boolean).join('\n');
   return (
     <div className={`session-row${session.role ? ` is-${session.role}` : ''}${running(session) ? ' running' : ''}`}>
       <span className="session-dot" title={running(session) ? 'Running' : status(session)} />
       <div className="session-text">
         {show ? (
-          <button className="session-title" onClick={show} title="Open in the Claude app">
+          <button className="session-title" onClick={show} title={about || 'Open in the Claude app'}>
             {session.title ?? 'Untitled session'}
           </button>
         ) : (
-          <b className="session-title">{session.title ?? 'Untitled session'}</b>
+          <b className="session-title" title={about || undefined}>
+            {session.title ?? 'Untitled session'}
+          </b>
         )}
         <span className="session-meta" title={session.last ? `Last finished: ${title(session.last.post)} (${ago(session.last.time)})` : undefined}>
           {meta || 'free'}
         </span>
       </div>
+      <button className="link session-name" onClick={() => setNaming(true)} title={session.name ? `Rename ${session.name}, or change what it is about` : 'Name this session'} aria-label="Name">
+        <Icon name="pencil" />
+      </button>
+      {naming && <NameSession session={session} onClose={() => setNaming(false)} />}
       <select aria-label="Job" value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
         <option value="">No job</option>
         <option value="worker">Worker</option>
@@ -339,6 +348,54 @@ export function SessionsView() {
       {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
       {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
     </Page>
+  );
+}
+
+/** Name a session (a session names itself once; here you rename it), and say what it is about. */
+function NameSession({ session, onClose }: { session: SessionInfo; onClose(): void }) {
+  const [name, setName] = useState(session.name ?? '');
+  const [about, setAbout] = useState(session.about ?? '');
+  const [description, setDescription] = useState(session.description ?? '');
+  const [busy, setBusy] = useState(false);
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const saved = await attempt(() => api('nameSession', { session: ref(session), name: name.trim(), about, description, rename: true }));
+    setBusy(false);
+    if (saved) {
+      bump();
+      onClose();
+    }
+  };
+  return (
+    <Modal title={session.name ? `Rename ${session.name}` : 'Name this session'} onClose={onClose}>
+      <form className="form" onSubmit={(e) => void save(e)}>
+        <p className="small">
+          A session names itself once, and goes by “name · about” everywhere in Weave. The name is permanent for the session: only you change it here. Its title in the Claude
+          app is the session's to set{session.providerTitle ? ` (now “${session.providerTitle}”)` : ''}.
+        </p>
+        <div className="field-row-stacked">
+          <label htmlFor="session-name">Name (one short word nobody around you has)</label>
+          <input id="session-name" required minLength={2} maxLength={24} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="session-about">About (one line on what it specializes in)</label>
+          <input id="session-about" maxLength={100} value={about} onChange={(e) => setAbout(e.target.value)} />
+        </div>
+        <div className="field-row-stacked">
+          <label htmlFor="session-description">Description (its job at length)</label>
+          <textarea id="session-description" rows={3} maxLength={1000} value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="default" disabled={busy || name.trim().length < 2}>
+            Save
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

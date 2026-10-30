@@ -23,7 +23,7 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
-import { RepoBanner, startAppOpens } from './github.tsx';
+import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
   CommunityAbout,
@@ -276,7 +276,6 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
             </button>
           </span>
         </header>
-        <RepoBanner space={space} />
         <ChatView space={space} channel={channel} meDid={me.did} meName={me.name} members={list} />
       </section>
     );

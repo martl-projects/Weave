@@ -55,12 +55,12 @@ export type {
   EdgeInput,
   FeedItem,
   FeedQuery,
-  GitHubInfo,
   GumroadInfo,
   HarnessInfo,
   PermissionRequest,
   AppOpen,
-  HubGitHub,
+  AccountInfo,
+  PlatformInfo,
   InProject,
   InSpace,
   IssueInfo,
@@ -81,12 +81,10 @@ export type {
   PublishInput,
   ReactionInfo,
   ReplyInfo,
-  RepoInfo,
   RpcMethod,
   Social,
   SpaceInfo,
   SpaceRef,
-  SpaceRepos,
   ServiceGate,
   ServiceInfo,
   HostedWebsiteInfo,
@@ -110,7 +108,7 @@ export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
 export { MARKS_TIMING } from './marks.ts';
 export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
 export { checkGumroadLicense, createGumroadMembership, startGumroadSignIn, type CreatedGumroadMembership, type GumroadSignIn, type NewGumroadMembership } from './gumroad.ts';
-export { checkGistProof, DEFAULT_GITHUB_APP, GITHUB_CLIENT_ID, GitHub, lookUpGitHubApp, type GitHubApp, finishDeviceFlow, startDeviceFlow, type DeviceCode, type Fetch } from './github.ts';
+export { publicReleases, type Fetch } from './github.ts';
 export { startApi, type ApiServer } from './api.ts';
 export { startLinks, type LinkServer } from './links.ts';
 export { claudeBundle, zip, type ClaudeBundleOptions } from './mcpb.ts';

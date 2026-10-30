@@ -10,7 +10,10 @@ import type { Entry } from './collab.ts';
  * many-to-many: an item can sit on several stacks.
  *
  *   weave.session  {provider, id, host?, folder?, title?, stack,   sealed to yourself; the latest per
- *                   role?, projects?, available?, last?}             provider and id counts
+ *                   name?, about?, description?,                     provider and id counts
+ *                   role?, projects?, available?, last?}
+ *     name: chosen once by the session, permanent, unique among your sessions ("Skala")
+ *     about: one line on what it specializes in; description: its job at length
  *     stack: [{post, since}], top first
  *     role: 'driver' (plans and hands out work) or 'worker' (takes work items)
  *     projects: the spaces whose items it takes (none: any); available: it takes new items
@@ -34,7 +37,14 @@ export interface SessionRecord {
   host?: string;
   /** The folder it runs in, on the computer that ran it. */
   folder?: string;
+  /** The provider's title for it (the Claude app's sidebar title), as read back from the provider. */
   title?: string;
+  /** Its permanent name, chosen once by the session: unique among your sessions, never changed by it. */
+  name?: string;
+  /** One line on what it specializes in; with the name it makes the title "name · about". */
+  about?: string;
+  /** Its job at length. */
+  description?: string;
   /** Top first. */
   stack: StackItem[];
   /** Its job: the driver plans and hands out work, workers take work items. */
@@ -54,6 +64,30 @@ export type SessionRole = (typeof SESSION_ROLES)[number];
 
 /** At most this many items on a stack: it's a scratch board, not an archive. */
 export const MAX_STACK = 50;
+
+export const MAX_NAME = 24;
+export const MAX_ABOUT = 100;
+export const MAX_DESCRIPTION = 1000;
+
+/**
+ * A session name as people say it: letters (any script) and digits, with single spaces,
+ * hyphens or apostrophes inside, starting with a letter, 2 to 24 characters ("Skala", "Shuttle II").
+ */
+export const SESSION_NAME = /^\p{L}[\p{L}\p{N}]*(?:[ '-][\p{L}\p{N}]+)*$/u;
+
+/** Names compare without case or surrounding space: "skala" is "Skala". */
+export const sameName = (a: string | undefined, b: string | undefined) => !!a && !!b && a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+
+/** Why a name can't be a session's: not well-formed, or already taken by one of `taken`. Undefined when it can. */
+export function nameProblem(name: string, taken: Iterable<string | undefined>): string | undefined {
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > MAX_NAME || !SESSION_NAME.test(trimmed)) return `a session name is 2 to ${MAX_NAME} letters or digits, like "Skala" or "Shuttle II"`;
+  const clash = [...taken].find((t) => sameName(t, trimmed));
+  return clash ? `"${clash}" is taken` : undefined;
+}
+
+/** The title a session goes by: "name · about" once it's named, else the provider's title. */
+export const sessionTitle = (s: { name?: string; about?: string; title?: string }): string | undefined => (s.name ? (s.about ? `${s.name} · ${s.about}` : s.name) : s.title);
 
 const str = (value: unknown, max: number) => (typeof value === 'string' ? value.slice(0, max) : '');
 
@@ -81,6 +115,9 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       ...(str(b?.host, 200) ? { host: str(b?.host, 200) } : {}),
       ...(str(b?.folder, 1000) ? { folder: str(b?.folder, 1000) } : {}),
       ...(str(b?.title, 200) ? { title: str(b?.title, 200) } : {}),
+      ...(str(b?.name, MAX_NAME) ? { name: str(b?.name, MAX_NAME) } : {}),
+      ...(str(b?.about, MAX_ABOUT) ? { about: str(b?.about, MAX_ABOUT) } : {}),
+      ...(str(b?.description, MAX_DESCRIPTION) ? { description: str(b?.description, MAX_DESCRIPTION) } : {}),
       stack,
       ...(role ? { role } : {}),
       ...(projects.length ? { projects } : {}),

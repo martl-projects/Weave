@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceListInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
 import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
-import { ago, api, bump, shortDid, useApi, useTick } from './lib.ts';
+import { AccountProofDialog } from './accounts.tsx';
+import { ago, api, bump, onItem, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
+import { ServiceList } from './lists.tsx';
 
 /*
  * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
@@ -186,7 +188,6 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
           <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
         </div>
       )}
-      {service.builtin === 'github' && <GitHubAppSettings service={service.name} set={service.settings.includes('GITHUB_APP_KEY')} onChange={(change) => setSettings({ ...settings, ...change })} />}
       <fieldset>
         <legend>Settings</legend>
         <p className="small">
@@ -214,70 +215,6 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         </AsyncButton>
       </div>
     </Modal>
-  );
-}
-
-/**
- * The GitHub service's own GitHub App: its ID and private key. With them it acts as that App where it's installed
- * (keeping linked repositories' access in step, handing out release files), and nobody has to sign in.
- */
-function GitHubAppSettings({ service, set, onChange }: { service: string; set: boolean; onChange(change: Record<string, string>): void }) {
-  const [org, setOrg] = useState('');
-  const [id, setId] = useState('');
-  const [key, setKey] = useState('');
-  const [picked, setPicked] = useState<string>();
-  const file = useRef<HTMLInputElement>(null);
-  const ready = /^\d+$/.test(id.trim()) && /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(key);
-  return (
-    <fieldset>
-      <legend>GitHub App</legend>
-      <p className="small">
-        {set ? 'It acts as your own GitHub App.' : 'Without one, it acts with the GitHub sign-in of the computer it runs on.'} With an App of your own, nobody has to sign in, and on an always-on node it keeps
-        repositories in step while your computers are off.
-      </p>
-      <div className="field-row">
-        <input value={org} onChange={(e) => setOrg(e.target.value.trim())} placeholder="Organization on GitHub, like acme" aria-label="GitHub organization" />
-        <AsyncButton
-          className="default"
-          onClick={() =>
-            attempt(async () => {
-              const { url } = await api<{ url: string }>('githubAppSetup', { service, ...(org ? { org } : {}) });
-              window.open(url, '_blank', 'noopener');
-            }, 'Confirm the App on GitHub, then install it: Weave takes its ID and key by itself')
-          }
-        >
-          {set ? 'Create a new App…' : 'Create my GitHub App…'}
-        </AsyncButton>
-      </div>
-      <p className="small muted">Opens GitHub with the App filled in (Administration: read and write, Contents and Metadata: read, no webhooks). Without an organization, it's an App of your account.</p>
-      <details>
-        <summary className="small">Or give an App's ID and key by hand</summary>
-        <div className="field-row">
-          <input value={id} onChange={(e) => setId(e.target.value.replace(/\D/g, ''))} placeholder="App ID, like 123456" inputMode="numeric" aria-label="GitHub App ID" />
-          <button type="button" onClick={() => file.current?.click()}>
-            {picked ?? 'Choose its .pem key…'}
-          </button>
-          <input
-            ref={file}
-            type="file"
-            accept=".pem"
-            hidden
-            onChange={async (e) => {
-              const chosen = e.target.files?.[0];
-              if (!chosen) return;
-              setKey(await chosen.text());
-              setPicked(chosen.name);
-            }}
-          />
-        </div>
-        {!picked && <textarea className="wide code" rows={3} value={key} onChange={(e) => setKey(e.target.value)} placeholder="…or paste the private key (-----BEGIN RSA PRIVATE KEY-----…)" spellCheck={false} aria-label="GitHub App private key" />}
-        <div className="buttons">
-          <button disabled={!ready} onClick={() => (onChange({ GITHUB_APP_ID: id.trim(), GITHUB_APP_KEY: key }), setId(''), setKey(''), setPicked(undefined))}>
-            Use this App
-          </button>
-        </div>
-      </details>
-    </fieldset>
   );
 }
 
@@ -490,7 +427,7 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
           .map((r) => (
             <div className="service-request" key={r.id}>
               <div className="small">
-                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.text}
+                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.private ? <span className="muted">asked something, for it alone</span> : r.text}
               </div>
               {r.results.length ? (
                 r.results.map((x) => (
@@ -535,25 +472,119 @@ export function SpaceServices({ space }: { space: SpaceInfo }) {
  * shows its value; a secret is set blind (sealed for the service, nobody reads it back); a sign-in goes through the
  * provider's own page, and the node that runs the service keeps it current.
  */
+/** Ask a service with one of its actions, and wait for its answer (from the node that runs it; half a minute at most). */
+export async function askAndWait(space: string, service: { did: string; name: string }, action: string, input?: unknown, label?: string): Promise<{ text?: string; data?: unknown }> {
+  const asked = await api<ServiceRequestInfo>('askService', { space, service: service.did, text: label ?? action, action, ...(input !== undefined && input !== null ? { data: input } : {}) });
+  // Two minutes at most: it answers one thing at a time, and may be starting again (a setting changed). Often at
+  // first, then calmer.
+  for (let i = 0, until = Date.now() + 120_000; Date.now() < until; i++) {
+    const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space, service: service.did })).find((r) => r.id === asked.id)?.results[0];
+    if (answer) {
+      if (answer.error) throw new Error(answer.error);
+      return { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, i < 10 ? 500 : 1500));
+  }
+  throw new Error(`${service.name} didn't answer in time`);
+}
+
+/** A setting picked from what the service lists (its action answers [{value, label?, note?}]): one, or several. */
+function ChooseSetting({ space, service, action, many, value, onSave }: { space: string; service: { did: string; name: string }; action: string; many: boolean; value: string; onSave(value: string): Promise<unknown> }) {
+  const [choices, setChoices] = useState<Array<{ value: string; label?: string; note?: string }>>();
+  const [picked, setPicked] = useState<string[]>(value ? value.split('\n').filter(Boolean) : []);
+  const [find, setFind] = useState('');
+  const [problem, setProblem] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const load = async () => {
+    setLoading(true);
+    setProblem(undefined);
+    try {
+      const got = (await askAndWait(space, service, action)).data;
+      setChoices(Array.isArray(got) ? got.filter((c): c is { value: string } => typeof c?.value === 'string') : []);
+    } catch (error) {
+      setProblem((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  if (!choices)
+    return (
+      <div className="field-row">
+        <button disabled={loading} onClick={load}>
+          {loading ? 'Asking it…' : value ? 'Change…' : 'Choose…'}
+        </button>
+        {problem && <span className="small problem">{problem}</span>}
+      </div>
+    );
+  type Choice = { value: string; label?: string; note?: string };
+  const shown = [...choices, ...picked.filter((p) => !choices.some((c) => c.value === p)).map((p): Choice => ({ value: p, note: "it doesn't list it now" }))].filter((c) => !find.trim() || `${c.value} ${c.label ?? ''}`.toLowerCase().includes(find.trim().toLowerCase()));
+  const toggle = (v: string) => setPicked((p) => (many ? (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]) : [v]));
+  return (
+    <div className="choose-setting">
+      <input className="wide" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find…" autoFocus />
+      <div className="choose-list sunken">
+        {shown.map((c) => (
+          <div className="field-row" key={c.value}>
+            <input type={many ? 'checkbox' : 'radio'} id={`choose-${c.value}`} checked={picked.includes(c.value)} onChange={() => toggle(c.value)} />
+            <label htmlFor={`choose-${c.value}`}>
+              {c.label ?? c.value}
+              {c.note && <span className="small muted"> · {c.note}</span>}
+            </label>
+          </div>
+        ))}
+        {!shown.length && <div className="small muted">{find ? 'Nothing is called that.' : 'It lists nothing.'}</div>}
+      </div>
+      <div className="field-row">
+        <button onClick={() => setChoices(undefined)}>Cancel</button>
+        <AsyncButton className="default" disabled={!picked.length} onClick={() => onSave(picked.join('\n')).then(() => setChoices(undefined))}>
+          {many ? `Use these ${picked.length}` : 'Use it'}
+        </AsyncButton>
+      </div>
+    </div>
+  );
+}
+
+/** A service's settings changed here: its pages show what's current (detail: its key). */
+export const SERVICE_CHANGED = 'weave-service-changed';
+const serviceChanged = (did: string) => dispatchEvent(new CustomEvent(SERVICE_CHANGED, { detail: did }));
+
 export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState({ name: '', value: '', secret: true });
+  const [signing, setSigning] = useState<{ code: string; url: string }>();
   if (!data) return null;
   const save = (name: string, value: string | null, secret?: boolean) =>
-    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump())), value === null ? `${name} removed` : `${name} set`);
+    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump(), serviceChanged(service.did))), value === null ? `${name} removed` : `${name} set`);
   const names = [...data.asks.map((a) => a.name), ...data.settings.map((x) => x.name).filter((n) => !data.asks.some((a) => a.name === n))];
   return (
     <Modal title={`${service.name}: settings in ${space.name}`} onClose={onClose} wide>
       <p className="small muted">
         Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
+        {data.yours?.length ? (data.runsHere ? ' Those marked yours stay with it on this computer, for every project you run it in.' : ` Its sign-in is ${data.service.person.name ?? 'its runner'}'s, who runs it: kept on their computer, for every project they run it in.`) : ''}
       </p>
-      {data.missing.length > 0 && <p className="note">It needs {data.missing.join(', ')} to work.</p>}
+      {signing && (
+        <div className="notice">
+          Enter this code on{' '}
+          <a href={signing.url} target="_blank" rel="noopener noreferrer">
+            {new URL(signing.url).hostname}
+          </a>{' '}
+          (it's copied): <b className="user-code">{signing.code}</b>. Only ever enter a code Weave shows you, here.
+        </div>
+      )}
+      {data.missing.length > 0 && <p className="note">It needs {data.missing.map((n) => data.asks.find((a) => a.name === n)?.label ?? n).join(', ')} to work.</p>}
       {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
-        const set = data.settings.find((x) => x.name === name);
+        // Yours (whoever runs it): kept with it on their computer, for every project it's in; only they change it.
+        const yours = asked?.yours ? (data.yours?.find((y) => y.name === name) ?? { name }) : undefined;
+        const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: !asked?.choose, value: 'value' in yours ? yours.value : undefined } : undefined) : data.settings.find((x) => x.name === name);
+        // An app of yours registered with the provider: what it is, and installing it.
+        const app = yours && 'app' in yours ? yours.app : undefined;
+        const appName = app ? String(app.slug ?? app.id ?? 'your app') : undefined;
         const secret = asked?.secret ?? set?.secret ?? false;
+        const mayChange = yours ? data.runsHere : data.mayChange;
+        const runner = data.service.person.name ?? shortDid(data.service.person.did);
         return (
           <fieldset key={name} className="service-setting">
             <legend>
@@ -561,24 +592,51 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
             </legend>
             {asked?.hint && <p className="small muted">{asked.hint}</p>}
             <p className="small">
-              {set ? (set.oauth ? 'Signed in' : secret ? 'Set (secret)' : <code>{set.value}</code>) : asked?.oauth ? 'Not signed in' : 'Not set'}
-              {set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
+              {yours && !data.runsHere
+                ? `${runner}'s, who runs it: kept with it on their computer, for every project they run it in`
+                : app && typeof app.html_url === 'string'
+                  ? <>Made: <a href={app.html_url} target="_blank" rel="noopener noreferrer">{appName}</a></>
+                  : set
+                    ? set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>
+                    : asked?.oauth ? 'Not signed in' : asked?.register ? 'Not made yet' : asked?.choose ? 'None chosen yet' : 'Not set'}
+              {yours && data.runsHere && <span className="muted"> · yours, for every project you run it in</span>}
+              {set && 'by' in set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
             </p>
-            {data.mayChange && (
+            {mayChange && asked?.choose && (
+              <ChooseSetting space={space.id} service={service} action={asked.choose.action} many={!!asked.choose.many} value={set?.value ?? ''} onSave={(value) => save(name, value)} />
+            )}
+            {mayChange && !asked?.choose && (
               <div className="field-row">
-                {asked?.oauth ? (
+                {app && yours && 'next' in yours && yours.next && (
+                  <button className="default" onClick={() => window.open(yours.next, '_blank', 'noopener')}>
+                    Install it on repositories…
+                  </button>
+                )}
+                {asked?.oauth || asked?.register ? (
                   <AsyncButton
                     className="default"
                     onClick={() =>
                       attempt(async () => {
-                        const { id, url } = await api<{ id: string; url: string }>('startServiceSignIn', { space: space.id, service: service.did, name });
+                        const { id, url, code } = await api<{ id: string; url: string; code?: string }>('startServiceSignIn', { space: space.id, service: service.did, name });
+                        // A sign-in with a code: the code to enter there, shown here (and copied) until it's done.
+                        if (code) {
+                          void navigator.clipboard?.writeText(code).catch(() => {});
+                          setSigning({ code, url });
+                        }
                         window.open(url, '_blank', 'noopener');
-                        await api('finishServiceSignIn', { id });
-                        reload();
-                      }, `${service.name} is signed in`)
+                        try {
+                          await api('finishServiceSignIn', { id });
+                        } finally {
+                          setSigning(undefined);
+                          reload();
+                          serviceChanged(service.did);
+                        }
+                      }, asked.register ? `${asked.label} is made` : `${service.name} is signed in`)
                     }
                   >
-                    {set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth.authorize).hostname}…`}
+                    {asked.register
+                      ? `${set ? 'Make another' : `Make ${lowerFirst(asked.label)}`} on ${new URL(asked.register.page).hostname}…`
+                      : set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth!.authorize ?? asked.oauth!.device ?? asked.oauth!.token).hostname.replace(/^(www|api|accounts)\./, '')}…`}
                   </AsyncButton>
                 ) : (
                   <>
@@ -640,6 +698,10 @@ export interface ScopedAction {
   who: ActionWho | 'runner';
   mine: boolean;
   run(): void;
+  /** Its contract's actions this stands in for. */
+  replaces?: string[];
+  /** Only where the service has no page of its own shown (asking it in words: its page is how one talks to it). */
+  withoutPage?: true;
 }
 
 /**
@@ -647,21 +709,31 @@ export interface ScopedAction {
  * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
  * which is changed in its settings (maintainers).
  */
-export function ActionScopes({ space, service, groups, extras }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[] }) {
+export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
+  const { data: lists } = useApi(() => api<ServiceListInfo[]>('serviceLists', { space: space.id, service: service.did }).catch(() => [] as ServiceListInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
-  const all: ScopedAction[] = [...(actions ?? []).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras];
+  // Its lists stand in for the actions they use: their buttons are on them.
+  const listed = (lists ?? []).flatMap((l) => [l.list, ...(l.add?.action ? [l.add.action] : []), ...(l.remove ? [l.remove.action] : []), ...(l.use?.action ? [l.use.action] : []), ...(l.covers ?? [])]);
+  // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say), and so can
+  // one of its own pages, where it's shown.
+  // And Weave's own view of what it does (a website service's running websites, say): `covered`.
+  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? []), ...listed]);
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
-  if (!all.length && !shown.length) return null;
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
+  if (!all.length && !shown.length && !lists?.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
   const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
   const options = sections.filter((who) => all.some((a) => JSON.stringify(a.who) === JSON.stringify(who)));
   return (
     <div className="action-scopes">
-      {/* Its own pages first (each shown only to who may see it), then what one can do with it, by who may. */}
+      {/* Its lists first (the same for every service), then its own pages (each shown only to who may see it), then what one can do with it, by who may. */}
+      {(lists ?? []).map((l) => (
+        <ServiceList key={l.name} space={space} service={service} list={l} actions={actions ?? []} />
+      ))}
       {shown.map((p) => (
         <div className="service-panel-box" key={p.name}>
           {p.who !== 'members' && <div className="small muted">{title(p.who)} see this</div>}
@@ -725,7 +797,7 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
   );
 }
 
-function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [asked, setAsked] = useState<string>();
   const { data: answer } = useApi(
@@ -776,25 +848,64 @@ function ActionDialog({ space, service, action, onClose }: { space: { id: string
 
 
 /**
+ * The app's look around a service's page, for the page to follow (dark or light, the skin's colours): its text, a
+ * quieter text, links, lines, buttons, font, and whether it's dark.
+ */
+function themeAround(frame: HTMLElement | null): Record<string, string> | undefined {
+  const box = frame?.closest('fieldset');
+  if (!box) return undefined;
+  const css = getComputedStyle(box);
+  const button = box.querySelector('button');
+  const b = button ? getComputedStyle(button) : undefined;
+  const muted = box.querySelector('.muted');
+  const link = box.querySelector('a');
+  return {
+    scheme: getComputedStyle(document.documentElement).colorScheme.includes('dark') ? 'dark' : 'light',
+    text: css.color,
+    muted: muted ? getComputedStyle(muted).color : css.color,
+    link: link ? getComputedStyle(link).color : css.color,
+    line: css.borderTopColor,
+    font: css.fontFamily,
+    ...(b ? { buttonBg: b.backgroundColor, buttonText: b.color, buttonBorder: b.borderTopColor, buttonRadius: b.borderTopLeftRadius } : {}),
+  };
+}
+
+/**
  * A service's own page in its card: its panel, sandboxed with no network (like a board's view). It learns where it is
  * and which actions you may use, uses them by asking (the node that runs the service checks who may, as for buttons),
  * and gets the service's answer back; it may say how tall it is.
  *
- *   to it:    {weave: 'view', panel, space, me, actions} (again when something changed)   {weave: 'acted', id, text?, data?, error?}
+ *   to it:    {weave: 'view', panel, space, me, actions, boards, theme} (again when something changed; theme: the app's look)   {weave: 'acted', id, text?, data?, error?}
  *   from it:  {weave: 'act', id, name, input}               {weave: 'height', px}   {weave: 'visit', website} (to Live)
  */
 function ServicePanel({ space, service, panel, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; panel: ServicePanelInfo; actions: ServiceActionInfo[] }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(160);
+  const [proving, setProving] = useState<string>();
   const { data: base } = useApi(async () => bridge.lensBase(panel.key), [panel.key]);
+  const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
   const latest = useRef(actions);
   latest.current = actions;
+  const boardNames = useRef<string[]>([]);
+  boardNames.current = (boards ?? []).map((b) => b.name);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () =>
-    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })) });
-  // Again whenever something changed here (a website opened, a setting changed): it shows what's current.
-  const tick = useTick();
-  useEffect(sendView, [actions, tick]);
+    send({ weave: 'view', panel: { name: panel.name, title: panel.title }, space, service: { name: service.name }, actions: latest.current.map((a) => ({ name: a.name, label: a.label, mine: a.mine, ...(a.input ? { input: a.input } : {}) })), boards: boardNames.current, theme: themeAround(frame.current) });
+  // Again whenever something changed here (a website opened, a setting changed): it shows what's current. Not for
+  // requests to services and their answers: a page that asks its service on each view would ask on and on.
+  useEffect(sendView, [actions, boards]);
+  useEffect(() => {
+    let soon: ReturnType<typeof setTimeout> | undefined;
+    const again = () => (clearTimeout(soon), (soon = setTimeout(sendView, 300)));
+    const off = onItem((item) => {
+      if (item.kind === 'weave.service.request' || item.kind === 'weave.service.result') return;
+      again();
+    });
+    // Its settings changed here (a sign-in of yours is no event anywhere): a moment later, once it started again.
+    const changed = (event: Event) => (event as CustomEvent<string>).detail === service.did && setTimeout(again, 1500);
+    addEventListener(SERVICE_CHANGED, changed);
+    return () => (off(), clearTimeout(soon), removeEventListener(SERVICE_CHANGED, changed));
+  }, [service.did]);
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
@@ -802,18 +913,13 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
       if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
       // A running website it shows: its window is in the project's Live.
       if (m?.weave === 'visit') location.hash = `#/p/${space.id}/live`;
+      // Proving an account elsewhere here (its services give access by it): Weave asks for it, never the page.
+      if (m?.weave === 'account' && typeof (m as { platform?: unknown }).platform === 'string') setProving(String((m as { platform: string }).platform));
       if (m?.weave === 'act' && typeof m.name === 'string') {
         const action = latest.current.find((a) => a.name === m.name);
         void (async () => {
           try {
-            const asked = await api<ServiceRequestInfo>('askService', { space: space.id, service: service.did, text: action?.label ?? String(m.name), action: m.name, ...(m.input !== undefined && m.input !== null ? { data: m.input } : {}) });
-            // Its answer comes from the node that runs it: wait for it (half a minute at most).
-            for (let i = 0; i < 60; i++) {
-              const answer = (await api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did })).find((r) => r.id === asked.id)?.results[0];
-              if (answer) return send({ weave: 'acted', id: m.id, ...(answer.error ? { error: answer.error } : { text: answer.text, ...(answer.data !== undefined ? { data: answer.data } : {}) }) });
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-            send({ weave: 'acted', id: m.id, error: `${service.name} didn't answer in time` });
+            send({ weave: 'acted', id: m.id, ...(await askAndWait(space.id, service, String(m.name), m.input, action?.label)) });
           } catch (error) {
             send({ weave: 'acted', id: m.id, error: (error as Error).message });
           }
@@ -824,5 +930,10 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
     return () => window.removeEventListener('message', listen);
   }, [space.id, service.did]);
   if (!base) return null;
-  return <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />;
+  return (
+    <>
+      <iframe ref={frame} className="service-panel" title={panel.title} src={`${base}${panel.page}`} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ height }} onLoad={sendView} />
+      {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => setProving(undefined)} />}
+    </>
+  );
 }

@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, whoWords, type Json, type RepoAccess, type ServiceContract, type VisitorRule } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, whoWords, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -33,12 +33,11 @@ import {
   type CreateCompanyInput,
   type CommunityInfo,
   type FeedItem,
-  type GitHubInfo,
   type GumroadInfo,
-  type SpaceRepos,
   type SpaceRef,
   type ServiceInfo,
   type FetcherInfo,
+  type AccountInfo,
   type ServiceSettingsInfo,
   type ServiceOriginInfo,
   type HostedWebsiteInfo,
@@ -196,13 +195,14 @@ github — repositories that follow a group, tier or project (members who give t
   gumroad                    your Gumroad connection on this device (for tier … --gumroad new)
   gumroad connect            connect Gumroad in the browser (through the Weave application on Gumroad)
   gumroad disconnect         forget the connection on this device
-  github                     your GitHub sign-in on this device
-  github connect             sign in to GitHub with a code (through the Weave GitHub app)
-  github disconnect          forget the sign-in on this device
-  github app <link>|default  sign in through your own GitHub App (https://github.com/apps/…) instead of Weave Connect
-  github repos               repositories you can link (the app is installed on them and you're admin)
-  github hub [off]           show your GitHub account on your hub (proven by a public gist); hub off to stop
-  github share <space>       give a space your GitHub account, so its repos invite you; unshare to take it back
+  account platforms          where accounts can be proven here (a verifier checks each: github…)
+  account proof <platform>   what a proof there holds (your Weave id), and how to make one
+  account prove <platform>   prove an account there in one go: a code to enter there, and its verifier makes the proof
+                             (on GitHub, a secret gist naming you); on your hub, or with -p/-g in a space
+  account link <platform> <handle> <proof>   or by hand: say an account there is yours, with a proof you made
+                             (its members see it, and its services may give you access by it: GitHub access, say)
+  account unlink <platform>  take it back (on your hub, or with -p/-g in a space)
+  account list [--who <someone>]   accounts elsewhere on hubs (or in a space with -p/-g), each checked
   service new <folder> [--website] [--rust] [--lens] [--marks]   start a WebAssembly service of your own from a starter:
                              a bot (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), a client service that shows a
                              board its own way (a Kanban in JavaScript), or a mark service that labels people you list
@@ -224,7 +224,6 @@ github — repositories that follow a group, tier or project (members who give t
                              (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
                              [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
                              installed on the organization, so nobody has to sign in (with --node, on an always-on node)
-  service github-app [<name>] [--org <org>] [--open]   create that App in one go: confirm on GitHub, install it, done
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -252,10 +251,6 @@ github — repositories that follow a group, tier or project (members who give t
   fetcher add <name>         add one Weave ships, for the projects that need it   --spaces <a,b> | --all
   fetcher set <name>         what it fetches for (--spaces <a,b> | --all), your settings for it (--setting KEY=VALUE, KEY= removes)
   fetcher remove <name>      take it out: it fetches for no project any more
-  repo list <space>          a space's repositories
-  repo link <space> <owner/name>     owner or maintainers: let the repo follow the space   [-b <board>: only its readers]
-                             a personal repo: --access none (just linked) or --access write --writers <who,…> (picked one by one)
-  repo unlink <space> <owner/name>   stop it (access Weave gave is taken back)
 
 posts — in a community (-r) or a project's boards (-p); without either, your home:
   posts                      list posts                 [-b <board>] [--sort hot|new|top] [--saved] [-n <count>]
@@ -430,6 +425,7 @@ const { values, positionals } = parseArgs({
     out: { type: 'string' },
     open: { type: 'boolean', default: false },
     org: { type: 'string' },
+    who: { type: 'string' },
     as: { type: 'string' },
     kind: { type: 'string' },
     can: { type: 'string' },
@@ -1532,49 +1528,38 @@ async function main(): Promise<void> {
       throw new Error('usage: weave gumroad [connect|disconnect]');
     }
 
-    case 'github': {
-      const [sub, ref] = args;
+    case 'account': {
+      const [sub, platform, handle, proof] = args;
       const b = await backend();
-      const status = (g: GitHubInfo) =>
-        `${g.login ? `signed in to GitHub as ${g.login}` : g.available ? 'not signed in to GitHub (weave github connect)' : "this copy of Weave can't reach GitHub yet (no GitHub app client ID)"}
-through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.app.own ? ', your own choice' : ''}`;
-      if (!sub) {
-        const g = await b.github();
-        return out(g, () => status(g));
+      const space = values.project ?? values.group ?? values.community;
+      const line = (a: AccountInfo) => `${a.who.name ?? a.who.did}  ${a.platform}: ${a.handle}${a.verified ? ' ✓' : a.verified === false ? "  (its proof doesn't hold)" : "  (couldn't be checked yet)"}${a.url ? `  ${a.url}` : ''}`;
+      if (sub === 'platforms') {
+        const all = await b.platforms();
+        return out(all, () => all.map((p) => `${p.platform}  ${p.title}${p.howto ? `\n  ${p.howto}` : ''}`).join('\n') || '(this Weave checks accounts on no platform)');
       }
-      if (sub === 'connect') {
-        const started = await b.connectGithub();
-        console.error(`Open ${started.pending!.verificationUri} and enter the code  ${started.pending!.userCode}`);
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const g = await b.github();
-          if (g.error) throw new Error(g.error);
-          if (!g.pending && g.login) return out(g, () => status(g));
-        }
+      if (sub === 'proof' && platform) {
+        const p = await b.accountProof({ platform });
+        return out(p, () => `${p.howto ?? 'Make a proof there, as that account, holding:'}\n\n  ${p.text}\n\nthen: weave account link ${platform} <your account> <its address>`);
       }
-      if (sub === 'app') {
-        const g = await b.setGithubApp(!ref || ref === 'default' ? null : ref);
-        return out(g, () => `${status(g)}
-(sign in again: weave github connect)`);
+      if (sub === 'prove' && platform) {
+        const { id, url, code } = await b.startAccountProof({ platform, ...(space ? { space } : {}) });
+        if (!values.json) console.log(`Enter this code on ${url}: ${code}`);
+        const all = await b.finishAccountProof({ id });
+        return out(all, () => `proven${space ? ` in ${space}` : ' on your hub'}\n${all.map(line).join('\n')}`);
       }
-      if (sub === 'disconnect') {
-        const g = await b.disconnectGithub();
-        return out(g, () => 'GitHub sign-in forgotten on this device');
+      if (sub === 'link' && platform && handle && proof) {
+        const all = await b.linkAccount({ platform, handle, proof, ...(space ? { space } : {}) });
+        return out(all, () => `${handle} on ${platform} is proven yours${space ? ` in ${space}` : ' on your hub'}\n${all.map(line).join('\n')}`);
       }
-      if (sub === 'repos') {
-        const repos = await b.githubRepos();
-        return out(repos, () => repos.join('\n') || '(none: install the Weave GitHub app on a repository you administer)');
+      if (sub === 'unlink' && platform) {
+        const all = await b.linkAccount({ platform, on: false, ...(space ? { space } : {}) });
+        return out(all, () => `your ${platform} account is taken back${space ? ` in ${space}` : ' from your hub'}`);
       }
-      if (sub === 'hub') {
-        const off = ref === 'off';
-        const p = await b.showGithubOnHub({ on: !off });
-        return out(p, () => (p.github ? `your hub shows GitHub ${p.github.login} (${p.github.url})` : 'your hub no longer shows GitHub'));
+      if (sub === 'list' || !sub) {
+        const all = await b.accounts({ ...(space ? { space } : {}), ...(values.who ? { who: values.who } : {}) });
+        return out(all, () => all.map(line).join('\n') || '(none)');
       }
-      if ((sub === 'share' || sub === 'unshare') && ref) {
-        const r = await b.shareGithub({ space: ref, on: sub === 'share' });
-        return out(r, () => (r.shared ? `${ref} knows your GitHub account ${r.shared}` : `${ref} no longer has your GitHub account`));
-      }
-      throw new Error('usage: weave github [connect|disconnect|app <link>|default|repos|hub [off]|share <space>|unshare <space>]');
+      throw new Error('usage: weave account platforms | proof <platform> | link <platform> <handle> <proof> [-p <space>] | unlink <platform> [-p <space>] | list [--who <someone>] [-p <space>]');
     }
 
     case 'service': {
@@ -1614,15 +1599,6 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
         const all = await b.artifacts(ref ?? needSpace());
         return out(all, () => all.map((a) => `${a.name} ${a.tag}  ${a.kind.replace('-', ' ')}${a.source ? ` from ${a.source.provider}` : ''}  released ${a.time.slice(0, 10)} by ${a.released.name ?? a.released.did}${a.mine ? '' : '  (not for you)'}${a.packaged ? '  (a Weave service)' : ''}${a.applet ? `  (a service that ${contractWords(a.applet)})` : a.website ? '  (a web app: it serves its page as a website)' : ''}\n  ${a.kind === 'file' ? `${a.file?.name ?? 'a file'}${a.type ? ` (${a.type})` : ''}: weave file get ${a.id} -p ${a.project.name}` : a.runs ? `runs here as its ${a.runs === 'container' ? 'container' : 'release build'}` : 'nothing for this computer'}${a.settings.length ? `\n  settings: ${a.settings.map((e) => `${e.name}${e.optional ? ' (optional)' : ''}`).join(', ')}` : ''}`).join('\n\n') || '(no releases yet)');
       }
-      if (sub === 'github-app') {
-        const { url } = await b.githubAppSetup({ ...(ref ? { service: ref } : {}), ...(values.org ? { org: values.org } : {}) });
-        if (values.open) {
-          const { spawn } = await import('node:child_process');
-          const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
-          spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
-        }
-        return out({ url }, () => `Open this in your browser (within an hour) to create your own GitHub App${values.org ? ` in ${values.org}` : ''}:\n  ${url}\nConfirm it on GitHub, then install it on the repositories it should manage: the GitHub service gets its ID and key by itself.`);
-      }
       if (sub === 'release' && ref) {
         const app = await b.releaseService({ project: needProject(), image: ref });
         const image = app.install!.image!;
@@ -1645,13 +1621,9 @@ through the GitHub App ${g.app.name} (${g.app.url}), owned by ${g.app.owner}${g.
       }
       if (sub === 'add' && values.builtin) {
         const builtin = values.builtin === 'room' ? 'website' : values.builtin;
-        if (builtin !== 'website' && builtin !== 'github') throw new Error('Weave ships two services: --builtin website, or --builtin github');
+        if (builtin !== 'website') throw new Error("Weave has one built-in service, --builtin website: the others it ships are added with --shipped (github-releases, github-access, websites)");
         const s = await b.addService({ ...(ref ? { name: ref } : {}), builtin, ...(values.text ? { description: values.text } : {}), spaces: list(values.spaces) });
-        return out(s, () =>
-          builtin === 'website'
-            ? `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`
-            : `${line(s)}\n\nIt answers as you · ${s.name}: participants of its projects fetch release files through it, with this node's GitHub sign-in (weave github connect for private repositories).`,
-        );
+        return out(s, () => `${line(s)}\n\nIt signs websites as you · ${s.name}. Services with a web page show up there; for a program of yours: weave website open <name> -p <project> --port <n>`);
       }
       if (sub === 'add' && values.shipped) {
         const settings = settingsOf();
@@ -1725,7 +1697,8 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out(s, () => `${value ? `set ${name}` : `removed ${name}`} for ${s.service.name} in ${s.space.name}\n${settingsText(s)}`);
       }
       if (sub === 'sign-in' && ref && args[2]) {
-        const { id, url } = await b.startServiceSignIn({ space: needSpace(), service: ref, name: args[2] });
+        const { id, url, code } = await b.startServiceSignIn({ space: needSpace(), service: ref, name: args[2] });
+        if (code && !values.json) console.log(`Enter this code there: ${code}`);
         const { spawn } = await import('node:child_process');
         const [command, ...rest] = process.platform === 'win32' ? ['cmd', '/c', 'start', '""', `"${url}"`] : [process.platform === 'darwin' ? 'open' : 'xdg-open', url];
         spawn(command, rest, { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
@@ -1792,31 +1765,6 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         return out({ removed: ref }, () => `removed ${ref}: it fetches for no project any more`);
       }
       throw new Error('usage: weave fetcher list|add <name>|set <name>|remove <name> — see "weave --help"');
-    }
-
-    case 'repo': {
-      const [sub, ref, repo] = args;
-      const b = await backend();
-      const show = (r: SpaceRepos) =>
-        [
-          ...r.repos.map((x) => `${x.repo}${x.board ? ` (readers of ${x.board})` : ''}${x.access === 'none' ? ' (linked only)' : x.access === 'write' ? ` (can write: ${(x.writers ?? []).map(actor).join(', ')})` : ''}  linked by ${actor(x.by)}${x.problem ? `  — ${x.problem}` : ''}`),
-          r.repos.length ? '' : '(no repositories)',
-          r.shared ? `you gave it your GitHub account ${r.shared}` : r.repos.length ? 'you haven\'t given it your GitHub account (weave github share)' : '',
-          r.missing?.length ? `without a GitHub account here: ${r.missing.map(actor).join(', ')}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-      if (sub === 'list' && ref) {
-        const r = await b.spaceRepos(ref);
-        return out(r, () => show(r));
-      }
-      if ((sub === 'link' || sub === 'unlink') && ref && repo) {
-        const access = values.access as RepoAccess | undefined;
-        const writers = values.writers?.split(',').map((w) => w.trim()).filter(Boolean);
-        const r = await b.linkRepo({ space: ref, repo, board: values.board, ...(access ? { access } : {}), ...(writers ? { writers } : {}), on: sub === 'link' });
-        return out(r, () => show(r));
-      }
-      throw new Error('usage: weave repo list <space> | repo link <space> <owner/name> [-b <board>] [--access none|write --writers <who,…>] | repo unlink <space> <owner/name>');
     }
 
     case 'home': {
@@ -2658,7 +2606,7 @@ ${postLine(p)}`);
       }
       if (sub === 'show') {
         const app = await b.projectApp(needProject());
-        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.github ? ` (${app.install.github})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
+        return out(app, () => (app ? `${app.name} (${app.app})\n${app.services.map((s) => `  ${s.id}: port ${s.port} (${s.protocol})${s.open?.host ? ` · host: ${s.open.host.label} ${s.open.host.path}` : ''}${s.open?.joiner ? ` · players: ${s.open.joiner.label} ${s.open.joiner.path}` : ''}`).join('\n')}${app.start?.hint ? `\n  start: ${app.start.hint}` : ''}${app.install?.tag ? `\n  release: ${app.install.tag}${app.install.source ? ` (${app.install.source.provider}: ${app.install.source.ref})` : ''}` : ''}${app.install?.image ? `\n  container: ${app.install.image.ref}:${app.install.image.tag} @ ${app.install.image.digest}` : app.start?.image ? `\n  container: ${app.start.image} (pinned at the next weave app release)` : ''}` : '(no app published)'));
       }
       if (sub === 'check') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), args[1] ?? values.file ?? 'weave.app.json');
@@ -2691,7 +2639,7 @@ ${postLine(p)}`);
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
         const app = await b.releaseApp({ project: needProject(), tag: args[1], repo: values.repo, assets });
-        return out(app, () => `${app.name} ${app.install?.tag} is released from github.com/${app.install?.github}: it installs as a service\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}${app.start?.image && !app.install?.image ? `\n  its image ${app.start.image} is left out: it's private or not tagged ${app.install?.tag} (hosts run the build files)` : app.install?.image ? `\n  image         ${app.install.image.ref}@${app.install.image.digest.slice(0, 19)}…` : ''}`);
+        return out(app, () => `${app.name} ${app.install?.tag} is released from ${app.install?.source ? `${app.install.source.provider}: ${app.install.source.ref}` : 'its image'}: it installs as a service\n${Object.entries(app.install?.assets ?? {}).map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}${app.start?.image && !app.install?.image ? `\n  its image ${app.start.image} is left out: it's private or not tagged ${app.install?.tag} (hosts run the build files)` : app.install?.image ? `\n  image         ${app.install.image.ref}@${app.install.image.digest.slice(0, 19)}…` : ''}`);
       }
       throw new Error('usage: weave app publish|show|check|example|workflow|release <tag> -p <project>');
     }

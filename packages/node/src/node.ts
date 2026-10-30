@@ -1,22 +1,6 @@
 import {
   accessOf,
-  accountsOf,
-  sharedAccountsOf,
-  type SharedAccount,
   canManage as mayManageSpace,
-  isLogin,
-  isRepoName,
-  KIND_GITHUB_ACCOUNT,
-  KIND_GITHUB_ADDED,
-  KIND_GITHUB_PUBLIC,
-  githubProofText,
-  KIND_GITHUB_REPO,
-  planSync,
-  reposOf,
-  REPO_ACCESS,
-  MAX_WRITERS,
-  type RepoAccess,
-  type RepoLink,
   b64u,
   BLOB_TYPES,
   boardKeyFor,
@@ -128,6 +112,12 @@ import {
   KIND_ADMIT,
   KIND_APP,
   KIND_ARTIFACT,
+  KIND_ACCOUNT,
+  accountClaimsOf,
+  type AccountClaim,
+  accountProofText,
+  isPlatform,
+  KIND_SERVICE_REQUEST,
   artifactsOf,
   KIND_BOARD,
   KIND_CURATE,
@@ -205,7 +195,12 @@ import {
   routinesOf,
   type Routine,
   KIND_SESSION,
+  MAX_ABOUT,
+  MAX_DESCRIPTION,
+  nameProblem,
   pushOnto,
+  sameName,
+  sessionTitle,
   reorder,
   sessionKey,
   SESSION_ROLES,
@@ -407,7 +402,6 @@ import {
   type BoardViewInfo,
   type ChatInfo,
   type CoauthorRequest,
-  type GitHubInfo,
   type GumroadInfo,
   type HarnessInfo,
   type PermissionRequest,
@@ -419,8 +413,6 @@ import {
   type WorkTarget,
   type DeskInfo,
   type RoutineInfo,
-  type RepoInfo,
-  type SpaceRepos,
   type MembershipRequestInfo,
   type BadgeInfo,
   type BadgeSeriesInfo,
@@ -489,7 +481,10 @@ import {
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
   type ArtifactInfo,
+  type AccountInfo,
+  type MyAccountInfo,
   type FetcherInfo,
+  type KeyvaultInfo,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -501,7 +496,7 @@ import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, t
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform } from './appinstall.ts';
-import { checkGistProof, DEFAULT_GITHUB_APP, finishDeviceFlow, GitHub, GITHUB_CLIENT_ID, githubInstallUrl, lookUpGitHubApp, type GitHubApp, startDeviceFlow, type DeviceCode, type Fetch, type ReleaseAsset } from './github.ts';
+import { publicReleases, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
@@ -516,7 +511,6 @@ import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, 
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLabels, imageLocation } from './registry.ts';
-import type { GitHubAppFlow } from './links.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
 import {
@@ -540,6 +534,11 @@ import { BlobStore } from './blobstore.ts';
 import { Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
+import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
+import { Verifiers, type PlatformInfo } from './verifiers.ts';
+import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
+import type { Grant as ServiceGrant } from './servicesettings.ts';
+import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
@@ -574,13 +573,6 @@ export const KIND_BOARD_FOLLOW = 'weave.board.follow';
 export const FOLLOWED_BOARDS = ['releases', 'showcase'];
 const SELF_SCOPE = 'self';
 
-
-/** A GitHub sign-in waiting for its code, or why the last one failed. */
-interface GitHubLogin {
-  code?: DeviceCode;
-  error?: string;
-  cancel: AbortController;
-}
 
 /** An event as this node can read it, before names are resolved. */
 /** A service handed to an always-on node (the body of a handover, sealed to yourself). */
@@ -637,6 +629,10 @@ export interface StoredService {
   hosted?: Record<string, StoredRoom>;
   /** The settings your own code asks for (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
   asks?: AppSetting[];
+  /** Its sign-ins as you (settings it asks for as yours), by name: for every project it's in. */
+  grants?: Record<string, ServiceGrant>;
+  /** Its apps registered as you (a GitHub App), by name: what it reads of each, and the key Weave signs with. */
+  registered?: Record<string, ServiceRegistered>;
   /** One Weave ships (shipped.ts): its name, and the digest it ran last. */
   shipped?: { name: string; digest: string };
   /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
@@ -834,10 +830,6 @@ mine now, change it as you learn how I work.)
 - When you mention a post, link it with its url.
 `;
 }
-/** Why a person's repository can't follow a space, and what to do about it. */
-const personalRepo = (repo: string) =>
-  `${repo} belongs to a personal GitHub account, and those can't give anyone read-only access: GitHub refuses the invitations. Link it without access (access: none), give write access to people you pick one by one (access: write), or move it to a GitHub organization (free; on GitHub: the repository's Settings → Transfer), install the Weave app there, and link it again for read access for all members`;
-
 /** How an onchain payment is kept among the license records: its transaction hash after this prefix. */
 const ONCHAIN_RECORD = 'tx:';
 
@@ -926,7 +918,8 @@ export class WeaveNode implements Backend {
     env: process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: '1' } : ({} as Record<string, string>),
   });
   /** How this node reaches GitHub (tests put a stand-in here). */
-  githubSetup: { clientId: string; fetch: Fetch; sleep: (ms: number) => Promise<unknown> } = { clientId: GITHUB_CLIENT_ID, fetch: (...args) => fetch(...args), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+  /** Fetch for GitHub's public API (gists that prove accounts, public releases): tests put a stand-in there. */
+  githubSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /**
    * Containers (Weave and Docker): the registry API is reached with `fetch`; `docker` is the Docker command line
    * (WEAVE_DOCKER: a path, or a JSON list of a program and its first arguments). Tests use stand-ins.
@@ -939,7 +932,6 @@ export class WeaveNode implements Backend {
   oauthSetup: { fetch: Fetch } = { fetch: (...args) => fetch(...args) };
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
   wasmSetup: { testHosts: Record<string, number>; shippedDir?: string } = { testHosts: {} };
-  #githubLogin?: GitHubLogin;
 
   /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
   #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
@@ -964,9 +956,13 @@ export class WeaveNode implements Backend {
   /** What runs code on this node: services and the handlers of its websites (see runtime.ts). */
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
-  #releases = new Releases(() => joinPath(this.home.dir, 'services'), () => new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
+  /** My keyvaults (keyvaults.ts): my access to platforms, of which my services get only what's derived. */
+  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
+  /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
+  #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
@@ -1023,7 +1019,9 @@ export class WeaveNode implements Backend {
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
     // Secrets read only now and then (tokens, pairings) are sealed right away, not when first needed.
-    for (const file of [this.#githubFile, this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
+    // Weave's own GitHub sign-in is gone (services have their own access): its token isn't kept.
+    rmSync(joinPath(home.dir, 'github.json'), { force: true });
+    for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
@@ -2265,7 +2263,7 @@ export class WeaveNode implements Backend {
   }
 
   async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
-    if (!['link-repo', 'space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is link-repo, space, inbox, post or person');
+    if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
     if (input.what === 'person') {
       if (!input.who) throw new Error('say who');
       const did = this.resolve(input.who);
@@ -2283,9 +2281,7 @@ export class WeaveNode implements Backend {
     }
     const space = input.space ? this.#space(input.space) : undefined;
     if (input.what !== 'inbox' && !space) throw new Error('say which space');
-    const repo = input.repo?.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
-    if (repo && !isRepoName(repo)) throw new Error('a repository looks like owner/name');
-    const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}), ...(repo ? { repo } : {}) };
+    const open: AppOpen = { what: input.what, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}) };
     for (const listener of this.#openListeners) listener(open);
     return open;
   }
@@ -2352,7 +2348,8 @@ export class WeaveNode implements Backend {
       if (!post) continue;
       const hour = Date.now() - 60 * 60 * 1000;
       if (this.#mentions.some((m) => m.post.id === post.id && m.session?.id === said.session && Date.parse(m.time) > hour)) continue;
-      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
+      const name = this.#sessionRecords().get(sessionKey('claude-code', said.session))?.name;
+      this.#mention(post, { source: 'claude-code', session: { id: said.session, ...(name ? { name } : {}), ...(said.cwd ? { folder: basename(said.cwd) } : {}) } });
     }
   }
 
@@ -2476,6 +2473,35 @@ export class WeaveNode implements Backend {
     if (!(await this.workers({ post: post.id })).some((w) => w.provider === record.provider && w.id === record.id))
       throw new Error(`that session doesn't take ${post.title} now: it isn't an available worker for its project`);
     return this.workOn({ session: input.session, post: post.id, as: input.as });
+  }
+
+  async nameSession(input: { session: SessionRef; name?: string; about?: string; description?: string; rename?: boolean }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const name = input.name?.trim();
+    const about = input.about === undefined ? record.about : input.about.trim() || undefined;
+    const description = input.description === undefined ? record.description : input.description.trim() || undefined;
+    if (about && about.length > MAX_ABOUT) throw new Error(`about is one line, up to ${MAX_ABOUT} characters`);
+    if (description && description.length > MAX_DESCRIPTION) throw new Error(`a description is up to ${MAX_DESCRIPTION} characters`);
+    if (name === undefined && !record.name) throw new Error('this session has no name yet: name it first (name, with about: one line on what it specializes in)');
+    if (name === '' && !input.rename) throw new Error('a session name is permanent');
+    if (name && !sameName(name, record.name)) {
+      // A name is for good: the session picks it once; from then on only its person changes it.
+      if (record.name && !input.rename) throw new Error(`this session is ${record.name}: a name is permanent, only your person renames a session (in Weave's Sessions view)`);
+      const taken = this.#takenNames(record);
+      const problem = nameProblem(name, taken);
+      if (problem) throw new Error(`${problem}; names around you: ${[...new Set(taken.filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b)).join(', ') || 'none yet'}`);
+    }
+    return this.#saveSession({ ...record, name: name === '' ? undefined : (name ?? record.name), about, description });
+  }
+
+  /** Names a session can't take (except `own`'s): your other sessions', people's around you, your agents' and yours. */
+  #takenNames(own: SessionRecord): Array<string | undefined> {
+    const names: Array<string | undefined> = [this.nameOf(this.identity.author), ...this.#agents.map((a) => a.name)];
+    for (const r of this.#sessionRecords().values()) if (!(r.provider === own.provider && r.id === own.id)) names.push(r.name);
+    const people = new Set<Did>(this.#contacts().keys());
+    for (const space of this.#spaces.values()) for (const did of this.#state(space).members.keys()) people.add(did);
+    for (const did of people) if (did !== this.identity.author) names.push(this.nameOf(did));
+    return names;
   }
 
   // ---------------------------------------------------------------- your desk and its routines
@@ -2696,13 +2722,18 @@ export class WeaveNode implements Backend {
     const provider = ref.provider?.trim() || 'claude-code';
     const id = ref.id?.trim();
     if (!id || id.length > 200) throw new Error('say which session (its id)');
-    const known = this.#sessionRecords().get(sessionKey(provider, id));
+    const records = this.#sessionRecords();
+    // "Give that to Skala": a name does where no session has that id.
+    const known = records.get(sessionKey(provider, id)) ?? [...records.values()].find((r) => r.provider === provider && sameName(r.name, id));
     return {
       provider,
-      id,
+      id: known?.id ?? id,
       ...((ref.host ?? known?.host) ? { host: ref.host ?? known?.host } : {}),
       ...((ref.folder ?? known?.folder) ? { folder: ref.folder ?? known?.folder } : {}),
       ...(known?.title ? { title: known.title } : {}),
+      ...(known?.name ? { name: known.name } : {}),
+      ...(known?.about ? { about: known.about } : {}),
+      ...(known?.description ? { description: known.description } : {}),
       stack: known?.stack ?? [],
       ...(known?.role ? { role: known.role } : {}),
       ...(known?.projects ? { projects: known.projects } : {}),
@@ -2720,6 +2751,9 @@ export class WeaveNode implements Backend {
       ...(record.host ? { host: record.host } : {}),
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
+      ...(record.name ? { name: record.name } : {}),
+      ...(record.about ? { about: record.about } : {}),
+      ...(record.description ? { description: record.description } : {}),
       stack: record.stack.map((s) => ({ post: s.post, since: s.since })),
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length ? { projects: record.projects } : {}),
@@ -2735,7 +2769,8 @@ export class WeaveNode implements Backend {
       const p = posts.get(item.post);
       return p ?? { id: item.post, missing: true };
     };
-    const title = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const providerTitle = (record.provider === 'claude-code' ? transcriptTitle(record.id) : undefined) ?? record.title;
+    const title = sessionTitle({ ...record, title: providerTitle });
     const active = record.provider === 'claude-code' ? transcriptActive(record.id) : undefined;
     const host = record.host ?? (record.provider === 'claude-code' ? this.#appLog?.hostOf(record.id) : undefined);
     return {
@@ -2745,6 +2780,10 @@ export class WeaveNode implements Backend {
       ...(host ? { host } : {}),
       ...(record.folder ? { folder: record.folder } : {}),
       ...(title ? { title } : {}),
+      ...(record.name ? { name: record.name } : {}),
+      ...(record.about ? { about: record.about } : {}),
+      ...(record.description ? { description: record.description } : {}),
+      ...(providerTitle ? { providerTitle } : {}),
       stack: record.stack.map((s) => ({ post: brief(s), since: s.since })),
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length
@@ -3178,7 +3217,7 @@ export class WeaveNode implements Backend {
     // A standby only follows: no duties, no keys, no writes.
     if (this.config.standby) return 0;
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + (await this.#syncGithub());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
@@ -3228,394 +3267,122 @@ export class WeaveNode implements Backend {
     return changed;
   }
 
-  // ---------------------------------------------------------------- GitHub: repos that follow a space
-
-  get #githubFile(): string {
-    return joinPath(this.home.dir, 'github.json');
-  }
-
-  /** The GitHub sign-in on this device (kept in the home, never in a log). */
-  #githubAuth(): { token: string; login: string } | undefined {
-    const saved = readSecretJson<{ token?: string; login?: string }>(this.home, this.#githubFile);
-    return saved?.token && saved.login ? { token: saved.token, login: saved.login } : undefined;
-  }
-
-  /** The GitHub App this node signs in through: your own, or Weave Connect. */
-  #githubApp(): GitHubApp {
-    return this.config.githubApp ?? { ...DEFAULT_GITHUB_APP, clientId: this.githubSetup.clientId };
-  }
-
-  async github(): Promise<GitHubInfo> {
-    const auth = this.#githubAuth();
-    const login = this.#githubLogin;
-    const app = this.#githubApp();
-    return {
-      available: !!app.clientId,
-      installUrl: githubInstallUrl(app.slug),
-      app: { name: app.name, slug: app.slug, owner: app.owner, url: `https://github.com/apps/${app.slug}`, own: !!this.config.githubApp },
-      ...(auth ? { login: auth.login } : {}),
-      ...(login?.code ? { pending: { userCode: login.code.userCode, verificationUri: login.code.verificationUri, expires: login.code.expiresAt } } : {}),
-      ...(login?.error ? { error: login.error } : {}),
-    };
-  }
-
-  async setGithubApp(link: string | null): Promise<GitHubInfo> {
-    const app = link?.trim() ? await lookUpGitHubApp(link, this.githubSetup.fetch) : undefined;
-    const before = this.#githubApp().clientId;
-    const { githubApp: _old, ...rest } = this.config;
-    this.config = app && app.clientId !== DEFAULT_GITHUB_APP.clientId ? { ...rest, githubApp: app } : rest;
-    saveConfig(this.home, this.config);
-    // A sign-in belongs to the app it went through.
-    if (this.#githubApp().clientId !== before) await this.disconnectGithub();
-    return this.github();
-  }
-
-  async connectGithub(): Promise<GitHubInfo> {
-    const { fetch: fetchImpl, sleep } = this.githubSetup;
-    const { clientId } = this.#githubApp();
-    this.#githubLogin?.cancel.abort();
-    const cancel = new AbortController();
-    const code = await startDeviceFlow(clientId, fetchImpl);
-    const login: GitHubLogin = { code, cancel };
-    this.#githubLogin = login;
-    // Wait for the person to enter the code on GitHub, in the background; github() tells how it went.
-    void finishDeviceFlow(clientId, code, fetchImpl, cancel.signal, sleep)
-      .then(async (token) => {
-        const user = await new GitHub(token, fetchImpl).user();
-        writeSecretJson(this.home, this.#githubFile, { token, login: user.login, id: user.id, connected: new Date(this.clock()).toISOString() });
-        this.#githubSynced.clear();
-        if (this.#githubLogin === login) this.#githubLogin = undefined;
-      })
-      .catch((error: Error) => {
-        if (this.#githubLogin === login) this.#githubLogin = cancel.signal.aborted ? undefined : { error: error.message, cancel };
-      });
-    return this.github();
-  }
-
-  async disconnectGithub(): Promise<GitHubInfo> {
-    this.#githubLogin?.cancel.abort();
-    this.#githubLogin = undefined;
-    rmSync(this.#githubFile, { force: true });
-    return this.github();
-  }
-
-  /** Repositories known to belong to an organization (a person's are asked again: they may have moved). */
-  #organizationRepos = new Set<string>();
-
-  async #ownedByOrganization(client: GitHub, repo: string): Promise<boolean> {
-    if (this.#organizationRepos.has(repo.toLowerCase())) return true;
-    const organization = (await client.owner(repo)) === 'Organization';
-    if (organization) this.#organizationRepos.add(repo.toLowerCase());
-    return organization;
-  }
-
-  async githubRepoOwner(repo: string): Promise<'organization' | 'personal'> {
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
-    return (await this.#ownedByOrganization(new GitHub(auth.token, this.githubSetup.fetch), repo)) ? 'organization' : 'personal';
-  }
-
-  async githubRepos(): Promise<string[]> {
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first (Keys & devices → Linked accounts, or "weave github connect")');
-    return new GitHub(auth.token, this.githubSetup.fetch).repos();
-  }
-
-  async spaceRepos(ref: string): Promise<SpaceRepos> {
-    const space = this.#space(ref);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    const state = this.#state(space);
-    const entries = this.#entries(space);
-    const me = this.identity.author;
-    const repos = reposOf(entries, (did) => mayManageSpace(state, did));
-    const accounts = accountsOf(entries);
-    const out: SpaceRepos = {
-      repos: repos.map((r): RepoInfo => {
-        const synced = r.by === me ? this.#githubSynced.get(r.repo.toLowerCase()) : undefined;
-        return {
-          repo: r.repo,
-          url: `https://github.com/${r.repo}`,
-          ...(r.board ? { board: r.board } : {}),
-          access: r.access,
-          ...(r.writers ? { writers: r.writers.map((did) => this.#actor(did, did)) } : {}),
-          ...(r.by !== me && this.#repoPeople(space, state, entries, r).includes(me) ? { forYou: true as const } : {}),
-          by: this.#actor(r.by, r.by),
-          ...(r.by === me ? { mine: true as const } : {}),
-          ...(synced ? { synced: new Date(synced.at).toISOString() } : {}),
-          ...(synced?.problem ? { problem: synced.problem } : {}),
-        };
-      }),
-      canLink: mayManageSpace(state, me),
-      ...(accounts.has(me) ? { shared: accounts.get(me)! } : {}),
-    };
-    if (out.canLink) out.mayWrite = [...state.members.keys()].filter((did) => did !== me && this.#mayWrite(state, did)).map((did) => this.#actor(did, did));
-    const mine = repos.filter((r) => r.by === me);
-    if (mine.length) {
-      const wanted = new Set(mine.flatMap((r) => this.#repoPeople(space, state, entries, r)));
-      wanted.delete(me);
-      out.missing = [...wanted].filter((did) => !accounts.has(did)).map((did) => this.#actor(did, did));
-      const shared = sharedAccountsOf(entries);
-      out.accounts = await Promise.all([...shared].filter(([did]) => wanted.has(did)).map(async ([did, account]) => ({ who: this.#actor(did, did), login: account.login, proven: (await this.#githubProven(did, account)) === true })));
-    }
-    return out;
-  }
-
-  async linkRepo(input: { space: string; repo: string; board?: string; access?: RepoAccess; writers?: string[]; on: boolean; as?: string }): Promise<SpaceRepos> {
-    if (input.as) this.#agentMay(input.as, KIND_GITHUB_REPO);
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    const state = this.#state(space);
-    if (!mayManageSpace(state, this.identity.author)) throw new Error(`only the ${space.kind === 'group' ? 'owner' : space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can link repositories`);
-    const repo = input.repo.trim().replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
-    if (!isRepoName(repo)) throw new Error('a repository looks like owner/name');
-    const body: Record<string, Json> = { repo, on: input.on };
-    if (input.on) {
-      const board = input.board?.trim();
-      if (board) {
-        if (space.kind !== 'project') throw new Error('only projects have boards');
-        if (!boardsOf('project', this.#entries(space), state.maintainers).some((b) => b.name === board)) throw new Error(`${space.name} has no board "${board}"`);
-        body.board = board;
-      }
-      // Who manages it: the person's own GitHub App (the GitHub service), where it's installed; else the Weave app,
-      // through their sign-in. With the App on an always-on node, that node finds out (and says so) when it syncs.
-      const own = this.#services.githubApp();
-      const asApp = own ? await own.app.clientFor(repo) : undefined;
-      const away = !asApp && !this.#githubAuth() ? this.#services.githubAppAway() : undefined;
-      const match = asApp || away ? repo : own && !this.#githubAuth() ? undefined : (await this.githubRepos()).find((r) => r.toLowerCase() === repo.toLowerCase());
-      if (!match) throw new Error(own ? `your GitHub App isn't installed on ${repo.split('/')[0]}, and the Weave app can't manage ${repo} either: install one of them on that repository on GitHub` : `the Weave app can't manage ${repo}: install it on that repository on GitHub (you need to be its admin)`);
-      body.repo = match;
-      if (input.access !== undefined && !REPO_ACCESS.includes(input.access)) throw new Error('access is read, none or write');
-      // Members get read access; a person's repositories only have collaborators who can write: linked only, or written to by people picked.
-      const organization = away ? true : await this.#ownedByOrganization(asApp ?? new GitHub(this.#githubAuth()!.token, this.githubSetup.fetch), match);
-      const access = input.access ?? (organization ? 'read' : undefined);
-      if (!access || (access === 'read' && !organization)) throw new Error(personalRepo(match));
-      if (access === 'write' && organization) throw new Error(`${match} belongs to an organization: its members get read access (access: read); give write access on GitHub`);
-      if (access !== 'read') body.access = access;
-      if (access === 'write') {
-        if (body.board) throw new Error('write access goes to the people you pick, not to the readers of a board');
-        const writers = [...new Set((input.writers ?? []).map((who) => this.resolve(who)))].filter((did) => did !== this.identity.author);
-        if (!writers.length) throw new Error('pick the people who may write (writers)');
-        if (writers.length > MAX_WRITERS) throw new Error(`at most ${MAX_WRITERS} people can be picked to write`);
-        for (const did of writers) if (!this.#mayWrite(state, did)) throw new Error(`${this.nameOf(did) ?? did} can't be picked to write: only people in ${space.name} personally, not through a group or tier`);
-        body.writers = writers;
-      }
-    }
-    await this.publish({ kind: KIND_GITHUB_REPO, body, space: space.id, as: input.as });
-    this.#githubSynced.delete(repo.toLowerCase());
-    await this.#syncGithub();
-    return this.spaceRepos(space.id);
-  }
-
-  async shareGithub(input: { space: string; on: boolean; as?: string }): Promise<SpaceRepos> {
-    if (input.as) this.#agentMay(input.as, KIND_GITHUB_ACCOUNT);
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('direct chats have no repositories');
-    if (!this.#state(space).members.has(this.identity.author)) throw new Error(`you are not a member of ${space.name}`);
-    const auth = input.on ? this.#githubAuth() : undefined;
-    if (input.on && !auth) throw new Error('connect GitHub first, so Weave knows your account');
-    // The proof it's yours: a secret gist of that account naming you (one for all your spaces).
-    const gist = auth ? await this.#githubProof(auth) : undefined;
-    await this.publish({ kind: KIND_GITHUB_ACCOUNT, body: auth ? { login: auth.login, gist: gist!, on: true } : { on: false }, space: space.id, as: input.as });
-    return this.spaceRepos(space.id);
-  }
+  // ---------------------------------------------------------------- accounts elsewhere
 
   /**
-   * A gist of the signed-in GitHub account naming this person: the one shared before (in any space, or shown on the
-   * hub) while it still proves it, or a new secret one. Owners' nodes check it before inviting anyone.
+   * Who reads a space: its members, or in a project the readers of one of its boards (everyone, for a board nobody
+   * limited).
    */
-  async #githubProof(auth: { token: string; login: string }): Promise<string> {
-    const me = this.identity.author;
-    const login = auth.login.toLowerCase();
-    const known = [...this.#spaces.values()].flatMap((space) => (space.kind === 'direct' ? [] : [sharedAccountsOf(this.#entries(space)).get(me)])).filter((a) => a?.gist && a.login.toLowerCase() === login).map((a) => a!.gist!);
-    const hub = this.#hubGithub(me);
-    if (hub && hub.login.toLowerCase() === login) known.push(hub.gist);
-    for (const gist of new Set(known)) if ((await checkGistProof(gist, auth.login, me, this.githubSetup.fetch)) === true) return gist;
-    return (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login), false)).id;
-  }
-
-  /**
-   * Whether a member's gist proves the GitHub account is theirs: asked again every hour, so a gist taken down takes
-   * the access with it. GitHub unreachable: undefined (asked again next time).
-   */
-  async #githubProven(did: Did, account: SharedAccount): Promise<boolean | undefined> {
-    if (!account.gist) return false;
-    const key = `${account.gist}:${account.login}:${did}`;
-    const known = this.#accessProofs.get(key);
-    if (known && this.clock() - known.at < 60 * 60_000) return known.proven;
-    const proven = await checkGistProof(account.gist, account.login, did, this.githubSetup.fetch);
-    if (proven === undefined) this.#accessProofs.delete(key);
-    else this.#accessProofs.set(key, { at: this.clock(), proven });
-    return proven;
-  }
-
-  /** Your own shares from before proofs: shared again, with one, where this device is signed in to that account. */
-  async #proveGithubShares(): Promise<void> {
-    const auth = this.#githubAuth();
-    if (!auth || this.#githubSharesProven === auth.login) return;
-    const me = this.identity.author;
-    for (const space of this.#spaces.values()) {
-      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
-      const mine = sharedAccountsOf(this.#entries(space)).get(me);
-      if (mine && !mine.gist && mine.login.toLowerCase() === auth.login.toLowerCase()) await this.shareGithub({ space: space.id, on: true }).catch(() => {});
-    }
-    this.#githubSharesProven = auth.login;
-  }
-
-  async showGithubOnHub(input: { on: boolean }): Promise<Profile> {
-    const me = this.identity.author;
-    const before = this.#hubGithub(me);
-    if (!input.on) {
-      if (before) this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { on: false } });
-      return this.profile();
-    }
-    const auth = this.#githubAuth();
-    if (!auth) throw new Error('connect GitHub first');
-    // The proof: a public gist of this account naming this did. Made once, kept while the account stays the same.
-    let gist = before && before.login.toLowerCase() === auth.login.toLowerCase() ? before.gist : undefined;
-    if (!gist) gist = (await new GitHub(auth.token, this.githubSetup.fetch).createGist('Weave', 'weave.md', githubProofText(me, auth.login))).id;
-    if (before?.gist === gist) return this.profile();
-    this.replica.write(this.identity, { kind: KIND_GITHUB_PUBLIC, body: { login: auth.login, gist, on: true } });
-    return this.profile();
-  }
-
-  /** The GitHub account someone shows on their hub (latest word), not checked yet. */
-  #hubGithub(did: Did): { login: string; gist: string } | undefined {
-    const last = this.replica.events((e) => e.author === did && e.kind === KIND_GITHUB_PUBLIC).sort((a, b) => a.time.localeCompare(b.time)).at(-1);
-    const body = (last?.body ?? {}) as Record<string, unknown>;
-    if (!last || body.on === false || !isLogin(body.login) || typeof body.gist !== 'string' || !/^[A-Za-z0-9]{1,64}$/.test(body.gist)) return undefined;
-    return { login: body.login, gist: body.gist };
-  }
-
-  /** Who a repo linked to a space should include: its members, or in a project the readers of one board. */
-  /**
-   * Who may be picked to write to a person's repository: members in personally, never through a group (a project's
-   * participants who came with one) nor a tier's membership, so nobody gets write access by joining something.
-   */
-  #mayWrite(state: SpaceState, did: Did): boolean {
-    const member = state.members.get(did);
-    return !!member && !member.via && !member.until;
-  }
-
-  /** Who a link gives access: its readers (read), nobody (none), or the people picked who still may write (write). */
-  #repoPeople(space: StoredSpace, state: SpaceState, entries: Entry[], link: RepoLink): Did[] {
-    if (link.access === 'none') return [];
-    if (link.access === 'write') return (link.writers ?? []).filter((did) => this.#mayWrite(state, did));
-    return this.#repoReaders(space, state, entries, link.board);
-  }
-
-  #repoReaders(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
+  #readersOf(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
     if (!board || space.kind !== 'project') return [...state.members.keys()];
     return readersOf(board, state, this.#access(space, state, entries));
   }
 
+  /** The platforms accounts can be proven on here (a verifier checks each), and how. */
+  async platforms(): Promise<PlatformInfo[]> {
+    return this.#verifiers.platforms();
+  }
+
+  /** What a proof of an account must hold (your Weave id), and how to make one on that platform. */
+  async accountProof(input: { platform: string }): Promise<{ text: string; howto?: string }> {
+    const p = this.#verifiers.platforms().find((x) => x.platform === input.platform);
+    if (!p) throw new Error(`nothing here checks accounts on ${input.platform}${this.#verifiers.platforms().length ? ` (only on ${this.#verifiers.platforms().map((x) => x.platform).join(', ')})` : ''}`);
+    return { text: accountProofText(this.identity.author), ...(p.howto ? { howto: p.howto } : {}) };
+  }
+
   /**
-   * Bring the repos this person linked in step with their spaces: invite
-   * members who gave their GitHub account, take access away from those Weave
-   * added who left (or whose repo was unlinked). Each repo at most every few
-   * minutes unless something changed. The GitHub service does it as the
-   * person's own GitHub App where that's installed (nobody signs in, and on an
-   * always-on node it goes on while their computers are off); elsewhere, or
-   * without one, the person's GitHub sign-in on this device does.
+   * Say an account elsewhere is yours, with its proof (or take it back, on: false): on your hub for everyone, or in a
+   * space for its members (whose services may give access by it). Checked here first, by its platform's verifier.
    */
-  async #syncGithub(): Promise<number> {
-    await this.#proveGithubShares().catch(() => {});
-    const auth = this.#githubAuth();
-    const own = this.#services.githubApp();
-    // The person's App runs on an always-on node: that node keeps access in step, not this device.
-    const away = own ? undefined : this.#services.githubAppAway();
+  async linkAccount(input: { platform: string; handle?: string; proof?: string; space?: string; on?: boolean; as?: string }): Promise<AccountInfo[]> {
+    if (input.as) this.#agentMay(input.as, KIND_ACCOUNT);
+    const space = input.space ? this.#space(input.space) : undefined;
+    if (space && (space.kind === 'direct' || !this.#state(space).members.has(this.identity.author))) throw new Error(`you are not a member of ${space.name}`);
+    if (!isPlatform(input.platform)) throw new Error('a platform: lowercase letters, digits and dashes, like github');
+    let body: Json = { platform: input.platform, on: false };
+    if (input.on !== false) {
+      const handle = input.handle?.trim().replace(/^@/, '');
+      const proof = input.proof?.trim();
+      if (!handle || !proof) throw new Error(`your account on ${input.platform}, and where its proof is (weave account proof ${input.platform})`);
+      const claim = { platform: input.platform, handle, proof };
+      const ok = await this.#verifiers.verify(claim, this.identity.author);
+      if (ok === undefined) throw new Error(this.#verifiers.platforms().some((p) => p.platform === input.platform) ? `${input.platform} can't be asked right now: try again in a moment` : `nothing here checks accounts on ${input.platform}`);
+      if (!ok) throw new Error(`that proof doesn't hold: it has to be ${handle}'s, on ${input.platform}, and hold "${accountProofText(this.identity.author)}"`);
+      body = { ...claim, on: true };
+    }
+    if (space) await this.publish({ kind: KIND_ACCOUNT, body, space: space.id, as: input.as });
+    else this.replica.write(this.identity, { kind: KIND_ACCOUNT, body });
+    return this.accounts({ ...(space ? { space: space.id } : {}) });
+  }
+
+  /** Proofs its verifier makes, under way: each waits for its sign-in with a code. */
+  #proving = new Map<string, Promise<AccountInfo[]>>();
+
+  /**
+   * Prove an account elsewhere in one go: a sign-in with a code there (its verifier's), used once for the verifier to
+   * make the proof (a secret gist naming you, on GitHub), then forgotten; the account is then yours on your hub, or in
+   * a space. finishAccountProof waits for it.
+   */
+  async startAccountProof(input: { platform: string; space?: string }): Promise<{ id: string; url: string; code: string }> {
+    const oauth = this.#verifiers.prover(input.platform);
+    if (!oauth?.device) throw new Error(`${input.platform}'s verifier can't make a proof itself: make one by hand (weave account proof ${input.platform})`);
+    if (input.space) this.#space(input.space);
+    const started = await startDeviceSignIn(oauth as DeviceOAuth, this.oauthSetup.fetch, input.platform);
+    const id = b64u.encode(randomBytes(12));
+    const done = started.grant
+      .then((grant) => this.#verifiers.prove(input.platform, grant.access, this.identity.author))
+      .then(({ handle, proof }) => this.linkAccount({ platform: input.platform, handle, proof, ...(input.space ? { space: input.space } : {}) }))
+      .finally(() => setTimeout(() => this.#proving.delete(id), 60_000).unref());
+    done.catch(() => {});
+    this.#proving.set(id, done);
+    return { id, url: started.url, code: started.code };
+  }
+
+  async finishAccountProof(input: { id: string }): Promise<AccountInfo[]> {
+    const proving = this.#proving.get(input.id);
+    if (!proving) throw new Error('no proof under way with that id');
+    return proving;
+  }
+
+  /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
+  async accounts(input: { space?: string; who?: string } = {}): Promise<AccountInfo[]> {
+    // On hubs: public events, signed by the person. In a space: sealed for its members.
+    const claims = input.space ? accountClaimsOf(this.#entries(this.#space(input.space))) : accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } })));
+    const only = input.who ? this.resolve(input.who) : undefined;
+    // Each checked by its verifier, all at once (known ones aren't asked again for an hour).
+    const all = [...claims].filter(([did]) => !only || did === only).flatMap(([did, mine]) => [...mine.values()].map((claim) => ({ did, claim })));
+    return Promise.all(
+      all.map(async ({ did, claim }): Promise<AccountInfo> => {
+        const verified = await this.#verifiers.verify(claim, did);
+        const page = this.#verifiers.page(claim);
+        return { who: this.#actor(did, did), platform: claim.platform, handle: claim.handle, proof: claim.proof, ...(page ? { url: page } : {}), ...(verified !== undefined ? { verified } : {}) };
+      }),
+    );
+  }
+
+  async myAccounts(): Promise<MyAccountInfo[]> {
     const me = this.identity.author;
-    const mine = new Set<string>(auth ? [auth.login.toLowerCase()] : []);
-    // Every repo this person linked, with everyone it should include.
-    // Logins proven theirs (a gist of the account naming the member), and unproven ones: those keep what Weave gave
-    // them before proofs (or while GitHub can't be asked), but nobody unproven is invited.
-    const wanted = new Map<string, { repo: string; logins: Set<string>; unproven: Set<string>; write: boolean }>();
+    const byAccount = new Map<string, MyAccountInfo>();
+    const said = (claim: AccountClaim | undefined, where: { hub: true } | { space: StoredSpace }) => {
+      if (!claim) return;
+      const key = JSON.stringify([claim.platform, claim.handle.toLowerCase(), claim.proof]);
+      const page = this.#verifiers.page(claim);
+      const a = byAccount.get(key) ?? { ...claim, ...(page ? { url: page } : {}), hub: false, spaces: [] };
+      if ('hub' in where) a.hub = true;
+      else a.spaces.push({ id: where.space.id, kind: where.space.kind, name: where.space.name });
+      byAccount.set(key, a);
+    };
+    for (const claim of accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT && e.author === me).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } }))).get(me)?.values() ?? []) said(claim, { hub: true });
     for (const space of this.#spaces.values()) {
-      if (space.kind === 'direct') continue;
-      const state = this.#state(space);
-      if (!mayManageSpace(state, me)) continue;
-      const entries = this.#entries(space);
-      const links = reposOf(entries, (did) => mayManageSpace(state, did)).filter((r) => r.by === me);
-      if (!links.length) continue;
-      const accounts = sharedAccountsOf(entries);
-      if (accounts.has(me)) mine.add(accounts.get(me)!.login.toLowerCase());
-      for (const link of links) {
-        const key = link.repo.toLowerCase();
-        const entry = wanted.get(key) ?? { repo: link.repo, logins: new Set<string>(), unproven: new Set<string>(), write: false };
-        if (link.access === 'write') entry.write = true;
-        for (const did of this.#repoPeople(space, state, entries, link)) {
-          const account = did !== me ? accounts.get(did) : undefined;
-          if (!account) continue;
-          // Proven: in. A share from before proofs, or GitHub not answering: kept if given. Disproven: out.
-          const proven = account.gist ? await this.#githubProven(did, account) : undefined;
-          if (proven !== false) (proven ? entry.logins : entry.unproven).add(account.login.toLowerCase());
-        }
-        wanted.set(key, entry);
-      }
+      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
+      for (const claim of accountClaimsOf(this.#entries(space)).get(me)?.values() ?? []) said(claim, { space });
     }
-    // Who Weave gave access, per repo: the latest word per repo and login.
-    const added = new Map<string, { repo: string; people: Map<string, boolean> }>();
-    for (const b of this.#selfBodies(KIND_GITHUB_ADDED)) {
-      if (!isRepoName(b.repo) || typeof b.login !== 'string') continue;
-      const key = b.repo.toLowerCase();
-      if (!added.has(key)) added.set(key, { repo: b.repo, people: new Map() });
-      added.get(key)!.people.set(b.login.toLowerCase(), b.on === true);
-    }
-    const repos = new Set([...wanted.keys(), ...[...added].filter(([, a]) => [...a.people.values()].some(Boolean)).map(([key]) => key)]);
-    const now = this.clock();
-    let changed = 0;
-    for (const key of repos) {
-      const repo = wanted.get(key)?.repo ?? added.get(key)!.repo;
-      const want = wanted.get(key)?.logins ?? new Set<string>();
-      for (const login of mine) want.delete(login);
-      const gave = [...(added.get(key)?.people ?? [])].filter(([, on]) => on).map(([login]) => login);
-      for (const login of wanted.get(key)?.unproven ?? []) if (gave.includes(login)) want.add(login);
-      // What it acts with is part of it: new credentials (an App taken over, a sign-in) are tried at once.
-      const via = own ? `app:${own.service.name}` : away ? `away:${away}` : auth ? `person:${auth.login}` : 'none';
-      const shape = JSON.stringify([[...want].sort(), gave.sort(), via]);
-      const last = this.#githubSynced.get(key);
-      if (last && last.shape === shape && now - last.at < (last.problem ? 60_000 : 10 * 60_000)) continue;
-      // Nobody to give access and nothing given (a repository linked only): nothing to ask GitHub.
-      if (!want.size && !gave.length) {
-        this.#githubSynced.set(key, { at: now, shape });
-        continue;
-      }
-      if (away) {
-        this.#githubSynced.set(key, { at: now, shape, problem: `kept in step by the GitHub service on ${away}` });
-        continue;
-      }
-      try {
-        // As the person's App where it's installed: its records are signed by the GitHub service's key.
-        const asApp = own ? await own.app.clientFor(repo) : undefined;
-        const client = asApp ?? (auth ? new GitHub(auth.token, this.githubSetup.fetch) : undefined);
-        if (!client) {
-          this.#githubSynced.set(key, { at: now, shape, problem: own ? `your GitHub App isn't installed on ${repo.split('/')[0]}, and this device isn't connected to GitHub` : 'not connected to GitHub on this device' });
-          continue;
-        }
-        const signer = asApp ? this.#services.serviceKey(own!.service.name) : this.identity;
-        const plan = planSync(want, await client.access(repo), gave);
-        // People picked to write are invited to write; everyone else to read.
-        const write = !!wanted.get(key)?.write;
-        // Linked for reading before Weave checked: a person's repository can't take read-only collaborators (GitHub
-        // refuses with 422). Nobody new is invited there; what Weave gave is still taken back.
-        const personal = !write && plan.invite.length > 0 && !(await this.#ownedByOrganization(client, repo));
-        if (personal) plan.invite = [];
-        for (const login of plan.invite) {
-          await client.invite(repo, login, write ? 'push' : 'pull');
-          this.replica.write(signer, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: true } }));
-          changed++;
-        }
-        for (const { login, invitation } of plan.remove) {
-          await client.remove(repo, login, invitation);
-          this.replica.write(signer, this.#sealForSelf({ kind: KIND_GITHUB_ADDED, body: { repo, login, on: false } }));
-          changed++;
-        }
-        const after = [...gave.filter((l) => !plan.remove.some((r) => r.login === l)), ...plan.invite].sort();
-        this.#githubSynced.set(key, { at: now, shape: personal ? shape : JSON.stringify([[...want].sort(), after, via]), ...(personal ? { problem: personalRepo(repo) } : {}) });
-      } catch (error) {
-        this.#githubSynced.set(key, { at: now, shape, problem: (error as Error).message });
-      }
-    }
-    return changed;
+    return Promise.all(
+      [...byAccount.values()].map(async (a) => {
+        const verified = await this.#verifiers.verify(a, me);
+        return { ...a, ...(verified !== undefined ? { verified } : {}) };
+      }),
+    );
   }
 
   // ---------------------------------------------------------------- people
@@ -3644,16 +3411,9 @@ export class WeaveNode implements Backend {
 
   async profile(who?: string): Promise<Profile> {
     const did = who ? this.resolve(who) : this.identity.author;
-    const github = this.#hubGithub(did);
-    if (github) {
-      // Check the proof (once per run) before showing it; a false proof isn't shown at all.
-      const key = `${github.gist}:${github.login}:${did}`;
-      if (!this.#gistProofs.has(key)) this.#gistProofs.set(key, checkGistProof(github.gist, github.login, did, this.githubSetup.fetch));
-      const verified = await this.#gistProofs.get(key)!;
-      if (verified === undefined) this.#gistProofs.delete(key); // GitHub unreachable: ask again next time
-      return { ...this.#profile(did), ...(verified === false ? {} : { github: { login: github.login, url: `https://github.com/${github.login}`, ...(verified ? { verified } : {}) } }) };
-    }
-    return this.#profile(did);
+    // The accounts elsewhere on their hub, those that hold (a false proof isn't shown at all).
+    const accounts = (await this.accounts({ who: did })).filter((a) => a.verified !== false).map(({ platform, handle, url, verified }) => ({ platform, handle, ...(url ? { url } : {}), ...(verified ? { verified } : {}) }));
+    return { ...this.#profile(did), ...(accounts.length ? { accounts } : {}) };
   }
 
   #profile(did: Did): Profile {
@@ -3804,8 +3564,7 @@ export class WeaveNode implements Backend {
   /** Whether you may point the app at a release, and where releases come from (the app's repository, or the project's one linked repository). */
   #releaseInfo(project: StoredSpace, app: AppManifest): { canRelease: boolean; repo?: string } {
     const state = this.#state(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = app.install?.github ?? (linked.length === 1 ? linked[0].repo : undefined);
+    const repo = app.install?.source?.ref;
     return { canRelease: state.maintainers.has(this.identity.author), ...(repo ? { repo } : {}) };
   }
 
@@ -3829,10 +3588,9 @@ export class WeaveNode implements Backend {
         found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
       }
     }
-    // The repository's releases, with your GitHub sign-in if you have one (the repository may be private).
+    // The repository's releases, as anyone sees them (a private repository's: its release posts are enough).
     try {
-      const auth = this.#githubAuth();
-      const releases = await withTimeout(new GitHub(auth?.token ?? '', this.githubSetup.fetch).releases(source.repo), 8000);
+      const releases = await withTimeout(publicReleases(source.repo, this.githubSetup.fetch), 8000);
       for (const r of releases) {
         const version = parseVersion(r.tag);
         if (version) found.push({ version: formatVersion(version), url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(r.tag)}`, ...(r.published ? { published: r.published } : {}), source: 'github' });
@@ -3846,104 +3604,42 @@ export class WeaveNode implements Backend {
     return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
   }
 
+  /**
+   * Where a project's releases come from: as given, or where its app was released from (what its provider
+   * understands: a repository, for GitHub releases). Its source's provider, when that's known.
+   */
+  #releaseSource(project: StoredSpace, given?: string): { ref: string; provider?: string } {
+    const before = this.#app(project)?.install?.source;
+    const ref = given?.trim() || before?.ref || '';
+    if (!ref) throw new Error('where does the release come from? (a repository, owner/name, for GitHub releases)');
+    return { ref, ...(before && (!given || given.trim() === before.ref) ? { provider: before.provider } : {}) };
+  }
+
+  /** The releases on GitHub a project could publish: as its provider sees them, with its access. */
   async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
     const project = this.#project(ref);
-    const app = this.#app(project);
-    const repo = app ? this.#releaseInfo(project, app).repo : undefined;
-    if (!repo) throw new Error(`${project.name} has no GitHub repository to take releases from: link one in its settings`);
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const [releases, releaseWorkflow] = await Promise.all([client.releases(repo), client.hasReleaseWorkflow(repo)]);
-    return { repo, releases, ...(releaseWorkflow !== undefined ? { releaseWorkflow } : {}) };
+    const from = this.#releaseSource(project);
+    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
   }
 
   // ---------------------------------------------------------------- app API
 
   // ---------------------------------------------------------------- fetching a release
 
+  /**
+   * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
+   * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
+   */
   async releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest> {
-    if (input.as) this.#agentMay(input.as, KIND_APP);
+    if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
+    this.#maintainerState(project);
     const published = this.#app(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    const repo = input.repo?.trim() || published?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
-    const auth = this.#githubAuth();
-    const client = new GitHub(auth?.token ?? '', this.githubSetup.fetch);
-    const release = await client.release(repo, input.tag.trim());
-    // The release carries its own manifest: weave.app.json at that tag, or (without one) what's published.
-    const atTag = await client.fileAt(repo, 'weave.app.json', release.tag);
-    let app: AppManifest;
-    if (atTag) {
-      try {
-        app = parseManifest(JSON.parse(atTag));
-      } catch (error) {
-        throw new Error(`weave.app.json in ${repo} at ${release.tag} isn't right: ${(error as Error).message}`);
-      }
-      if (published && published.app !== app.app) throw new Error(`${repo} at ${release.tag} holds the app "${app.app}", but ${project.name}'s app is "${published.app}"`);
-    } else if (published) app = published;
-    else throw new Error(`${repo} has no weave.app.json at ${release.tag}: add one (app, name, services, start), tag again, and release`);
-    if (!release.assets.length && !app.start?.image)
-      throw new Error(
-        `${release.tag} in ${repo} has no build files attached. Weave installs build files from a release; GitHub's source archives don't count. Weave's release workflow attaches them when a tag is pushed (weave app workflow), or attach them to the release on github.com (or name a container image in weave.app.json: start.image)`,
-      );
-    // The release's container image, pinned by its digest: tagged like the release (v1.2.0, or 1.2.0).
-    let image: AppImage | undefined;
-    if (app.start?.image) {
-      const ref = app.start.image;
-      const tags = [...new Set([release.tag, release.tag.replace(/^v(?=\d)/, '')])];
-      const credentials = auth && imageLocation(ref).host === 'ghcr.io' ? { user: auth.login, token: auth.token } : undefined;
-      try {
-        const found = await imageDigest(ref, tags, { fetch: this.containerSetup.fetch, ...(credentials ? { credentials } : {}) });
-        image = { ref, tag: found.tag, digest: found.digest };
-      } catch (error) {
-        // With build files, the release doesn't need its image: hosts run the files (the CLI says it's left out).
-        if (!release.assets.length) throw error;
-      }
-    }
-    // Which file is for which platform: as given, or guessed from the names.
-    const chosen = new Map<string, ReleaseAsset>();
-    if (input.assets && Object.keys(input.assets).length) {
-      for (const [platform, name] of Object.entries(input.assets)) {
-        const asset = release.assets.find((a) => a.name === name);
-        if (!asset) throw new Error(`the release ${release.tag} has no file ${name}`);
-        chosen.set(platform, asset);
-      }
-    } else {
-      for (const asset of release.assets) {
-        const platform = guessPlatform(asset.name);
-        if (platform && !chosen.has(platform)) chosen.set(platform, asset);
-      }
-    }
-    if (!chosen.size && release.assets.length && !image) throw new Error(`no file in ${release.tag} says which computer it's for (win, mac, linux in its name): name them with --asset win32-x64=<file>`);
-    // Fingerprint each file once, so every host's node can check what it downloads.
-    const assets: Record<string, AppAsset> = {};
-    for (const [platform, asset] of chosen) {
-      const download = await client.download(repo, asset.id);
-      const hash = createHash('sha256');
-      const reader = download.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        hash.update(value);
-      }
-      assets[platform] = { file: asset.name, sha256: hash.digest('hex'), size: asset.size };
-    }
-    // Members download through the app the maintainer uses, when it's their own.
-    const own = this.config.githubApp?.slug;
-    const { app: _app, ...before } = { ...published?.install, ...app.install };
-    const { image: _image, assets: _assets, ...kept } = before as AppInstall;
-    const manifest = parseManifest({ ...app, install: { ...kept, github: repo, tag: release.tag, ...(Object.keys(assets).length ? { assets } : {}), ...(image ? { image } : {}), ...(own ? { app: own } : {}) } });
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
-    return manifest;
+    const from = this.#releaseSource(project, input.repo);
+    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(published ? { previous: published as unknown as Json } : {}) }, input.as, from.provider)) as { manifest?: unknown };
+    return parseManifest(data.manifest);
   }
 
-
-  /**
-   * Release a Weave service: an image (ref:tag) whose config carries its manifest (SERVICE_LABEL). The tag is pinned
-   * to its digest, and the manifest is read from the image at that digest, so what people approve is what runs.
-   */
   async releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
@@ -3952,8 +3648,8 @@ export class WeaveNode implements Backend {
     const colon = given.lastIndexOf(':');
     const [ref, tag] = colon > given.lastIndexOf('/') ? [given.slice(0, colon), given.slice(colon + 1)] : [given, ''];
     if (!tag || !IMAGE_REF.test(ref)) throw new Error('which image? its name and tag, like ghcr.io/you/service:1.0 (Weave pins the tag to its digest)');
-    const auth = this.#githubAuth();
-    const options = { fetch: this.containerSetup.fetch, ...(auth && imageLocation(ref).host === 'ghcr.io' ? { credentials: { user: auth.login, token: auth.token } } : {}) };
+    // A public image: Weave signs in nowhere, and those who install it pull it the same way.
+    const options = { fetch: this.containerSetup.fetch };
     const { digest } = await imageDigest(ref, [tag], options);
     const checked = checkServiceLabel((await imageLabels(ref, digest, options))[SERVICE_LABEL]);
     if (!checked.manifest) throw new Error(`${ref}:${tag} isn't a Weave service: ${checked.problems.join('; ')}`);
@@ -9117,10 +8813,11 @@ export class WeaveNode implements Backend {
       oauthFetch: () => n.oauthSetup.fetch,
       /** Where the services Weave ships are (tests give their own). */
       shippedDir: () => n.wasmSetup.shippedDir,
+      /** Hosts a test stands in for (none in use). */
+      testHosts: () => n.wasmSetup.testHosts,
       /** The Weave project: where Weave announces itself (and its new versions); its maintainers speak for Weave. */
       weaveProject: () => n.config.updates?.project ?? UPDATE_SOURCE.project,
       clock: () => n.clock(),
-      github: () => new GitHub(n.#githubAuth()?.token ?? '', n.githubSetup.fetch),
       project: n.#project.bind(n),
       publish: n.publish.bind(n),
       get releases() {
@@ -9143,8 +8840,16 @@ export class WeaveNode implements Backend {
       },
       state: n.#state.bind(n),
       toItem: n.#toItem.bind(n),
+      /** Accounts elsewhere said in a space, checked. */
+      accounts: (space: StoredSpace, platform: string) => n.accounts({ space: space.id }).then((all) => all.filter((a) => a.platform === platform)),
+      /** My keyvaults: what my services get access through. */
+      keyvaults: () => n.#keyvaults,
+      /** Your own account on a platform, proven (on your hub or in any space of yours): its handle. */
+      myAccount: (platform: string) => n.myAccounts().then((all) => all.find((a) => a.platform === platform && a.verified)?.handle),
       /** Who reads a board of a project (everyone, for a board nobody limited). */
-      boardReaders: (space: StoredSpace, board: string) => n.#repoReaders(space, n.#state(space), n.#entries(space), board),
+      boardReaders: (space: StoredSpace, board: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
+      /** Who reads a space (or one of its boards). */
+      readers: (space: StoredSpace, board?: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
     };
   }
 
@@ -9236,20 +8941,6 @@ export class WeaveNode implements Backend {
     return this.#services.catalog(...args);
   }
 
-  async githubAppSetup(input: { service?: string; org?: string }): Promise<{ url: string }> {
-    return this.#services.githubAppSetup(input);
-  }
-
-  /** Where GitHub sends the person back when they set up an App (this computer's local pages); the daemon sets it. */
-  set linkPort(port: number | undefined) {
-    this.#services.linkPort = port;
-  }
-
-  /** The local pages' part in setting up a GitHub App (not on the API: only the browser reaches it, with its secret state). */
-  get githubAppFlow(): GitHubAppFlow {
-    return { manifest: (state) => this.#services.githubAppManifest(state), created: (input) => this.#services.githubAppCreated(input) };
-  }
-
   setBoardLens(...args: Parameters<Lenses['setBoardLens']>): Promise<BoardViewInfo> {
     return this.#lenses.setBoardLens(...args);
   }
@@ -9325,35 +9016,23 @@ export class WeaveNode implements Backend {
     return this.#services.launchWebsite(...args);
   }
 
+  withdrawArtifact(...args: Parameters<Services['withdrawArtifact']>): ReturnType<Services['withdrawArtifact']> {
+    return this.#services.withdrawArtifact(...args);
+  }
+
   setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {
     return this.#services.setArtifactAccess(...args);
   }
 
   async releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo> {
-    if (input.as) this.#agentMay(input.as, KIND_ARTIFACT);
+    if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const linked = reposOf(this.#entries(project), (did) => state.maintainers.has(did));
-    // As given, or where the project's app is released, or its one linked repository.
-    const repo = input.repo?.trim() || this.#app(project)?.install?.github || (linked.length === 1 ? linked[0].repo : '');
-    if (!isRepoName(repo)) throw new Error(linked.length > 1 ? `${project.name} has several repositories: say which one` : 'which repository holds the release? (owner/name)');
-    const client = new GitHub(this.#githubAuth()?.token ?? '', this.githubSetup.fetch);
-    const release = await client.release(repo, input.tag.trim());
-    const asset = release.assets.find((a) => a.name === input.file);
-    if (!asset) throw new Error(`the release ${release.tag} in ${repo} has no file ${input.file}${release.assets.length ? ` (it has ${release.assets.slice(0, 8).map((a) => a.name).join(', ')})` : ''}`);
-    // Fingerprinted once, so whoever gets it can check it.
-    const download = await client.download(repo, asset.id);
-    const hash = createHash('sha256');
-    const reader = download.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      hash.update(value);
-    }
-    const app = (input.name ?? asset.name).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'file';
-    const manifest = parseManifest({ app, name: (input.name ?? asset.name).slice(0, 40), version: 1, services: [], file: input.type ? { type: input.type } : {}, install: { github: repo, tag: release.tag, assets: { file: { file: asset.name, sha256: hash.digest('hex'), size: asset.size } } } });
-    const item = await this.publish({ kind: KIND_ARTIFACT, body: manifest as unknown as Json, space: project.id, as: input.as });
-    return (await this.artifacts(project.id)).find((a) => a.id === item.id)!;
+    this.#maintainerState(project);
+    const from = this.#releaseSource(project, input.repo);
+    const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as, from.provider)) as { id?: string };
+    const found = (await this.artifacts(project.id)).find((a) => a.id === data.id);
+    if (!found) throw new Error(`${input.file} was published, but isn't an artifact of ${project.name} here: is its provider's person a maintainer?`);
+    return found;
   }
 
   async getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }> {
@@ -9396,8 +9075,65 @@ export class WeaveNode implements Backend {
     this.#fetchers.remove(name);
   }
 
+  /** A keyvault as the app shows it: projects by name, and which of my services use it. */
+  #keyvaultInfo(k: KeyvaultState, added = true): KeyvaultInfo {
+    const ref = (id: string) => ({ id, name: this.#spaces.has(id) ? this.#spaceName(this.#spaces.get(id)!) : id });
+    const users = this.#services.storedServices().filter((s) => s.contract.uses?.[k.platform]).map((s) => ({ service: s.name, rights: s.contract.uses![k.platform], projects: s.spaces.filter((id) => this.#spaces.has(id)).map(ref) }));
+    const apps = k.apps.map((a) => ({ ...a, handed: Object.entries(a.handed).map(([id, resources]) => ({ project: ref(id), resources })) }));
+    return { name: k.name, title: k.title, ...(k.about ? { about: k.about } : {}), platform: k.platform, ...(k.resources ? { resources: k.resources } : {}), settings: k.settings, apps, users, log: k.log.map((l) => ({ ...l, project: ref(l.project) })).reverse(), ...(k.problem ? { problem: k.problem } : {}), added };
+  }
+
+  async keyvaults(): Promise<KeyvaultInfo[]> {
+    const mine = this.#keyvaults.list();
+    const more = this.#keyvaults.shipped().filter((s) => !mine.some((k) => k.name === s.name));
+    return [...mine.map((k) => this.#keyvaultInfo(k)), ...more.map((s) => this.#keyvaultInfo({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), platform: s.manifest.keyvault!.platform, ...(s.manifest.keyvault!.resources ? { resources: s.manifest.keyvault!.resources } : {}), digest: s.digest, settings: s.manifest.env ?? [], apps: [], log: [] }, false))];
+  }
+
+  async addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo> {
+    // An app made for a service before (its own setting of that name) moves into the keyvault: the service keeps no access.
+    const s = this.#keyvaults.shipped().find((x) => x.name === input.shipped);
+    const apps = s ? this.#services.settings.takeApps((s.manifest.env ?? []).filter((e) => e.register).map((e) => e.name)) : {};
+    return this.#keyvaultInfo(this.#keyvaults.add({ shipped: input.shipped, apps }));
+  }
+
+  async removeKeyvault(name: string): Promise<void> {
+    this.#keyvaults.remove(name);
+  }
+
+  async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {
+    const k = this.#keyvaults.list().find((x) => x.name === input.name);
+    // Named for whose it is: the account you proved there, else your name here.
+    const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;
+    return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
+  }
+
+  async finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo> {
+    return this.#keyvaultInfo(await this.#keyvaults.finishApp(input.id));
+  }
+
+  async keyvaultReachable(input: { name: string; app?: string }): Promise<Array<{ value: string; note?: string }>> {
+    return this.#keyvaults.reachable(input.name, input.app);
+  }
+
+  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo> {
+    const k = this.#keyvaultInfo(this.#keyvaults.removeApp(input));
+    for (const u of k.users) this.#services.restartSoon(u.service);
+    return k;
+  }
+
+  async handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {
+    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, ...(input.app ? { app: input.app } : {}), project: this.#project(input.project).id, resources: input.resources }));
+    // Its users bring their projects in step with what they're handed now.
+    for (const u of k.users) this.#services.restartSoon(u.service);
+    return k;
+  }
+
   servicePanels(...args: Parameters<Services['servicePanels']>): ReturnType<Services['servicePanels']> {
     return this.#services.servicePanels(...args);
+  }
+
+  serviceLists(...args: Parameters<Services['serviceLists']>): ReturnType<Services['serviceLists']> {
+    return this.#services.serviceLists(...args);
   }
 
   serviceActions(...args: Parameters<Services['serviceActions']>): ReturnType<Services['serviceActions']> {

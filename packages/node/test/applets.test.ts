@@ -6,7 +6,8 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { checkManifest } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { platformKey } from '../src/appinstall.ts';
-import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { closeOpenStores, WeaveNode } from '../src/index.ts';
+import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
 
 /*
  * Applets (block 5): a release whose manifest declares a contract. Installed, it becomes a service of the installer's
@@ -52,31 +53,8 @@ function buildArchive(version: string): Buffer {
   return readFileSync(join(dir, 'Bot.tar.gz'));
 }
 
-/** GitHub as far as releases go: releases by tag, each with its files and weave.app.json. */
-class FakeReleases {
-  releases = new Map<string, { files: Map<number, { name: string; bytes: Buffer }>; manifest: unknown }>();
-  fetch: Fetch = (async (input: string | URL | Request) => {
-    const url = new URL(String(input));
-    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
-    const tagged = url.pathname.match(/^\/repos\/martl\/bot\/releases\/tags\/(.+)$/);
-    if (tagged) {
-      const release = this.releases.get(tagged[1]);
-      return release ? json(200, { tag_name: tagged[1], assets: [...release.files].map(([id, f]) => ({ id, name: f.name, size: f.bytes.length })) }) : json(404, { message: 'Not Found' });
-    }
-    if (url.pathname === '/repos/martl/bot/contents/weave.app.json') {
-      const release = this.releases.get(url.searchParams.get('ref') ?? '');
-      return release ? json(200, { encoding: 'base64', content: Buffer.from(JSON.stringify(release.manifest)).toString('base64') }) : json(404, { message: 'Not Found' });
-    }
-    const asset = url.pathname.match(/^\/repos\/martl\/bot\/releases\/assets\/(\d+)$/);
-    const file = asset && [...this.releases.values()].map((r) => r.files.get(Number(asset[1]))).find(Boolean);
-    if (!file) return json(404, { message: 'Not Found' });
-    return new Response(new Uint8Array(file.bytes), { status: 200, headers: { 'content-length': String(file.bytes.length) } });
-  }) as Fetch;
-}
-
-function person(name: string, github: FakeReleases): WeaveNode {
+function person(name: string): WeaveNode {
   const node = WeaveNode.init(name, tempDir('weave-applets-home-'));
-  node.githubSetup = { clientId: 'Iv1.test', fetch: github.fetch, sleep: async () => {} };
   nodes.push(node);
   return node;
 }
@@ -95,7 +73,10 @@ describe('applets', { timeout: 60_000 }, () => {
   });
 
   it("installs another project's applet as your service, with its contract, pinned to its release", async () => {
-    const github = new FakeReleases();
+    // One archive: what GitHub serves is what was fingerprinted (two builds differ in their timestamps).
+    const v10 = { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
+    const github = new PublicGitHub().add('martl/bot', 'v1.0', v10);
+    const port = await github.serve();
     const manifest = (writes: string[]) => ({
       app: 'echo-bot',
       name: 'Echo bot',
@@ -104,12 +85,12 @@ describe('applets', { timeout: 60_000 }, () => {
       start: { release: { [platformKey()]: ['node', 'bot.cjs'] } },
       env: [{ name: 'GREETING', label: 'Greeting' }],
     });
-    github.releases.set('v1.0', { files: new Map([[31, { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') }]]), manifest: manifest([]) });
-    const martl = person('martl', github);
-    const lena = person('Lena', github);
+    const martl = person('martl');
+    const lena = person('Lena');
+    await fetchesFrom(lena, port);
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
-    await martl.releaseApp({ project: 'Bots', tag: 'v1.0', repo: 'martl/bot', assets: { [platformKey()]: `Bot-1.0-${platformKey()}.tar.gz` } });
+    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest: manifest([]), files: { [platformKey()]: v10 } });
     syncAll([martl, lena]);
 
     // Lena sees an applet: a service that reads only what's asked of it.
@@ -126,15 +107,18 @@ describe('applets', { timeout: 60_000 }, () => {
       const bot = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } });
       expect(bot).toMatchObject({ name: 'echo-bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, artifact: { tag: 'v1.0', project: { name: 'Bots' } } });
       expect(lena.replica.authority.grant(bot.did)?.permissions.sort()).toEqual(['weave.service.profile', 'weave.service.result']);
-      expect((await lena.serviceReady('echo-bot')).artifact).toMatchObject({ installed: true });
+      const ready = (await lena.serviceReady('echo-bot')).artifact;
+      expect(ready?.error).toBeUndefined();
+      expect(ready).toMatchObject({ installed: true });
 
       // It answers in Friends, as "Lena · echo-bot".
       await lena.askService({ space: 'Friends', service: bot.did, text: 'are you there?' });
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Friends' }))[0].results.map((r) => r.text)).toEqual(['v1.0 Hello: are you there?']), { timeout: 15_000, interval: 200 });
 
       // martl releases v1.1, which also posts. Lena's bot stays on v1.0 until she takes it, and then may post.
-      github.releases.set('v1.1', { files: new Map([[32, { name: `Bot-1.1-${platformKey()}.tar.gz`, bytes: buildArchive('v1.1') }]]), manifest: manifest(['weave.post']) });
-      await martl.releaseApp({ project: 'Bots', tag: 'v1.1', repo: 'martl/bot', assets: { [platformKey()]: `Bot-1.1-${platformKey()}.tar.gz` } });
+      const v11 = { name: `Bot-1.1-${platformKey()}.tar.gz`, bytes: buildArchive('v1.1') };
+      github.add('martl/bot', 'v1.1', v11);
+      await publishRelease(martl, { project: 'Bots', tag: 'v1.1', repo: 'martl/bot', manifest: manifest(['weave.post']), files: { [platformKey()]: v11 } });
       syncAll([martl, lena]);
       expect((await lena.services()).find((s) => s.name === 'echo-bot')?.artifact).toMatchObject({ tag: 'v1.0', latest: 'v1.1' });
       await expect(lena.setService({ name: 'echo-bot', artifact: {} })).rejects.toThrow(/approve it first[^]*writes weave\.post and its answers/);
@@ -148,21 +132,24 @@ describe('applets', { timeout: 60_000 }, () => {
     } finally {
       await lena.removeService('echo-bot').catch(() => {});
       await api.close();
+      github.close();
     }
   });
 
   it('installs an applet on an always-on node: approved on the computer, fetched and run by the node, its secret sealed to it', async () => {
-    const github = new FakeReleases();
+    const file = { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
+    const github = new PublicGitHub().add('martl/bot', 'v1.0', file);
+    const port = await github.serve();
     const manifest = { app: 'echo-bot', name: 'Echo bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [platformKey()]: ['node', 'bot.cjs'] } }, env: [{ name: 'GREETING', label: 'Greeting', secret: true }] };
-    github.releases.set('v1.0', { files: new Map([[41, { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') }]]), manifest });
-    const martl = person('martl', github);
+    const martl = person('martl');
     await martl.createProject({ name: 'Bots' });
-    await martl.releaseApp({ project: 'Bots', tag: 'v1.0', repo: 'martl/bot', assets: { [platformKey()]: `Bot-1.0-${platformKey()}.tar.gz` } });
+    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest, files: { [platformKey()]: file } });
     const boxDir = tempDir('weave-applets-box-');
     const linked = await martl.linkNode({ request: WeaveNode.nodeRequest(boxDir, 'nas') });
     const box = await WeaveNode.completeNodeLink(linked.answer, boxDir);
-    box.githubSetup = { clientId: 'Iv1.test', fetch: github.fetch, sleep: async () => {} };
     nodes.push(box);
+    // The node fetches it, with its own fetcher.
+    await fetchesFrom(box, port);
     syncAll([martl, box]);
     await box.reconcile();
 
@@ -191,6 +178,7 @@ describe('applets', { timeout: 60_000 }, () => {
       syncAll([martl, box]);
       await box.reconcile();
       await api.close();
+      github.close();
     }
   });
 });

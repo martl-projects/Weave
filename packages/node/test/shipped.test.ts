@@ -104,6 +104,34 @@ describe('services Weave ships', { timeout: 120_000 }, () => {
       expect(after.running).toBe(false);
       expect(JSON.stringify(after)).toMatch(/isn't what this Weave ships/);
 
+      // A new build that asks for no more than was approved (an action more): its contract as it ships. One that asks
+      // for more: it keeps what was approved.
+      copyFileSync(component, join(mine, 'ticker.wasm'));
+      const ship = (service: Record<string, unknown>) => {
+        const listed = JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>;
+        listed.ticker.manifest = { ...listed.ticker.manifest, service };
+        writeFileSync(join(mine, 'shipped.json'), JSON.stringify(listed));
+      };
+      const restart = async () => {
+        await martl.setService({ name: 'ticker', enabled: false });
+        await martl.setService({ name: 'ticker', enabled: true });
+      };
+      const ticker = async () => (await martl.services()).find((s) => s.name === 'ticker')!;
+      ship({ reads: 'addressed', writes: [], actions: [{ name: 'hello', label: 'Say hello', who: 'members' }], version: '1.0' });
+      await restart();
+      await vi.waitFor(async () => expect((await ticker()).contract.actions?.map((a) => a.name)).toEqual(['hello']), { timeout: 10_000, interval: 200 });
+      ship({ reads: 'addressed', writes: ['weave.post'], actions: [], version: '1.0' });
+      await restart();
+      await new Promise((r) => setTimeout(r, 1500));
+      expect((await ticker()).contract).toMatchObject({ writes: [], actions: [{ name: 'hello' }] });
+      // One that asks for no settings any more: its profile asks for none (not what it asked for before).
+      expect((await martl.serviceSettings({ space: 'Weave', service: 'ticker' })).asks.map((a) => a.name)).toEqual(['KEY']);
+      const listed = JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>;
+      delete listed.ticker.manifest.env;
+      writeFileSync(join(mine, 'shipped.json'), JSON.stringify(listed));
+      await restart();
+      await vi.waitFor(async () => expect((await martl.serviceSettings({ space: 'Weave', service: 'ticker' })).asks).toEqual([]), { timeout: 10_000, interval: 200 });
+
       // Code from others serves only its own port: never another of this computer (a database's, say).
       copyFileSync(component, join(mine, 'ticker.wasm'));
       const site = (JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>).ticker;

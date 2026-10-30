@@ -85,6 +85,13 @@ export const nearby = (address: string): boolean => {
   return v4 ? NEARBY.check(v4, 'ipv4') : NEARBY.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4');
 };
 
+/** Whether a host is reachable from here without touching this computer's networks (a test's stand-in host is). */
+export async function publicHost(host: string, testHosts: Record<string, number>): Promise<void> {
+  if (testHosts[host]) return;
+  const addresses = await lookup(host, { all: true });
+  if (!addresses.length || addresses.some((a) => nearby(a.address))) throw new Error(`${host} is on this computer's networks`);
+}
+
 /** What a component handles, one at a time: an event, or what its website's players do. */
 type WasmTask =
   | { type: 'event'; item: string }
@@ -101,7 +108,7 @@ interface WasmEntry {
   stopping: boolean;
   ready: boolean;
   queue: WasmTask[];
-  busy?: { task: WasmTask; timer: ReturnType<typeof setTimeout> };
+  busy?: { task: WasmTask; timer: ReturnType<typeof setTimeout>; expire(): void };
   next(): void;
   server?: HttpServer;
   players: Map<string, WebSocketConnection>;
@@ -287,8 +294,10 @@ export class Runtime {
     worker.stderr.pipe(log, { end: false });
     const entry: WasmEntry = { worker, stopping: false, ready: false, queue: [], next: () => {}, players: new Map() };
     this.#wasm.set(key, entry);
-    // Its calls to the host: answered here (they may take a while), then it goes on.
+    // Its calls to the host: answered here (they may take a while), then it goes on. Weave's own time doesn't count
+    // against its limit: the task's time starts again once a call is answered.
     port1.on('message', async ({ name, args }: { name: string; args: unknown[] }) => {
+      if (entry.busy) clearTimeout(entry.busy.timer);
       let reply: { value?: unknown; error?: string };
       try {
         reply = { value: name === 'reach' ? await this.#reach(run, String(args[0])) : await run.host(name, args) };
@@ -298,6 +307,7 @@ export class Runtime {
       port1.postMessage(reply);
       Atomics.store(waiting, 0, 1);
       Atomics.notify(waiting, 0);
+      if (entry.busy) entry.busy.timer = setTimeout(entry.busy.expire, run.taskMs ?? WASM_LIMITS.eventMs);
     });
     const queue = (task: WasmTask) => {
       entry.queue.push(task);
@@ -308,13 +318,13 @@ export class Runtime {
       const task = entry.queue.shift();
       if (task === undefined) return;
       // Too long on one task: it's given up, and the worker ends (and starts again).
-      const timer = setTimeout(() => {
+      const expire = () => {
         log.write(`weave: ${run.name} took longer than ${(run.taskMs ?? WASM_LIMITS.eventMs) / 1000}s on ${task.type === 'event' ? 'an event' : task.type === 'call' ? task.fn : `a player's ${task.type}`}: stopped\n`);
         if (task.type === 'event') run.handled?.(task.item, 'took too long');
         if (task.type === 'call') task.reply(undefined, `${run.name} took too long`);
         void worker.terminate();
-      }, run.taskMs ?? WASM_LIMITS.eventMs);
-      entry.busy = { task, timer };
+      };
+      entry.busy = { task, timer: setTimeout(expire, run.taskMs ?? WASM_LIMITS.eventMs), expire };
       worker.postMessage(task.type === 'call' ? { type: 'call', fn: task.fn, args: task.args } : task);
     };
     worker.on('message', (message: { type: string; error?: string; value?: unknown; op?: string; player?: string; message?: string; ms?: number }) => {

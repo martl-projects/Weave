@@ -4,7 +4,7 @@ import type { AppSetting, ServiceContract } from '@weave/core';
 import { InstallFromCatalog } from './catalog.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, bump, useApi } from './lib.ts';
-import { contractText } from './services.tsx';
+import { contractText, KeptSettingsDialog } from './services.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
 import { InstallRelease, SettingInput, useArtifacts } from './websites.tsx';
 
@@ -38,13 +38,12 @@ interface Entry {
 
 type Picked =
   | { kind: 'shipped'; shipped: ShippedServiceInfo }
-  | { kind: 'builtin'; builtin: 'website' | 'github' }
+  | { kind: 'builtin'; builtin: 'website' }
   | { kind: 'release'; artifact: ArtifactInfo }
   | { kind: 'mine'; service: ServiceInfo };
 
 const BUILTINS = {
   website: { title: 'Websites', about: "A way to join in with the project's participants: services with a web page show up as websites here, and so can programs of yours." },
-  github: { title: 'GitHub access', about: "Gives the project's members read access to its linked repositories, and takes it back when they leave. It acts with your GitHub sign-in, or your own GitHub App." },
 } as const;
 
 export function ServiceCatalog({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
@@ -64,7 +63,7 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
     ...(shipped ?? [])
       .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
       .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
-    ...(['website', 'github'] as const)
+    ...(['website'] as const)
       // Websites ship with Weave now: the built-in one only where this Weave ships none.
       .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
       .map((b): Entry => ({ key: `builtin:${b}`, icon: serviceIcon({ name: b, builtin: b }), title: BUILTINS[b].title, by: 'Weave', about: BUILTINS[b].about, badge: 'built into Weave', open: () => setPicked({ kind: 'builtin', builtin: b }) })),
@@ -123,6 +122,9 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
 /** One picked from the catalog: what it is, does and asks for, and adding it. */
 function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { project: SpaceInfo; picked: Picked; maintainer: boolean; onBack(): void; onDone(): void }) {
   const added = (what: string) => () => (bump(), onDone(), what);
+  // Added, with a sign-in or a pick still to make (its repository, say): its settings right away.
+  const [setUp, setSetUp] = useState<ServiceInfo>();
+  if (setUp) return <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={{ did: setUp.did, name: setUp.name }} onClose={() => (bump(), onDone())} />;
   const head = (icon: IconName, title: string, by: string, about: string) => (
     <div className="service-details-head">
       <Icon name={icon} size={32} />
@@ -144,7 +146,16 @@ function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { proje
             contract={picked.shipped.contract}
             note="Weave runs it only as exactly the component it ships."
             settings={picked.shipped.settings}
-            add={(settings, keep) => attempt(() => api<ServiceInfo>('addService', { shipped: picked.shipped.name, spaces: [project.id], settings, ...(keep ? { settingsIn: project.id } : {}) }).then(added('')), `${picked.shipped.title} runs in p/${project.name}`)}
+            add={(settings, keep) =>
+              attempt(
+                () =>
+                  api<ServiceInfo>('addService', { shipped: picked.shipped.name, spaces: [project.id], settings, ...(keep ? { settingsIn: project.id } : {}) }).then((service) => {
+                    if (keep && picked.shipped.settings.some((s) => (s.oauth || s.choose || s.register) && !settings[s.name])) setSetUp(service);
+                    else added('')();
+                  }),
+                `${picked.shipped.title} runs in p/${project.name}`,
+              )
+            }
           />
         </>
       )}
@@ -186,7 +197,7 @@ function ServiceDetails({ project, picked, maintainer, onBack, onDone }: { proje
 function SettingsForm({ project, maintainer, contract, note, settings, add }: { project: SpaceInfo; maintainer: boolean; contract: ServiceContract; note: string; settings: AppSetting[]; add(settings: Record<string, string>, keep: boolean): Promise<unknown> }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [keep, setKeep] = useState(maintainer);
-  const missing = settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim());
+  const missing = settings.filter((s) => !s.optional && !s.oauth && !s.choose && !s.register && !values[s.name]?.trim());
   return (
     <>
       <p className="small muted">

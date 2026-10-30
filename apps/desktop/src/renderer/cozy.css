@@ -211,6 +211,7 @@
 :root[data-skin='cozy'] :is(input[type='checkbox'], input[type='radio']):focus-visible + label::before { outline: 2px solid var(--cz-yellow); }
 
 :root[data-skin='cozy'] fieldset { border: 2px solid var(--cz-soft); border-radius: 10px; padding: 10px 12px; }
+:root[data-skin='cozy'] .choose-list { background: var(--cz-paper); color: var(--cz-ink); border: 2px solid var(--cz-soft); border-radius: var(--cz-radius); }
 :root[data-skin='cozy'] legend { padding: 0 6px; color: var(--cz-line); font: 700 13px var(--cz-pixel); }
 
 :root[data-skin='cozy'] menu[role='tablist'] { gap: 4px; padding-left: 0; margin-bottom: 8px; }

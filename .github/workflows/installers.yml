@@ -1,17 +1,24 @@
-# Builds the desktop installers on each platform and keeps them as workflow
-# artifacts. Signed when the repository has the secrets (see the top of
-# apps/desktop/package.ts): Windows through Azure Trusted Signing, macOS with a
-# Developer ID and notarized; unsigned (Windows) or ad-hoc (macOS) otherwise.
-# The release workflow attaches them to the GitHub Release; run it by hand from
-# the Actions tab to try a build.
+# Builds the desktop installers on each platform. Signed when the repository has
+# the secrets (see the top of apps/desktop/package.ts): Windows through Azure
+# Trusted Signing, macOS with a Developer ID and notarized; unsigned (Windows) or
+# ad-hoc (macOS) otherwise. Called by the release workflow with a tag, each job
+# attaches its installers to that release's draft itself (no Actions artifacts,
+# whose storage quota runs out); run by hand from the Actions tab to try a build,
+# kept as workflow artifacts for two days.
 name: Installers
 
 on:
   workflow_call:
+    inputs:
+      release:
+        description: The tag whose release (a draft) gets the installers
+        type: string
+        required: false
   workflow_dispatch:
 
+# Write: called for a release, each job attaches its installers to the draft.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -58,7 +65,13 @@ jobs:
           CSC_INSTALLER_KEY_PASSWORD: ${{ secrets.MAC_INSTALLER_CERT_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Attach to the release
+        if: inputs.release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-upload.ts "${{ inputs.release }}" apps/desktop/release
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.release }}
         with:
           name: installers-${{ matrix.os }}
           path: |

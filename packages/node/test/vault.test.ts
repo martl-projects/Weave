@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -46,14 +46,14 @@ describe('keys at rest', () => {
     const home = resolveHome(dir);
     const plain = readSecretJson<Record<string, unknown>>(home, home.identity)!;
     await node.close();
-    // As an older Weave left it: in the clear, a GitHub token too.
+    // As an older Weave left it: in the clear, and a GitHub sign-in Weave no longer has (it goes).
     writeFileSync(home.identity, JSON.stringify(plain));
     writeFileSync(join(dir, 'github.json'), JSON.stringify({ token: 'gho_secret', login: 'martl' }));
     forgetVaults();
     const again = WeaveNode.open(dir);
     expect(again.identity.did).toBe(plain.did);
     expect(readFileSync(home.identity, 'utf8')).toContain('"weaveSealed": 1');
-    expect(readFileSync(join(dir, 'github.json'), 'utf8')).not.toContain('gho_secret');
+    expect(existsSync(join(dir, 'github.json'))).toBe(false);
     await again.close();
   });
 
