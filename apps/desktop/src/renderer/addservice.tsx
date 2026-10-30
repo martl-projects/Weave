@@ -38,8 +38,24 @@ interface Entry {
   about: string;
   /** A mark of where it's from: ships with Weave, verified. */
   badge?: string;
+  /** Where it comes from: each source its own card, never mixed with another's. */
+  source: Source;
   open(): void;
 }
+
+/** A catalog of services, by where they come from: Weave, a project's releases, a space's catalog, or yours elsewhere. */
+interface Source {
+  key: string;
+  title: string;
+  /** Why (and how far) to trust what's in it. */
+  note: string;
+  rank: number;
+}
+
+const FROM_WEAVE: Source = { key: 'weave', title: 'From Weave', note: 'Shipped with Weave: each checked against what this Weave ships, by its fingerprint.', rank: 0 };
+const YOURS: Source = { key: 'mine', title: 'Yours, elsewhere', note: 'Services you run in other spaces: add one here too.', rank: 3 };
+const fromProject = (p: { id: string; name: string }, here: string): Source => ({ key: `project:${p.id}`, title: `From p/${p.name}`, note: `Released in p/${p.name} by its maintainers: you see what each runs, and approve it, before it does.`, rank: p.id === here ? 1 : 1.5 });
+const inCatalog = (s: SpaceInfo): Source => ({ key: `catalog:${s.id}`, title: `In ${s.name}'s catalog`, note: `Listed by the maintainers of ${s.name}: each comes from a project's release, shown on it.`, rank: 2 });
 
 type Picked =
   | { kind: 'shipped'; shipped: ShippedServiceInfo }
@@ -67,22 +83,24 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
   const entries: Entry[] = [
     ...(shipped ?? [])
       .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
-      .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'ships with Weave', open: () => setPicked({ kind: 'shipped', shipped: x }) })),
+      .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'Weave ✓', source: FROM_WEAVE, open: () => setPicked({ kind: 'shipped', shipped: x }) })),
     ...(['website'] as const)
       // Websites ship with Weave now: the built-in one only where this Weave ships none.
       .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
-      .map((b): Entry => ({ key: `builtin:${b}`, icon: serviceIcon({ name: b, builtin: b }), title: BUILTINS[b].title, by: 'Weave', about: BUILTINS[b].about, badge: 'built into Weave', open: () => setPicked({ kind: 'builtin', builtin: b }) })),
+      .map((b): Entry => ({ key: `builtin:${b}`, icon: serviceIcon({ name: b, builtin: b }), title: BUILTINS[b].title, by: 'Weave', about: BUILTINS[b].about, badge: 'Weave ✓', source: FROM_WEAVE, open: () => setPicked({ kind: 'builtin', builtin: b }) })),
     ...(listed ?? [])
       .filter(({ e }) => !e.installed)
-      .map(({ e, s }): Entry => ({ key: `catalog:${s.id}:${e.app}`, icon: serviceIcon({ name: e.app }), title: e.name, by: e.origin.project.name ? `p/${e.origin.project.name}` : (e.by.name ?? 'a project'), about: e.summary || `Listed in ${s.name}`, badge: `in ${s.name}'s catalog`, open: () => setFromCatalog({ space: s, entry: e }) })),
+      .map(({ e, s }): Entry => ({ key: `catalog:${s.id}:${e.app}`, icon: serviceIcon({ name: e.app }), title: e.name, by: e.origin.project.name ? `p/${e.origin.project.name}` : (e.by.name ?? 'a project'), about: e.summary || `Listed in ${s.name}`, source: inCatalog(s), open: () => setFromCatalog({ space: s, entry: e }) })),
     ...(artifacts ?? [])
       .filter((a) => a.runs && (a.website || a.applet))
-      .map((a): Entry => ({ key: `release:${a.id}`, icon: serviceIcon({ name: a.name, contract: a.applet }), title: `${a.name} ${a.tag}`, by: `p/${a.project.name}`, about: a.applet ? `It ${contractText(a.applet)}` : 'A website', badge: 'a release', open: () => setPicked({ kind: 'release', artifact: a }) })),
+      .map((a): Entry => ({ key: `release:${a.id}`, icon: serviceIcon({ name: a.name, contract: a.applet }), title: `${a.name} ${a.tag}`, by: `p/${a.project.name}`, about: a.applet ? `It ${contractText(a.applet)}` : 'A website', source: fromProject(a.project, project.id), open: () => setPicked({ kind: 'release', artifact: a }) })),
     ...services
       .filter((s) => !s.node && !here(s) && s.builtin !== 'github')
-      .map((s): Entry => ({ key: `mine:${s.name}`, icon: serviceIcon(s), title: s.name, by: 'you', about: s.description || `It ${contractText(s.contract)}`, badge: 'yours, elsewhere', open: () => setPicked({ kind: 'mine', service: s }) })),
+      .map((s): Entry => ({ key: `mine:${s.name}`, icon: serviceIcon(s), title: s.name, by: 'you', about: s.description || `It ${contractText(s.contract)}`, source: YOURS, open: () => setPicked({ kind: 'mine', service: s }) })),
   ];
   const shown = entries.filter((e) => !query.trim() || `${e.title} ${e.by} ${e.about}`.toLowerCase().includes(query.trim().toLowerCase()));
+  // Each source its own card: what Weave ships never beside what a project released, nor one project's beside another's.
+  const sources = [...new Map(shown.map((e) => [e.source.key, e.source])).values()].sort((a, b) => a.rank - b.rank || a.title.localeCompare(b.title));
   const loading = !shipped || !listed || !artifacts;
 
   if (fromCatalog) return <InstallFromCatalog space={fromCatalog.space} entry={fromCatalog.entry} onClose={onClose} />;
@@ -94,19 +112,27 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
             <Icon name="search" />
             <input className="grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a service…" autoFocus />
           </div>
-          <div className="service-catalog">
-            {shown.map((e) => (
-              <button key={e.key} className="service-tile" onClick={e.open}>
-                <Icon name={e.icon} size={32} />
-                <span className="service-tile-text">
-                  <b>{e.title}</b>
-                  <span className="small muted">by {e.by}</span>
-                  <span className="small service-tile-about">{e.about}</span>
-                  {e.badge && <span className="small service-tile-badge">{e.badge}</span>}
-                </span>
-              </button>
-            ))}
-          </div>
+          {sources.map((src) => (
+            <fieldset key={src.key} className="catalog-source">
+              <legend>{src.title}</legend>
+              <p className="small muted">{src.note}</p>
+              <div className="service-catalog">
+                {shown
+                  .filter((e) => e.source.key === src.key)
+                  .map((e) => (
+                    <button key={e.key} className="service-tile" onClick={e.open}>
+                      <Icon name={e.icon} size={32} />
+                      <span className="service-tile-text">
+                        <b>{e.title}</b>
+                        <span className="small muted">by {e.by}</span>
+                        <span className="small service-tile-about">{e.about}</span>
+                        {e.badge && <span className="small service-tile-badge">{e.badge}</span>}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            </fieldset>
+          ))}
           {loading && <p className="small muted">Looking for services…</p>}
           {!loading && !shown.length && <p className="small muted">{query ? 'Nothing matches.' : `Everything there is runs in p/${project.name} already.`}</p>}
           <p className="small muted">
