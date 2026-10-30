@@ -19,7 +19,7 @@ export function contractText(c: ServiceContract): string {
   const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
   const answers = c.reads === 'nothing' ? '' : ' and its answers';
   const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''} (contract ${c.version})`;
+  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.uses ? `; uses your ${Object.keys(c.uses).join(', ')} access from your keyvault` : ''} (contract ${c.version})`;
 }
 
 /** Where a service comes from, and whether this computer could check it. */
@@ -325,6 +325,23 @@ function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): 
   );
 }
 
+/** A service Weave ships whose new version asks for more: it keeps what you approved until your yes. */
+export function ShippedUpdate({ service: s }: { service: ServiceInfo }) {
+  return (
+    <div className="small">
+      <span className="error-text">Update needs your yes:</span> this version of Weave ships it to {contractText(s.update!)}. Until then it keeps what you approved.{' '}
+      <AsyncButton
+        onClick={async () =>
+          (await ask(`Give ${s.name} what Weave ships it with now? It ${contractText(s.update!)}.`, 'Yes, update')) &&
+          attempt(() => api('setService', { name: s.name, approve: true }).then(bump), `${s.name} has its new rights`)
+        }
+      >
+        Update…
+      </AsyncButton>
+    </div>
+  );
+}
+
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
   const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
@@ -366,6 +383,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
                 )}
               </div>
             )}
+            {s.update && <ShippedUpdate service={s} />}
           </div>
           <div className="service-actions">
             {!s.builtin && <button onClick={() => setEditing(s)}>Settings…</button>}

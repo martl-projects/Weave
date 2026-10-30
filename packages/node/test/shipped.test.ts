@@ -124,6 +124,19 @@ describe('services Weave ships', { timeout: 120_000 }, () => {
       await restart();
       await new Promise((r) => setTimeout(r, 1500));
       expect((await ticker()).contract).toMatchObject({ writes: [], actions: [{ name: 'hello' }] });
+      // Its yes is pending: the services say what it would have, and yes gives it that (its key's rights too).
+      expect((await ticker()).update).toMatchObject({ writes: ['weave.post'] });
+      const yes = await martl.setService({ name: 'ticker', approve: true });
+      expect([yes.contract.writes, yes.update]).toEqual([['weave.post'], undefined]);
+      expect(martl.replica.authority.grant(yes.did)?.permissions).toContain('weave.post');
+      sync(all);
+      expect((await lena.servicesIn('Weave'))[0].contract.writes).toEqual(['weave.post']);
+      await expect(martl.setService({ name: 'ticker', approve: true })).rejects.toThrow(/nothing waiting for a yes/);
+      // Using a keyvault is a right too: a new version that uses one waits for a yes.
+      ship({ reads: 'addressed', writes: ['weave.post'], uses: { github: { contents: 'read' } }, version: '1.0' });
+      await restart();
+      await new Promise((r) => setTimeout(r, 1500));
+      expect([(await ticker()).contract.uses, (await ticker()).update?.uses]).toEqual([undefined, { github: { contents: 'read' } }]);
       // One that asks for no settings any more: its profile asks for none (not what it asked for before).
       expect((await martl.serviceSettings({ space: 'Weave', service: 'ticker' })).asks.map((a) => a.name)).toEqual(['KEY']);
       const listed = JSON.parse(readFileSync(join(mine, 'shipped.json'), 'utf8')) as Record<string, { manifest: Record<string, unknown> }>;

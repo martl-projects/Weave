@@ -225,6 +225,8 @@ export interface ServiceInfo {
   problem?: string;
   /** One Weave ships: its name there. */
   shipped?: string;
+  /** One Weave ships, whose new version asks for more than you approved: the contract it would have. It keeps the old one until your yes (setService approve). */
+  update?: ServiceContract;
   /** It runs on one of your always-on nodes, not here: its key and settings are there only. */
   node?: { did: Did; name: string };
 }

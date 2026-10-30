@@ -237,6 +237,7 @@ github — repositories that follow a group, tier or project (members who give t
   service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
                              [--update latest|<tag>]: an applet takes another release (asks you to approve it)
+                             [--approve]: one Weave ships whose new version asks for more rights gets them (service list says)
   service start|stop <name>  run it or not
   service remove <name>      stop it for good (its key is revoked)
   service ask <service> <text...>  ask a service something in a space (-p/-g/-r); service requests: the requests there and their answers
@@ -478,6 +479,7 @@ const { values, positionals } = parseArgs({
     'agent-kinds': { type: 'string' },
     'service-kinds': { type: 'string' },
     update: { type: 'string' },
+    approve: { type: 'boolean' },
     builtin: { type: 'string' },
     folder: { type: 'string' },
     port: { type: 'string' },
@@ -611,7 +613,7 @@ function needSpace(): string {
 
 const money = (cents: number, currency: string) => (cents === 0 ? 'free' : `${(cents / 100).toFixed(2)} ${currency}/month`);
 const contractLine = (c: ServiceContract) =>
-  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; reaches ${c.net.join(', ')} over HTTPS` : ''}; contract ${c.version}`;
+  `reads ${c.reads === 'nothing' ? 'nothing (no requests)' : c.reads === 'addressed' ? 'requests to it' : c.reads === 'space' ? 'its whole spaces' : `requests and ${c.reads.kinds.join(', ')}`}; writes ${c.writes.length ? c.writes.join(', ') : 'only its answers'}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; reaches ${c.net.join(', ')} over HTTPS` : ''}${c.uses ? `; uses your ${Object.entries(c.uses).map(([p, r]) => `${p} access (${Object.entries(r).map(([k, v]) => `${k} ${v}`).join(', ')})`).join(', ')}` : ''}; contract ${c.version}`;
 
 /** A service's settings in a space: each it asks for, set (by whom) or not; a secret only as set. */
 const settingsText = (s: ServiceSettingsInfo) =>
@@ -1577,6 +1579,7 @@ async function main(): Promise<void> {
           `  ${s.did}`,
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
+          ...(s.update ? [`  its new version asks for more, and keeps these rights until you say yes: weave service set ${s.name} --approve\n    it would: ${contractLine(s.update)}`] : []),
           ...(s.websites ?? []).map((r) => `  website "${r.name}" in ${r.project.name}: ${hostedLine(r)}`),
           ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
           ...(s.artifact?.deliveredBy ? [`  delivered by ${s.artifact.deliveredBy}, checked against the release`] : []),
@@ -1656,7 +1659,7 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
         const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
         const s = await approving((approve) =>
-          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site !== undefined ? { site: values.site || null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
+          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site !== undefined ? { site: values.site || null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : values.approve ? { approve: true } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
         );
         return out(s, () => line(s));
       }

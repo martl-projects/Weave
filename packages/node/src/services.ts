@@ -56,6 +56,12 @@ const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSet
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
 export const hostsWebsites = (s: Pick<StoredService, 'builtin' | 'contract'>): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
+/** Whether two contracts give the same rights: what they read, write, reach, offer and use of a keyvault. */
+const sameRights = (a: ServiceContract, b: ServiceContract): boolean => {
+  const rights = (c: ServiceContract) => canonicalJson(JSON.parse(JSON.stringify([c.reads ?? null, [...(c.writes ?? [])].sort(), [...(c.net ?? [])].sort(), [...(c.offers ?? [])].sort(), c.uses ?? null])) as Json);
+  return rights(a) === rights(b);
+};
+
 /** The services this Weave ships (tests give their own folder). */
 const shippedHere = (h: ServicesHost) => shippedServices(h.shippedDir() ?? SHIPPED_DIR);
 
@@ -161,7 +167,16 @@ export class Services {
       // Why it doesn't run (a shipped component that isn't what Weave ships, say); a release says so in its artifact.
       ...(!stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
       ...(stored.shipped ? { shipped: stored.shipped.name } : {}),
+      ...(this.shippedUpdate(stored) ? { update: this.shippedUpdate(stored)! } : {}),
     };
+  }
+
+  /** A shipped service's contract as this Weave ships it now, when it asks for more than was approved: its yes is pending. */
+  shippedUpdate(stored: StoredService): ServiceContract | undefined {
+    const s = stored.shipped ? shippedHere(this.h).get(stored.shipped.name) : undefined;
+    if (!s) return undefined;
+    const contract = this.artifactContract(s.manifest);
+    return sameRights(contract, stored.contract) ? undefined : contract;
   }
 
   // Artifacts: a project's releases. A service runs one, pinned to it, in any space of yours.
@@ -606,6 +621,9 @@ export class Services {
     if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
     if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
     const next = input.artifact && before.artifact ? this.nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;
+    // A shipped one whose new version asks for more: yes gives it the contract this Weave ships now.
+    const update = input.approve && !input.artifact ? this.shippedUpdate(before) : undefined;
+    if (input.approve && !input.artifact && !update) throw new Error(`${before.name} has nothing waiting for a yes`);
     const settings = { ...before.settings };
     this.checkSettings((next?.artifact ?? before.artifact)?.manifest ?? (before.builtin ? builtinSpec(before.builtin) : undefined), input.settings ?? {});
     for (const [key, value] of Object.entries(input.settings ?? {})) {
@@ -638,6 +656,7 @@ export class Services {
       ...(wasm ? { wasm } : {}),
       ...(site ? { site } : {}),
       ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
+      ...(update ? { contract: update } : {}),
       spaces,
       ...(command?.length ? { command } : {}),
       settings,
@@ -645,7 +664,7 @@ export class Services {
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.description !== undefined ? { description: input.description.trim().slice(0, 1000) } : {}),
     };
-    if (next && JSON.stringify(servicePermissions(after.contract)) !== JSON.stringify(servicePermissions(before.contract))) this.grantContract(this.serviceKey(after.name).did, after.name, after.contract);
+    if ((next || update) && JSON.stringify(servicePermissions(after.contract)) !== JSON.stringify(servicePermissions(before.contract))) this.grantContract(this.serviceKey(after.name).did, after.name, after.contract);
     this.saveServices(this.storedServices().map((s) => (s.name === after.name ? after : s)));
     // Another release is another origin: the profile says so.
     if (after.description !== before.description || JSON.stringify(after.contract) !== JSON.stringify(before.contract) || after.artifact?.id !== before.artifact?.id) this.publishServiceProfile(after);
@@ -1421,8 +1440,7 @@ export class Services {
     // Its contract as this Weave ships it: taken as it is when it asks for no more than what was approved (its actions
     // changed, say); otherwise it stays what was approved.
     const shippedContract = this.artifactContract(s.manifest);
-    const rights = (c: ServiceContract) => JSON.stringify([c.reads ?? null, [...(c.writes ?? [])].sort(), [...(c.net ?? [])].sort(), [...(c.offers ?? [])].sort()]);
-    const contract = rights(shippedContract) === rights(stored.contract) ? shippedContract : stored.contract;
+    const contract = sameRights(shippedContract, stored.contract) ? shippedContract : stored.contract;
     // What it does, as this Weave says it now.
     const description = s.about?.split(/(?<=\.)\s/)[0] ?? s.manifest.name;
     // Compared as values, whatever order their keys were kept in.

@@ -8,7 +8,7 @@ import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
 import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
-import { ActionScopes, askAndWait, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, whoLabel, type ScopedAction } from './services.tsx';
+import { ActionScopes, askAndWait, contractText, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, ShippedUpdate, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 
 /*
@@ -769,6 +769,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       </legend>
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
+      {own && mine?.update && <ShippedUpdate service={mine} />}
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
       {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
       {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} {...(maintainer && app && handsOutGitHub(service) ? { publish: () => setPublishing(true) } : {})} />}
