@@ -280,7 +280,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // On to installing it.
       expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);
       const vault = await martl.finishKeyvaultApp({ id: making.id });
-      expect(vault.apps).toEqual([{ setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new' }]);
+      expect(vault.apps).toEqual([{ key: '42', setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new', handed: [] }]);
       expect(JSON.stringify(await martl.keyvaults())).not.toMatch(/PRIVATE KEY|shh-client/);
       expect(vault.users).toEqual([{ service: 'github-access', rights: { administration: 'write', metadata: 'read' }, projects: [{ id: expect.any(String), name: 'Site' }, { id: expect.any(String), name: 'Docs' }] }]);
       // Not installed anywhere yet; then on all three.
@@ -298,7 +298,8 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         sync([martl, lena, kofi]);
       };
       await choose('Site', ['acme/site', 'acme/secret']);
-      expect((await martl.keyvaults())[0].handed).toEqual([{ project: { id: expect.any(String), name: 'Site' }, resources: ['acme/site', 'acme/secret'] }]);
+      // What it hands which project is the app's own (a keyvault may hold several apps).
+      expect((await martl.keyvaults())[0].apps[0].handed).toEqual([{ project: { id: expect.any(String), name: 'Site' }, resources: ['acme/site', 'acme/secret'] }]);
 
       // Lena proves her GitHub account and shares it with Site; Kofi only says it's his (no proof, so nothing to check).
       gistFor(github, '0123456789abcdef01234567', 'lena-gh', lena);

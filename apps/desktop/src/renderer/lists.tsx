@@ -131,7 +131,7 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
   const [paged, setPaged] = useState<{ next?: string; query: string }>();
   const [round, setRound] = useState(0);
   const [proving, setProving] = useState<string>();
-  const [handing, setHanding] = useState<{ vault: KeyvaultInfo; resources: string[] }>();
+  const [handing, setHanding] = useState<KeyvaultInfo>();
   const [using, setUsing] = useState<ServiceActionInfo>();
   const again = () => setRound((n) => n + 1);
   // Asked once per round: when it opens, after one of its buttons, and when something changed here (not for requests
@@ -172,8 +172,8 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
             if (list.add!.hand) {
               // From your keyvault for that platform: yours alone to hand to a project.
               const vault = (await api<KeyvaultInfo[]>('keyvaults')).find((k) => k.platform === list.add!.hand && k.added);
-              if (!vault) return void ((await ask(`First add your ${list.add!.hand} keyvault in Keys & devices: it holds your access, and you hand projects what it reaches.`, 'Go there')) && navigate('#/keys'));
-              setHanding({ vault, resources: vault.handed.find((h) => h.project.id === space.id)?.resources ?? [] });
+              if (!vault?.apps.length) return void ((await ask(`First add your ${list.add!.hand} keyvault in Keys & devices, and make an app there: it holds your access, and you hand projects what it reaches.`, 'Go there')) && navigate('#/keys'));
+              setHanding(vault);
             } else {
               const a = actions.find((x) => x.name === list.add!.action);
               if (a) setUsing(a);
@@ -228,7 +228,7 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
     <>
       <ItemList title={list.title} add={add} rows={rows} error={error} empty={`No ${list.item ?? 'item'}s yet.`} {...(more ? { more } : {})} {...(query ? { query } : {})} />
       {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => (setProving(undefined), again())} />}
-      {handing && <HandDialog vault={handing.vault} project={{ id: space.id, name: space.name.replace(/^p\//, '') }} resources={handing.resources} onClose={() => (setHanding(undefined), again())} />}
+      {handing && <HandDialog vault={handing} project={{ id: space.id, name: space.name.replace(/^p\//, '') }} onClose={() => (setHanding(undefined), again())} />}
       {using && <ActionDialog space={space} service={service} action={using} onClose={() => (setUsing(undefined), again())} />}
     </>
   );

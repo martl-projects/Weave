@@ -9020,13 +9020,14 @@ export class WeaveNode implements Backend {
   #keyvaultInfo(k: KeyvaultState, added = true): KeyvaultInfo {
     const ref = (id: string) => ({ id, name: this.#spaces.has(id) ? this.#spaceName(this.#spaces.get(id)!) : id });
     const users = this.#services.storedServices().filter((s) => s.contract.uses?.[k.platform]).map((s) => ({ service: s.name, rights: s.contract.uses![k.platform], projects: s.spaces.filter((id) => this.#spaces.has(id)).map(ref) }));
-    return { name: k.name, title: k.title, ...(k.about ? { about: k.about } : {}), platform: k.platform, ...(k.resources ? { resources: k.resources } : {}), settings: k.settings, apps: k.apps, handed: Object.entries(k.handed).map(([id, resources]) => ({ project: ref(id), resources })), users, log: k.log.map((l) => ({ ...l, project: ref(l.project) })).reverse(), ...(k.problem ? { problem: k.problem } : {}), added };
+    const apps = k.apps.map((a) => ({ ...a, handed: Object.entries(a.handed).map(([id, resources]) => ({ project: ref(id), resources })) }));
+    return { name: k.name, title: k.title, ...(k.about ? { about: k.about } : {}), platform: k.platform, ...(k.resources ? { resources: k.resources } : {}), settings: k.settings, apps, users, log: k.log.map((l) => ({ ...l, project: ref(l.project) })).reverse(), ...(k.problem ? { problem: k.problem } : {}), added };
   }
 
   async keyvaults(): Promise<KeyvaultInfo[]> {
     const mine = this.#keyvaults.list();
     const more = this.#keyvaults.shipped().filter((s) => !mine.some((k) => k.name === s.name));
-    return [...mine.map((k) => this.#keyvaultInfo(k)), ...more.map((s) => this.#keyvaultInfo({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), platform: s.manifest.keyvault!.platform, ...(s.manifest.keyvault!.resources ? { resources: s.manifest.keyvault!.resources } : {}), digest: s.digest, settings: s.manifest.env ?? [], apps: [], handed: {}, log: [] }, false))];
+    return [...mine.map((k) => this.#keyvaultInfo(k)), ...more.map((s) => this.#keyvaultInfo({ name: s.name, title: s.manifest.name, ...(s.about ? { about: s.about } : {}), platform: s.manifest.keyvault!.platform, ...(s.manifest.keyvault!.resources ? { resources: s.manifest.keyvault!.resources } : {}), digest: s.digest, settings: s.manifest.env ?? [], apps: [], log: [] }, false))];
   }
 
   async addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo> {
@@ -9051,12 +9052,18 @@ export class WeaveNode implements Backend {
     return this.#keyvaultInfo(await this.#keyvaults.finishApp(input.id));
   }
 
-  async keyvaultReachable(input: { name: string }): Promise<Array<{ value: string; note?: string }>> {
-    return this.#keyvaults.reachable(input.name);
+  async keyvaultReachable(input: { name: string; app?: string }): Promise<Array<{ value: string; note?: string }>> {
+    return this.#keyvaults.reachable(input.name, input.app);
   }
 
-  async handKeyvault(input: { name: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {
-    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, project: this.#project(input.project).id, resources: input.resources }));
+  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo> {
+    const k = this.#keyvaultInfo(this.#keyvaults.removeApp(input));
+    for (const u of k.users) this.#services.restartSoon(u.service);
+    return k;
+  }
+
+  async handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {
+    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, ...(input.app ? { app: input.app } : {}), project: this.#project(input.project).id, resources: input.resources }));
     // Its users bring their projects in step with what they're handed now.
     for (const u of k.users) this.#services.restartSoon(u.service);
     return k;

@@ -1729,8 +1729,7 @@ export class Services {
             if (!rights) throw new Error(`${name}'s contract doesn't use a ${platform} keyvault`);
             const space = this.h.spaces.get(String(args[1]));
             if (!space || !current.spaces.includes(space.id)) throw new Error(`${name} isn't in that space`);
-            const vault = this.h.keyvaults().forPlatform(platform);
-            if (call === 'handed') return JSON.stringify(vault?.handed[space.id] ?? []);
+            if (call === 'handed') return JSON.stringify(this.h.keyvaults().handedTo(platform, space.id));
             const resources = (Array.isArray(args[2]) ? args[2] : []).map(String).slice(0, 100);
             return JSON.stringify(await this.h.keyvaults().mint({ platform, service: name, project: space.id, resources, rights }));
           }
