@@ -9062,6 +9062,10 @@ export class WeaveNode implements Backend {
     return this.#services.servicePanels(...args);
   }
 
+  serviceLists(...args: Parameters<Services['serviceLists']>): ReturnType<Services['serviceLists']> {
+    return this.#services.serviceLists(...args);
+  }
+
   serviceActions(...args: Parameters<Services['serviceActions']>): ReturnType<Services['serviceActions']> {
     return this.#services.serviceActions(...args);
   }

@@ -6,12 +6,15 @@
     "writes": ["github.added"],
     "net": ["api.github.com"],
     "uses": {"github": {"administration": "write", "metadata": "read"}},
-    "actions": [{"name": "status", "label": "See who gets access", "who": "members"}],
+    "actions": [
+      {"name": "offers", "label": "See the repositories offered", "who": "members"},
+      {"name": "decline", "label": "Decline a repository here", "who": "maintainers", "input": [{"name": "id", "label": "Repository"}]},
+      {"name": "accept", "label": "Accept a declined repository again", "who": "maintainers", "input": [{"name": "id", "label": "Repository"}]}
+    ],
     "version": "1.0"
   },
   "wasm": {
     "component": "github-access.wasm",
-    "panel": "panel",
-    "panels": [{"name": "repos", "title": "Repositories", "who": "members", "page": "index.html", "covers": ["status"]}]
+    "lists": [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github", "label": "Offer repositories of yours"}, "remove": {"action": "decline", "label": "Decline here"}, "use": {"account": "github", "label": "Get access"}, "covers": ["accept"]}]
   }
 }

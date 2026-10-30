@@ -1,5 +1,5 @@
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -750,6 +750,35 @@ export class Services {
       ...(p.covers ? { covers: p.covers } : {}),
       mine: mayAct(p.who, this.h.identity.author, { owner: state.founder, maintainers: state.maintainers, members: state.members }, (board) => this.h.boardReaders(space, board), (group, person) => this.inGroup(group, person)),
     }));
+  }
+
+  /**
+   * A shipped service's lists in a space, those you may see (its list action is yours), with which buttons are yours:
+   * an action's as its who says there; handing from a keyvault, whoever runs it (what's handed is theirs); sharing
+   * your account, everyone's.
+   */
+  async serviceLists(input: { space: string; service: string }): Promise<ServiceListInfo[]> {
+    const did = await this.serviceDid(input.service);
+    const profile = (await this.serviceProfiles()).find((p) => p.did === did);
+    if (profile?.origin.kind !== 'shipped' || profile.origin.checked !== 'verified') return [];
+    const s = shippedHere(this.h).get(profile.origin.name);
+    const lists = s?.manifest.wasm?.lists ?? [];
+    if (!lists.length) return [];
+    const actions = await this.serviceActions(input);
+    const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
+    const runner = profile.person.did === this.h.identity.author && this.storedServices().some((x) => this.serviceKey(x.name).did === did);
+    return lists
+      .filter((l) => mine(l.list))
+      .map((l) => ({
+        name: l.name,
+        title: l.title,
+        ...(l.item ? { item: l.item } : {}),
+        list: l.list,
+        ...(l.add ? { add: { ...l.add, mine: 'hand' in l.add ? runner : mine(l.add.action) } } : {}),
+        ...(l.remove ? { remove: { ...l.remove, mine: mine(l.remove.action) } } : {}),
+        ...(l.use ? { use: { ...l.use, mine: 'account' in l.use ? true : mine(l.use.action) } } : {}),
+        ...(l.covers ? { covers: l.covers } : {}),
+      }));
   }
 
   /** The services this Weave ships, as the app offers them. */

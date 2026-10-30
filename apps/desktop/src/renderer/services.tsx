@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
+import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceListInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
 import type { ActionWho, ServiceContract } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
 import { AccountProofDialog } from './accounts.tsx';
 import { ago, api, bump, onItem, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
+import { ServiceList } from './lists.tsx';
 
 /*
  * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
@@ -544,7 +545,7 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
 }
 
 /** A service's settings changed here: its pages show what's current (detail: its key). */
-const SERVICE_CHANGED = 'weave-service-changed';
+export const SERVICE_CHANGED = 'weave-service-changed';
 const serviceChanged = (did: string) => dispatchEvent(new CustomEvent(SERVICE_CHANGED, { detail: did }));
 
 export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
@@ -711,22 +712,28 @@ export interface ScopedAction {
 export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
+  const { data: lists } = useApi(() => api<ServiceListInfo[]>('serviceLists', { space: space.id, service: service.did }).catch(() => [] as ServiceListInfo[]), [space.id, service.did]);
   const [using, setUsing] = useState<ServiceActionInfo>();
+  // Its lists stand in for the actions they use: their buttons are on them.
+  const listed = (lists ?? []).flatMap((l) => [l.list, ...(l.add?.action ? [l.add.action] : []), ...(l.remove ? [l.remove.action] : []), ...(l.use?.action ? [l.use.action] : []), ...(l.covers ?? [])]);
   // An option of the app's own can stand in for one of its actions (a picker for publishing a release, say), and so can
   // one of its own pages, where it's shown.
   // And Weave's own view of what it does (a website service's running websites, say): `covered`.
-  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? [])]);
+  const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? []), ...listed]);
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
-  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && shown.length))];
-  if (!all.length && !shown.length) return null;
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
+  if (!all.length && !shown.length && !lists?.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
   const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
   const options = sections.filter((who) => all.some((a) => JSON.stringify(a.who) === JSON.stringify(who)));
   return (
     <div className="action-scopes">
-      {/* Its own pages first (each shown only to who may see it), then what one can do with it, by who may. */}
+      {/* Its lists first (the same for every service), then its own pages (each shown only to who may see it), then what one can do with it, by who may. */}
+      {(lists ?? []).map((l) => (
+        <ServiceList key={l.name} space={space} service={service} list={l} actions={actions ?? []} />
+      ))}
       {shown.map((p) => (
         <div className="service-panel-box" key={p.name}>
           {p.who !== 'members' && <div className="small muted">{title(p.who)} see this</div>}
@@ -790,7 +797,7 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
   );
 }
 
-function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [asked, setAsked] = useState<string>();
   const { data: answer } = useApi(

@@ -436,6 +436,20 @@ export interface ServicePanelInfo {
   covers?: string[];
 }
 
+/** One of a service's lists in a space, with which of its buttons you may use (mine): only lists you may see. */
+export interface ServiceListInfo {
+  name: string;
+  title: string;
+  item?: string;
+  /** The action that answers its items. */
+  list: string;
+  add?: { action?: string; hand?: string; label?: string; mine: boolean };
+  remove?: { action: string; label?: string; mine: boolean };
+  use?: { action?: string; account?: string; label: string; mine: boolean };
+  /** Other actions its items offer. */
+  covers?: string[];
+}
+
 /** One of a service's actions in a space: who may use it there (its contract's, or tighter), and whether you may. */
 export interface ServiceActionInfo {
   name: string;
@@ -1781,6 +1795,8 @@ export interface Backend {
   serviceActions(input: { space: string; service: string }): Promise<ServiceActionInfo[]>;
   /** A service's own pages for its card in a space (a shipped service's), each for whoever may see it. */
   servicePanels(input: { space: string; service: string }): Promise<ServicePanelInfo[]>;
+  /** A service's lists in a space (those you may see), with which of their buttons are yours. */
+  serviceLists(input: { space: string; service: string }): Promise<ServiceListInfo[]>;
   /** Maintainers: tighten who may use one of a service's actions in a space (null: as its contract says). */
   setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]>;
   /** Maintainers: who may get one of the project's artifacts (null: everyone there). Providers' nodes refuse the rest. */
@@ -2189,7 +2205,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

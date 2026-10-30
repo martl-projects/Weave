@@ -158,6 +158,58 @@ export interface AppWasm {
    * network: they act only through its actions (checked as buttons are), and get what they show by asking one.
    */
   panels?: AppPanel[];
+  /**
+   * Its lists, shown by Weave in its card the same way for every service: what's in each (an action answers its
+   * items), + to add one, a trash can to remove one, and each item's main button: each only for who may (as its
+   * action says, or whoever runs it for what's theirs).
+   */
+  lists?: AppList[];
+}
+
+/**
+ * A list of a service's things (running websites, repositories offered, releases, files). Its items, as `list`
+ * answers them: [{id, title, detail?, url?, done?, use?: false, remove?: false, more?: [{action, label}]}], where done
+ * is said instead of the main button (you have it), and more are each item's other buttons.
+ */
+export interface AppList {
+  name: string;
+  title: string;
+  /** What one is, in words: "website", "access offer". */
+  item?: string;
+  /** The action that answers its items. */
+  list: string;
+  /** Adding one: an action of its own, or whoever runs it handing one from their keyvault for a platform (hand). */
+  add?: { action: string; label?: string } | { hand: string; label?: string };
+  /** Removing one: an action, given {id}. */
+  remove?: { action: string; label?: string };
+  /** Each item's main button: an action given {id}, or sharing your proven account on a platform with the project (account). */
+  use?: { action: string; label: string } | { account: string; label: string };
+  /** Other actions its items offer (more): shown on them, not as buttons of their own. */
+  covers?: string[];
+}
+
+/** A list as a manifest names it, checked: or why not. */
+function parseList(value: unknown): AppList | string {
+  const o = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+  const name = (v: unknown) => (typeof v === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(v) ? v : undefined);
+  const part = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
+  const label = (v: unknown) => text(v, 40) || undefined;
+  const add = part(o.add);
+  const remove = part(o.remove);
+  const use = part(o.use);
+  const list: AppList = {
+    name: name(o.name) ?? '',
+    title: text(o.title, 60),
+    ...(text(o.item, 40) ? { item: text(o.item, 40) } : {}),
+    list: name(o.list) ?? '',
+    ...(add && name(add.action) ? { add: { action: name(add.action)!, ...(label(add.label) ? { label: label(add.label) } : {}) } } : add && name(add.hand) ? { add: { hand: name(add.hand)!, ...(label(add.label) ? { label: label(add.label) } : {}) } } : {}),
+    ...(remove && name(remove.action) ? { remove: { action: name(remove.action)!, ...(label(remove.label) ? { label: label(remove.label) } : {}) } } : {}),
+    ...(use && label(use.label) && name(use.action) ? { use: { action: name(use.action)!, label: label(use.label)! } } : use && label(use.label) && name(use.account) ? { use: { account: name(use.account)!, label: label(use.label)! } } : {}),
+    ...(Array.isArray(o.covers) && o.covers.some((c) => name(c)) ? { covers: o.covers.flatMap((c) => (name(c) ? [name(c)!] : [])).slice(0, 10) } : {}),
+  };
+  if (!list.name || !list.title || !list.list) return '{"name": "websites", "title": "Running websites", "list": "list", "add": {"action": "open"}, "remove": {"action": "close"}, "use": {"action": "visit", "label": "Visit"}}';
+  if ((o.add !== undefined && !list.add) || (o.remove !== undefined && !list.remove) || (o.use !== undefined && !list.use)) return 'add is {"action"} or {"hand": platform}, remove {"action"}, use {"action", "label"} or {"account": platform, "label"}';
+  return list;
 }
 
 export interface AppPanel {
@@ -578,10 +630,16 @@ export function checkManifest(input: unknown): ManifestCheck {
       if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
       else panels.push({ name, title: text(o.title, 60) || name, who, page, ...(covers.length ? { covers } : {}) });
     }
+    const lists: AppList[] = [];
+    for (const [i, l] of (Array.isArray(raw.lists) ? raw.lists : []).slice(0, 6).entries()) {
+      const got = parseList(l);
+      if (typeof got === 'string') problems.push(`wasm.lists[${i}] is ${got}`);
+      else lists.push(got);
+    }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
     else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
-    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
+    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}), ...(lists.length ? { lists } : {}) };
   }
   // A fetcher: a component (wasm) that fetches artifacts for its person, reaching only the hosts it names.
   let fetcher: AppFetcher | undefined;
@@ -682,6 +740,10 @@ export function checkManifest(input: unknown): ManifestCheck {
     }
   }
 
+  for (const l of wasm?.lists ?? []) {
+    const named = [l.list, ...(l.add && 'action' in l.add ? [l.add.action] : []), ...(l.remove ? [l.remove.action] : []), ...(l.use && 'action' in l.use ? [l.use.action] : []), ...(l.covers ?? [])];
+    for (const a of named) if (!service?.actions?.some((x) => x.name === a)) problems.push(`wasm.lists: ${l.name} names the action ${a}, but its service has no such action`);
+  }
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };

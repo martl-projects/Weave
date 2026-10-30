@@ -11,17 +11,23 @@ import { accounts, answer, handed, load, log, me, publish, readers, save, tickEv
 const API = 'https://api.github.com';
 const isRepo = (value) => typeof value === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(value);
 
-/** Its projects, each with the repositories its person handed it (in their GitHub keyvault). */
-const projects = () =>
-  JSON.parse(me()).spaces.map((s) => {
-    let repos = [];
+/**
+ * Its projects, each with the repositories its person offers it (handed it, in their GitHub keyvault) and the
+ * project took (its maintainers didn't decline them there).
+ */
+const projects = () => {
+  const declined = state().declined ?? {};
+  return JSON.parse(me()).spaces.map((s) => {
+    let offered = [];
     try {
-      repos = JSON.parse(handed('github', s.id)).filter(isRepo);
+      offered = JSON.parse(handed('github', s.id)).filter(isRepo);
     } catch (error) {
       log(error?.message ?? String(error));
     }
-    return { id: s.id, name: s.name, repos };
+    const no = new Set(declined[s.id] ?? []);
+    return { id: s.id, name: s.name, offered, repos: offered.filter((r) => !no.has(r)) };
   });
+};
 
 /** Access to a repository for one of the projects it was handed to, from its person's keyvault. */
 const tokenFor = (project, repo) => JSON.parse(token('github', project, [repo])).token;
@@ -140,18 +146,41 @@ async function syncAll() {
   }
 }
 
-/** How it's going in a project: its repositories, and whether the one asking gets access (and as whom). */
-function status(space, who) {
+/**
+ * The access offers in a project, as a list Weave shows (its items): each repository offered, what members get there,
+ * and for the one asking whether they have it (done), or that it's theirs. Declined ones too, to accept again.
+ */
+function offers(space, who) {
   const project = projects().find((p) => p.id === space);
   const s = state();
   const mine = JSON.parse(accounts(space, 'github')).find((a) => a.did === who && a.verified);
-  const repos = project?.repos ?? [];
-  return {
-    repos: repos.map((repo) => ({ repo, url: `https://github.com/${repo}`, ...(s.status[repo] ?? {}) })),
-    // The one asking: its person (their repositories), or a member with access (and where it's given so far).
-    ...(who === JSON.parse(me()).person ? { yours: true } : {}),
-    ...(mine ? { me: { handle: mine.handle, given: repos.filter((r) => mine.handle.toLowerCase() in (s.gave[r] ?? {})) } } : {}),
-  };
+  const owner = who === JSON.parse(me()).person;
+  return (project?.offered ?? []).map((repo) => {
+    const st = s.status[repo] ?? {};
+    const declined = !project.repos.includes(repo);
+    const given = mine && mine.handle.toLowerCase() in (s.gave[repo] ?? {});
+    const what = st.personal === undefined ? '' : st.personal ? 'write access' : 'read access';
+    return {
+      id: repo,
+      title: repo,
+      url: `https://github.com/${repo}`,
+      detail: declined ? 'Declined in this project' : [what && `members get ${what}`, `${st.given ?? 0} given so far`, st.problem].filter(Boolean).join(' · '),
+      ...(owner ? { done: 'Yours' } : given ? { done: '✓ You have access' } : mine && !declined ? { done: `Inviting ${mine.handle}…` } : {}),
+      ...(declined ? { use: false, remove: false, more: [{ action: 'accept', label: 'Accept again' }] } : {}),
+    };
+  });
+}
+
+/** A project's maintainers decline an offer there (or accept it again): it gives nobody access there through it. */
+function decline(space, repo, no) {
+  if (!isRepo(repo)) throw new Error('which repository?');
+  change((s) => {
+    const all = new Set((s.declined ??= {})[space] ?? []);
+    if (no) all.add(repo);
+    else all.delete(repo);
+    s.declined[space] = [...all];
+    if (!s.declined[space].length) delete s.declined[space];
+  });
 }
 
 export async function onEvent(text) {
@@ -163,8 +192,15 @@ export async function onEvent(text) {
   if (item.kind !== 'weave.service.request') return;
   const { action } = item.body ?? {};
   try {
-    if (action === 'status') return void answer(item.id, undefined, JSON.stringify(status(item.space.id, item.author)), undefined);
-    throw new Error('it answers status');
+    if (action === 'offers') return void answer(item.id, undefined, JSON.stringify(offers(item.space.id, item.author)), undefined);
+    if (action === 'decline' || action === 'accept') {
+      const repo = String(item.body?.data?.id ?? '');
+      decline(item.space.id, repo, action === 'decline');
+      answer(item.id, action === 'decline' ? `${repo} is declined here: nobody gets access through it in this project.` : `${repo} is accepted here again.`, undefined, undefined);
+      // In step at once: access given through it here goes (or comes).
+      return syncAll();
+    }
+    throw new Error('it answers offers, decline and accept');
   } catch (error) {
     answer(item.id, undefined, undefined, error?.message ?? String(error));
   }

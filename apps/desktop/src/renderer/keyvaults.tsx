@@ -133,7 +133,7 @@ export function KeyvaultsBox() {
 }
 
 /** Which of what your access reaches (your repositories) a project gets: yours alone to say. */
-function HandDialog({ vault, project, resources, onClose }: { vault: KeyvaultInfo; project: { id: string; name: string }; resources: string[]; onClose(): void }) {
+export function HandDialog({ vault, project, resources, onClose }: { vault: KeyvaultInfo; project: { id: string; name: string }; resources: string[]; onClose(): void }) {
   // Asked once (it asks GitHub, which takes a moment): not again on every event, which would never let it finish.
   const [reachable, setReachable] = useState<Array<{ value: string; note?: string }>>();
   const [error, setError] = useState<string>();

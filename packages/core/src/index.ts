@@ -365,7 +365,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ARTIFACT, KIND_ROOM, artifactsOf, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_ARTIFACT, KIND_ROOM, artifactsOf, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, startCommand, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, formatBlobRef, MAX_BLOB, parseBlobRef, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,

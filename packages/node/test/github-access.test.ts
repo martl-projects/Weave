@@ -312,12 +312,18 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
         expect([...github.repos.get('acme/secret')!.invited.keys()]).toEqual(['lena-gh']);
       }, { timeout: 60_000, interval: 200 });
       expect(github.invited.get('lena-gh')?.permission).toBe('pull');
-      expect((await ask(lena, access.did, 'status')).data).toMatchObject({ repos: [{ repo: 'acme/site', personal: false, given: 1 }, { repo: 'acme/secret', given: 1 }], me: { handle: 'lena-gh' } });
+      // Its list, the same as every service's: + (offering more) is martl's alone, whose repositories they are; the trash
+      // can (declining) is maintainers'; getting access, everyone's.
+      expect(await martl.serviceLists({ space: 'Site', service: access.did })).toMatchObject([{ name: 'repos', list: 'offers', add: { hand: 'github', mine: true }, remove: { action: 'decline', mine: true }, use: { account: 'github', mine: true }, covers: ['accept'] }]);
+      expect(await lena.serviceLists({ space: 'Site', service: access.did })).toMatchObject([{ add: { mine: false }, remove: { mine: false }, use: { mine: true } }]);
+      // Its list, as Weave shows it: each repository offered, and that she has access.
+      expect((await ask(lena, access.did, 'offers')).data).toMatchObject([{ id: 'acme/site', url: 'https://github.com/acme/site', detail: 'members get read access · 1 given so far', done: '✓ You have access' }, { id: 'acme/secret', done: '✓ You have access' }]);
       // Each token cut to one repository and the service's rights, and logged in his keyvault.
       expect(github.mints).toContainEqual({ repositories: ['site'], permissions: { administration: 'write', metadata: 'read' } });
       expect(github.mints.filter((m) => m.repositories).every((m) => m.repositories!.length === 1 && JSON.stringify(m.permissions) === JSON.stringify({ administration: 'write', metadata: 'read' }))).toBe(true);
       expect((await martl.keyvaults())[0].log[0]).toMatchObject({ service: 'github-access', project: { name: 'Site' }, rights: { administration: 'write', metadata: 'read' } });
-      expect((await ask(kofi, access.did, 'status')).data).not.toHaveProperty('me');
+      expect(((await ask(kofi, access.did, 'offers')).data as Array<{ done?: string }>).some((i) => i.done)).toBe(false);
+      expect(((await ask(martl, access.did, 'offers')).data as Array<{ done?: string }>).map((i) => i.done)).toEqual(['Yours', 'Yours']);
 
       // A person's repository too: members write there (GitHub has no read-only collaborators for it).
       await choose('Site', ['acme/site', 'acme/secret', 'martl/notes']);
@@ -337,7 +343,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // leaves Site, and keeps her access by Docs.
       await lena.linkAccount({ platform: 'github', handle: 'lena-gh', proof: '0123456789abcdef01234567', space: 'Docs' });
       await choose('Docs', ['acme/site']);
-      await vi.waitFor(async () => expect((await ask(lena, access.did, 'status', undefined, 'Docs')).data).toMatchObject({ repos: [{ repo: 'acme/site' }] }), { timeout: 90_000, interval: 500 });
+      await vi.waitFor(async () => expect((await ask(lena, access.did, 'offers', undefined, 'Docs')).data).toMatchObject([{ id: 'acme/site' }]), { timeout: 90_000, interval: 500 });
       const rounds = () => github.calls.filter((c) => c === 'GET /repos/acme/site/collaborators').length;
       await martl.removeMember('Site', lena.identity.author);
       sync([martl, lena, kofi]);
@@ -348,9 +354,11 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       await vi.waitFor(() => expect(github.calls.filter((c) => c === 'GET /repos/acme/site/invitations').length).toBe(rounds()), { timeout: 60_000, interval: 200 });
       expect(github.collaborators.has('lena-gh')).toBe(true);
 
-      // Docs chooses another instead of its own: hers goes.
-      await choose('Docs', ['martl/notes']);
+      // Docs' maintainers decline it there (only members can't): hers goes, and it shows as declined, to accept again.
+      await expect(lena.askService({ space: 'Docs', service: access.did, text: 'decline', action: 'decline', data: { id: 'acme/site' } })).rejects.toThrow(/only maintainers/);
+      await ask(martl, access.did, 'decline', { id: 'acme/site' }, 'Docs');
       sync([martl, lena, kofi]);
+      expect((await ask(martl, access.did, 'offers', undefined, 'Docs')).data).toMatchObject([{ id: 'acme/site', detail: 'Declined in this project', use: false, remove: false, more: [{ action: 'accept' }] }]);
       await vi.waitFor(() => expect(github.collaborators.has('lena-gh')).toBe(false), { timeout: 60_000, interval: 200 });
       expect(github.calls).toContain('DELETE /repos/acme/site/collaborators/lena-gh');
     } finally {
