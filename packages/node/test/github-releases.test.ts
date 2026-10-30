@@ -240,6 +240,13 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
         expect(answer?.data).toMatchObject({ url: expect.stringMatching(/^https:\/\/objects\.githubusercontent\.com\//) });
       }, { timeout: 30_000, interval: 300 });
       expect(github.seen).toEqual(['app', 'app']);
+
+      // Withdrawn by a maintainer (only): no longer listed, nor handed out.
+      await expect(lena.withdrawArtifact({ project: 'Bot', artifact: release })).rejects.toThrow(/only the maintainers of Bot withdraw/);
+      expect((await martl.withdrawArtifact({ project: 'Bot', artifact: release })).some((a) => a.id === release)).toBe(false);
+      await vi.waitFor(async () => expect((await lena.artifacts('Bot')).some((a) => a.id === release)).toBe(false), { timeout: 10_000, interval: 100 });
+      const gone = await lena.askService({ space: 'Bot', service: provider.did, text: 'still?', data: { protocol: 'artifact.fetch', artifact: release, platform: platformKey() } });
+      await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Bot', service: provider.did })).find((r) => r.id === gone.id)?.results[0]?.error).toMatch(/no such release in this project/), { timeout: 20_000, interval: 200 });
     } finally {
       clearInterval(syncing);
       await martl.removeService('github-releases').catch(() => {});

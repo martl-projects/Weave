@@ -1,4 +1,4 @@
-import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -1030,6 +1030,15 @@ export class Services {
     const who = input.who === null ? 'members' : parseWho(input.who);
     if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_ACCESS, body: { artifact: input.artifact, who: who as unknown as Json } }));
+    return this.artifacts(project.id);
+  }
+
+  /** Maintainers: withdraw a release. It's no longer listed, launched or handed out; who got it keeps what they have. */
+  async withdrawArtifact(input: { project: string; artifact: string }): Promise<ArtifactInfo[]> {
+    const project = this.h.project(input.project);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such release (withdrawn already?)`);
+    this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: input.artifact } }));
     return this.artifacts(project.id);
   }
 

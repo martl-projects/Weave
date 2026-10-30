@@ -274,7 +274,19 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
               {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
             </>
           ),
-          ...(maintainer ? { tools: [{ icon: 'gear' as const, label: 'Who may get it', run: () => setAccess(a) }] } : {}),
+          ...(maintainer
+            ? {
+                tools: [{ icon: 'gear' as const, label: 'Who may get it', run: () => setAccess(a) }],
+                // Withdrawn: no longer listed, launched or handed out; who got it keeps what they have.
+                remove: {
+                  label: 'Withdraw this release',
+                  run: () =>
+                    void (async () =>
+                      (await ask(`Withdraw ${a.name} ${a.tag}? It's no longer listed, launched or handed out in p/${a.project.name}. Who got it already keeps what they have; releasing ${a.tag} again brings it back.`, 'Withdraw')) &&
+                      attempt(() => api('withdrawArtifact', { project: a.project.id, artifact: a.id }).then(bump), `${a.name} ${a.tag} is withdrawn`))(),
+                },
+              }
+            : {}),
         }))}
       />
       {adding && <AddArtifactDialog artifact={adding} onClose={() => setAdding(undefined)} />}
@@ -726,8 +738,8 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
   const by = service.person.name ?? shortDid(service.person.did);
   const its = rooms.filter((r) => r.offeredBy?.did === service.did);
   const extras: ScopedAction[] = [
-    // Asking it in words: only where it has no page of its own (its page is how one talks to it).
-    ...(!hostsSites(service) && service.contract.reads !== 'nothing' ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true), withoutPage: true as const }] : []),
+    // Asking it in words: only a service one talks to (no actions, list or page of its own: those are how one uses it).
+    ...(!hostsSites(service) && service.contract.reads !== 'nothing' && !service.contract.actions?.length && !service.contract.offers?.length ? [{ key: 'ask', label: `Ask ${service.name}…`, who: 'members' as const, mine: true, run: () => setAsking(true), withoutPage: true as const }] : []),
   ];
   return (
     <fieldset className="project-service">

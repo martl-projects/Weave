@@ -865,8 +865,13 @@ export interface Artifact {
  * GitHub release or another source. The project's app (weave.app) stays what it is.
  */
 export const KIND_ARTIFACT = 'weave.artifact';
+/**
+ * A release withdrawn by a maintainer ({artifact: its id}): no longer listed, launched or handed out from then on.
+ * Signed events stay (who got it keeps what they have); a new release of the same tag counts again.
+ */
+export const KIND_ARTIFACT_WITHDRAWN = 'weave.artifact.withdrawn';
 
-/** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get. */
+/** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get, never one withdrawn. */
 export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
   const byTag = new Map<string, Artifact>();
   for (const e of [...entries].filter((x) => x.kind === KIND_APP || x.kind === KIND_ARTIFACT).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
@@ -885,7 +890,8 @@ export function artifactsOf(entries: Array<{ id: string; kind: string; body: Jso
     const source = artifactSourceOf(manifest);
     byTag.set(`${manifest.app}\0${tag}`, { id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
   }
-  return [...byTag.values()].sort((a, b) => b.time.localeCompare(a.time));
+  const withdrawn = new Set(entries.filter((e) => e.kind === KIND_ARTIFACT_WITHDRAWN && maintainers.has(e.event.author)).map((e) => (e.body as { artifact?: unknown } | null)?.artifact));
+  return [...byTag.values()].filter((a) => !withdrawn.has(a.id)).sort((a, b) => b.time.localeCompare(a.time));
 }
 
 export interface Room {

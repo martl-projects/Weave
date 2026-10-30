@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { artifactKindOf, artifactSourceOf, artifactsOf, checkManifest, KIND_APP, KIND_ARTIFACT, MANIFEST_EXAMPLE, type Did } from '../src/index.ts';
+import { artifactKindOf, artifactSourceOf, artifactsOf, checkManifest, KIND_APP, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, MANIFEST_EXAMPLE, type Did } from '../src/index.ts';
 
 const base = { app: 'band-ab', name: 'BAND AB!', services: [{ port: 3000 }] };
 
@@ -71,6 +71,17 @@ describe('artifacts: their kind and where their files are', () => {
     // A file published as the app, or an app as a file, isn't one.
     expect(artifactsOf([entry('x', KIND_APP, guide, '2026-01-03'), entry('y', KIND_ARTIFACT, service, '2026-01-03')], maintainers)).toEqual([]);
     expect(artifactKindOf(checkManifest(base).manifest!)).toBe('website');
+  });
+
+  it('are gone once a maintainer withdraws one, and back when it is released again', () => {
+    const service = { ...base, service: { reads: 'addressed', writes: [], version: '1.0' }, install: { github: 'acme/bot', tag: 'v1', assets: { 'linux-x64': { file: 'bot.tgz', sha256: sha } } } };
+    const withdraw = (id: string, by: string, time: string) => ({ id: `w-${id}-${time}`, kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: id } as never, event: { author: by as Did, time } });
+    const released = [entry('a', KIND_APP, service, '2026-01-01')];
+    expect(artifactsOf([...released, withdraw('a', 'did:key:zMaintainer', '2026-01-02')], maintainers)).toEqual([]);
+    // Only a maintainer withdraws one.
+    expect(artifactsOf([...released, withdraw('a', 'did:key:zSomeone', '2026-01-02')], maintainers).map((a) => a.id)).toEqual(['a']);
+    // The same tag released again: a new release, there.
+    expect(artifactsOf([...released, withdraw('a', 'did:key:zMaintainer', '2026-01-02'), entry('b', KIND_APP, service, '2026-01-03')], maintainers).map((a) => a.id)).toEqual(['b']);
   });
 
   it('can come from anywhere a provider knows, not only GitHub', () => {

@@ -8957,6 +8957,10 @@ export class WeaveNode implements Backend {
     return this.#services.launchWebsite(...args);
   }
 
+  withdrawArtifact(...args: Parameters<Services['withdrawArtifact']>): ReturnType<Services['withdrawArtifact']> {
+    return this.#services.withdrawArtifact(...args);
+  }
+
   setArtifactAccess(...args: Parameters<Services['setArtifactAccess']>): ReturnType<Services['setArtifactAccess']> {
     return this.#services.setArtifactAccess(...args);
   }
