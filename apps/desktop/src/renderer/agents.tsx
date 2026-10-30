@@ -122,8 +122,6 @@ const KIND_WORDS: Record<string, string> = {
   'weave.vote': 'vote on proposals',
   'weave.post.coauthor': 'confirm co-authorships',
   'weave.post.edit': 'edit its posts',
-  'weave.github.repo': 'link GitHub repositories to spaces you own or maintain',
-  'weave.github.account': 'give spaces your GitHub account',
   'weave.app': "publish projects' apps and point them at releases",
   'weave.project.page': "change your projects' pages",
   'weave.project.public': 'show projects on your public hub',

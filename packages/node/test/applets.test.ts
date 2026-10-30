@@ -81,7 +81,9 @@ describe('applets', { timeout: 60_000 }, () => {
       app: 'echo-bot',
       name: 'Echo bot',
       version: 1,
-      service: { reads: 'addressed', writes, version: '1.0' },
+      service: { reads: 'addressed', writes, actions: [{ name: 'greetings', label: 'See the greetings', who: 'members' }, { name: 'greet', label: 'Greet one', who: 'members', input: [{ name: 'id', label: 'Who' }] }], version: '1.0' },
+      // Its list, like any service's: a program's, not only a WebAssembly one's, not only Weave's own.
+      lists: [{ name: 'greetings', title: 'Greetings', item: 'greeting', list: 'greetings', use: { action: 'greet', label: 'Greet' } }],
       start: { release: { [platformKey()]: ['node', 'bot.cjs'] } },
       env: [{ name: 'GREETING', label: 'Greeting' }],
     });
@@ -104,8 +106,12 @@ describe('applets', { timeout: 60_000 }, () => {
       lena.runServices({ port: api.port });
       await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'] })).rejects.toThrow(/approve it first: Weave would run "node bot.cjs" from Echo bot v1\.0, released in Bots, as a service that reads only what is asked of it; writes only its answers/);
       await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true })).rejects.toThrow(/Echo bot needs Greeting/);
+      // Never by a name of Weave's own: nothing passes for one of those.
+      await expect(lena.addService({ name: 'github-checkout', artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } })).rejects.toThrow(/"github-checkout" is the name of one Weave ships/);
       const bot = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } });
       expect(bot).toMatchObject({ name: 'echo-bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, artifact: { tag: 'v1.0', project: { name: 'Bots' } } });
+      // Its card shows its list as Weave's own services' do: read from the release it runs, as checked here.
+      expect(await lena.serviceLists({ space: 'Friends', service: bot.did })).toEqual([{ name: 'greetings', title: 'Greetings', item: 'greeting', list: 'greetings', use: { action: 'greet', label: 'Greet', mine: true } }]);
       expect(lena.replica.authority.grant(bot.did)?.permissions.sort()).toEqual(['weave.service.profile', 'weave.service.result']);
       const ready = (await lena.serviceReady('echo-bot')).artifact;
       expect(ready?.error).toBeUndefined();

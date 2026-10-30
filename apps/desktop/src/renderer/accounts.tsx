@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AccountInfo, AppOpen, MyAccountInfo, PlatformInfo, Profile, SpaceInfo } from '@weave/node/client';
-import { Icon } from './icons.tsx';
+import { Icon, isIconName, type IconName } from './icons.tsx';
 import { api, bridge, bump, navigate, onItem, useApi } from './lib.ts';
 import { copy, spaceHref } from './posts.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
@@ -12,6 +12,15 @@ import { attempt, AsyncButton, Modal } from './ui.tsx';
  */
 
 /** Where an account can show besides your hub: the projects and groups you're in. */
+/** A platform's icon, as its verifier names it (Weave knows no platform's look); a plain link where none does. */
+function usePlatformIcon(): (platform: string) => IconName {
+  const { data: platforms } = useApi(() => api<PlatformInfo[]>('platforms').catch(() => [] as PlatformInfo[]), []);
+  return (platform) => {
+    const icon = platforms?.find((p) => p.platform === platform)?.icon;
+    return isIconName(icon) ? icon : 'externalLink';
+  };
+}
+
 function usePlaces(): SpaceInfo[] {
   const { data } = useApi(() => api<SpaceInfo[]>('spaces').catch(() => [] as SpaceInfo[]), []);
   return (data ?? []).filter((s) => s.kind === 'project' || s.kind === 'group');
@@ -193,6 +202,7 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
 export function LinkedAccountsBox() {
   const { data: mine, reload } = useApi(() => api<MyAccountInfo[]>('myAccounts').catch(() => [] as MyAccountInfo[]), []);
   const places = usePlaces();
+  const iconOf = usePlatformIcon();
   const [adding, setAdding] = useState(false);
   const toggle = (a: MyAccountInfo, space: string | undefined, on: boolean, where: string) => attempt(() => showIn(a, space, on).then(() => (reload(), bump())), on ? `${a.handle} shows ${where} now` : `${a.handle} no longer shows ${where}`);
   return (
@@ -201,7 +211,7 @@ export function LinkedAccountsBox() {
       {(mine ?? []).map((a) => (
         <div className="linked-account" key={`${a.platform} ${a.handle}`}>
           <div className="field-row">
-            <Icon name={a.platform === 'github' ? 'github' : 'externalLink'} />
+            <Icon name={iconOf(a.platform)} />
             <span className="grow">
               <b>{a.platform}</b>{' '}
               <span className="small">
@@ -240,12 +250,13 @@ export function LinkedAccountsBox() {
 
 /** Under a hub's name: the accounts elsewhere they show, each opening its page; ✓ when its proof holds. */
 export function HubAccounts({ profile }: { profile: Profile }) {
+  const iconOf = usePlatformIcon();
   if (!profile.accounts?.length) return null;
   return (
     <>
       {profile.accounts.map((a) => (
         <a key={a.platform} className="hub-github" href={a.url} target="_blank" rel="noopener noreferrer" title={a.verified ? `A proof on ${a.platform} names this identity` : `Not checked: ${a.platform} couldn't be reached`}>
-          <Icon name={a.platform === 'github' ? 'github' : 'externalLink'} /> {a.handle}
+          <Icon name={iconOf(a.platform)} /> {a.handle}
           {a.verified && ' ✓'}
         </a>
       ))}

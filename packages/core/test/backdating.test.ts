@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { closingUpTo, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_VOTE, tally, type Entry } from '../src/index.ts';
 import { boardRulesOf, KIND_BOARD_RULE, KIND_INVITE_CLOSE, KIND_TREASURY_SPLIT, splitOf } from '../src/index.ts';
-import { createIdentity, KIND_INVITE, KIND_JOIN, KIND_MAINTAINER, KIND_REMOVE, KIND_SPACE_CREATE, newSpace, openIn, Replica, sealFor, spaceState, visibleIn, type Inner, type SigningIdentity, type SpaceKind } from '../src/index.ts';
+import { createIdentity, eventId, KIND_INVITE, KIND_JOIN, KIND_MAINTAINER, KIND_REMOVE, KIND_SETTLE, KIND_SPACE_CREATE, newSpace, openIn, Replica, sealFor, spaceState, visibleIn, type Inner, type SigningIdentity, type SpaceKind } from '../src/index.ts';
 
 /*
  * Julian's issue "Removed members can backdate events" (cpjHYTDQ): an event's
@@ -20,10 +20,13 @@ function setup(kind: SpaceKind) {
   const post = (who: SigningIdentity, inner: Inner, time: string) => replica.append(who, { ...sealFor(space, inner), time });
   post(founder, { kind: KIND_SPACE_CREATE, body: { name: 'Synths' } }, at(0));
   const opened = () => replica.events().flatMap((event) => (openIn(space, event) ? [{ event, inner: openIn(space, event)! }] : []));
-  const state = () => spaceState(kind, founder.did, opened());
+  // In the order this replica got them, as a node does.
+  const state = () => spaceState(kind, founder.did, opened(), { arrival: (e) => replica.arrival((e as { id?: string }).id ?? '') });
   /** What a removal names: the last number of the person's key the remover holds. */
   const upTo = (who: SigningIdentity) => ({ [who.did]: replica.number(who.did) });
-  return { founder, post, opened, state, upTo };
+  /** What a removal names as seen, both ways (upTo and at): the person's key at its last number here. */
+  const anchor = (who: SigningIdentity) => ({ upTo: upTo(who), at: { [who.did]: { c: 0, s: 0, n: replica.number(who.did) } } });
+  return { founder, post, opened, state, upTo, anchor, replica };
 }
 
 describe('backdated events of a removed member', () => {
@@ -89,14 +92,15 @@ describe('backdated events of a removed member', () => {
     post(founder, { kind: KIND_INVITE, body: { invite: 'i1', expires: at(50) } }, at(1));
     post(eve, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(2));
     post(founder, { kind: KIND_REMOVE, body: { member: eve.did, upTo: upTo(eve) } }, at(10));
-    // The founder leaves "removed" behind with a fresh invite; Eve joins with it later. That's a leave-and-rejoin path, not removed → in:
-    // a removed member only comes back once they left on their own, as before. Here: she was removed, so she stays out, whatever the date.
+    // Her old link doesn't bring her back; a fresh one from the founder, made after the removal, does (_Ak3UUmp).
+    post(eve, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(15));
+    expect(state().members.has(eve.did)).toBe(false);
     post(founder, { kind: KIND_INVITE, body: { invite: 'i2', expires: at(50) } }, at(20));
     post(eve, { kind: KIND_JOIN, body: { invite: 'i2' } }, at(21));
-    expect(state().members.has(eve.did)).toBe(false);
+    expect(state().members.has(eve.did)).toBe(true);
   });
 
-  it('two maintainers removing each other at once: both removals count', () => {
+  it('two maintainers removing each other at once: the one this node got first counts, until the owner settles which', () => {
     const { founder, post, state, upTo } = setup('project');
     const lena = createIdentity();
     const eve = createIdentity();
@@ -108,11 +112,41 @@ describe('backdated events of a removed member', () => {
     // Neither has seen the other's removal: each names the other's last number before it.
     const lenaSeen = upTo(eve);
     const eveSeen = upTo(lena);
-    post(lena, { kind: KIND_REMOVE, body: { member: eve.did, upTo: lenaSeen } }, at(10));
-    post(eve, { kind: KIND_REMOVE, body: { member: lena.did, upTo: eveSeen } }, at(10));
-    expect(state().members.has(lena.did)).toBe(false);
+    const lenas = post(lena, { kind: KIND_REMOVE, body: { member: eve.did, upTo: lenaSeen } }, at(10));
+    const eves = post(eve, { kind: KIND_REMOVE, body: { member: lena.did, upTo: eveSeen } }, at(10));
+    expect(state().members.has(lena.did)).toBe(true);
     expect(state().members.has(eve.did)).toBe(false);
-    expect(state().maintainers.has(founder.did)).toBe(true);
+    expect(state().unsettled).toEqual([{ first: eventId(lenas), second: eventId(eves) }]);
+    // The owner saw Eve's first: their settle counts on every node, whatever order it got them in.
+    post(founder, { kind: KIND_SETTLE, body: { first: eventId(eves), second: eventId(lenas) } }, at(11));
+    expect(state().members.has(lena.did)).toBe(false);
+    expect(state().members.has(eve.did)).toBe(true);
+    expect(state().unsettled).toBeUndefined();
+  });
+
+  it("a removed maintainer can't take down who removed them by not naming them (H7hk7X9S, Julian's four variants)", () => {
+    const variants: Array<(lena: SigningIdentity, upTo: (who: SigningIdentity) => Record<string, number>) => Record<string, unknown>> = [
+      () => ({}),
+      () => ({ upTo: {}, at: {} }),
+      () => ({ upTo: { [createIdentity().did]: 1 }, at: {} }),
+      (lena) => ({ upTo: { [lena.did]: 1 }, at: { [lena.did]: { c: 0, s: 0, n: 1 } } }),
+    ];
+    for (const variant of variants) {
+      const { founder, post, state, upTo, anchor } = setup('project');
+      const lena = createIdentity();
+      const kofi = createIdentity();
+      post(founder, { kind: KIND_INVITE, body: { invite: 'i1', expires: at(50) } }, at(1));
+      post(lena, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(2));
+      post(kofi, { kind: KIND_JOIN, body: { invite: 'i1' } }, at(3));
+      post(founder, { kind: KIND_MAINTAINER, body: { member: lena.did } }, at(4));
+      post(founder, { kind: KIND_MAINTAINER, body: { member: kofi.did } }, at(5));
+      post(lena, { kind: KIND_REMOVE, body: { member: kofi.did, ...anchor(kofi) } }, at(10));
+      // Kofi, removed, answers with Lena's removal dated a moment before hers, naming her as he likes.
+      post(kofi, { kind: KIND_REMOVE, body: { member: lena.did, ...variant(lena, upTo) } }, at(9));
+      expect([...state().members.keys()].sort()).toEqual([founder.did, lena.did].sort());
+      expect(state().maintainers.has(lena.did)).toBe(true);
+      expect(state().maintainers.has(kofi.did)).toBe(false);
+    }
   });
 
   it('removals written before upTo existed are judged by time, as before', () => {

@@ -107,7 +107,7 @@ function BuyTicket({ show }: { show: ShowInfo }) {
       </div>
     );
   if (!wallet) return <WalletNeeded why={`Tickets are paid from your own wallet, so ${person(show.host)} knows the payment is yours.`} />;
-  return <PayFromWallet show={show.id} payee={person(show.host)} onDone={() => setPaying(false)} />;
+  return <PayFromWallet show={show.id} creator={show.host.did} payee={person(show.host)} onDone={() => setPaying(false)} />;
 }
 
 /** The split as rows to edit: the project's treasury, people, addresses. */

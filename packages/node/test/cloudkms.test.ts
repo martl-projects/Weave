@@ -47,7 +47,7 @@ async function companyOn(provider: ProviderSpec, server: VaultCredentials, princ
   await acme.say({ space: 'Acme', text: 'welcome to Acme' });
 
   // Kofi enrolls with his company sign-in only: no keys of the key service on his computer.
-  const kofi = await WeaveNode.enroll(await acme.enrollLink(), dir(), { idToken: oidc.token({ sub: 'kofi', email: 'kofi@acme.example', groups: ['employees'] }), name: 'Kofi' });
+  const kofi = await WeaveNode.enroll(await acme.enrollLink(), dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi', email: 'kofi@acme.example', groups: ['employees'] }), name: 'Kofi' });
   sync(acme, kofi);
   sync(kofi, acme);
   await kofi.reconcile();

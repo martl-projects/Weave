@@ -98,7 +98,11 @@ export class Releases {
     const download = await this.#download(a, asset);
     const total = release.asset.size ?? download.size;
     job.progress = { state: 'downloading', done: 0, ...(total ? { total } : {}) };
-    const file = join(dir, `.download-${release.asset.file}`);
+    // Downloaded under its own name (a single file, not an archive, is kept as it is, by that name).
+    const downloading = join(dir, `.download-${tagFolder(release.tag)}`);
+    rmSync(downloading, { recursive: true, force: true });
+    mkdirSync(downloading, { recursive: true });
+    const file = join(downloading, release.asset.file);
     await saveVerified(download.body, file, release.asset.sha256, (n) => {
       job.progress!.done += n;
     });
@@ -106,7 +110,7 @@ export class Releases {
     const target = join(dir, tagFolder(release.tag));
     rmSync(target, { recursive: true, force: true });
     const root = unpack(file, target);
-    rmSync(file, { force: true });
+    rmSync(downloading, { recursive: true, force: true });
     // The folder holds the release: say so the way a checkout would, with its manifest.
     if (!existsSync(join(root, 'weave.app.json'))) writeJson(join(root, 'weave.app.json'), app);
     // Who delivered it, for the record: it matched the release either way.

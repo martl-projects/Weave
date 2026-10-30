@@ -5,7 +5,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { afterAll, describe, expect, it } from 'vitest';
-import { checksumAddress, contractWalletCheck, EIP1271_MAGIC, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
+import { checksumAddress, contractWalletCheck, EIP1271_MAGIC, KIND_TREASURY, readPayment, safeAddress, TEST_USDC, TRANSFER_TOPIC, treasurySaltNonce } from '@weave/core';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -430,5 +430,94 @@ describe('who may retire an address or announce a treasury', () => {
     expect(await martin.labels({ target: mw.address })).toEqual([]);
     expect((await martin.treasury('Kasse')).address).toBe(real.address);
     expect((await martin.treasury('Kasse')).announced).toBe(true);
+  });
+});
+
+describe("someone else's tier id (DSwoQOgF)", () => {
+  it("doesn't let anyone republish a tier under its id and take its requests or payments", async () => {
+    const [alice, mallory, bob] = [person('Alice'), person('Mallory'), person('Bob')];
+    const all = [alice, mallory, bob];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    const tier = await alice.createTier({ name: 'Backers', price: 500 });
+    syncAll();
+    // Mallory publishes "the same" tier, later, paying her address.
+    mallory.replica.write(mallory.identity, { kind: 'weave.tier', body: { tier: tier.id, name: 'Backers', price: 500, currency: 'EUR', open: true, onchain: { chain: TEST_USDC.chain, token: TEST_USDC.token, symbol: 'USDC', decimals: 6, to: '0x' + '11'.repeat(20), amount: 5_000_000 } } });
+    syncAll();
+    // Alice's tier is still Alice's, unchanged, on everyone's node.
+    expect((await bob.tiers('Alice'))[0]).toMatchObject({ id: tier.id, creator: { did: alice.identity.author } });
+    expect((await bob.tiers('Alice'))[0].onchain).toBeUndefined();
+    // By id alone it's ambiguous now: Bob is asked whose; joining from Alice's hub names her.
+    await expect(bob.requestMembership({ tier: tier.id, note: 'take my money' })).rejects.toThrow(/name its creator/);
+    await bob.requestMembership({ tier: tier.id, creator: alice.identity.author, note: 'take my money' });
+    syncAll();
+    expect((await alice.membershipRequests()).map((r) => r.name)).toEqual(['Bob']);
+    expect(await mallory.membershipRequests()).toEqual([]);
+    // Alice can still let people into her own tier.
+    await alice.grantMembership({ tier: tier.id, who: 'Bob', months: 1 });
+  });
+});
+
+describe("someone else's show id", () => {
+  it('a backdated show under the same id is a show of its own: it replaces nothing', async () => {
+    const [martin, mallory, bob] = [person('Martin'), person('Mallory'), person('Bob')];
+    const all = [martin, mallory, bob];
+    const syncAll = () => {
+      for (let round = 0; round < 2; round++) for (const a of all) for (const b of all) if (a !== b) sync(a, b);
+    };
+    for (const n of all) {
+      const w = wallet();
+      await n.linkWallet({ address: w.address, proof: w.sign(await n.walletMessage(w.address)) });
+    }
+    const show = await martin.createShow({ name: 'Premiere', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T22:00:00Z', price: 1_000_000 });
+    syncAll();
+    const fake = { show: show.id, name: 'Premiere', starts: '2030-01-01T20:00:00Z', ends: '2030-01-01T22:00:00Z', price: { ...show.price, to: '0x' + '22'.repeat(20) }, hosts: [mallory.identity.author], split: [{ to: mallory.identity.author, share: 10000 }] };
+    mallory.replica.write(mallory.identity, { kind: 'weave.show', body: fake, time: '2020-01-01T00:00:00.000Z' } as never);
+    syncAll();
+    // Martin's show is still his, with his Safe; by id alone Bob is asked whose.
+    expect((await bob.shows()).find((s) => s.id === show.id && s.host.did === martin.identity.author)?.safe.address).toBe(show.safe.address);
+    await expect(bob.paymentRequest({ show: show.id })).rejects.toThrow(/name its host/);
+    expect((await bob.paymentRequest({ show: show.id, creator: martin.identity.author })).to).toBe(show.safe.address);
+    // Martin's own lookups find his.
+    expect((await martin.cancelShow(show.id)).host.did).toBe(martin.identity.author);
+  });
+});
+
+describe("someone else's treasury for a space (7iriYk4C)", () => {
+  it("pays a held community's treasury as computed here: neither a stranger's nor a moderator's own Safe", async () => {
+    const [alice, mallory] = [person('Alice'), person('Mallory')];
+    const both = () => {
+      for (let round = 0; round < 2; round++) {
+        sync(alice, mallory);
+        sync(mallory, alice);
+      }
+    };
+    const w = wallet();
+    await alice.linkWallet({ address: w.address, proof: w.sign(await alice.walletMessage(w.address)) });
+    await alice.createProject({ name: 'P' });
+    const c = await alice.createCommunity({ name: 'C' });
+    await alice.announceTreasury('C');
+    const own = (await alice.treasury('C')).address!;
+    await alice.setSplit({ project: 'P', preset: 'community', community: 'C' });
+    const community = async () => (await alice.treasury('P')).recipients!.find((r) => r.part === 'community')!.address;
+    expect(await community()).toBe(own);
+    // A stranger announces a Safe of her own for C, consistent by construction.
+    const mw = wallet();
+    const safe = safeAddress([mw.address], 1, treasurySaltNonce(c.id));
+    const announce = () => mallory.replica.write(mallory.identity, { kind: KIND_TREASURY, body: { space: c.id, kind: 'community', address: safe, owners: [mw.address], threshold: 1 } });
+    both();
+    announce();
+    both();
+    expect(await community()).toBe(own);
+    // As a moderator of C, later than Alice: still not what Alice's project pays.
+    await mallory.joinSpace(await alice.invite('C'));
+    both();
+    await alice.setModerator({ community: 'C', who: 'Mallory', on: true });
+    both();
+    announce();
+    both();
+    expect(await community()).not.toBe(safe);
+    expect((await alice.treasury('P')).allocations!.some((a) => a.address.toLowerCase() === safe.toLowerCase())).toBe(false);
   });
 });

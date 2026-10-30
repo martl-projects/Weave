@@ -21,6 +21,8 @@ export {
   KIND_DELEGATE,
   KIND_IDENTITY,
   KIND_REVOKE,
+  withinRevocation,
+  type RevokedHead,
   KIND_ROTATE,
   KIND_ORG_FREEZE,
   KIND_SEALED,
@@ -114,6 +116,13 @@ export {
   spaceScope,
   spaceState,
   parseUpTo,
+  parseAnchors,
+  KIND_SETTLE,
+  inviteKeys,
+  joinProof,
+  joinProven,
+  isPast,
+  type Anchor,
   rekeyCounts,
   type Cutoff,
   spaceTopic,
@@ -377,6 +386,7 @@ export {
   eventIdV2,
   isWellFormedV2,
   isWireItemV2,
+  innerHash,
   signContentEventV2,
   signControlEventV2,
   signEventV2,
@@ -451,3 +461,4 @@ export { KIND_CATALOG_ENTRY, catalogOf, parseCatalogEntry, type CatalogEntry } f
 export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type SpaceServiceSetting } from './servicesettings.ts';
 export { KIND_SERVICE_POLICY, KIND_ARTIFACT_ACCESS, artifactAccessOf, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';
 export { KIND_ACCOUNT, accountProofText, accountClaimsOf, isPlatform, type AccountClaim } from './accounts.ts';
+export { parsePack, type Pack, type PackStep } from './packs.ts';

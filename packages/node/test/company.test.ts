@@ -59,8 +59,8 @@ describe('company accounts', { timeout: 120_000 }, () => {
     expect(link).toMatch(/^weave:enroll:/);
 
     const lenaDir = dir();
-    const lena = await WeaveNode.enroll(link, lenaDir, { idToken: oidc.token({ sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees', 'engineering', 'weave-admins'] }), name: 'Lena' });
-    const kofi = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'kofi@acme', email: 'kofi@acme.example', groups: ['employees'] }) });
+    const lena = await WeaveNode.enroll(link, lenaDir, { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', email: 'lena@acme.example', groups: ['employees', 'engineering', 'weave-admins'] }), name: 'Lena' });
+    const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', email: 'kofi@acme.example', groups: ['employees'] }) });
     const all = [acme, ceo, lena, kofi];
     // The words wait, sealed, until the company group is here; then they go to the company and are deleted.
     expect(existsSync(join(lenaDir, 'enroll.json'))).toBe(true);
@@ -106,8 +106,8 @@ describe('company accounts', { timeout: 120_000 }, () => {
   it('recovers a company-owned identity on a new computer without showing the words, and freezes it when someone leaves', async () => {
     const acme = await company('acme-recovery');
     const link = await acme.enrollLink();
-    const kofi = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
-    const lena = await WeaveNode.enroll(link, dir(), { idToken: oidc.token({ sub: 'lena@acme', groups: ['employees'] }), name: 'Lena' });
+    const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
+    const lena = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', groups: ['employees'] }), name: 'Lena' });
     const all = [acme, kofi, lena];
     syncAll(all);
     for (const node of [kofi, lena]) await node.reconcile();
@@ -156,7 +156,8 @@ describe('company accounts', { timeout: 120_000 }, () => {
     expect(await martl.links()).toEqual([expect.objectContaining({ did: work.identity.author, state: 'asked' })]);
     await martl.link({ who: work.identity.author });
     syncAll(all);
-    expect(await carol.links(martl.identity.author)).toEqual([expect.objectContaining({ did: work.identity.author, state: 'linked', company: { did: acme.identity.author, name: 'Acme' } })]);
+    // Carol isn't in the company: she sees the company as the account names it, unconfirmed.
+    expect(await carol.links(martl.identity.author)).toEqual([expect.objectContaining({ did: work.identity.author, state: 'linked', company: { did: acme.identity.author, name: 'Acme', unconfirmed: true } })]);
     expect((await carol.profile(martl.identity.author)).links.map((l) => l.name)).toEqual(['martl @ Acme']);
 
     // Sealed into a space: only its members see it.
@@ -270,5 +271,36 @@ describe('company accounts', { timeout: 120_000 }, () => {
     await promoted.say({ space: 'Acme', text: 'after the takeover' });
     expect((await promoted.company())?.name).toBe('Acme');
     await promoted.close();
+  });
+});
+
+describe("naming a company in one's identity doesn't make one a colleague (MHV79Ro6)", { timeout: 120_000 }, () => {
+  it('a stranger who claims Acme is no colleague and shows no company; a vouched colleague is', async () => {
+    const acme = await company('acme-org-claim');
+    const link = await acme.enrollLink();
+    const lena = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'lena@acme', groups: ['employees'] }), name: 'Lena' });
+    const kofi = await WeaveNode.enroll(link, dir(), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'kofi@acme', groups: ['employees'] }), name: 'Kofi' });
+    const all = [acme, lena, kofi];
+    syncAll(all);
+    for (const node of [lena, kofi]) await node.reconcile();
+    await settle();
+    syncAll(all);
+    await acme.reconcile();
+    syncAll(all);
+    const mallory = WeaveNode.create('Mallory', dir(), { org: acme.identity.author }).node;
+    const people = [...all, mallory];
+    const syncPeople = () => {
+      for (let round = 0; round < 3; round++) for (const a of people) for (const b of people) if (a !== b) sync(a, b);
+    };
+    syncPeople();
+    for (const [a, b] of [[lena, mallory], [mallory, lena], [lena, kofi], [kofi, lena]] as const) await a.setEdge({ edge: 'follow', who: b.identity.author, on: true });
+    syncPeople();
+    await acme.companyAction({ action: 'settings', directs: 'company' });
+    syncPeople();
+    await expect(lena.say({ space: (await lena.openChat(mallory.identity.author)).id, text: 'hi colleague?' })).rejects.toThrow(/only with colleagues/);
+    expect((await lena.profile(mallory.identity.author)).company).toBeUndefined();
+    expect((await lena.profile(kofi.identity.author)).company).toMatchObject({ did: acme.identity.author });
+    await lena.say({ space: (await lena.openChat(kofi.identity.author)).id, text: 'hi Kofi' });
+    for (const node of people) await node.close();
   });
 });

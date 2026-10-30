@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
-import type { AppImage, AppManifest, AppSetting, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, Pack, RoomPages, BoardType, Choice, Did, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -348,6 +348,18 @@ export interface ShippedServiceInfo {
  * A fetcher of yours: a client app that fetches artifacts for you, with what providers grant you, in the projects
  * you allow (or all). Its settings are yours (your own sign-in), kept sealed on your node: only which are filled in.
  */
+/**
+ * The releases a project's provider could publish, in its own words (Weave knows no platform): where they are (its
+ * source's ref, and in words), what to do when there are none, and why one can't be published (problem).
+ */
+export interface AppReleases {
+  repo: string;
+  where?: string;
+  empty?: string;
+  releases: Array<{ tag: string; name: string; problem?: string; published?: string; files: number; prerelease: boolean }>;
+  releaseWorkflow?: boolean;
+}
+
 /** A keyvault of yours: what it holds access to, what you handed which project, who uses it, and what it minted. */
 export interface KeyvaultInfo {
   name: string;
@@ -1348,8 +1360,8 @@ export interface Profile {
   projects: PublicProject[];
   /** Accounts elsewhere they show on their hub, checked (one whose proof doesn't hold isn't shown). */
   accounts?: Array<{ platform: string; handle: string; url?: string; verified?: true }>;
-  /** A company-owned identity: the company that holds it. */
-  company?: { did: Did; name?: string; frozen?: true };
+  /** A company-owned identity: the company that holds it (unconfirmed: it says so, but this node can't see the company vouch for it). */
+  company?: { did: Did; name?: string; frozen?: true; unconfirmed?: true };
   /** Their other identities, where both sides say so. */
   links: LinkInfo[];
 }
@@ -1433,8 +1445,8 @@ export interface LinkInfo {
   since: string;
   /** When it stopped counting going forward: the company froze one side (it stays as history). */
   until?: string;
-  /** The other side is company-owned. */
-  company?: { did: Did; name?: string };
+  /** The other side is company-owned (unconfirmed: as it says, not seen vouched for here). */
+  company?: { did: Did; name?: string; unconfirmed?: true };
   /** Sealed into this space rather than public. */
   space?: string;
 }
@@ -1879,6 +1891,16 @@ export interface Backend {
   /** Add a keyvault Weave ships: an app you made for a service before moves into it. */
   addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo>;
   removeKeyvault(name: string): Promise<void>;
+  /**
+   * Add a keyvault or fetcher someone released in a project (its release by id or tag, or its latest): approved once,
+   * its component fetched, checked against what was released and pinned. It then shows in Keys & devices, beside
+   * Weave's own, and runs as they do. Without approve, what it would run is said and nothing happens.
+   */
+  addClientApp(input: { project: string; artifact?: string; approve?: boolean }): Promise<KeyvaultInfo | FetcherInfo>;
+  /** Take out one added from a release (a keyvault or fetcher): what it holds or fetches for is forgotten. */
+  removeClientApp(name: string): Promise<void>;
+  /** Setup packs this Weave ships: steps it walks you through, like adding GitHub to a project (a keyvault, its app, services). */
+  setupPacks(): Promise<Pack[]>;
   /** Make your app for a keyvault (GitHub's App manifest flow): the page to open, and an id to wait on (finishKeyvaultApp). */
   startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }>;
   finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo>;
@@ -2115,7 +2137,7 @@ export interface Backend {
   /** Release a Weave service (maintainers): an image, ref:tag, with its manifest in its "dev.weave.service" label; pinned to its digest. */
   releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
-  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
+  appReleases(project: string): Promise<AppReleases>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
@@ -2154,7 +2176,8 @@ export interface Backend {
   tiers(who?: string): Promise<TierInfo[]>;
   /** Ask a creator to let you into a tier; `note` is for them, e.g. how you paid. Only they can read it. */
   /** Ask to join a tier; for tiers sold through Gumroad, send the license key from your receipt and you're in as soon as the creator's node checked it. */
-  requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void>;
+  /** Ask to join a tier; name its creator when others publish under the same id (the app always does). */
+  requestMembership(input: { tier: string; creator?: string; note?: string; license?: string; payment?: string }): Promise<void>;
   /** Requests waiting for you, as a creator. */
   membershipRequests(): Promise<MembershipRequestInfo[]>;
   /** Let someone into a tier (or renew them) for some months; their node gets the tier's keys. */
@@ -2183,9 +2206,10 @@ export interface Backend {
   safeProposals(safe?: string): Promise<SafeProposalInfo[]>;
 
   /** How to pay a tier (a month) or a show (a ticket) from your linked wallet: a QR link and a transaction. */
-  paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo>;
+  /** `creator`: whose tier, or whose show (its host), when others publish under the same id. */
+  paymentRequest(input: { tier?: string; creator?: string; show?: string }): Promise<PaymentRequestInfo>;
   /** Look on chain for that payment from your wallets since a block; found, it is sent on (as if its hash were pasted). */
-  findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
+  findPayment(input: { tier?: string; creator?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }>;
 
   // ticketed events: paid into the show's Safe, paid out by its split after it, or back if it's called off
   /** Set up a show (you host it; other hosts must have linked wallets too): its Safe holds the ticket money until it's over. */
@@ -2195,7 +2219,7 @@ export interface Backend {
   /** Shows this node knows, or a project's. */
   shows(project?: string): Promise<ShowInfo[]>;
   /** Ask for a ticket with the transaction that paid it, from your linked wallet; the host's node reads it on chain. */
-  buyTicket(input: { show: string; payment: string }): Promise<void>;
+  buyTicket(input: { show: string; host?: string; payment: string }): Promise<void>;
   /** For the host: every ticket sold and requests not let in; for others: their own ticket. */
   tickets(show: string): Promise<TicketInfo[]>;
   /**
@@ -2276,7 +2300,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',

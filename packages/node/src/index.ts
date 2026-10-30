@@ -126,6 +126,6 @@ export { connectTo, openTunnel, pairWith, type Dialer, type PairedNode, type Rem
 export type { CompanyAction } from './company.ts';
 export { machinePolicy, type MachinePolicy } from './machine.ts';
 export { moveHomeKeyToKeyService, serverCredentials, unlockHomeKey } from './homekey.ts';
-export { browserSignIn, openInBrowser, refreshSignIn, type SignInConfig, type SignInTokens } from './signin.ts';
+export { browserSignIn, openInBrowser, refreshSignIn, signInNonce, type SignInConfig, type SignInTokens } from './signin.ts';
 export type { AuditSinkInput } from './auditsinks.ts';
 export { HARDWARE_KEYSTORES, KEYSTORE_NAMES, type HardwareKeystore, type Keystore } from './vault.ts';

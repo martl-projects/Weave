@@ -98,6 +98,9 @@ const VECTORS = { arrowDown, arrowUp, bulletList, clock, code, database, downloa
 
 export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 
+/** Whether a name (from a manifest, say) is one of these icons. */
+export const isIconName = (name: unknown): name is IconName => typeof name === 'string' && (Object.hasOwn(BITMAPS, name) || Object.hasOwn(VECTORS, name));
+
 export function Icon({ name, size = 16, className = '' }: { name: IconName; size?: number; className?: string }) {
   if (name in BITMAPS) {
     const [small, big] = BITMAPS[name as keyof typeof BITMAPS] as [string, string?];

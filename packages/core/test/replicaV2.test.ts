@@ -5,10 +5,12 @@ import {
   createSubKey,
   delegation,
   eventId,
+  eventIdV2,
   inception,
   Replica,
   revocation,
   signContentEventV2,
+  signEvent,
   signControlEventV2,
   type WeaveRecord,
 } from '../src/index.ts';
@@ -113,18 +115,34 @@ describe('v2 events in the replica', () => {
     const posts = replica.events((r) => r.kind === 'weave.post');
     expect(posts.map((r) => [r.v, r.id])).toEqual([[2, eventId(v1)]]);
     expect(replica.forks.size).toBe(0);
-    // And in the other order: the v2 one first, then the v1 event it re-signs.
+    // And in the other order: the v2 one first waits for the v1 event it re-signs, then takes its place.
     const { laptop: l2, replica: r2 } = person();
     const early = r2.append(l2, { kind: 'weave.post', body: { title: 'x' } });
     const fresh = new Replica();
     for (const r of r2.events((r) => r.kind !== 'weave.post')) fresh.ingest(r);
-    const again = signContentEventV2(l2, { n: early.seq, kind: 'weave.post', space: 'public', body: { title: 'x' }, was: eventId(early) });
-    expect(fresh.ingest({ e: again.event, b: again.body }).status).toBe('accepted');
+    const again = signContentEventV2(l2, { n: early.seq, kind: 'weave.post', space: 'public', body: { title: 'x' }, time: early.time, was: eventId(early) });
+    expect(fresh.ingest({ e: again.event, b: again.body }).status).toBe('pending');
     expect(fresh.ingest(early).status).toBe('accepted');
     expect(fresh.events((r) => r.kind === 'weave.post').map((r) => r.v)).toEqual([2]);
-    // A `was` that names an id another event already holds.
+    // A `was` at another number names no v1 event of this key there: it waits, and takes nothing.
     const thief = signContentEventV2(l2, { n: 9, kind: 'weave.post', space: 'public', body: {}, was: eventId(early) });
-    expect(fresh.ingest({ e: thief.event, b: thief.body })).toEqual({ status: 'rejected', reason: 'id already taken' });
+    expect(fresh.ingest({ e: thief.event, b: thief.body }).status).toBe('pending');
+    expect(fresh.events((r) => r.id === eventId(early)).map((r) => r.body)).toEqual([{ title: 'x' }]);
+    // Re-signing its own v1 event with another body, kind or space is refused: a rewrite isn't a restatement.
+    const rewrite = signContentEventV2(l2, { n: early.seq, kind: 'weave.msg', space: 'public', body: { text: 'rewritten' }, time: early.time, was: eventId(early) });
+    expect(fresh.ingest({ e: rewrite.event, b: rewrite.body }).status).not.toBe('accepted');
+  });
+
+  it("doesn't let another key take an event's id with was (94YOOwAC)", () => {
+    const victim = person();
+    const other = new Replica();
+    for (const r of victim.replica.events()) other.ingest(r);
+    const real = signContentEventV2(victim.laptop, { n: 3, kind: 'weave.post', space: 'public', body: { text: 'mine' } });
+    const attacker = createIdentity();
+    const squat = signContentEventV2(attacker, { n: 1, kind: 'weave.post', space: 'public', body: { text: 'squat' }, was: eventIdV2(real.event) });
+    expect(other.ingest({ e: squat.event, b: squat.body }).status).not.toBe('accepted');
+    expect(other.ingest({ e: real.event, b: real.body }).status).toBe('accepted');
+    expect(other.record2(eventIdV2(real.event))?.author).toBe(victim.laptop.author);
   });
 
   it('voids a revoked key’s v2 events after the cutoff, by number', () => {
@@ -158,5 +176,42 @@ describe('v2 events in the replica', () => {
     expect(replica.ingest({ e: { v: 2, class: 'content' } }).status).toBe('rejected');
     expect(replica.ingest({ e: { ...identity, sig: identity.sig.replace(/^./, (c) => (c === 'A' ? 'B' : 'A')) } }).status).toBe('rejected');
     expect(bodyHash(null)).toBeTypeOf('string');
+  });
+});
+
+describe('peer input that can\'t be read (KixI_JwE)', () => {
+  it('rejects a body with a non-finite number instead of throwing', () => {
+    const laptop = createIdentity();
+    const other = new Replica();
+    const { event } = signContentEventV2(laptop, { n: 1, kind: 'weave.post', space: 'public', body: { x: 1 } });
+    // On the wire {"x":1e400} parses to Infinity, which canonical JSON can't hash.
+    expect(() => other.ingest({ e: event, b: JSON.parse('{"x":1e400}') })).not.toThrow();
+    expect(other.ingest({ e: event, b: { x: Number.POSITIVE_INFINITY } }).status).not.toBe('accepted');
+  });
+});
+
+describe('one key can\'t fill the pending pool (KtpOfhGu)', () => {
+  it("a key's flood of gapped events waits only so far; an honest out-of-order event still waits, and comes in", () => {
+    const attacker = createIdentity();
+    const other = new Replica();
+    let head;
+    const flood = [];
+    for (let i = 0; i < 400; i++) {
+      head = signEvent(attacker, head, { kind: 'weave.post', body: null });
+      flood.push(head);
+    }
+    const rest = flood.slice(1); // its first event never sent
+    const results = rest.map((e) => other.ingest(e));
+    expect(results.filter((r) => r.status === 'pending')).toHaveLength(256);
+    expect(results.at(-1)).toMatchObject({ status: 'rejected', reason: 'too many events of this key waiting' });
+    // An honest laptop's second event before its first: it waits, and comes in when the first does.
+    const { laptop, replica } = person();
+    replica.append2(laptop, { kind: 'weave.space.create', space: 'group:g', body: { name: 'G' } });
+    replica.append2(laptop, { kind: 'weave.space.join', space: 'group:g', body: { invite: 'x' } });
+    const control = replica.events((r) => r.scope === 'group:g').sort((a, b) => a.seq - b.seq);
+    expect(other.ingest(control[1]).status).toBe('pending');
+    for (const r of replica.events((r) => r.scope !== 'group:g')) other.ingest(r);
+    expect(other.ingest(control[0]).status).toBe('accepted');
+    expect(other.events((r) => r.scope === 'group:g')).toHaveLength(2);
   });
 });

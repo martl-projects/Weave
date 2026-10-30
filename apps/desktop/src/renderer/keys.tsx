@@ -303,8 +303,6 @@ const AGENT_KINDS: { kind: string; label: string }[] = [
   { kind: 'weave.vote', label: 'Vote' },
   { kind: 'weave.post.coauthor', label: 'Confirm co-authorship' },
   { kind: 'weave.post.edit', label: 'Edit its posts' },
-  { kind: 'weave.github.repo', label: 'Link GitHub repositories' },
-  { kind: 'weave.github.account', label: 'Give spaces your GitHub account' },
   { kind: 'weave.app', label: 'Publish apps and releases' },
 ];
 

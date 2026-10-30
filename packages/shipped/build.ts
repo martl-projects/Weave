@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { componentize } from '@bytecodealliance/componentize-js';
-import { checkManifest } from '@weave/core';
+import { checkManifest, parsePack } from '@weave/core';
 import { build } from 'esbuild';
 
 const here = import.meta.dirname;
@@ -51,6 +51,20 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
   console.log(`${name}: ${shipped[name].digest}`);
 }
 writeFileSync(join(dist, 'shipped.json'), `${JSON.stringify(shipped, null, 2)}\n`);
+// Its setup packs (packs/*.json): checked, and each step naming something this Weave ships.
+const packs = existsSync(join(here, 'packs')) ? readdirSync(join(here, 'packs')).filter((f) => f.endsWith('.json')).sort() : [];
+const checked = packs.map((f) => {
+  const raw = JSON.parse(readFileSync(join(here, 'packs', f), 'utf8')) as unknown;
+  const { pack, problem } = parsePack(raw);
+  if (!pack) throw new Error(`packs/${f}: ${problem}`);
+  for (const step of pack.steps) {
+    const named = 'service' in step ? step.service : step.keyvault;
+    if (!shipped[named]) throw new Error(`packs/${f}: ${step.kind} ${named} isn't one this Weave ships`);
+  }
+  // As written (Weave checks it again when it reads it).
+  return raw;
+});
+writeFileSync(join(dist, 'packs.json'), `${JSON.stringify(checked, null, 2)}\n`);
 console.log(`${Object.keys(shipped).length} shipped service(s) in packages/shipped/dist`);
 
 /** What it's for, in the app: its README's first paragraph. */

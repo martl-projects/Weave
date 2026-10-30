@@ -83,7 +83,7 @@ describe('spaces', () => {
     expect(event.kind).toBe('weave.sealed');
     expect(event.scope).toBe(spaceScope(space));
     expect(JSON.stringify(event)).not.toContain('members only');
-    expect(openIn(space, event)).toEqual({ kind: 'weave.post', body: { text: 'members only' } });
+    expect(openIn(space, event)).toMatchObject({ kind: 'weave.post', body: { text: 'members only' } });
     expect(openIn(newSpace('project', 'other', founder.did), event)).toBeUndefined();
     expect(replica.events()).toHaveLength(2);
   });

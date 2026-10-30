@@ -89,7 +89,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
-Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example linking a repository and releasing its app: weave.github.repo and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
+Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example publishing posts and releasing its app: weave.post and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
 Your session has a permanent name. weave_whoami says whether yours has one yet (session.name). If not, pick one now: one short pronounceable word, like a person's first name but nobody's around you ("Skala", "Heddle"), and say in one line what this session specializes in (about: "Service-, Netzwerk- und Last-Review"), then call weave_name_session. Weave refuses a name that is taken and lists the names around you: pick another. The name is for good and survives restarts and resumes: never ask to change it, your person renames a session in Weave's Sessions view. Weave shows the session as "name · about" everywhere; set your harness's own session title to that too, once (in the Claude app with its session-title tool; in a terminal ask your person to /rename). Change about and description when your job changes, not per work item.
 
@@ -660,7 +660,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Ask for a permission',
       description:
-        "Ask your person to let you sign more kinds of events (like weave.github.repo to link repositories, weave.app to publish apps, weave.vote to vote). The request waits in their Weave Inbox, where they allow or decline it; check weave_whoami afterwards. Say what you want to do with it.",
+        "Ask your person to let you sign more kinds of events (like weave.app to publish apps, weave.vote to vote). The request waits in their Weave Inbox, where they allow or decline it; check weave_whoami afterwards. Say what you want to do with it.",
       inputSchema: { kinds: z.array(z.string()).min(1).max(10), reason: z.string().max(300).describe('What for, in one sentence') },
     },
     run(async ({ kinds, reason }: { kinds: string[]; reason: string }) => {

@@ -84,12 +84,15 @@ export class Keyvaults {
   readonly #homeOf: () => Home;
   readonly #runtime: Runtime;
   readonly #shippedDir: () => string | undefined;
+  /** Those its person added from releases (clientapps.ts): run exactly as the ones Weave ships. */
+  readonly #fromReleases: () => ShippedService[];
   /** Access minted, by keyvault, app and what it's cut to: used again while it lasts. */
   #minted = new Map<string, { token: string; expires?: number }>();
   /** Apps being made: each waits for the provider. */
   #making = new Map<string, Promise<KeyvaultState>>();
 
-  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined) {
+  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined, fromReleases: () => ShippedService[] = () => []) {
+    this.#fromReleases = fromReleases;
     this.#homeOf = home;
     this.#runtime = runtime;
     this.#shippedDir = shippedDir;
@@ -142,7 +145,7 @@ export class Keyvaults {
 
   /** The keyvaults this Weave ships. */
   shipped(): ShippedService[] {
-    return [...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.keyvault);
+    return [...[...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.keyvault), ...this.#fromReleases()];
   }
 
   state(k: StoredKeyvault): KeyvaultState {
@@ -178,6 +181,10 @@ export class Keyvaults {
     const s = this.shipped().find((x) => x.name === input.shipped);
     if (!s) throw new Error(`this Weave ships no keyvault named ${input.shipped}${this.shipped().length ? ` (it ships ${this.shipped().map((x) => x.name).join(', ')})` : ''}`);
     const all = this.#stored();
+    // One per platform: services' access comes from it, so a second (anyone's) never stands in quietly. Swapped only on purpose.
+    const platform = s.manifest.keyvault!.platform;
+    const other = all.find((k) => k.name !== s.name && this.shipped().find((x) => x.name === k.shipped)?.manifest.keyvault?.platform === platform);
+    if (other) throw new Error(`you have a keyvault for ${platform} already (${other.name}): remove it first to use ${s.name} instead (your services then get their access through that one)`);
     const kept = all.find((k) => k.name === s.name);
     const moved = Object.fromEntries(Object.entries(input.apps ?? {}).map(([setting, a]): [string, StoredApp] => [String(a.info.id ?? setting), { ...a, setting, handed: {} }]));
     const next: StoredKeyvault = { name: s.name, shipped: s.name, digest: s.digest, apps: { ...moved, ...(kept?.apps ?? {}) }, log: kept?.log ?? [] };

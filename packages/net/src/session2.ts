@@ -9,10 +9,13 @@ import type { BlobSource } from './session.ts';
  * prove, on this very connection, that they hold its key.
  *
  * Messages, one JSON object per line:
- * - `hello {v: 2, tags}`: per space this node holds, HMAC(authKey, handshake
- *   hash) for its current and previous key. The handshake hash is known only to
- *   the two ends of this connection, so a tag can't be replayed on another one
- *   and tells nobody else anything. Sent again when this node's spaces change.
+ * - `hello {v: 2, tags}`: per space this node holds, HMAC(authKey, role ‖
+ *   handshake hash) for its current and previous key. The handshake hash is
+ *   known only to the two ends of this connection, so a tag can't be replayed
+ *   on another one and tells nobody else anything. The role (initiator or
+ *   responder) makes each end's tags its own: a peer echoing ours back proves
+ *   nothing, it must show the other role's tag. Sent again when this node's
+ *   spaces change.
  * - `chains {space, heads}`: per signer, the last seq of its control chain in
  *   the space; the other side sends what comes after.
  * - `sync {space, since, until?, bare?}`: content from `since` on, please
@@ -102,8 +105,12 @@ export const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 /** The key a space's tags are made with, derived from one of its keys (so the tag never shows the key itself). */
 export const authKey = (key: Uint8Array): Uint8Array => sha256(new Uint8Array([...utf8('weave/auth/v2'), ...key]));
 
-/** A space's tag on one connection. */
-export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array): string => b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8('weave/tag/v2'), ...handshakeHash])));
+/** Which end of the connection made a tag: the one that dialled, or the one that answered. */
+export type Role = 'initiator' | 'responder';
+
+/** A space's tag on one connection, made by one end: the other end's tag for the same key differs, so a reflected tag never matches. */
+export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array, role: Role): string =>
+  b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8(`weave/tag/v3/${role}`), ...handshakeHash])));
 
 export class PeerSession2 {
   readonly replica: Replica;
@@ -111,6 +118,9 @@ export class PeerSession2 {
   readonly blobs?: BlobSource;
   readonly #access: SpaceAccess;
   readonly #handshakeHash: Uint8Array;
+  /** Our end of the connection, and the peer's: we tag as ours, and expect theirs. */
+  readonly #role: Role;
+  readonly #peerRole: Role;
   /** Spaces both ends hold (public always), and those whose sync has started on this connection. */
   #shared = new Set<string>(['public']);
   /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
@@ -134,7 +144,7 @@ export class PeerSession2 {
   #unsubscribe: () => void;
   #closed = false;
 
-  constructor(replica: Replica, stream: Duplex, options: { access: SpaceAccess; handshakeHash?: Uint8Array; blobs?: BlobSource; neg?: boolean }) {
+  constructor(replica: Replica, stream: Duplex, options: { access: SpaceAccess; handshakeHash?: Uint8Array; initiator?: boolean; blobs?: BlobSource; neg?: boolean }) {
     this.replica = replica;
     this.neg = options.neg !== false;
     this.stream = stream;
@@ -143,6 +153,10 @@ export class PeerSession2 {
     const hash = options.handshakeHash ?? (stream as { handshakeHash?: Uint8Array | null }).handshakeHash;
     if (!hash) throw new Error('a v2 session needs the connection’s handshake hash');
     this.#handshakeHash = hash;
+    const initiator = options.initiator ?? (stream as { isInitiator?: unknown }).isInitiator;
+    if (typeof initiator !== 'boolean') throw new Error('a v2 session needs to know which end of the connection it is');
+    this.#role = initiator ? 'initiator' : 'responder';
+    this.#peerRole = initiator ? 'responder' : 'initiator';
     this.#unsubscribe = replica.onAppend((record) => {
       if (isWireItemV2(record.wire)) this.#offer([record.wire]);
       else this.#offerV1(record.wire);
@@ -164,7 +178,7 @@ export class PeerSession2 {
 
   /** Tell the peer which spaces this node holds (again, after they changed). */
   announce(): void {
-    const tags = this.#access.spaces().flatMap(({ keys }) => keys.map((key) => spaceTag(key, this.#handshakeHash)));
+    const tags = this.#access.spaces().flatMap(({ keys }) => keys.map((key) => spaceTag(key, this.#handshakeHash, this.#role)));
     this.#send({ t: 'hello', v: 2, tags, ...(this.neg ? { features: ['neg'] } : {}) });
     // Spaces new here may be ones the peer already said it holds.
     if (this.#peerTags) this.#hello(this.#peerTags);
@@ -200,7 +214,12 @@ export class PeerSession2 {
         return this.close();
       }
       if (!message || typeof message !== 'object') return this.close();
-      this.#handle(message);
+      // One message a peer sends must never take the process down: what can't be handled is dropped.
+      try {
+        this.#handle(message);
+      } catch {
+        // ignore this message
+      }
     }
   }
 
@@ -351,10 +370,12 @@ export class PeerSession2 {
     const behind = new Set<string>();
     const startedWith = new Map<string, string>([['public', '']]);
     for (const { space, keys } of this.#access.spaces()) {
-      if (keys[0]) startedWith.set(space, spaceTag(keys[0], this.#handshakeHash));
+      // The peer's tags are made as the other end: our own tags, echoed back, match nothing here.
+      const theirTag = (key: Uint8Array) => spaceTag(key, this.#handshakeHash, this.#peerRole);
+      if (keys[0]) startedWith.set(space, theirTag(keys[0]));
       const [current, ...earlier] = keys;
-      if (current && theirs.has(spaceTag(current, this.#handshakeHash))) shared.add(space);
-      else if (earlier.some((key) => theirs.has(spaceTag(key, this.#handshakeHash)))) behind.add(space);
+      if (current && theirs.has(theirTag(current))) shared.add(space);
+      else if (earlier.some((key) => theirs.has(theirTag(key)))) behind.add(space);
     }
     this.#shared = shared;
     for (const space of behind) if (!this.#behind.has(space)) this.#sendKeys(space);
@@ -454,7 +475,7 @@ export class PeerSession2 {
   /** Does the peer's last hello show any key we hold of this space? (Keys come from someone ahead of us, whose current key we don't hold yet.) */
   #peerHasKeyOf(space: string): boolean {
     const theirs = new Set((this.#peerTags ?? []).filter((t): t is string => typeof t === 'string'));
-    return this.#access.spaces().some((held) => held.space === space && held.keys.some((key) => theirs.has(spaceTag(key, this.#handshakeHash))));
+    return this.#access.spaces().some((held) => held.space === space && held.keys.some((key) => theirs.has(spaceTag(key, this.#handshakeHash, this.#peerRole))));
   }
 
   /** Control events of a space the peer lacks, in chain order per signer. */

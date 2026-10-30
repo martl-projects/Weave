@@ -28,6 +28,14 @@ import {
   overBudget,
   type BoardRule,
   KIND_CARRY,
+  KIND_SETTLE,
+  joinProof,
+  inviteKeys,
+  type RevokedHead,
+  canonicalJson,
+  verifyEventV2,
+  isWellFormedV2,
+  innerHash,
   KIND_SHRED,
   KIND_MANAGED,
   KIND_KMS,
@@ -388,7 +396,9 @@ import {
   SERVICE_PREFIX,
   type ServiceContract,
   type Builtin,
+  type Pack,
 } from '@weave/core';
+import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
   HOME_SOURCES,
@@ -485,6 +495,7 @@ import {
   type MyAccountInfo,
   type FetcherInfo,
   type KeyvaultInfo,
+  type AppReleases,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -507,7 +518,7 @@ import { acquireLock } from './lock.ts';
 import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
 import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
-import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, type SignInTokens } from './signin.ts';
+import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, signInNonce, type SignInTokens } from './signin.ts';
 import { startConsole } from './console.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
 import { imageDigest, imageLabels, imageLocation } from './registry.ts';
@@ -531,10 +542,11 @@ import {
   type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
-import { Runtime } from './runtime.ts';
+import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
+import { ClientApps } from './clientapps.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
 import type { Grant as ServiceGrant } from './servicesettings.ts';
@@ -554,6 +566,8 @@ const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.deleg
 /** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
 interface Sso {
   idToken: string;
+  /** The salt the ID token's nonce was made with for this identity (signInNonce). */
+  salt?: string;
   expires?: number;
   refreshToken?: string;
   issuer?: string;
@@ -672,6 +686,8 @@ export interface Decoded {
   space?: StoredSpace;
   /** For events of a read-limited board: which board (they were sealed with its key). */
   board?: string;
+  /** For those: what the event sealed, still under the board's key (with its salt), for a carry to restate checkably. */
+  outer?: Inner;
   private?: true;
 }
 
@@ -712,7 +728,7 @@ interface KeepState {
  * issuer's published keys (RS256), the issuer, the audience, the expiry.
  * Returns its claims, or throws.
  */
-export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[] }> {
+export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[]; nonce?: string }> {
   const [h, b, sig] = token.split('.');
   if (!h || !b || !sig) throw new Error('not a token');
   const header = JSON.parse(Buffer.from(h, 'base64url').toString()) as { alg?: string; kid?: string };
@@ -722,12 +738,12 @@ export async function verifyIdToken(token: string, issuer: string, audience: str
   const jwk = keys.find((k) => !header.kid || k.kid === header.kid);
   if (!jwk) throw new Error('unknown signing key');
   if (!createVerify('RSA-SHA256').update(`${h}.${b}`).verify(createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))) throw new Error('bad signature');
-  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown };
+  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown; nonce?: unknown };
   if (claims.iss !== issuer) throw new Error('wrong issuer');
   if (!(Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(audience)) throw new Error('wrong audience');
   if (!claims.exp || claims.exp * 1000 < Date.now()) throw new Error('expired');
   if (!claims.sub) throw new Error('no subject');
-  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [] };
+  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [], ...(typeof claims.nonce === 'string' ? { nonce: claims.nonce } : {}) };
 }
 
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
@@ -746,8 +762,25 @@ function withoutSecrets(value: Json): Json {
   return value;
 }
 
-/** An event as a carry restates it: its id, who wrote it when, and what it said. */
-const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string }; inner: { kind: string; body: Json } }) => ({
+/** A space's managed setting and its wrapped company halves, by epoch and by who published them. */
+interface ManagedRaw {
+  setting?: ManagedSetting;
+  parts: Map<number, Map<Did, string>>;
+}
+
+/** A promoted server's generation (nQ9JHlUV): { generation }. */
+const KIND_GENERATION = 'weave.org.generation';
+
+/** An escrow's key: its key service part and its company part, both needed. */
+const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
+
+/**
+ * An event as a carry restates it: what it said, with its original signed
+ * envelope (`e`) and the salt sealed with it, so that anyone can check the
+ * restatement against its author's signature (the envelope signs the salted
+ * hash of what it sealed, ih) without the key it was sealed with.
+ */
+const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string; wire?: unknown }; inner: { kind: string; body: Json; salt?: string }; outer?: Inner }) => ({
   id: d.id,
   author: d.event.author,
   signer: d.event.signer,
@@ -755,6 +788,9 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
   time: d.event.time,
   kind: d.inner.kind,
   body: d.inner.body,
+  ...(isWireItemV2(d.event.wire) ? { e: d.event.wire.e as unknown as Json } : {}),
+  // A read-limited board's event sealed its board blob: that's what the envelope signs, so that's what's checked (then opened with the board's key).
+  ...(d.outer ? { sealed: { kind: d.outer.kind, body: d.outer.body } as unknown as Json, ...(d.outer.salt ? { salt: d.outer.salt } : {}) } : d.inner.salt ? { salt: d.inner.salt } : {}),
 });
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
@@ -933,14 +969,6 @@ export class WeaveNode implements Backend {
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
   wasmSetup: { testHosts: Record<string, number>; shippedDir?: string } = { testHosts: {} };
 
-  /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
-  #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
-  /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
-  #gistProofs = new Map<string, Promise<boolean | undefined>>();
-  /** Members' GitHub proofs as checked for access: when, and whether it held. */
-  #accessProofs = new Map<string, { at: number; proven: boolean }>();
-  /** The GitHub login this device's earlier shares were given proofs for (once per run). */
-  #githubSharesProven?: string;
   /** The time, in milliseconds (tests move it forward to reach renewals). */
   clock: () => number = Date.now;
   /** Paired phones using this node remotely (see remote.ts). */
@@ -958,9 +986,11 @@ export class WeaveNode implements Backend {
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
-  #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
+  /** Keyvaults and fetchers I added from releases (clientapps.ts): beside the ones Weave ships, run the same. */
+  #clientApps = new ClientApps(() => this.home, () => this.#releases);
+  #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir, () => this.#clientApps.asShipped('fetcher')));
   /** My keyvaults (keyvaults.ts): my access to platforms, of which my services get only what's derived. */
-  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
+  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir, () => this.#clientApps.asShipped('keyvault'));
   /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
@@ -1007,14 +1037,7 @@ export class WeaveNode implements Backend {
     this.#releaseLock = acquireLock(home);
     this.replica = new Replica(this.#openStore(home));
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
-    if (loadConfig(home).standby) {
-      const refuse = () => {
-        throw new Error('this is a standby server: it follows the active one and writes nothing (weave-server promote, once the active one is gone)');
-      };
-      this.replica.write = refuse;
-      this.replica.append = refuse;
-      this.replica.append2 = refuse;
-    }
+    if (loadConfig(home).standby) this.#refuseWrites();
     this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
@@ -1023,14 +1046,18 @@ export class WeaveNode implements Backend {
     rmSync(joinPath(home.dir, 'github.json'), { force: true });
     for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
+    this.#loadHalves();
+    // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
+    for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#seeGeneration(r);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
+      if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#seeGeneration(event);
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
-      if (event.kind === KIND_SEALED) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
+      if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
@@ -1075,13 +1102,13 @@ export class WeaveNode implements Backend {
    * next root) and this device's key; after that, only the device key is on disk.
    * `writeVersion: 1` writes as v0.3 did, for tests that need an older home.
    */
-  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2; org?: Did } = {}): { node: WeaveNode; words: string } {
+  static create(name: string, dir?: string, options: { writeVersion?: 1 | 2; org?: Did; words?: string } = {}): { node: WeaveNode; words: string } {
     const home = resolveHome(dir);
     if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
     const managed = machinePolicy();
     if (managed.companyOnly && !options.org) throw new Error('this computer is managed by a company: only company accounts are set up here (weave enroll)');
     if (options.org && managed.companies?.length && !managed.companies.includes(options.org)) throw new Error("this computer is managed by another company: its accounts aren't set up here");
-    const words = newRecoveryWords();
+    const words = options.words ?? newRecoveryWords();
     const root = recoveryRoot(words, 0);
     const person: SigningIdentity = { author: root.did, did: root.did, keys: root };
     const device = createSubKey(root.did);
@@ -1148,22 +1175,31 @@ export class WeaveNode implements Backend {
    * deleted (see #continueEnrollment). The app's bundle isn't applied; the
    * company's starting setup is.
    */
-  static async enroll(link: string, dir: string | undefined, options: { idToken?: string; name?: string; open?: (url: string) => void | Promise<void> }): Promise<WeaveNode> {
+  static async enroll(link: string, dir: string | undefined, options: { idToken?: string | ((bind: { nonce: string }) => string); name?: string; open?: (url: string) => void | Promise<void> }): Promise<WeaveNode> {
     const enrollment = decodeEnrollment(link);
+    // The identity's words first: the sign-in is asked for it (its nonce names it, see signInNonce).
+    const fresh = newRecoveryWords();
+    const author = recoveryRoot(fresh, 0).did;
     // Without a token: the company's sign-in, in the browser (its refresh token keeps the account signed in).
     let tokens: SignInTokens | undefined;
-    if (!options.idToken) {
-      if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: give your company sign-in token (--id-token)");
-      tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser);
+    if (typeof options.idToken === 'function') {
+      const salt = b64u.encode(new Uint8Array(randomBytes(16)));
+      tokens = { idToken: options.idToken({ nonce: signInNonce(author, salt) }), salt, expires: 0 };
+    } else if (options.idToken) {
+      // A token from elsewhere can't name this new identity in its nonce: the company would never vouch for it (0siqvEzB).
+      throw new Error("a new company account signs in through the company's sign-in page: run weave enroll <link> without a token");
+    } else {
+      if (!enrollment.signIn) throw new Error("this enrollment link doesn't say where to sign in: ask your company for a new link");
+      tokens = await browserSignIn(enrollment.signIn, options.open ?? openInBrowser, { for: author });
     }
-    const idToken = options.idToken ?? tokens!.idToken;
+    const { idToken, salt } = tokens;
     const name = options.name?.trim() || nameFromToken(idToken) || 'New colleague';
-    const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company });
-    node.#saveSso({ idToken, expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens?.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
+    const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company, words: fresh });
+    node.#saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
-    const { invite } = await node.#takeInvite(enrollment.invite);
-    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, words, idToken } satisfies Enrolling);
+    const { invite, proof } = await node.#takeInvite(enrollment.invite);
+    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, ...(proof ? { proof } : {}), words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
     await node.#continueEnrollment();
     return node;
   }
@@ -1382,7 +1418,7 @@ export class WeaveNode implements Backend {
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
     if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
-    const fields: EventFields = space ? sealFor(this.#cipher(space), inner) : inner;
+    const fields: EventFields = space ? sealFor(await this.#cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
     return this.itemFor(event)!;
   }
@@ -1551,9 +1587,10 @@ export class WeaveNode implements Backend {
     if (options.access?.length && space.kind !== 'project') throw new Error('board rights are for projects');
     const boards = space.kind === 'project' ? this.#spacePosts(space).boards : [];
     const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
-    const invite = b64u.encode(randomBytes(12));
+    // The space reads the link's public key as its id; the link keeps the secret one (inviteKeys).
+    const { invite, key } = inviteKeys();
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
-    const body: Record<string, Json> = { invite, expires };
+    const body: Record<string, Json> = { invite, expires, key: true };
     if (access.length) body.access = access as unknown as Json;
     if (options.accept) body.accept = true;
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE, body }));
@@ -1569,26 +1606,36 @@ export class WeaveNode implements Backend {
       });
     }
     const boardKeys = this.#boardKeysFor(space, access);
-    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, key, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
   }
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
     if (isKnockLink(text)) return this.#knock(text, note ?? '');
-    const { space, invite } = await this.#takeInvite(text);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite } }));
+    const { space, invite, proof } = await this.#takeInvite(text);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
     return this.#spaceInfo(space);
   }
 
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
-  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string }> {
+  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
     const invite = decodeInvite(text);
-    if (this.#spaces.has(invite.space.id)) throw new Error(`you are already in ${invite.space.name}`);
+    const held = this.#spaces.get(invite.space.id);
+    if (held) {
+      // Removed, and asked back with a new link (_Ak3UUmp): the space as it is now, keys added to the ones we kept.
+      const state = this.#state(held);
+      if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new Error(`you are already in ${invite.space.name}`);
+      for (const [epoch, key] of Object.entries(invite.space.keys)) if (!held.keys[epoch]) held.keys[epoch] = key;
+      held.via = invite.inviter;
+      if (invite.boards) for (const [board, epochs] of Object.entries(invite.boards)) held.boards = { ...held.boards, [board]: { ...held.boards?.[board], ...epochs } };
+      this.#saveSpace(held);
+      return { space: held, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(held), this.identity.author) } : {}) };
+    }
     const inside = this.#insideOnly(invite.space.founder);
     if (inside) throw new Error(inside);
     this.#adoptBootstrap(invite.entry);
     const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
     await this.#addSpace(space);
-    return { space, invite: invite.invite };
+    return { space, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(space), this.identity.author) } : {}) };
   }
 
   /** Ask to be let in with a link that needs the inviter's OK. */
@@ -1661,14 +1708,23 @@ export class WeaveNode implements Backend {
    * newcomers read stays near 30 days. Rotating is for those who manage the
    * space (only their new keys count).
    */
+  /** Does letting someone in now need a fresh key, so they don't read what came before (history joining, or 30d with an older key)? */
+  #needsFreshKey(space: StoredSpace, state: SpaceState = this.#state(space)): boolean {
+    const history = state.history?.value ?? 'all';
+    const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
+    return history === 'joining' || (history === '30d' && start < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString());
+  }
+
   #keysForNewcomers(space: StoredSpace): SpaceKeys {
     const state = this.#state(space);
     const history = state.history?.value ?? 'all';
     const starts = this.#epochStarts(space);
-    const current = currentEpoch(space);
-    const old = (starts.get(current) ?? '') < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-    // Only a manager's new key counts for the others; a group member inviting hands over what the setting allows without one.
-    if (canManage(state, this.identity.author) && (history === 'joining' || (history === '30d' && old))) {
+    // Only a manager's new key counts for the others (T3a83nLy): when one is needed, nobody else lets people in, or they'd read it all.
+    const fresh = this.#needsFreshKey(space, state);
+    if (fresh && !canManage(state, this.identity.author)) {
+      throw new Error(`${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
+    }
+    if (fresh) {
       this.#rotateKey(space);
       starts.set(currentEpoch(space), new Date().toISOString());
     }
@@ -1693,51 +1749,59 @@ export class WeaveNode implements Backend {
   }
 
   /**
-   * A carry becomes the events it restates (see #trustedCarries for whose).
+   * A carry becomes the events it restates, each checked against its original
+   * envelope: signed by its author's key, in this space, sealing exactly what
+   * the carry says (ih). Who wrote it and when come from that envelope, never
+   * from the carry. Items that can't be checked count only in our own private
+   * carries (`unchecked`): anyone else could make them up.
    */
-  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined): Decoded[] {
+  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined, unchecked = false): Decoded[] {
     if (d.inner.kind !== KIND_CARRY || !space) return [];
     const items = (d.inner.body as { events?: unknown } | null)?.events;
     if (!Array.isArray(items)) return [];
+    const scope = spaceScope(space);
     const out: Decoded[] = [];
     for (const item of items as Array<Record<string, unknown>>) {
-      if (typeof item?.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || typeof item.kind !== 'string' || !Number.isSafeInteger(item.seq)) continue;
-      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, time: item.time, body: null };
-      out.push({ id: item.id, event, inner: { kind: item.kind, body: (item.body ?? null) as Json }, space, carried: true, ...(d.board ? { board: d.board } : {}) });
+      if (typeof item?.kind !== 'string') continue;
+      const inner = { kind: item.kind, body: (item.body ?? null) as Json };
+      const e = item.e;
+      // What the envelope signed: the inner itself, or for a read-limited board its sealed blob, which must open (board key) to exactly the inner.
+      const sealed = item.sealed as { kind?: unknown; body?: unknown } | undefined;
+      const signed = sealed && typeof sealed.kind === 'string' ? { kind: sealed.kind, body: (sealed.body ?? null) as Json } : inner;
+      const opened = signed === inner ? undefined : space.kind === 'project' ? openBoard(space, signed, space.boards) : undefined;
+      const opensTo = signed === inner || (!!opened && opened.kind === inner.kind && canonicalJson(opened.body) === canonicalJson(inner.body));
+      if (isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e)) {
+        const id = canonicalIdV2(e);
+        if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
+        const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, cseq: e.class === 'control' ? e.seq : undefined, cs: e.class === 'content' ? e.cs : undefined, time: e.time, body: null };
+        out.push({ id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
+        continue;
+      }
+      if (!unchecked || typeof item.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || !Number.isSafeInteger(item.seq)) continue;
+      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, cseq: undefined, cs: undefined, time: item.time, body: null };
+      out.push({ id: item.id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
     }
     return out;
   }
 
   /**
-   * The events restated in the carries we trust: from whoever handed us a
-   * space's keys (a newcomer trusts them for the keys already), from someone
-   * who manages the space by the state we read ourselves (never by what a
-   * carry says), and our own private ones (what we wrote, kept before keys
-   * were shredded).
+   * The events restated in carries. Whoever wrote a carry vouches for nothing:
+   * every item is checked against its author's own signature (#expandCarry), so
+   * a carry from anyone holding the space's key restates only what was really
+   * written there. Our own private carries (what we wrote, kept before keys were
+   * shredded) count as they are.
    */
   #trustedCarries(decoded: Decoded[]): Decoded[] {
-    const carries = decoded.filter((d) => d.inner.kind === KIND_CARRY);
-    if (!carries.length) return [];
-    const states = new Map<string, SpaceState>();
-    const stateOf = (space: StoredSpace) => {
-      let state = states.get(space.id);
-      if (!state) {
-        state = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id && d.inner.kind !== KIND_CARRY));
-        states.set(space.id, state);
-      }
-      return state;
-    };
-    return carries.flatMap((d) => {
-      if (d.private) {
-        // Our own: {space, events} kept in our private space.
-        const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
-        return d.event.author === this.identity.author && space ? this.#expandCarry(d, space) : [];
-      }
-      const space = d.space as StoredSpace | undefined;
-      if (!space) return [];
-      const trusted = d.event.author === space.via || canManage(stateOf(space), d.event.author);
-      return trusted ? this.#expandCarry(d, space) : [];
-    });
+    return decoded
+      .filter((d) => d.inner.kind === KIND_CARRY)
+      .flatMap((d) => {
+        if (d.private) {
+          // Our own: {space, events} kept in our private space.
+          const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
+          return d.event.author === this.identity.author && space ? this.#expandCarry(d, space, true) : [];
+        }
+        return this.#expandCarry(d, d.space as StoredSpace | undefined).filter((x) => !this.#forgottenCarried().has(x.id));
+      });
   }
 
   /**
@@ -1838,12 +1902,16 @@ export class WeaveNode implements Backend {
     if (!setting) throw new Error(`${space.name} isn't a company space: recovery words stay with you`);
     const words = normalizeWords(input.words);
     if (recoveryIdentity(words) !== this.identity.author) throw new Error("these words don't belong to this identity");
-    // The words are sealed with a fresh key; only that key goes through the key service (some can wrap only a key's worth).
-    const dataKey = new Uint8Array(randomBytes(32));
+    // The words are sealed with a fresh key made of two parts (XyMStMvo): one goes through the key service, so opening is in
+    // its audit; the other is boxed to the company itself (the space's owner). A key service context is no access rule:
+    // every employee may decrypt with it, so its part alone must not be enough. Only the company opens an escrow.
+    const kmsPart = new Uint8Array(randomBytes(32));
+    const companyPart = new Uint8Array(randomBytes(32));
     const context = this.#escrowContext(space, this.identity.author);
-    const sealed = seal(dataKey, words, `weave/escrow/v1:${context.space}`);
-    const wrapped = await this.#provider(setting).wrap(dataKey, context);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, wrapped, nonce: sealed.nonce, ct: sealed.ct } }));
+    const sealed = seal(escrowKey(kmsPart, companyPart), words, `weave/escrow/v2:${context.space}`);
+    const wrapped = await this.#provider(setting).wrap(kmsPart, context);
+    const boxed = boxTo(this.#encryptionKeyOf(space.founder), b64u.encode(companyPart));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, v: 2, wrapped, boxed: boxed as unknown as Json, nonce: sealed.nonce, ct: sealed.ct } }));
   }
 
   async openEscrow(input: { space: string; person: string; for?: string }): Promise<string> {
@@ -1857,11 +1925,27 @@ export class WeaveNode implements Backend {
       throw new Error(`${this.nameOf(person) ?? person}'s identity belongs to the company: its words go only to the new computer (there: weave recover-request; here: --for <request>)`);
     const escrow = this.#decodedIn(space.id)
       .filter((d) => d.inner.kind === KIND_ESCROW && d.event.author === person && (d.inner.body as { person?: unknown } | null)?.person === person)
-      .at(-1)?.inner.body as { wrapped: string; nonce: string; ct: string } | undefined;
+      .at(-1)?.inner.body as { v?: number; wrapped: string; boxed?: Box; nonce: string; ct: string } | undefined;
     if (!escrow) throw new Error(`${this.nameOf(person) ?? person} left no recovery words in ${space.name}`);
     const context = this.#escrowContext(space, person);
-    const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
-    const words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
+    let words: string;
+    if (escrow.v === 2) {
+      // The company's part first: without it, the key service's part opens nothing, and isn't asked.
+      const companyPart = escrow.boxed && this.#tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, escrow.boxed!) as string;
+        } catch {
+          return undefined;
+        }
+      });
+      if (typeof companyPart !== 'string') throw new Error(`only ${this.nameOf(space.founder) ?? 'the company'} opens recovery words: ask through the company's admin console`);
+      const kmsPart = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
+      words = open(escrowKey(kmsPart, b64u.decode(companyPart)), { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v2:${context.space}`) as string;
+    } else {
+      // Escrows from before v2 went through the key service alone (any employee could open them): leave new ones.
+      const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
+      words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
+    }
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person, ...(request ? { for: request } : {}) } }));
     return request ? encodeRecoveryAnswer(person, boxTo(request, { words }) as unknown as Json) : words;
   }
@@ -1903,14 +1987,28 @@ export class WeaveNode implements Backend {
       .map((s) => ({ id: s.id, name: s.name }));
   }
 
-  /** When each of a space's epochs began: the time of its rekey (the epoch number is in the clear). */
-  #epochStarts(space: StoredSpace): Map<number, string> {
+  /**
+   * The rekeys that count in a space (Gr9S4DLf): by someone who managed it as
+   * of the rekey (rekeyCounts), for an epoch we hold. Rekeys are in the clear:
+   * anyone in the space can write one, dated as they like. Its time is its date,
+   * but never later than when it got here.
+   */
+  #countingRekeys(space: StoredSpace, state: SpaceState = this.#state(space)): Array<{ epoch: number; time: string; seen: string }> {
     const scope = spaceScope(space);
+    return this.replica
+      .events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)
+      .flatMap((e) => {
+        const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
+        if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) return [];
+        const seen = this.#seenAt(e);
+        return [{ epoch: epoch as number, time: e.time < seen ? e.time : seen, seen }];
+      });
+  }
+
+  /** When each of a space's epochs began: the earliest rekey to it that counts (the epoch number is in the clear). */
+  #epochStarts(space: StoredSpace): Map<number, string> {
     const starts = new Map<number, string>();
-    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
-      const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
-      if (Number.isSafeInteger(epoch) && !starts.has(epoch as number)) starts.set(epoch as number, e.time);
-    }
+    for (const r of this.#countingRekeys(space)) if (!(starts.get(r.epoch)! <= r.time)) starts.set(r.epoch, r.time);
     return starts;
   }
 
@@ -1992,7 +2090,7 @@ export class WeaveNode implements Backend {
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
       ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
-      ...(this.replica.authority.keys(m.did).org ? { company: this.nameOf(this.replica.authority.keys(m.did).org!) ?? 'a company' } : {}),
+      ...(this.#companyVouchedOf(m.did) ? { company: this.nameOf(this.#companyVouchedOf(m.did)!) ?? 'a company' } : {}),
     }));
   }
 
@@ -2004,7 +2102,7 @@ export class WeaveNode implements Backend {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
@@ -2022,7 +2120,7 @@ export class WeaveNode implements Backend {
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new Error("that's you");
     if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     return this.#spaceInfo(space);
   }
 
@@ -2049,10 +2147,17 @@ export class WeaveNode implements Backend {
   /** After people leave, a node that may rotate the key does: they can't read what comes next. */
   #rotateAfterLeaving(space: StoredSpace, state: SpaceState): number {
     if (space.kind === 'direct' || !canManage(state, this.identity.author) || !state.left.size) return 0;
-    const lastLeft = [...state.left].map((did) => state.removed.get(did) ?? '').reduce((a, b) => (b > a ? b : a), '');
-    const scope = spaceScope(space);
-    const lastRekey = this.replica.events((e) => canonicalKind(e.kind) === KIND_REKEY && e.scope === scope).reduce((a, e) => (e.time > a ? e.time : a), '');
-    if (lastLeft <= lastRekey) return 0;
+    // A leave and a rekey after it, by their dates (never later than they got here) and by when they got here: a
+    // leaver can date their leave early, but not make it arrive early; and only rekeys that count count (Gr9S4DLf).
+    const latest = (times: string[]) => times.reduce((a, b) => (b > a ? b : a), '');
+    const leaves = this.#decodedIn(space.id)
+      .filter((d) => canonicalKind(d.inner.kind) === KIND_LEAVE && state.left.has(d.event.author))
+      .map((d) => {
+        const seen = this.#seenAt(d.event);
+        return { time: d.event.time < seen ? d.event.time : seen, seen };
+      });
+    const rekeys = this.#countingRekeys(space, state);
+    if (latest(leaves.map((l) => l.time)) <= latest(rekeys.map((r) => r.time)) && latest(leaves.map((l) => l.seen)) <= latest(rekeys.map((r) => r.seen))) return 0;
     const { fields, epoch, key } = rekey(space, [...state.members.keys()], this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
@@ -2070,7 +2175,7 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
     if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
+    this.replica.write(this.identity, sealFor(await this.#cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
@@ -2241,7 +2346,7 @@ export class WeaveNode implements Backend {
     const agent = this.#agents.find((a) => a.name === input.as);
     if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
     const kinds = [...new Set(input.kinds.map((k) => k.trim()))].filter((k) => /^weave\.[a-z0-9.*-]{1,60}$/.test(k));
-    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.github.repo');
+    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.app');
     const missing = kinds.filter((k) => !permits(agent.permissions, k));
     const now = new Date(this.clock()).toISOString();
     if (!missing.length) return { id: '', agent: agent.name, kinds, reason: '', time: now, state: 'allowed' };
@@ -3216,6 +3321,11 @@ export class WeaveNode implements Backend {
   async reconcile(): Promise<number> {
     // A standby only follows: no duties, no keys, no writes.
     if (this.config.standby) return 0;
+    // A promoted server says which generation it is, once: an older one that comes back stands down when it hears.
+    const generation = this.config.generation;
+    if (generation && !this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author && (e.body as { generation?: unknown } | null)?.generation === generation).length) {
+      this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
+    }
     this.#prefetchBlobs();
     let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
@@ -3233,6 +3343,8 @@ export class WeaveNode implements Backend {
     changed += await this.#attest();
     changed += await this.#applyDirectory();
     changed += await this.#offboard();
+    changed += this.#anchorRemovals();
+    changed += this.#settleLosses();
     changed += await this.#orgDuties();
     changed += await this.#continueEnrollment();
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
@@ -3434,7 +3546,7 @@ export class WeaveNode implements Backend {
       contact: this.#contacts().has(did),
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
-      ...(this.replica.authority.keys(did).org ? { company: this.#companyOfPerson(did) } : {}),
+      ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.#companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.#companyClaim(did)),
       links: this.#linksOf(did).filter((l) => l.state === 'linked'),
     };
   }
@@ -3611,15 +3723,15 @@ export class WeaveNode implements Backend {
   #releaseSource(project: StoredSpace, given?: string): { ref: string; provider?: string } {
     const before = this.#app(project)?.install?.source;
     const ref = given?.trim() || before?.ref || '';
-    if (!ref) throw new Error('where does the release come from? (a repository, owner/name, for GitHub releases)');
+    if (!ref) throw new Error("where does the release come from? (what its provider understands: a repository's owner/name, say)");
     return { ref, ...(before && (!given || given.trim() === before.ref) ? { provider: before.provider } : {}) };
   }
 
-  /** The releases on GitHub a project could publish: as its provider sees them, with its access. */
-  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
+  /** The releases a project could publish, as its provider sees them (with its access), in its words: where they are, what to do without any. */
+  async appReleases(ref: string): Promise<AppReleases> {
     const project = this.#project(ref);
     const from = this.#releaseSource(project);
-    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
+    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as unknown as AppReleases;
   }
 
   // ---------------------------------------------------------------- app API
@@ -3731,14 +3843,22 @@ export class WeaveNode implements Backend {
       afterSeq = 0;
       for (const event of this.replica.eventsBy(key.did)) if (Date.parse(event.time) < since) afterSeq = event.seq;
     }
+    // Where we saw it, per space, up to that number (KgmsMa_g): numbers it left unused elsewhere can't be filled in later.
+    const heads: Record<string, RevokedHead> = {};
+    for (const { event } of this.replica.store.range2(key.did)) {
+      if (event.n > afterSeq) continue;
+      const head = (heads[event.space] ??= { c: 0, s: 0 });
+      if (event.class === 'control') head.c = Math.max(head.c, event.seq);
+      else if (event.cs !== undefined) (head.s = Math.max(head.s, event.cs)), (head.f = Math.min(head.f ?? Infinity, event.n));
+    }
     const ownDevice = key.did === this.identity.did;
     if (key.role === 'agent' && !input.words) {
       if (ownDevice) throw new Error('that is this device');
-      this.replica.write(this.identity, revocation(key.did, afterSeq));
+      this.replica.write(this.identity, revocation(key.did, afterSeq, heads));
     } else {
       if (!input.words) throw new Error('revoking a device needs your recovery words');
       const root = this.#currentRoot(input.words);
-      this.replica.write(root, revocation(key.did, afterSeq));
+      this.replica.write(root, revocation(key.did, afterSeq, heads));
       if (ownDevice) {
         // This computer keeps working with a fresh device key.
         const fresh = createSubKey(me);
@@ -3957,14 +4077,14 @@ export class WeaveNode implements Backend {
     const group = await this.#createSpace('group', input.name, { tier: true });
     const position = this.#tierOffers(this.identity.author).length;
     this.#publishTier({ id: group.id, creator: this.identity.author, name: group.name, price: 0, currency: 'EUR', description: '', benefits: [], position, open: true, auto: false, time: '' }, input);
-    return this.#tierInfo(this.#tierOffer(group.id));
+    return this.#tierInfo(this.#tierOffer(group.id, this.identity.author));
   }
 
   async setTier(input: { tier: string; name?: string; price?: number; currency?: string; description?: string; benefits?: string[]; position?: number; open?: boolean; auto?: boolean; hidden?: boolean; gumroad?: GumroadLink | null; onchain?: OnchainPrice | null }): Promise<TierInfo> {
-    const before = this.#tierOffer(input.tier);
+    const before = this.#tierOffer(input.tier, this.identity.author);
     if (before.creator !== this.identity.author) throw new Error('only its creator can change a tier');
     this.#publishTier(before, input);
-    return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id));
+    return input.hidden ? { ...this.#tierInfo(before), open: false } : this.#tierInfo(this.#tierOffer(before.id, this.identity.author));
   }
 
   get #gumroadFile(): string {
@@ -4014,7 +4134,7 @@ export class WeaveNode implements Backend {
   }
 
   async sellTierOnGumroad(input: { tier: string; token?: string }): Promise<{ tier: TierInfo; published: boolean; warning?: string }> {
-    const t = this.#tierOffer(input.tier);
+    const t = this.#tierOffer(input.tier, this.identity.author);
     if (t.creator !== this.identity.author) throw new Error('only its creator can sell a tier');
     const token = input.token?.trim() || this.#gumroadAuth()?.token;
     if (!token) throw new Error('connect Gumroad first (weave gumroad connect), or give an access token');
@@ -4027,8 +4147,8 @@ export class WeaveNode implements Backend {
     return this.#tierOffers(who ? this.resolve(who) : this.identity.author).map((t) => this.#tierInfo(t));
   }
 
-  async requestMembership(input: { tier: string; note?: string; license?: string; payment?: string }): Promise<void> {
-    const tier = this.#tierOffer(input.tier);
+  async requestMembership(input: { tier: string; creator?: string; note?: string; license?: string; payment?: string }): Promise<void> {
+    const tier = this.#tierOffer(input.tier, input.creator ? this.resolve(input.creator) : undefined);
     if (tier.creator === this.identity.author) throw new Error("that's your own tier");
     if (!tier.open) throw new Error(`${tier.name} isn't taking new members right now`);
     const license = input.license?.trim();
@@ -4081,7 +4201,7 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, gift(this.#keysForNewcomers(group), [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
     }
     await this.#answerRequests(group.id, member);
-    return this.#tierInfo(this.#tierOffer(group.id));
+    return this.#tierInfo(this.#tierOffer(group.id, this.identity.author));
   }
 
   async declineMembership(input: { tier: string; who: string }): Promise<void> {
@@ -4291,7 +4411,7 @@ export class WeaveNode implements Backend {
       if (!state.tier) continue;
       const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
       if (!expired.length) continue;
-      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member) } }));
+      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
       const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
@@ -4343,19 +4463,28 @@ export class WeaveNode implements Backend {
   }
 
   /** A tier anyone offers, by id or name (yours first). */
-  #tierOffer(ref: string): Tier {
-    const all = tiersOf(this.replica.events((e) => e.kind === KIND_TIER));
-    const match = all.find((t) => t.id === ref) ?? all.find((t) => t.creator === this.identity.author && t.name.toLowerCase() === ref.toLowerCase()) ?? all.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
-    if (Array.isArray(match)) {
-      if (match.length === 1) return match[0];
-      throw new Error(match.length ? `several tiers are named "${ref}" — use its id` : `no tier "${ref}" is known`);
+  /**
+   * A tier by id or name, of `creator` if given. Anyone can publish a tier under
+   * someone else's id: then the id alone doesn't say whose. It's the tier whose
+   * group this node holds with that founder, or else the creator has to be named
+   * (the app always does: you join a tier from its creator's hub).
+   */
+  #tierOffer(ref: string, creator?: Did): Tier {
+    const all = tiersOf(this.replica.events((e) => e.kind === KIND_TIER)).filter((t) => !creator || t.creator === creator);
+    let match = all.filter((t) => t.id === ref);
+    if (!match.length) match = all.filter((t) => t.creator === this.identity.author && t.name.toLowerCase() === ref.toLowerCase());
+    if (!match.length) match = all.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
+    if (match.length > 1) {
+      const founded = match.filter((t) => this.#spaces.get(t.id)?.founder === t.creator);
+      if (founded.length === 1) return founded[0];
     }
-    return match;
+    if (match.length === 1) return match[0];
+    throw new Error(match.length ? `several people offer a tier "${ref}": name its creator (or join from their hub)` : `no tier "${ref}" is known`);
   }
 
   /** One of your own tiers' groups. */
   #tierGroup(ref: string): StoredSpace {
-    const tier = this.#tierOffer(ref);
+    const tier = this.#tierOffer(ref, this.identity.author);
     const group = this.#spaces.get(tier.id);
     if (tier.creator !== this.identity.author || !group) throw new Error(`only ${this.nameOf(tier.creator) ?? 'its creator'} can let people into ${tier.name}`);
     return group;
@@ -4660,8 +4789,17 @@ export class WeaveNode implements Backend {
     const announced = this.#treasuries();
     const { current, pending } = space.kind === 'project' ? splitOf(this.#entries(space), state.maintainers, new Date(this.clock()), this.#seenAt) : {};
     const splitInfo = (split: Split): SplitInfo => ({ ...split, makers: split.makers.map((m) => ({ person: person(m.did), share: m.share })), by: person(split.by) });
+    // A space this node holds pays its treasury as computed here from its maintainers' wallets, never as someone announced it (7iriYk4C).
+    const paid = new Map(announced);
+    for (const id of [current?.community, WEAVE_FOUNDATION_PROJECT]) {
+      const held = id ? this.#spaces.get(id) : undefined;
+      if (!id || !held) continue;
+      const own = this.#treasuryAddressOf(held);
+      if (own) paid.set(id, { space: id, kind: held.kind === 'community' ? 'community' : 'project', address: own, owners: [], threshold: 0, by: this.identity.author, time: '', consistent: true });
+      else paid.delete(id);
+    }
     const recipients = current
-      ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: announced, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
+      ? splitRecipients(current, { project: space.id, maintainers: [...state.maintainers], wallets, ...(address ? { treasury: address } : {}), treasuries: paid, ...(WEAVE_FOUNDATION_PROJECT ? { foundation: WEAVE_FOUNDATION_PROJECT } : {}) })
       : undefined;
     const allocations = recipients && splitAllocations(recipients);
     const recipientName = (r: { kind: string; id: string }) => (r.kind === 'person' ? this.nameOf(r.id as Did) : r.kind === 'foundation' ? 'Weave Foundation' : this.#spaces.get(r.id)?.name);
@@ -4965,7 +5103,7 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- paying from a wallet, without copying anything
 
-  async paymentRequest(input: { tier?: string; show?: string }): Promise<PaymentRequestInfo> {
+  async paymentRequest(input: { tier?: string; creator?: string; show?: string }): Promise<PaymentRequestInfo> {
     const { price, what } = this.#payable(input);
     const wallet = this.#wallets().get(this.identity.author);
     if (!wallet?.verified) throw new Error('link your wallet first (weave wallet link): Weave looks for your payment from it');
@@ -4987,7 +5125,7 @@ export class WeaveNode implements Backend {
     };
   }
 
-  async findPayment(input: { tier?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }> {
+  async findPayment(input: { tier?: string; creator?: string; show?: string; since: number }): Promise<{ found?: string; checkedTo: number }> {
     const { price } = this.#payable(input);
     // From any wallet we ever linked (we may have moved on), to the address asked for.
     const mine = [...this.#walletHistory()].filter(([, did]) => did === this.identity.author).map(([address]) => '0x' + address.slice(2).padStart(64, '0'));
@@ -5003,8 +5141,8 @@ export class WeaveNode implements Backend {
       const paid = logs.find((l) => BigInt(l.data) >= BigInt(price.amount));
       if (paid) {
         // Found: send it on, as if its hash had been pasted.
-        if (input.tier) await this.requestMembership({ tier: input.tier, payment: paid.transactionHash });
-        else await this.buyTicket({ show: input.show!, payment: paid.transactionHash });
+        if (input.tier) await this.requestMembership({ tier: input.tier, ...(input.creator ? { creator: input.creator } : {}), payment: paid.transactionHash });
+        else await this.buyTicket({ show: input.show!, ...(input.creator ? { host: input.creator } : {}), payment: paid.transactionHash });
         return { found: paid.transactionHash, checkedTo: to };
       }
       from = to + 1;
@@ -5013,14 +5151,14 @@ export class WeaveNode implements Backend {
   }
 
   /** What a tier or show asks to be paid, and where. */
-  #payable(input: { tier?: string; show?: string }): { price: OnchainPrice; what: string } {
+  #payable(input: { tier?: string; creator?: string; show?: string }): { price: OnchainPrice; what: string } {
     if (input.tier) {
-      const tier = this.#tierOffer(input.tier);
+      const tier = this.#tierOffer(input.tier, input.creator ? this.resolve(input.creator) : undefined);
       if (!tier.onchain) throw new Error(`${tier.name} isn't paid on chain`);
       return { price: tier.onchain, what: `a month of ${tier.name}` };
     }
     if (input.show) {
-      const show = this.#showRef(input.show);
+      const show = this.#showRef(input.show, input.creator ? this.resolve(input.creator) : undefined);
       return { price: show.price, what: `a ticket to ${show.name}` };
     }
     throw new Error('pay for what? a tier or a show');
@@ -5076,8 +5214,8 @@ export class WeaveNode implements Backend {
       .map((s) => this.#showInfo(s));
   }
 
-  async buyTicket(input: { show: string; payment: string }): Promise<void> {
-    const show = this.#showRef(input.show);
+  async buyTicket(input: { show: string; host?: string; payment: string }): Promise<void> {
+    const show = this.#showRef(input.show, input.host ? this.resolve(input.host) : undefined);
     if (show.cancelled) throw new Error(`${show.name} is called off`);
     if (Date.parse(show.ends) < this.clock()) throw new Error(`${show.name} is over`);
     const payment = input.payment.trim().toLowerCase();
@@ -5239,15 +5377,17 @@ export class WeaveNode implements Backend {
   }
 
   /** A show by id, or by name (ours first). */
-  #showRef(ref: string): Show {
-    const all = this.#allShows();
-    const byId = all.find((s) => s.id === ref);
-    if (byId) return byId;
-    const named = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
-    const mine = named.filter((s) => s.host === this.identity.author);
-    const match = mine.length ? mine : named;
+  /** A show by id or name, of `host` if given. Anyone can publish a show under another's id: then ours (as a host) is meant, or the host has to be named. */
+  #showRef(ref: string, host?: Did): Show {
+    const all = this.#allShows().filter((s) => !host || s.host === host);
+    let match = all.filter((s) => s.id === ref);
+    if (!match.length) match = all.filter((s) => s.name.toLowerCase() === ref.toLowerCase());
+    if (match.length > 1) {
+      const ours = match.filter((s) => s.hosts.includes(this.identity.author));
+      if (ours.length === 1) return ours[0];
+    }
     if (match.length === 1) return match[0];
-    throw new Error(match.length ? `several shows are named "${ref}" — use its id` : `no show "${ref}" is known`);
+    throw new Error(match.length ? `several shows "${ref}": name its host` : `no show "${ref}" is known`);
   }
 
   #showInfo(show: Show): ShowInfo {
@@ -5701,7 +5841,7 @@ export class WeaveNode implements Backend {
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
     if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member) }) } }));
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member), at: this.#anchor(member, space) }) } }));
   }
 
   /** A board of a space, by name or title. */
@@ -5885,10 +6025,10 @@ export class WeaveNode implements Backend {
     const sso = this.#sso();
     const config = sso?.issuer && sso.clientId ? { issuer: sso.issuer, clientId: sso.clientId } : here?.org.signIn;
     if (!group || !config) throw new Error("this isn't a company account, or its company hasn't said where to sign in");
-    const tokens = await browserSignIn(config, openInBrowser, { ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
+    const tokens = await browserSignIn(config, openInBrowser, { for: this.identity.author, ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
     this.#saveSso({ ...tokens, ...config });
     this.#signInProblem = undefined;
-    await this.signIn({ space: group.id, idToken: tokens.idToken });
+    await this.signIn({ space: group.id, idToken: tokens.idToken, ...(tokens.salt ? { salt: tokens.salt } : {}) });
     return this.signInStatus();
   }
 
@@ -5911,7 +6051,7 @@ export class WeaveNode implements Backend {
   }
 
   /** Per space, its managed setting and halves: built once, kept up to date as events come, dropped when its keys change. */
-  #rawCache = new Map<string, { setting?: ManagedSetting; parts: Map<number, string> }>();
+  #rawCache = new Map<string, ManagedRaw>();
 
   /**
    * A space's managed setting and wrapped company halves, read straight from
@@ -5919,29 +6059,45 @@ export class WeaveNode implements Backend {
    * unlocks a space can't need the space unlocked, nor decoding, which needs
    * this. Kept until the next event arrives.
    */
-  #managedRaw(space: StoredSpace): { setting?: ManagedSetting; parts: Map<number, string> } {
+  #managedRaw(space: StoredSpace): ManagedRaw {
     const kept = this.#rawCache.get(space.id);
     if (kept) return kept;
     const scope = spaceScope(space);
-    const out: { setting?: ManagedSetting; parts: Map<number, string> } = { parts: new Map() };
+    const out: ManagedRaw = { parts: new Map() };
     for (const r of this.replica.events((e) => e.scope === scope && e.kind === KIND_SEALED && !e.missing)) this.#takeRaw(space, out, r);
     this.#rawCache.set(space.id, out);
     return out;
   }
 
   /** One event of a space, for its managed setting and halves (only those sealed with the Weave half open here). */
-  #takeRaw(space: StoredSpace, into: { setting?: ManagedSetting; parts: Map<number, string> }, r: WeaveRecord): boolean {
+  #takeRaw(space: StoredSpace, into: ManagedRaw, r: WeaveRecord): boolean {
     const inner = openIn(space, r);
     if (!inner || (inner.kind !== KIND_MANAGED && inner.kind !== KIND_KMS)) return false;
     const b = inner.body as Record<string, unknown> | null;
     if (inner.kind === KIND_MANAGED && r.author === space.founder && b?.provider && Number(b.ttlMinutes) > 0 && Number(b.graceHours) >= 0 && (!into.setting || r.time >= into.setting.time))
-      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), by: r.author, time: r.time };
-    if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string' && !into.parts.has(b.epoch as number)) into.parts.set(b.epoch as number, b.wrapped);
+      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), ...(Number.isSafeInteger(b.from) ? { from: b.from as number } : {}), by: r.author, time: r.time };
+    if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string') {
+      // Every author's part kept apart: which counts is decided by whose rekey we seal with (#kmsParts).
+      let byAuthor = into.parts.get(b.epoch as number);
+      if (!byAuthor) into.parts.set(b.epoch as number, (byAuthor = new Map()));
+      if (!byAuthor.has(r.author)) byAuthor.set(r.author, b.wrapped);
+    }
     return true;
   }
 
+  /**
+   * Each epoch's company half (WUCPqIBs): the one by whoever made the rekey we
+   * seal with, else the owner's, else the first. A part from anyone else (any
+   * member can seal one with the Weave half) never stands in for it.
+   */
   #kmsParts(space: StoredSpace): Map<number, string> {
-    return this.#managedRaw(space).parts;
+    const out = new Map<number, string>();
+    for (const [epoch, byAuthor] of this.#managedRaw(space).parts) {
+      const rekeyer = space.rekeyers?.[String(epoch)];
+      const part = rekeyer ? byAuthor.get(rekeyer) : (byAuthor.get(space.founder) ?? byAuthor.values().next().value);
+      if (part) out.set(epoch, part);
+    }
+    return out;
   }
 
   /** One epoch's key, from both halves. */
@@ -5979,6 +6135,8 @@ export class WeaveNode implements Backend {
     const grace = parts.size ? this.#graceCache() : {};
     const keys: Record<string, string> = {};
     let locked = false;
+    // From which epoch on the company's half is needed (yHsKySEi): the setting says, or (settings from before) the first epoch with one.
+    const from = setting.from ?? (parts.size ? Math.min(...parts.keys()) : Infinity);
     for (const [epoch, weavePart] of Object.entries(space.keys)) {
       const id = `${space.id}:${epoch}`;
       const memory = this.#managedKeys.get(id);
@@ -5990,11 +6148,22 @@ export class WeaveNode implements Backend {
           keys[epoch] = grace[id].key;
           this.#decodedValidUntil = Math.min(this.#decodedValidUntil, grace[id].until);
         } else locked = true;
-      } else if (!memory) keys[epoch] = weavePart; // from before the space was managed
+      } else if (!memory && Number(epoch) < from) keys[epoch] = weavePart; // from before the space was managed
       else locked = true;
     }
     if (locked) void this.#unlock(space);
+    // The newest epoch locked: it stays the newest, without a key, so writing waits for it (sealFor refuses) instead of using an older one.
+    const newest = String(currentEpoch(space));
+    if (!(newest in keys)) keys[newest] = undefined as unknown as string;
     return { ...space, keys };
+  }
+
+  /** A space's keys to write with: a managed space's newest epoch unlocked first, if it can be (else sealFor refuses to write). */
+  async #cipherReady(space: StoredSpace): Promise<StoredSpace> {
+    const cipher = this.#cipher(space);
+    if (cipher.keys[String(currentEpoch(cipher))]) return cipher;
+    await this.#unlock(space);
+    return this.#cipher(space);
   }
 
   /** Unlock the company halves this node doesn't hold (or whose time ran out). */
@@ -6013,6 +6182,7 @@ export class WeaveNode implements Backend {
     const setting = this.#managedRaw(space).setting;
     if (!setting) return 0;
     let unlocked = 0;
+    let problem: string | undefined;
     try {
       const provider = this.#provider(setting);
       const now = this.clock();
@@ -6020,14 +6190,20 @@ export class WeaveNode implements Backend {
         const weavePart = space.keys[String(epoch)];
         const kept = this.#managedKeys.get(`${space.id}:${epoch}`);
         if (!weavePart || (kept && kept.until > now)) continue;
-        const kmsPart = await provider.unwrap(wrapped, { space: spaceScope(space), epoch });
-        this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
-        unlocked++;
+        // Each epoch on its own: one that can't be unwrapped doesn't keep the others locked (WUCPqIBs).
+        try {
+          const kmsPart = await provider.unwrap(wrapped, { space: spaceScope(space), epoch });
+          this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
+          unlocked++;
+        } catch (error) {
+          problem = `key ${epoch}: ${(error as Error).message}`;
+        }
       }
-      this.#managedProblems.delete(space.id);
     } catch (error) {
-      this.#managedProblems.set(space.id, (error as Error).message);
+      problem = (error as Error).message;
     }
+    if (problem) this.#managedProblems.set(space.id, problem);
+    else this.#managedProblems.delete(space.id);
     if (unlocked) this.#decoded = undefined;
     return unlocked;
   }
@@ -6037,9 +6213,38 @@ export class WeaveNode implements Backend {
     const setting = this.#managedRaw(space).setting;
     if (!setting) return;
     const kmsPart = new Uint8Array(randomBytes(32));
+    (space.rekeyers ??= {})[String(epoch)] = this.identity.author;
+    this.#saveSpace(space);
     this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
     this.#halves.set(`${space.id}:${epoch}`, { space, epoch, kmsPart });
+    this.#saveHalves();
     void this.#publishHalf(`${space.id}:${epoch}`);
+  }
+
+  /**
+   * Halves not published yet, kept on disk (sealed at rest) so that a restart
+   * doesn't lose them (AsPMzM8O): without its half nobody else ever reads that
+   * epoch, and after the grace not even we.
+   */
+  #saveHalves(): void {
+    const file = joinPath(this.home.dir, 'managed-halves.json');
+    const out: Record<string, { space: string; epoch: number; kmsPart: string }> = {};
+    for (const [id, h] of this.#halves) out[id] = { space: h.space.id, epoch: h.epoch, kmsPart: b64u.encode(h.kmsPart) };
+    writeSecretJson(this.home, file, out);
+  }
+
+  #loadHalves(): void {
+    const saved = readSecretJson<Record<string, { space: string; epoch: number; kmsPart: string }>>(this.home, joinPath(this.home.dir, 'managed-halves.json')) ?? {};
+    for (const [id, h] of Object.entries(saved)) {
+      const space = this.#spaces.get(h.space);
+      const setting = space && this.#managedRaw(space).setting;
+      const weavePart = space?.keys[String(h.epoch)];
+      if (!space || !setting || !weavePart) continue;
+      const kmsPart = b64u.decode(h.kmsPart);
+      this.#halves.set(id, { space, epoch: h.epoch, kmsPart });
+      // Ours to read with meanwhile, as before the restart.
+      if (!this.#managedKeys.has(id)) this.#remember(space, setting, h.epoch, this.#splitKey(space, h.epoch, weavePart, kmsPart));
+    }
   }
 
   /** Company halves wrapped and published in the background; kept until published, and tried again on reconcile. */
@@ -6055,6 +6260,7 @@ export class WeaveNode implements Backend {
         const wrapped = await this.#provider(setting).wrap(kmsPart, { space: spaceScope(space), epoch });
         this.replica.write(this.identity, sealFor(space, { kind: KIND_KMS, body: { epoch, wrapped } }));
         this.#halves.delete(id);
+        this.#saveHalves();
       } catch (error) {
         this.#managedProblems.set(space.id, `couldn't wrap the new key: ${(error as Error).message}`);
       } finally {
@@ -6113,6 +6319,29 @@ export class WeaveNode implements Backend {
   #companyOfPerson(did: Did): NonNullable<Profile['company']> {
     const org = this.replica.authority.keys(did).org!;
     return { did: org, name: this.nameOf(org), ...(this.replica.authority.frozen(did) ? { frozen: true as const } : {}) };
+  }
+
+  /**
+   * The company someone belongs to, as far as this node can tell (MHV79Ro6):
+   * the one their identity names, if that company has them in its company
+   * group. Anyone can name a company in their identity; only the company puts
+   * them in its group. A bare claim counts only for what it costs the claimant
+   * (the company may freeze them; its policy holds them).
+   */
+  #companyVouchedOf(did: Did): Did | undefined {
+    const claim = this.#companyClaim(did);
+    return claim?.vouched ? claim.org : undefined;
+  }
+
+  /** The company someone's identity names, and whether it vouches for them as far as this node sees: yes, no (we hold its group), or can't tell. */
+  #companyClaim(did: Did): { org: Did; vouched?: boolean } | undefined {
+    const org = this.replica.authority.keys(did).org;
+    if (!org) return undefined;
+    // A freeze by that company is its word too: it held them.
+    if (this.replica.authority.frozen(did)) return { org, vouched: true };
+    const groups = [...this.#spaces.values()].filter((s) => s.kind === 'group' && s.founder === org && !!this.#orgOf(s));
+    if (!groups.length) return { org };
+    return { org, vouched: groups.some((g) => this.#state(g).members.has(did)) };
   }
 
   async createCompany(input: CreateCompanyInput): Promise<CompanyInfo> {
@@ -6362,7 +6591,7 @@ export class WeaveNode implements Backend {
           }
           for (const did of state.maintainers) {
             if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did) } }));
+            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
             changed++;
           }
           state = this.#state(space);
@@ -6469,7 +6698,7 @@ export class WeaveNode implements Backend {
     if (earlier) return undefined;
     const { org, policy } = found;
     const who = this.nameOf(org) ?? 'The company';
-    const colleague = (did: Did) => did === org || this.replica.authority.keys(did).org === org;
+    const colleague = (did: Did) => did === org || this.#companyVouchedOf(did) === org;
     if (event.space === 'public') {
       if (policy.public) return undefined;
       const b = body as { subject?: unknown; on?: unknown } | null | undefined;
@@ -6485,7 +6714,7 @@ export class WeaveNode implements Backend {
       const other = !direct ? undefined : event.author === this.identity.author ? direct.peer : direct.peer === event.author ? this.identity.author : undefined;
       if (!other) return undefined;
       if (policy.directs === 'company' && !colleague(other)) return `${who}'s accounts chat directly only with colleagues`;
-      if (policy.chats && other !== org && this.replica.authority.keys(other).org === org) return `${who} keeps chats between colleagues in company chats (weave company chat <colleague>)`;
+      if (policy.chats && other !== org && colleague(other)) return `${who} keeps chats between colleagues in company chats (weave company chat <colleague>)`;
       return undefined;
     }
     if (policy.outside) return undefined;
@@ -6508,17 +6737,18 @@ export class WeaveNode implements Backend {
     const group = this.#spaces.get(pending.group);
     if (!group || !this.#managedRaw(group).setting?.attestor) return 0;
     let changed = 0;
-    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
+    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, salt: pending.salt, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
     await this.#unlock(group);
     if (this.#managedProblems.has(group.id)) return 0;
     if (!pending.joined) {
-      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite } }));
+      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite, ...(pending.proof ? { proof: pending.proof } : {}) } }));
       pending.joined = true;
       changed++;
     }
     if (pending.idToken) {
-      await this.signIn({ space: group.id, idToken: pending.idToken });
+      await this.signIn({ space: group.id, idToken: pending.idToken, ...(pending.salt ? { salt: pending.salt } : {}) });
       delete pending.idToken;
+      delete pending.salt;
       changed++;
     }
     if (pending.words) {
@@ -6604,7 +6834,8 @@ export class WeaveNode implements Backend {
         return !!org && policy.get(org) === false;
       });
       const until = [did, other].map((x) => (this.replica.authority.frozen(x) ? frozenAt.get(x) : undefined)).filter((t): t is string => !!t).sort()[0];
-      const org = this.replica.authority.keys(other).org;
+      const claim = this.#companyClaim(other);
+      const org = claim && claim.vouched !== false ? claim.org : undefined;
       const space = mine?.space ?? theirs?.space;
       out.push({
         did: other,
@@ -6612,7 +6843,7 @@ export class WeaveNode implements Backend {
         state: refused ? 'refused' : mine?.on && theirs?.on ? 'linked' : mine?.on ? 'waiting' : 'asked',
         since: [mine?.on ? mine.time : '', theirs?.on ? theirs.time : ''].sort().at(-1)!,
         ...(until ? { until } : {}),
-        ...(org ? { company: { did: org, name: this.nameOf(org) } } : {}),
+        ...(org ? { company: { did: org, name: this.nameOf(org), ...(claim?.vouched ? {} : { unconfirmed: true as const }) } } : {}),
         ...(space ? { space: this.#spaces.get(space)?.name ?? space } : {}),
       });
     }
@@ -6918,6 +7149,33 @@ export class WeaveNode implements Backend {
    * What the person behind this company sign-in may do in the console (stage 15), by their sign-in groups
    * (the directory's when SCIM is on): admins everything, auditors read everything, the helpdesk sets people up.
    */
+  /** Signing nothing: a standby, or a server a newer one took over from. */
+  #refuseWrites(): void {
+    const refuse = () => {
+      throw new Error('this is a standby server: it follows the active one and writes nothing (weave-server promote, once the active one is gone)');
+    };
+    this.replica.write = refuse;
+    this.replica.append = refuse;
+    this.replica.append2 = refuse;
+  }
+
+  /** A server of this identity of a newer generation than ours: we stand down, as a standby. */
+  #seeGeneration(event: { body: Json }): void {
+    const generation = (event.body as { generation?: unknown } | null)?.generation;
+    if (!Number.isSafeInteger(generation) || (generation as number) <= (this.config.generation ?? 0) || this.config.standby) return;
+    this.config = { ...this.config, standby: true };
+    saveConfig(this.home, { ...loadConfig(this.home), standby: true });
+    this.#refuseWrites();
+    console.warn(`weave: a newer server of this identity took over (generation ${generation}): this one is a standby now and writes nothing`);
+  }
+
+  /** Is this person (name or did) one of the company's admins, or the company itself? */
+  isCompanyAdmin(who: string): boolean {
+    const here = this.#companyHere();
+    if (!here) return false;
+    return this.#isOrgAdmin(here.group, here.org, this.resolve(who));
+  }
+
   consoleRole(claims: { sub: string; email?: string; groups: string[] }): ConsoleRole | undefined {
     const group = this.#companyGroups()[0];
     const org = group ? this.#orgOf(group) : undefined;
@@ -6975,7 +7233,7 @@ export class WeaveNode implements Backend {
       .filter((did) => did !== group.founder)
       .map((did) => {
         const a = attested.get(did);
-        const refused = this.#deviceRefused.get(did);
+        const refused = this.#deviceRefused.get(did) ?? this.#signInRefused.get(did);
         return {
           did,
           ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}),
@@ -7145,21 +7403,30 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- SSO (stage 6.3)
 
-  async signIn(input: { space: string; idToken: string }): Promise<void> {
+  async signIn(input: { space: string; idToken: string; salt?: string }): Promise<void> {
     const space = this.#space(input.space);
     const setting = this.#state(space).managed;
     if (!setting?.attestor) throw new Error(`${space.name} has no company sign-in`);
+    const sso = this.#sso();
+    // A token keeps its salt (a refreshed one too, while the company's sign-in keeps its nonce).
+    const salt = input.salt ?? sso?.salt;
     // Kept for the key service too (Vault's JWT auth), sealed at rest.
-    this.#saveSso({ ...(this.#sso() ?? {}), idToken: input.idToken, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
+    this.#saveSso({ ...(sso ?? {}), idToken: input.idToken, salt, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
     await this.#unlock(space);
     const device = this.#deviceProof(input.idToken);
-    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, ...(device ? { device: device as unknown as Json } : {}) });
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
+    // Who hands it in, and the salt that ties the token to them (0siqvEzB).
+    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, did: this.identity.author, ...(salt ? { salt } : {}), ...(device ? { device: device as unknown as Json } : {}) });
+    // A sign-in is what lets the company's key service open its half to us, so it can't wait for it: boxed to the attestor, it goes under the newest key at hand.
+    const cipher = await this.#cipherReady(space);
+    const athand = { ...cipher, keys: Object.fromEntries(Object.entries(cipher.keys).filter(([, key]) => key)) };
+    this.replica.write(this.identity, sealFor(athand, { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
   }
 
   /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
   /** Sign-ins the company didn't vouch for because of the computer they came from (stage 15): person → why, and when. */
   #deviceRefused = new Map<Did, { problem: string; time: string }>();
+  /** Sign-ins the company didn't vouch for because they weren't the identity's own (0siqvEzB): person → why, and when. */
+  #signInRefused = new Map<Did, { problem: string; time: string }>();
 
   #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }> {
     const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }>();
@@ -7190,6 +7457,26 @@ export class WeaveNode implements Backend {
         if (typeof opened?.idToken !== 'string') continue;
         const claims = await verifyIdToken(opened.idToken, config.issuer, config.audience).catch(() => undefined);
         if (!claims) continue;
+        // The sign-in must be this identity's own (0siqvEzB): colleagues read the sealed sign-ins and could copy a box, and
+        // whoever sees a token (the key service takes it too) could hand it in as theirs. The token's nonce names the
+        // identity it was asked for; one without (a refreshed token) only renews who it vouched for already.
+        const handedIn = opened as { did?: unknown; salt?: unknown };
+        const salt = typeof handedIn.salt === 'string' ? handedIn.salt : undefined;
+        const bound = !!salt && claims.nonce === signInNonce(d.event.author, salt);
+        const renews = attested.get(d.event.author)?.subject === claims.sub;
+        const now = new Date(this.clock()).toISOString();
+        const taken = [...attested].some(([did, a]) => did !== d.event.author && a.subject === claims.sub && a.until > now);
+        const problem =
+          handedIn.did !== d.event.author ? 'this sign-in was handed in by someone else'
+          : salt && claims.nonce !== undefined && !bound ? 'this sign-in was made for another identity'
+          : !bound && !renews ? "this sign-in isn't tied to this identity: sign in from Weave on this computer"
+          : taken ? `${claims.email ?? claims.sub} is vouched for as another identity: that one has to lapse or be removed first`
+          : undefined;
+        if (problem) {
+          this.#signInRefused.set(d.event.author, { problem, time: d.event.time });
+          continue;
+        }
+        this.#signInRefused.delete(d.event.author);
         // With SCIM on, the directory decides: deactivated or unknown people aren't vouched for, and its groups count (stage 12).
         let groups = claims.groups;
         if (this.config.scim) {
@@ -7223,6 +7510,47 @@ export class WeaveNode implements Backend {
    * removed (with a new key), by whoever manages the space. Newcomers get an
    * hour to sign in.
    */
+  /**
+   * Two people who took each other's role at once (each removal or demotion
+   * not naming the other as seen): as the owner, say which came first, by the
+   * order this node got them, so every node ends up alike (H7hk7X9S).
+   */
+  #settleLosses(): number {
+    let settled = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (space.founder !== this.identity.author || this.#directs.has(space.id)) continue;
+      const state = this.#state(space);
+      if (state.founder !== this.identity.author) continue;
+      for (const pair of state.unsettled ?? []) {
+        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SETTLE, body: pair }));
+        settled++;
+      }
+    }
+    return settled;
+  }
+
+  /**
+   * People removed before removals named what they saw (an anchor, see
+   * spaces.ts): whoever manages the space anchors them now, once, by what this
+   * node holds of them. What they sign past it counts as after their removal.
+   */
+  #anchorRemovals(): number {
+    let anchored = 0;
+    for (const space of [...this.#spaces.values()]) {
+      if (this.#directs.has(space.id)) continue;
+      const state = this.#state(space);
+      if (!canManage(state, this.identity.author) || !state.removed.size) continue;
+      for (const did of state.removed.keys()) {
+        if (state.left.has(did) || state.members.has(did)) continue;
+        const signers = this.replica.signers().filter((s) => this.replica.authority.personOf(s) === did);
+        if (!signers.length || signers.every((s) => state.cutoffs?.some((c) => c.signer === s && c.c !== undefined))) continue;
+        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member: did, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
+        anchored++;
+      }
+    }
+    return anchored;
+  }
+
   async #offboard(): Promise<number> {
     let removed = 0;
     const now = new Date(this.clock()).toISOString();
@@ -7255,7 +7583,7 @@ export class WeaveNode implements Backend {
     const back = await this.#provider(setting).unwrap(await this.#provider(setting).wrap(probe, { space: spaceScope(space), epoch: -1 }), { space: spaceScope(space), epoch: -1 });
     if (b64u.encode(back) !== b64u.encode(probe)) throw new Error('the key service gave back something else');
     const attestor = input.attestor ? this.resolve(input.attestor) : undefined;
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}) } }));
+    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}), from: currentEpoch(space) + 1 } }));
     // From the next key on, half of it is the company's.
     this.#rotateKey(space);
     return this.#spaceInfo(space);
@@ -7624,6 +7952,8 @@ export class WeaveNode implements Backend {
   /** Record admissions into a project and hand the newcomers its keys through the group they came by. */
   #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
     if (!dids.length) return;
+    // Letting them in would need a new key we can't give: someone who manages the project does it.
+    if (!canManage(this.#state(project), this.identity.author) && this.#needsFreshKey(project)) return;
     for (const member of dids) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
     this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
@@ -7638,7 +7968,9 @@ export class WeaveNode implements Backend {
       const groupMembers = this.#state(group).members;
       const groupRef: SpaceRef = { id: group.id, kind: 'group', name: group.name };
       for (const did of groupMembers.keys()) {
-        if (!state.members.has(did) && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
+        // Someone removed from the project stays out, whatever groups they're in (unless they left on their own).
+        const removed = state.removed.has(did) && !state.left.has(did);
+        if (!state.members.has(did) && !removed && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
       }
       for (const member of state.members.values()) {
         if (member.via === group.id && !groupMembers.has(member.did) && member.did !== state.founder) {
@@ -7660,6 +7992,7 @@ export class WeaveNode implements Backend {
       const epoch = String(opened.epoch);
       if (!space.keys[epoch]) {
         space.keys[epoch] = opened.key;
+        (space.rekeyers ??= {})[epoch] = event.author;
         this.#saveSpace(space);
         return;
       }
@@ -7670,11 +8003,12 @@ export class WeaveNode implements Backend {
         .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && rekeyCounts(state, e))
         .flatMap((e) => {
           const o = this.#tryOpen((me) => openRekey(e, me));
-          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key }] : [];
+          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key, author: e.author }] : [];
         })
         .sort((a, b) => a.id.localeCompare(b.id));
       const keys = [...new Set([...all.map((k) => k.key), space.keys[epoch], ...(space.alternates?.[epoch] ?? [])])];
       space.keys[epoch] = all[0]?.key ?? space.keys[epoch];
+      if (all[0]) (space.rekeyers ??= {})[epoch] = all[0].author;
       (space.alternates ??= {})[epoch] = keys.filter((k) => k !== space.keys[epoch]);
       this.#saveSpace(space);
       return;
@@ -7692,14 +8026,46 @@ export class WeaveNode implements Backend {
     const known = this.#spaces.get(opened.space.id);
     if (known) {
       let added = false;
-      for (const [epoch, key] of Object.entries(opened.space.keys)) if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch))) (known.keys[epoch] = key), (added = true);
+      // For a space we hold, a gifted key counts only if it opens something sealed with it there (8R9bN-yO): anyone in a
+      // group with us can gift, and a made-up key for an epoch to come would keep the real one out.
+      for (const [epoch, key] of Object.entries(opened.space.keys)) {
+        if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch)) && this.#opensSomething(known, epoch, key)) (known.keys[epoch] = key), (added = true);
+      }
       for (const [board, epochs] of Object.entries((opened.space as StoredSpace).boards ?? {})) {
-        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch]) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
+        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch] && this.#opensSomething(known, epoch, key, board)) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
       }
       if (added) this.#saveSpace(known);
       return;
     }
     void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
+  }
+
+  /** Does a key we're handed open something sealed with it in this space (an epoch's events, or a board's)? */
+  #opensSomething(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
+    const scope = spaceScope(space);
+    const withKey = { ...space, keys: { ...space.keys, [epoch]: key } };
+    for (const e of this.replica.events((r) => r.kind === KIND_SEALED && r.scope === scope && !r.missing)) {
+      if (board === undefined) {
+        if ((e.body as { epoch?: unknown } | null)?.epoch === Number(epoch) && openIn(withKey, e)) return true;
+        continue;
+      }
+      const inner = openIn(space, e);
+      const b = inner?.body as { board?: unknown; epoch?: unknown } | null | undefined;
+      if (inner?.kind === KIND_BOARD_SEALED && b?.board === board && b.epoch === Number(epoch) && openBoard(space, inner, { [board]: { [epoch]: key } })) return true;
+    }
+    return false;
+  }
+
+  #anchor(person: Did, space: StoredSpace): Record<string, { c: number; s: number; n: number }> {
+    // In the space itself, each key's control head and last content (see Anchor in spaces.ts): numbered there without gaps.
+    const scope = spaceScope(space);
+    const out: Record<string, { c: number; s: number; n: number }> = {};
+    for (const signer of this.replica.signers()) {
+      if (this.replica.authority.personOf(signer) !== person) continue;
+      const n = this.replica.number(signer);
+      if (n > 0) out[signer] = { c: this.replica.store.chainHead(signer, scope)?.seq ?? 0, s: this.replica.store.contentCount(signer, scope), n };
+    }
+    return out;
   }
 
   /**
@@ -7729,7 +8095,7 @@ export class WeaveNode implements Backend {
     const key = `${this.#decodedGeneration}:${this.#controlRevision.get(space.id) ?? 0}`;
     const kept = this.#stateCache.get(space.id);
     if (kept?.key === key) return kept.state;
-    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id));
+    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id), { arrival: (e) => this.replica.arrival((e as { id?: string }).id ?? '') });
     this.#stateCache.set(space.id, { key, state });
     return state;
   }
@@ -7938,14 +8304,36 @@ export class WeaveNode implements Backend {
         for (const { id, author } of [{ id: post.id, author: post.by.did as Did }, ...(around.get(post.id)?.ids ?? [])]) {
           if (author === me) continue;
           const record = this.replica.record2(id);
-          if (!record || record.class !== 'content' || record.missing || !isWireItemV2(record.wire)) continue;
-          this.replica.store.dropBody(record.wire.e.body as string);
-          dropped++;
+          if (record && record.class === 'content' && !record.missing && isWireItemV2(record.wire)) {
+            this.replica.store.dropBody(record.wire.e.body as string);
+            dropped++;
+          } else if (!this.#forgottenCarried().has(id) && this.#carriedIds(space).has(id)) {
+            // Restated in a carry (7I92Kk20): a carry is never dropped, so its item is forgotten here, and the next shred leaves it behind.
+            this.#forgetCarried(id);
+            dropped++;
+          }
         }
       }
     }
     if (dropped) this.#decoded = undefined;
     return dropped;
+  }
+
+  /** Items of carries this node forgot by rule: kept in the carry (it can't be dropped), never shown. */
+  #forgottenCarriedSet?: Set<string>;
+  #forgottenCarried(): Set<string> {
+    this.#forgottenCarriedSet ??= new Set(readSecretJson<string[]>(this.home, joinPath(this.home.dir, 'forgotten-carried.json')) ?? []);
+    return this.#forgottenCarriedSet;
+  }
+
+  #forgetCarried(id: string): void {
+    this.#forgottenCarried().add(id);
+    writeSecretJson(this.home, joinPath(this.home.dir, 'forgotten-carried.json'), [...this.#forgottenCarried()]);
+  }
+
+  /** The ids carries restate in a space. */
+  #carriedIds(space: StoredSpace): Set<string> {
+    return new Set(this.#decodedIn(space.id).filter((d) => d.carried).map((d) => d.id));
   }
 
   async setBoardRule(input: { space: string; board: string; keepDays?: number | null; maxMB?: number | null }): Promise<BoardInfo[]> {
@@ -7990,8 +8378,8 @@ export class WeaveNode implements Backend {
       const { by: _by, time: _time, ...setting } = managed;
       this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: setting as unknown as Json }));
     }
-    const carried = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SHRED, body: { epochs: ended } }));
+    const { carried, dropped } = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SHRED, body: { epochs: ended, dropped } }));
     return { epochs: ended, carried };
   }
 
@@ -8000,19 +8388,26 @@ export class WeaveNode implements Backend {
    * keeps from those epochs: its control events and latest state, posts its
    * rules keep (and their chat), read-limited boards' with their own key.
    */
-  #carryForward(space: StoredSpace, epochs: Set<number>, dropBefore?: string): number {
+  #carryForward(space: StoredSpace, epochs: Set<number>, dropBefore?: string, skip?: Set<string>): { carried: number; dropped: string[] } {
     const posts = this.#spacePosts(space).posts;
     // A company's maximum (stage 11): chat and posts from before it go too, unless they stay for good (pinned, issues, proposals, releases).
     const forever = new Set(posts.filter((p) => p.lifetime && 'forever' in p.lifetime && p.lifetime.forever !== 'no-rule').map((p) => p.id));
     const gone = new Set(posts.filter((p) => (p.lifetime && isDue(p.lifetime, this.clock())) || (dropBefore && p.active < dropBefore && !forever.has(p.id))).map((p) => p.id));
     const around = this.#aroundPosts(this.#entries(space));
     const goneWith = new Set([...gone].flatMap((id) => (around.get(id)?.ids ?? []).map((x) => x.id)));
+    // What goes on purpose, by our rules and clock: named in the shred, so other nodes don't carry it forward after all.
+    const dropped: string[] = [];
     const items = this.#decodedIn(space.id).filter((d) => {
       const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
       const inEpochs = d.carried || (Number.isSafeInteger(epoch) && epochs.has(epoch as number));
-      if (dropBefore && d.inner.kind === KIND_MSG && d.event.time < dropBefore) return false;
-      return inEpochs && d.inner.kind !== KIND_CARRY && !gone.has(d.id) && !goneWith.has(d.id);
+      if (!inEpochs || d.inner.kind === KIND_CARRY || skip?.has(d.id)) return false;
+      if ((dropBefore && d.inner.kind === KIND_MSG && d.event.time < dropBefore) || gone.has(d.id) || goneWith.has(d.id)) {
+        dropped.push(d.id);
+        return false;
+      }
+      return true;
     });
+    if (!items.length) return { carried: 0, dropped };
     const byBoard = new Map<string, Decoded[]>();
     for (const d of items) byBoard.set(d.board ?? '', [...(byBoard.get(d.board ?? '') ?? []), d]);
     for (const [board, list] of byBoard) {
@@ -8022,7 +8417,7 @@ export class WeaveNode implements Backend {
       if (board && latest < 0) continue; // a board we can't read: we hold none of it to carry
       this.replica.write(this.identity, sealFor(this.#cipher(space), board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
     }
-    return items.length;
+    return { carried: items.length, dropped };
   }
 
   /** Apply the shreds of those who manage our spaces (each once: a shredded key is gone). */
@@ -8038,8 +8433,9 @@ export class WeaveNode implements Backend {
         const floor = this.#companyRetention(space)?.minDays;
         const kept = floor ? this.#endedWithin(space, floor) : undefined;
         const live = epochs.filter((e): e is number => Number.isSafeInteger(e) && !!space.keys[String(e)] && !kept?.has(e));
+        const dropped = (d.inner.body as { dropped?: unknown } | null)?.dropped;
         if (live.length) {
-          this.#applyShred(space, live);
+          this.#applyShred(space, live, Array.isArray(dropped) ? new Set(dropped.filter((x): x is string => typeof x === 'string')) : undefined);
           applied++;
         }
       }
@@ -8048,7 +8444,7 @@ export class WeaveNode implements Backend {
   }
 
   /** A shred from someone who manages the space: keep what we wrote, then let those keys go, with the bodies sealed with them. */
-  #applyShred(space: StoredSpace, epochs: number[]): void {
+  #applyShred(space: StoredSpace, epochs: number[], dropped?: Set<string>): void {
     if (this.#held(this.#state(space))) return; // on legal hold: keys stay
     const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
     if (!doomed.size) return;
@@ -8056,9 +8452,27 @@ export class WeaveNode implements Backend {
     const company = !!this.#managedRaw(space).setting?.company;
     const mine = company ? [] : this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
     if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
+    // The shredder's carry restates only what its node held (zLqeyEBC): what we hold of those epochs that no carry under a
+    // key that stays restates, and that the shred didn't drop on purpose, we carry forward ourselves before letting go.
+    // Anyone may: each item is checked by its author's signature. (A shred from before it named what it dropped: as it says.)
+    if (dropped && this.#state(space).members.has(this.identity.author)) {
+      const restated = new Set(
+        this.#decodedIn(space.id)
+          .filter((d) => d.inner.kind === KIND_CARRY && !d.carried && !doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)))
+          .flatMap((d) => this.#expandCarry(d, space).map((x) => x.id)),
+      );
+      this.#carryForward(space, doomed, undefined, new Set([...restated, ...dropped]));
+    }
     const scope = spaceScope(space);
+    // Bodies are stored once per hash for every space: drop only this space's own. One counts as ours if it opens with this
+    // space's key of that epoch (a copy of another space's body under our scope doesn't), and no event elsewhere points to it.
+    const cipher = this.#cipher(space);
+    const elsewhere = new Set(this.replica.events((r) => r.scope !== scope && isWireItemV2(r.wire)).map((r) => (r.wire as WireItemV2).e.body as string));
     for (const r of this.replica.events((r) => r.scope === scope && r.class === 'content' && !r.missing)) {
-      if (doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) && isWireItemV2(r.wire)) this.replica.store.dropBody(r.wire.e.body as string);
+      if (!doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) || !isWireItemV2(r.wire)) continue;
+      const hash = r.wire.e.body as string;
+      if (elsewhere.has(hash) || !openIn(cipher, r)) continue;
+      this.replica.store.dropBody(hash);
     }
     for (const e of doomed) delete space.keys[String(e)];
     space.shredded = [...new Set([...(space.shredded ?? []), ...doomed])];
@@ -8343,7 +8757,7 @@ export class WeaveNode implements Backend {
       if (inner.kind === KIND_BOARD_SEALED) {
         const opened = space?.kind === 'project' ? openBoard(space, inner, space.boards) : undefined;
         if (!opened) return undefined;
-        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board };
+        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board, outer: inner };
       }
     }
     // A delegated key may carry sealed events, but only of kinds it was granted.
@@ -9098,6 +9512,33 @@ export class WeaveNode implements Backend {
 
   async removeKeyvault(name: string): Promise<void> {
     this.#keyvaults.remove(name);
+  }
+
+  async addClientApp(input: { project: string; artifact?: string; approve?: boolean }): Promise<KeyvaultInfo | FetcherInfo> {
+    const { project, artifact } = this.#services.artifact(input.project, input.artifact);
+    const kind = artifact.kind === 'keyvault' || artifact.kind === 'fetcher' ? artifact.kind : undefined;
+    if (!kind) throw new Error(`${artifact.manifest.name} ${artifact.tag} is a ${artifact.kind}, not a keyvault or fetcher: add it where it goes (a project's services)`);
+    const reaches = (artifact.manifest.keyvault?.net ?? artifact.manifest.fetcher?.net ?? []).join(', ') || 'nothing';
+    if (!input.approve) throw new Error(`approve it first: Weave would run ${artifact.manifest.name} ${artifact.tag}, released in ${this.#spaceName(project)}, as your ${kind}${kind === 'keyvault' ? ` for ${artifact.manifest.keyvault!.platform} (it holds your access there)` : ''}; it reaches ${reaches} over HTTPS`);
+    const taken = new Set([...this.#keyvaults.shipped(), ...this.#fetchers.shipped()].filter((s) => !this.#clientApps.list().some((c) => c.name === s.name)).map((s) => s.name));
+    // One keyvault per platform: said before anything is fetched.
+    const already = kind === 'keyvault' ? this.#keyvaults.forPlatform(artifact.manifest.keyvault!.platform) : undefined;
+    if (already && already.name !== artifact.manifest.app) throw new Error(`you have a keyvault for ${artifact.manifest.keyvault!.platform} already (${already.name}): remove it first to use ${artifact.manifest.name} instead`);
+    const added = await this.#clientApps.add({ kind, artifact: { project: project.id, id: artifact.id, tag: artifact.tag, manifest: artifact.manifest }, approved: releaseApproval(artifact), taken });
+    if (kind === 'keyvault') return this.#keyvaultInfo(this.#keyvaults.add({ shipped: added.name }));
+    return this.#fetcherInfo(this.#fetchers.add({ shipped: added.name, projects: [project.id] }));
+  }
+
+  async setupPacks(): Promise<Pack[]> {
+    return shippedPacks(this.wasmSetup.shippedDir ?? SHIPPED_DIR);
+  }
+
+  async removeClientApp(name: string): Promise<void> {
+    const c = this.#clientApps.list().find((x) => x.name === name);
+    if (!c) throw new Error(`nothing named ${name} was added from a release here`);
+    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) this.#keyvaults.remove(name);
+    if (c.kind === 'fetcher' && this.#fetchers.list().some((f) => f.name === name)) this.#fetchers.remove(name);
+    this.#clientApps.remove(name);
   }
 
   async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {

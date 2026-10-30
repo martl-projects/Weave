@@ -1,11 +1,11 @@
-import { classOf } from './eventsV2.ts';
+import { classOf, innerHash } from './eventsV2.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { KIND_SEALED } from './authority.ts';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { boxTo, open, openBox, pairKey, randomBytes, seal, type Box, type Sealed } from './crypto.ts';
 import type { EventFields, SigningIdentity } from './events.ts';
 import type { EventView } from './records.ts';
-import { isDid, type Did, type KeyPair } from './keys.ts';
+import { generateKeyPair, isDid, sign, verify, type Did, type KeyPair } from './keys.ts';
 import { isMembershipBody, KIND_MEMBERSHIP } from './memberships.ts';
 
 /*
@@ -81,6 +81,8 @@ export const KIND_SHRED = 'weave.space.shred';
 export const KIND_MANAGED = 'weave.space.managed';
 /** `{epoch, wrapped}`: an epoch's company half, wrapped by the space's key provider. */
 export const KIND_KMS = 'weave.space.kms';
+/** The owner's word on which of two concurrent removals (or demotions) of each other came first: { first, second } event ids. */
+export const KIND_SETTLE = 'weave.space.settle';
 /** `{did, subject, email?, groups, until}`: the company's attestor vouches that this Weave person is this employee, until then. */
 export const KIND_ATTEST = 'weave.org.attest';
 /** `{box}`: an employee's sign-in (an OIDC ID token), boxed to the attestor. */
@@ -155,6 +157,8 @@ export interface ManagedSetting {
   attestor?: Did;
   /** A company space's company group (stage 10): where the attestor vouches for people. */
   company?: string;
+  /** The first epoch under the company's key service: from it on, an epoch without its company half is locked, never the Weave half alone. */
+  from?: number;
   by: Did;
   time: string;
 }
@@ -207,11 +211,15 @@ export interface SpaceKeys {
    * Everyone seals with `keys` (the rekey with the lowest id) and reads with all.
    */
   alternates?: Record<string, string[]>;
+  /** Epoch number → who made the rekey whose key everyone seals with: in a managed space, only their company half counts. */
+  rekeyers?: Record<string, Did>;
 }
 
 export interface Inner {
   kind: string;
   body: Json;
+  /** Sealed with them: the secret that salts the event's inner hash (ih), for checking a restatement of it. */
+  salt?: string;
 }
 
 export const spaceScope = (space: Pick<SpaceKeys, 'kind' | 'id'>): string => `${space.kind}:${space.id}`;
@@ -281,8 +289,13 @@ const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave
 /** Event fields for an encrypted event in a space, sealed with the current epoch key. */
 export function sealFor(space: SpaceKeys, inner: Inner): EventFields {
   const epoch = currentEpoch(space);
-  const key = b64u.decode(space.keys[String(epoch)]);
-  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), body: { epoch, ...seal(key, inner as unknown as Json, context(space, epoch)) } };
+  const newest = space.keys[String(epoch)];
+  // A newest key that isn't here (a managed epoch still locked): nothing goes out under an older one instead.
+  if (!newest) throw new Error(`the newest key of ${space.name} is locked: nothing can be written there until it unlocks`);
+  const key = b64u.decode(newest);
+  // A secret salt sealed inside, and the salted hash signed outside: a carry can restate it checkably (see innerHash).
+  const sealed = { kind: inner.kind, body: inner.body, salt: b64u.encode(randomBytes(16)) };
+  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), ih: innerHash(sealed), body: { epoch, ...seal(key, sealed as unknown as Json, context(space, epoch)) } };
 }
 
 /** Decrypt a sealed event of a space, or undefined if we lack the key or it doesn't decrypt. */
@@ -380,6 +393,33 @@ export interface Invite {
   entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
   /** Keys of read-limited boards the link gives access to: board → epoch → key. */
   boards?: Record<string, Record<string, string>>;
+  /** The link's own key (see inviteKeys): `invite` is its public half, which everyone in the space reads. */
+  key?: string;
+}
+
+/**
+ * An invite link's key pair (xQ0as76W). The invite event in the space names only
+ * its public half (the invite's id), which every member reads; the link holds
+ * the secret half, and a join signs who joins with it. So a join proves it came
+ * with the link, and nobody else in the space can cite the link as theirs.
+ */
+export function inviteKeys(): { invite: string; key: string } {
+  const pair = generateKeyPair();
+  return { invite: b64u.encode(pair.publicKey), key: b64u.encode(pair.secretKey) };
+}
+
+const joinMessage = (scope: string, joiner: Did) => utf8(`weave/join/v1\n${scope}\n${joiner}`);
+
+/** A join's proof that it holds the link: who joins which space, signed with the link's key. */
+export const joinProof = (key: string, scope: string, joiner: Did): string => b64u.encode(sign(joinMessage(scope, joiner), b64u.decode(key)));
+
+export function joinProven(invite: string, proof: unknown, scope: string, joiner: Did): boolean {
+  if (typeof proof !== 'string') return false;
+  try {
+    return verify(b64u.decode(proof), joinMessage(scope, joiner), b64u.decode(invite));
+  } catch {
+    return false;
+  }
 }
 
 const INVITE_PREFIX = 'weave:invite:';
@@ -457,6 +497,8 @@ export interface SpaceState {
   visitors?: { agents?: VisitorRule; services?: VisitorRule; by: Did; time: string };
   /** Keys cut off by a removal, demotion, leave or handover: what they sign numbered past `seq` counts from `time` on, whatever date it claims. */
   cutoffs?: Cutoff[];
+  /** Two people taking each other's role at once, ordered by this node's view alone: for the owner to settle (see orderLosses). */
+  unsettled?: Array<{ first: string; second: string }>;
 }
 
 /**
@@ -470,10 +512,65 @@ export interface SpaceState {
  */
 export interface Cutoff {
   signer: Did;
+  /** The key's last number (n) that counts: for what has no number in the space (v1, content from before cs). */
   seq: number;
+  /** Its last control event in the space that counts (chain position), and its last content there (cs): see Anchor. */
+  c?: number;
+  s?: number;
+  /** The lowest n of its content numbered in the space: content without a cs numbered past it is new content dressed as old. */
+  f?: number;
   time: string;
   /** The person managed the space until then: what they signed up to `seq` (a rekey, say) was a manager's. */
   managed?: true;
+  /**
+   * For the keys of `author` the anchor didn't name (`except` are those it did):
+   * anchored at 0, everything they sign in the space counts as after. Leaving a
+   * key out is never better than naming it (H7hk7X9S).
+   */
+  author?: Did;
+  except?: Did[];
+}
+
+/**
+ * What a removal, a demotion, a leave or a handover names as seen, per key of
+ * the person (causal anchoring, H7hk7X9S): its last number (`upTo`, n), and in
+ * the space itself its control chain's head (`at.c`) and its last content
+ * (`at.s`, cs). Both are numbered in the space without gaps from other spaces:
+ * whatever the key signs past them counts as after, whatever date it claims, and
+ * anything at or below them collides with what was seen (a fork).
+ */
+export interface Anchor {
+  signer: Did;
+  seq: number;
+  c?: number;
+  s?: number;
+}
+
+const count = (value: unknown): number | undefined => (Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : undefined);
+
+/** An anchor from untrusted input: `upTo` ({key: n}) and `at` ({key: {c, s, n}}), merged per key. */
+export function parseAnchors(body: Record<string, unknown> | null | undefined): Anchor[] {
+  const out = new Map<Did, Anchor>(parseUpTo(body?.upTo).map((u) => [u.signer, { signer: u.signer, seq: u.seq }]));
+  const at = body?.at;
+  if (at && typeof at === 'object' && !Array.isArray(at)) {
+    for (const [signer, v] of Object.entries(at as Record<string, unknown>).slice(0, 64)) {
+      if (!isDid(signer) || !v || typeof v !== 'object') continue;
+      const head = v as Record<string, unknown>;
+      const [c, s, n] = [count(head.c), count(head.s), count(head.n)];
+      const before = out.get(signer);
+      out.set(signer, { signer, seq: before?.seq ?? n ?? 0, ...(c !== undefined ? { c } : {}), ...(s !== undefined ? { s } : {}) });
+    }
+  }
+  return [...out.values()];
+}
+
+/** Does a cut key's event count as after its cutoff? By its place in the space where it has one, else by its number. */
+export function isPast(cut: Cutoff, event: Pick<EventView, 'signer' | 'seq' | 'cseq' | 'cs'> & { author?: Did }): boolean {
+  if (cut.author !== undefined) return event.author === cut.author && !cut.except?.includes(event.signer);
+  if (cut.signer !== event.signer) return false;
+  if (event.cseq !== undefined && cut.c !== undefined) return event.cseq > cut.c;
+  if (event.cs !== undefined && cut.s !== undefined) return event.cs > cut.s;
+  return event.seq > cut.seq || (event.cseq === undefined && event.cs === undefined && cut.f !== undefined && event.seq > cut.f);
 }
 
 /** The last numbers per key that count, for a removal or demotion to name (`upTo`), from untrusted input. */
@@ -495,10 +592,12 @@ const NAMES_SEEN = new Set([KIND_REMOVE, KIND_MAINTAINER, KIND_LEAVE, KIND_HANDO
  * previous event, never before what it says it saw (an upTo names events, so it
  * comes after them), and after any cutoff of its key it is past.
  */
-function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutoff[]): Placed[] {
+function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutoff[], firstOf: Map<EventView, EventView> = new Map()): Placed[] {
   const bySigner = new Map<Did, Placed[]>();
+  const placedOf = new Map<EventView, Placed>();
   for (const o of opened) {
     const p: Placed = { event: o.event, inner: o.inner, at: o.event.time, after: 0 };
+    placedOf.set(o.event, p);
     const list = bySigner.get(o.event.signer);
     if (list) list.push(p);
     else bySigner.set(o.event.signer, [p]);
@@ -516,18 +615,22 @@ function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutof
   for (let pass = 0; pass < 4; pass++) {
     let moved = false;
     for (const [signer, list] of bySigner) {
-      const cuts = cutoffs.filter((c) => c.signer === signer);
+      const cuts = cutoffs.filter((c) => c.signer === signer || c.author !== undefined);
       let last = { at: '', after: 0 };
       for (const p of list) {
         let place = { at: p.event.time, after: 0 };
         if (later(last, place)) place = { ...last };
-        for (const c of cuts) if (p.event.seq > c.seq && !later(place, { at: c.time, after: 0 })) place = { at: c.time, after: 1 };
+        for (const c of cuts) if (isPast(c, p.event) && !later(place, { at: c.time, after: 0 })) place = { at: c.time, after: 1 };
         if (NAMES_SEEN.has(canonicalKind(p.inner.kind))) {
-          for (const u of parseUpTo((p.inner.body as Record<string, unknown> | null)?.upTo)) {
+          for (const u of parseAnchors(p.inner.body as Record<string, unknown> | null)) {
             const before = u.signer === signer ? undefined : seen(u.signer, u.seq);
             if (before && !later(place, before)) place = { at: before.at, after: before.after + 1 };
           }
         }
+        // The second of two people taking each other's role comes after the first (see orderLosses).
+        const first = firstOf.get(p.event);
+        const firstPlaced = first && placedOf.get(first);
+        if (firstPlaced && !later(place, firstPlaced)) place = { at: firstPlaced.at, after: firstPlaced.after + 1 };
         if (place.at !== p.at || place.after !== p.after) moved = true;
         p.at = place.at;
         p.after = place.after;
@@ -539,7 +642,54 @@ function place(opened: Array<{ event: EventView; inner: Inner }>, cutoffs: Cutof
   return [...bySigner.values()].flat().sort(byPlace);
 }
 
-const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.every((c, i) => c.signer === b[i].signer && c.seq === b[i].seq && c.time === b[i].time);
+const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.every((c, i) => c.signer === b[i].signer && c.author === b[i].author && c.seq === b[i].seq && c.c === b[i].c && c.s === b[i].s && c.time === b[i].time);
+
+const idOf = (event: EventView) => (event as { id?: string }).id ?? `${event.signer}#${event.seq}`;
+
+/**
+ * Two people taking each other's role (a removal or a demotion each way): which
+ * came first (H7hk7X9S). If one names, in its anchor, the other as seen, the
+ * other came first. If neither does, they are concurrent, and a removed
+ * maintainer can always claim that: then the owner's settle decides, else the
+ * order in which this node got them (arrival), else claimed time and id. The
+ * second doesn't count, as its author had lost the role by then; the owner's
+ * node settles the order it saw, so every node ends up alike.
+ */
+function orderLosses(opened: Array<{ event: EventView; inner: Inner }>, founder: Did, arrival?: (event: EventView) => number | undefined): { firstOf: Map<EventView, EventView>; unsettled: Array<{ first: string; second: string }> } {
+  const losses: Array<{ event: EventView; by: Did; of: Did; anchors: Map<Did, Anchor> }> = [];
+  const settled = new Map<string, string>();
+  for (const { event, inner } of opened) {
+    const kind = canonicalKind(inner.kind);
+    const b = (inner.body ?? {}) as Record<string, unknown>;
+    if (kind === KIND_SETTLE && event.author === founder && typeof b.first === 'string' && typeof b.second === 'string') settled.set([b.first, b.second].sort().join(' '), b.first);
+    if ((kind === KIND_REMOVE || (kind === KIND_MAINTAINER && b.on === false)) && isDid(b.member)) losses.push({ event, by: event.author, of: b.member, anchors: new Map(parseAnchors(b).map((u) => [u.signer, u])) });
+  }
+  const saw = (x: (typeof losses)[number], y: (typeof losses)[number]) => {
+    const a = x.anchors.get(y.event.signer);
+    return !!a && (a.c !== undefined && y.event.cseq !== undefined ? a.c >= y.event.cseq : a.seq >= y.event.seq);
+  };
+  const firstOf = new Map<EventView, EventView>();
+  const unsettled: Array<{ first: string; second: string }> = [];
+  for (let i = 0; i < losses.length; i++) {
+    for (let j = i + 1; j < losses.length; j++) {
+      const [x, y] = [losses[i], losses[j]];
+      if (x.by !== y.of || y.by !== x.of || x.by === y.by) continue;
+      let first: (typeof losses)[number];
+      if (saw(x, y) !== saw(y, x)) first = saw(x, y) ? y : x;
+      else {
+        const settle = settled.get([idOf(x.event), idOf(y.event)].sort().join(' '));
+        if (settle) first = settle === idOf(x.event) ? x : y;
+        else {
+          const [ax, ay] = [arrival?.(x.event), arrival?.(y.event)];
+          first = ax !== undefined && ay !== undefined && ax !== ay ? (ax < ay ? x : y) : x.event.time !== y.event.time ? (x.event.time < y.event.time ? x : y) : idOf(x.event) < idOf(y.event) ? x : y;
+          unsettled.push({ first: idOf(first.event), second: idOf((first === x ? y : x).event) });
+        }
+      }
+      firstOf.set((first === x ? y : x).event, first.event);
+    }
+  }
+  return { firstOf, unsettled };
+}
 
 /**
  * Membership from a space's decrypted events, applied in time order. The rules
@@ -548,45 +698,42 @@ const sameCutoffs = (a: Cutoff[], b: Cutoff[]) => a.length === b.length && a.eve
  * maintainers do both, invite whole groups, and set rules that let group
  * newcomers in automatically.
  */
-export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: EventView; inner: Inner }>): SpaceState {
+export function spaceState(kind: SpaceKind, founder: Did, opened: Array<{ event: EventView; inner: Inner }>, options: { arrival?: (event: EventView) => number | undefined } = {}): SpaceState {
+  const { firstOf, unsettled } = orderLosses(opened, founder, options.arrival);
   // Cutoffs come only from removals (and the like) that count, and they move events, which can change what counts: fold until it settles.
+  // Each key's lowest n among its content numbered here (cs): see Cutoff.f.
+  const firstCs = new Map<Did, number>();
+  for (const { event } of opened) if (event.cs !== undefined && event.seq < (firstCs.get(event.signer) ?? Infinity)) firstCs.set(event.signer, event.seq);
   let cutoffs: Cutoff[] = [];
   for (let round = 0; ; round++) {
-    const { state, found } = foldSpace(kind, founder, place(opened, cutoffs));
-    if (sameCutoffs(found, cutoffs) || round === 4) return found.length ? { ...state, cutoffs: found } : state;
+    const { state, found } = foldSpace(kind, founder, place(opened, cutoffs, firstOf), firstCs);
+    if (sameCutoffs(found, cutoffs) || round === 4) return { ...state, ...(found.length ? { cutoffs: found } : {}), ...(unsettled.length ? { unsettled } : {}) };
     cutoffs = found;
   }
 }
 
-function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: SpaceState; found: Cutoff[] } {
+function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map<Did, number> = new Map()): { state: SpaceState; found: Cutoff[] } {
   const found: Cutoff[] = [];
-  const cut = (at: string, upTo: Array<{ signer: Did; seq: number }>, managed = false) => {
-    for (const u of upTo) found.push({ signer: u.signer, seq: u.seq, time: at, ...(managed ? { managed: true as const } : {}) });
+  const cut = (at: string, anchors: Anchor[], managed = false, person?: Did) => {
+    for (const u of anchors) {
+      const f = firstCs.get(u.signer);
+      found.push({ ...u, ...(f !== undefined ? { f } : {}), time: at, ...(managed ? { managed: true as const } : {}) });
+    }
+    // An anchor (at) names the person's keys it saw: any other key of theirs is anchored at 0.
+    if (person) found.push({ signer: person, seq: 0, c: 0, s: 0, author: person, except: anchors.map((u) => u.signer), time: at, ...(managed ? { managed: true as const } : {}) });
+  };
+  /** A leave's or handover's own key: cut at that event itself, with what it names of its other keys. */
+  const own = (event: EventView, body: Record<string, unknown>): Anchor[] => {
+    const named = parseAnchors(body);
+    const mine = named.find((u) => u.signer === event.signer);
+    return [{ ...mine, signer: event.signer, seq: event.seq, ...(event.cseq !== undefined ? { c: event.cseq } : {}) }, ...named.filter((u) => u.signer !== event.signer)];
   };
   const state: SpaceState = { kind, founder, members: new Map(), removed: new Map(), maintainers: new Set([founder]), groups: new Map(), declined: new Map(), left: new Set() };
-  /** How managers lost their role: by which event, and up to which number of each of their keys it counted. */
-  const losses = new Map<Did, Array<{ by: Did; signer: Did; seq: number; upTo: Map<Did, number> }>>();
-  const lose = (person: Did, event: EventView, upTo: Array<{ signer: Did; seq: number }>) => {
-    const list = losses.get(person) ?? [];
-    list.push({ by: event.author, signer: event.signer, seq: event.seq, upTo: new Map(upTo.map((u) => [u.signer, u.seq])) });
-    losses.set(person, list);
-  };
-  /**
-   * Two managers removing (or demoting) each other at once: the one who lost the
-   * role first still removes the other, if they hadn't seen it (past that loss's
-   * cutoff, and not naming it). Only the one who took their role, nobody else:
-   * lying about what they saw only takes that one down too, never keeps them in
-   * and never lets them act on others.
-   */
-  const concurrent = (author: Did, event: EventView, body: Record<string, unknown>): boolean => {
-    const named = new Map(parseUpTo(body.upTo).map((u) => [u.signer, u.seq]));
-    return (losses.get(author) ?? []).some((l) => {
-      if (body.member !== l.by) return false;
-      const cut = l.upTo.get(event.signer);
-      return cut !== undefined && event.seq > cut && (named.get(l.signer) ?? -1) < l.seq;
-    });
-  };
-  const invites = new Map<string, { by: Did; expires: string; accept: boolean }>();
+  /** Anchored (at): its unnamed keys count as anchored at 0 too. Older removals cut only the keys they name. */
+  const anchored = (body: Record<string, unknown>) => !!body.at && typeof body.at === 'object';
+  const invites = new Map<string, { by: Did; expires: string; accept: boolean; keyed: boolean; at: string; managing: boolean }>();
+  /** Who may let back in someone who was removed (not left): someone who could remove them, after the removal (_Ak3UUmp, odfs7haI). */
+  const mayReadmit = (by: Did, since: string, who: Did) => !state.removed.has(who) || state.left.has(who) || (canManage(state, by) && since > state.removed.get(who)!);
   // Invites their makers closed: only who they name came in with them.
   const closes = new Map<string, { by: Did; joined: Set<Did> }>();
   for (const { event, inner } of placed) {
@@ -617,35 +764,39 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
         }
         break;
       case KIND_INVITE:
-        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true });
+        if (may(author) && typeof body.invite === 'string' && typeof body.expires === 'string') invites.set(body.invite, { by: author, expires: body.expires, accept: body.accept === true, keyed: body.key === true, at, managing: canManage(state, author) });
         break;
       case KIND_JOIN: {
         const invite = typeof body.invite === 'string' ? invites.get(body.invite) : undefined;
         const live = invite && invite.expires >= at && state.members.has(invite.by) && !closedTo(body.invite as string, invite.by, author);
-        if (live && !invite.accept && !state.members.has(author) && (!state.removed.has(author) || state.left.has(author))) admit(author, at, invite.by, undefined, body.invite as string);
+        // A link with a key: the join must prove it holds it (xQ0as76W). One without (older links): nobody comes back with it after leaving,
+        // since its id is in the space for every member to read and cite.
+        const proven = !!invite && (invite.keyed ? joinProven(body.invite as string, body.proof, event.scope, author) : !state.left.has(author));
+        // Someone removed comes back only with a link made after the removal by someone who could remove them.
+        const back = !state.removed.has(author) || state.left.has(author) || (!!invite && invite.managing && invite.at > state.removed.get(author)!);
+        if (live && proven && !invite.accept && !state.members.has(author) && back) admit(author, at, invite.by, undefined, body.invite as string);
         break;
       }
       case KIND_REMOVE: {
-        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author) || concurrent(author, event, body);
+        const allowed = kind === 'group' ? author === state.founder : state.maintainers.has(author);
         if (allowed && isDid(body.member) && body.member !== state.founder && state.members.has(body.member)) {
-          const upTo = parseUpTo(body.upTo);
+          const anchors = parseAnchors(body);
           const managed = state.maintainers.has(body.member);
-          if (managed) lose(body.member, event, upTo);
           state.members.delete(body.member);
           state.maintainers.delete(body.member);
           state.removed.set(body.member, at);
-          cut(at, upTo, managed);
+          cut(at, anchors, managed, anchored(body) ? body.member : undefined);
+        } else if (allowed && isDid(body.member) && state.removed.has(body.member) && anchored(body)) {
+          // Someone removed before removals named what they saw: anchored now, by what this one saw of them.
+          cut(at, parseAnchors(body), false, body.member);
         }
         break;
       }
       case KIND_MAINTAINER:
-        if (kind !== 'group' && (state.maintainers.has(author) || (body.on === false && concurrent(author, event, body))) && isDid(body.member) && body.member !== state.founder) {
+        if (kind !== 'group' && state.maintainers.has(author) && isDid(body.member) && body.member !== state.founder) {
           if (body.on === false) {
-            const upTo = parseUpTo(body.upTo);
-            if (state.maintainers.delete(body.member)) {
-              lose(body.member, event, upTo);
-              cut(at, upTo, true);
-            }
+            const anchors = parseAnchors(body);
+            if (state.maintainers.delete(body.member)) cut(at, anchors, true, anchored(body) ? body.member : undefined);
           } else if (state.members.has(body.member)) state.maintainers.add(body.member);
         }
         break;
@@ -665,14 +816,17 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
         if (typeof body.invite === 'string') {
           const invite = invites.get(body.invite);
           const live = invite && invite.by === author && invite.expires >= at && state.members.has(author) && !(isDid(body.member) && closedTo(body.invite, author, body.member));
-          if (live && isDid(body.member) && !state.members.has(body.member)) admit(body.member, at, author, undefined, body.invite);
+          if (live && isDid(body.member) && !state.members.has(body.member) && mayReadmit(author, at, body.member)) admit(body.member, at, author, undefined, body.invite);
           break;
         }
         const via = typeof body.via === 'string' ? body.via : undefined;
-        const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.has(author);
+        // By a group's rule: only from someone who came in by that group themselves (99ZpCdH6). Anyone else can't know who's in it.
+        const ruled = via !== undefined && state.groups.get(via)?.auto === true && state.members.get(author)?.via === via;
         // In groups (not tiers), their owner admits directly: a company putting its people in (stage 10).
         const admits = kind === 'project' || (kind === 'group' && !state.tier && author === state.founder);
-        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member)) {
+        // By a rule, never someone removed (unless they left): only a maintainer lets them back, deliberately.
+        const readmits = isDid(body.member) && (ruled && !state.maintainers.has(author) ? !state.removed.has(body.member) || state.left.has(body.member) : mayReadmit(author, at, body.member));
+        if (admits && isDid(body.member) && (state.maintainers.has(author) || ruled) && !state.members.has(body.member) && readmits) {
           admit(body.member, at, author, via);
         }
         break;
@@ -691,7 +845,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
           state.maintainers.delete(author);
           state.removed.set(author, at);
           state.left.add(author);
-          cut(at, [{ signer: event.signer, seq: event.seq }, ...parseUpTo(body.upTo)], managed);
+          cut(at, own(event, body), managed);
         }
         break;
       case KIND_HANDOVER:
@@ -699,7 +853,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
           state.founder = body.to;
           state.maintainers.add(body.to);
           // In groups only the owner manages: handing it over ends that. In projects and communities they stay a maintainer.
-          if (kind === 'group') cut(at, [{ signer: event.signer, seq: event.seq }, ...parseUpTo(body.upTo)], true);
+          if (kind === 'group') cut(at, own(event, body), true);
         }
         break;
       case KIND_CLOSE:
@@ -709,7 +863,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[]): { state: Sp
         const ttl = Number(body.ttlMinutes);
         const grace = Number(body.graceHours);
         if (kind !== 'direct' && author === state.founder && body.provider && typeof body.provider === 'object' && ttl > 0 && grace >= 0)
-          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), by: author, time: at };
+          state.managed = { provider: body.provider as Json, ttlMinutes: ttl, graceHours: grace, ...(isDid(body.attestor) ? { attestor: body.attestor } : {}), ...(typeof body.company === 'string' ? { company: body.company } : {}), ...(Number.isSafeInteger(body.from) ? { from: body.from as number } : {}), by: author, time: at };
         break;
       }
       case KIND_VISITORS:
@@ -750,7 +904,7 @@ export function visibleIn(state: SpaceState, event: EventView, inner: Inner): bo
   if (state.members.has(event.author)) return true;
   const removedAt = state.removed.get(event.author);
   if (removedAt === undefined) return false;
-  if (state.cutoffs?.some((c) => c.signer === event.signer && event.seq > c.seq)) return false;
+  if (state.cutoffs?.some((c) => isPast(c, event))) return false;
   return event.time < removedAt;
 }
 
@@ -759,8 +913,8 @@ export function visibleIn(state: SpaceState, event: EventView, inner: Inner): bo
  * the rekey's own number (they lost the role later, past it): judged by when it
  * was made, not by today. One numbered past their loss doesn't.
  */
-export const rekeyCounts = (state: SpaceState, event: Pick<EventView, 'author' | 'signer' | 'seq'>): boolean =>
-  canManage(state, event.author) || !!state.cutoffs?.some((c) => c.managed && c.signer === event.signer && event.seq <= c.seq);
+export const rekeyCounts = (state: SpaceState, event: Pick<EventView, 'author' | 'signer' | 'seq' | 'cseq' | 'cs'>): boolean =>
+  canManage(state, event.author) || !!state.cutoffs?.some((c) => c.managed && c.signer === event.signer && !isPast(c, event));
 
 /** May this person remove members and rotate keys (and, in projects and communities, curate boards)? */
 export const canManage = (state: SpaceState, did: Did): boolean => (state.kind === 'group' ? did === state.founder : state.maintainers.has(did));

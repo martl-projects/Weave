@@ -21,6 +21,8 @@ export interface SignInTokens {
   refreshToken?: string;
   /** When the ID token runs out (ms). */
   expires: number;
+  /** The salt its nonce was made with, for the identity it was asked for (signInNonce). */
+  salt?: string;
 }
 
 const b64url = (b: Buffer) => b.toString('base64url');
@@ -40,6 +42,13 @@ export function isWebAddress(url: string): boolean {
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
   return parsed.protocol === 'http:' && (host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.endsWith('.localhost'));
 }
+
+/**
+ * The nonce that ties a sign-in to the identity it's for (0siqvEzB): the
+ * company's attestor recomputes it from whoever hands the token in, so a token
+ * someone else got hold of vouches for nobody else.
+ */
+export const signInNonce = (did: string, salt: string): string => b64url(createHash('sha256').update(`weave-signin:${did}:${salt}`).digest());
 
 async function discover(issuer: string): Promise<{ authorization_endpoint: string; token_endpoint: string }> {
   if (!isWebAddress(issuer)) throw new Error(`the company's sign-in must be an https address, not ${issuer}`);
@@ -77,11 +86,13 @@ h1{font-size:20px;margin:14px 0 6px}p{color:#667085;margin:0}</style>
  * Sign in through the browser: `open` shows the company's sign-in page (the
  * system browser, or a test's own fetch), and this waits until it comes back.
  */
-export async function browserSignIn(config: SignInConfig, open: (url: string) => void | Promise<void>, options: { loginHint?: string; timeoutMs?: number } = {}): Promise<SignInTokens> {
+export async function browserSignIn(config: SignInConfig, open: (url: string) => void | Promise<void>, options: { loginHint?: string; timeoutMs?: number; for?: string } = {}): Promise<SignInTokens> {
   const { authorization_endpoint, token_endpoint } = await discover(config.issuer);
   const verifier = b64url(randomBytes(32));
   const state = b64url(randomBytes(16));
-  const nonce = b64url(randomBytes(16));
+  // For an identity: its nonce names it (see signInNonce).
+  const salt = options.for ? b64url(randomBytes(16)) : undefined;
+  const nonce = options.for ? signInNonce(options.for, salt!) : b64url(randomBytes(16));
   let finish!: (code: string) => void;
   let fail!: (error: Error) => void;
   const answered = new Promise<string>((resolve, reject) => ((finish = resolve), (fail = reject)));
@@ -125,7 +136,7 @@ export async function browserSignIn(config: SignInConfig, open: (url: string) =>
     if (!res.ok) throw new Error(`the company's sign-in refused: ${answer.error_description ?? res.status}`);
     const tokens = tokensFrom(answer);
     if (claimsOf(tokens.idToken).nonce !== nonce) throw new Error('the sign-in came back for another request');
-    return tokens;
+    return { ...tokens, ...(salt ? { salt } : {}) };
   } finally {
     server.close();
   }

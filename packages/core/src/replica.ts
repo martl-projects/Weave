@@ -1,10 +1,25 @@
 import { Authority, KEY_KINDS, KIND_DELEGATE, KIND_IDENTITY, KIND_ORG_FREEZE, KIND_REVOKE, KIND_ROTATE } from './authority.ts';
-import type { Json } from './bytes.ts';
+import { canonicalJson, type Json } from './bytes.ts';
 import { eventId, isWellFormedEvent, signEvent, verifyEventSignature, type EventFields, type SigningIdentity, type WeaveEvent } from './events.ts';
-import { bodyMatches, canonicalIdV2, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
+import { bodyHash, bodyMatches, canonicalIdV2, classOf, eventIdV2, isWellFormedV2, isWireItemV2, signEventV2, verifyEventV2, type EventFieldsV2, type EventV2, type WireItemV2 } from './eventsV2.ts';
 import type { Did } from './keys.ts';
 import { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
 import { MemoryStore, type LogStore, type StoredV2 } from './store.ts';
+
+/**
+ * Does a v2 event restate this v1 event, as a key re-signing its own history
+ * does: same author, number, time, kind, space (or public, for scopes v2 doesn't
+ * know) and body? Only then may it carry the v1 event's id.
+ */
+function restatesV1(v1: WeaveEvent, e: EventV2): boolean {
+  const space = /^(public|self|[a-z]+:[A-Za-z0-9_-]{1,64})$/.test(v1.scope) ? v1.scope : 'public';
+  if (v1.author !== e.author || v1.seq !== e.n || v1.time !== e.time || v1.kind !== e.kind || space !== e.space) return false;
+  try {
+    return e.class === 'content' ? bodyHash(v1.body) === e.body : canonicalJson(v1.body) === canonicalJson((e as { body?: Json }).body ?? null);
+  } catch {
+    return false;
+  }
+}
 
 export type IngestResult =
   | { status: 'accepted' }
@@ -13,6 +28,8 @@ export type IngestResult =
   | { status: 'rejected'; reason: string };
 
 const MAX_PENDING = 10_000;
+/** Events of one key waiting at once (KtpOfhGu): one key can't fill the pool for everyone. */
+const MAX_PENDING_PER_SIGNER = 256;
 
 /** v2 key events that change who may sign; identity and rotation stay v1, signed by root keys that aren't on disk. */
 const isKeyEventV2 = (event: EventV2): boolean => event.class === 'control' && event.space === 'public' && (event.kind === KIND_DELEGATE || event.kind === KIND_REVOKE || event.kind === KIND_ORG_FREEZE);
@@ -33,7 +50,9 @@ const isKeyEventV2 = (event: EventV2): boolean => event.class === 'control' && e
 export class Replica {
   readonly store: LogStore;
   readonly authority = new Authority();
-  #pending = new Map<string, WeaveEvent | WireItemV2>();
+  /** Events waiting for something: an earlier one of their key (chain), or a key event that lets their signer sign (auth). */
+  #pending = new Map<string, { item: WeaveEvent | WireItemV2; signer: Did; waits: 'chain' | 'auth' }>();
+  #pendingBySigner = new Map<Did, number>();
   /** Keys seen signing two different events with the same number: a sign the key is used where it shouldn't be. */
   readonly forks = new Set<Did>();
   #listeners = new Set<(record: WeaveRecord) => void>();
@@ -53,14 +72,19 @@ export class Replica {
     this.store = store;
     // Replay key events in dependency order: identities, then rotations (each needs the one before),
     // then delegations and revocations of both versions (twice: devices delegate agents).
-    const keyEvents = store.signers().flatMap((signer) => store.range(signer, 1).filter((e) => KEY_KINDS.has(e.kind)));
+    const v1 = store.signers().flatMap((signer) => store.range(signer, 1));
+    const v2 = store.all2();
+    // What each key signed says whose it is (see Authority.vouch): whatever order the delegations come in.
+    for (const e of v1) this.authority.vouch(e.signer, e.author, e.seq);
+    for (const { event } of v2) this.authority.vouch(event.signer, event.author, event.n);
+    const keyEvents = v1.filter((e) => KEY_KINDS.has(e.kind));
     const byKind = (kind: string) => keyEvents.filter((e) => e.kind === kind);
     for (const event of byKind(KIND_IDENTITY)) this.authority.apply(event);
     const rotations = byKind(KIND_ROTATE);
     for (let round = 0; round < rotations.length; round++) for (const event of rotations) this.authority.apply(event);
     const grants = [
       ...keyEvents.filter((e) => e.kind === KIND_DELEGATE || e.kind === KIND_REVOKE),
-      ...store.all2().filter(({ event }) => isKeyEventV2(event)).map(({ id, event }) => recordOfV2(id, event)),
+      ...v2.filter(({ event }) => isKeyEventV2(event)).map(({ id, event }) => recordOfV2(id, event)),
     ];
     for (let round = 0; round < 2; round++) for (const event of grants) this.authority.apply(event);
   }
@@ -69,6 +93,14 @@ export class Replica {
   onAppend(listener: (record: WeaveRecord) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  /** v1 events taken in this run, in order (v2 ones are ordered by the store). */
+  #taken1 = new Map<string, number>();
+
+  /** In what order this node got an event (lower first), as far as it knows: v2 by its store, v1 in this run. */
+  arrival(id: string): number | undefined {
+    return this.store.order2(id) ?? this.#taken1.get(id);
   }
 
   /** Latest v1 seq per signer. */
@@ -124,17 +156,25 @@ export class Replica {
   /** Create, sign and store the next v2 event from a local identity: numbered after the key's last, chained if control. */
   append2(identity: SigningIdentity, fields: Omit<EventFieldsV2, 'n'>): WeaveRecord {
     const space = fields.space ?? 'public';
-    const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1 });
+    // Content is numbered in its space too (cs): what a removal names as seen there.
+    const content = (fields.class ?? classOf(fields.kind)) === 'content';
+    const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1, ...(content ? { cs: this.store.contentCount(identity.did, space) + 1 } : {}) });
     const result = this.ingest({ e: event, ...(body !== undefined ? { b: body } : {}) });
     if (result.status !== 'accepted') throw new Error(`local event not accepted: ${'reason' in result ? result.reason : result.status}`);
     return recordOfV2(canonicalIdV2(event), event, body);
   }
 
   /** Take a v1 event, a v2 wire item `{e, b?}`, or a record of either. */
+  /** Take an event from a peer (or our own). Never throws on what a peer sends: whatever can't be read is rejected as malformed. */
   ingest(input: unknown): IngestResult {
-    const item = isRecord(input) ? input.wire : input;
-    const result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
-    if (result.status === 'accepted') this.#drainPending();
+    let result: IngestResult;
+    try {
+      const item = isRecord(input) ? input.wire : input;
+      result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
+    } catch {
+      return { status: 'rejected', reason: 'malformed' };
+    }
+    if (result.status === 'accepted') this.#drainPending(this.#about(isRecord(input) ? input.wire : input));
     return result;
   }
 
@@ -175,6 +215,7 @@ export class Replica {
     if (!isWellFormedEvent(input)) return { status: 'rejected', reason: 'malformed event' };
     const event = input;
     if (!verifyEventSignature(event)) return { status: 'rejected', reason: 'bad signature' };
+    this.authority.vouch(event.signer, event.author, event.seq);
 
     const head = this.store.head(event.signer);
     const expected = (head?.seq ?? 0) + 1;
@@ -184,17 +225,18 @@ export class Replica {
       if (eventId(stored) === eventId(event)) return { status: 'duplicate' };
       return this.#fork(event.signer);
     }
-    if (event.seq > expected) return this.#park(pendingKey(event), event, 'gap in log');
+    if (event.seq > expected) return this.#park(pendingKey(event), event, 'gap in log', 'chain');
     if (event.prev !== (head ? eventId(head) : null)) return { status: 'rejected', reason: 'broken hash chain' };
     // The number is taken by a v2 event that isn't this one re-signed.
     const taken = this.store.byNumber(event.signer, event.seq);
     if (taken && taken.event.was !== eventId(event)) return this.#fork(event.signer);
 
     const check = this.authority.check(event);
-    if (!check.ok) return check.retry ? this.#park(pendingKey(event), event, check.reason) : { status: 'rejected', reason: check.reason };
+    if (!check.ok) return check.retry ? this.#park(pendingKey(event), event, check.reason, 'auth') : { status: 'rejected', reason: check.reason };
 
     this.store.append(event);
-    this.#pending.delete(pendingKey(event));
+    this.#taken1.set(eventId(event), this.#taken1.size + 1);
+    this.#unpark(pendingKey(event));
     if (KEY_KINDS.has(event.kind)) this.authority.apply(event);
     if (this.#listeners.size) this.#notify(recordOfV1(event));
     return { status: 'accepted' };
@@ -205,6 +247,7 @@ export class Replica {
     const event = input;
     if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE) return { status: 'rejected', reason: `${event.kind} stays v1` };
     if (!verifyEventV2(event)) return { status: 'rejected', reason: 'bad signature' };
+    this.authority.vouch(event.signer, event.author, event.n);
     // A body that doesn't match is dropped; the event stands without it.
     const goodBody = event.class === 'content' && body !== undefined && !this.store.forgotten(event.body) && bodyMatches(event, body) ? body : undefined;
     const ownId = eventIdV2(event);
@@ -222,7 +265,11 @@ export class Replica {
       return { status: 'duplicate' };
     }
     const v1 = this.store.get(event.signer, event.n);
-    if (v1 && event.was !== eventId(v1)) return this.#fork(event.signer);
+    if (event.was !== undefined) {
+      // `was` lets a key re-sign its own v1 event under its old id, and nothing else: it waits for that event, and must restate it.
+      if (!v1) return this.#park(`v2 ${ownId}`, wireItem(event, goodBody), 'was: waiting for the v1 event it restates', 'chain');
+      if (event.was !== eventId(v1) || !restatesV1(v1, event)) return { status: 'rejected', reason: "was names an event it doesn't restate" };
+    } else if (v1) return this.#fork(event.signer);
     const id = canonicalIdV2(event);
     // Another event already answers to this id (a `was` naming another key's event).
     if (this.store.get2(id)) return { status: 'rejected', reason: 'id already taken' };
@@ -231,19 +278,21 @@ export class Replica {
       const head = this.store.chainHead(event.signer, event.space);
       const expected = (head?.seq ?? 0) + 1;
       if (event.seq < expected) return eventIdV2(this.store.chainAt(event.signer, event.space, event.seq)!) === ownId ? { status: 'duplicate' } : this.#fork(event.signer);
-      if (event.seq > expected) return this.#park(`v2 ${ownId}`, wireItem(event, goodBody), 'gap in chain');
+      if (event.seq > expected) return this.#park(`v2 ${ownId}`, wireItem(event, goodBody), 'gap in chain', 'chain');
       if (event.prev !== (head ? eventIdV2(head) : null)) return { status: 'rejected', reason: 'broken hash chain' };
     }
+    // Two content events of one key at the same number in a space: a fork, like two at one n.
+    if (event.class === 'content' && event.cs !== undefined && this.store.contentAt(event.signer, event.space, event.cs)) return this.#fork(event.signer);
 
     const record = recordOfV2(id, event, goodBody);
     const check = this.authority.check(record);
-    if (!check.ok) return check.retry ? this.#park(`v2 ${ownId}`, wireItem(event, goodBody), check.reason) : { status: 'rejected', reason: check.reason };
+    if (!check.ok) return check.retry ? this.#park(`v2 ${ownId}`, wireItem(event, goodBody), check.reason, 'auth') : { status: 'rejected', reason: check.reason };
     const refused = this.admit?.(event, goodBody);
     if (refused) return { status: 'rejected', reason: refused };
 
     this.store.add2({ id, event });
     if (goodBody !== undefined) this.store.putBody(event.body as string, goodBody);
-    this.#pending.delete(`v2 ${ownId}`);
+    this.#unpark(`v2 ${ownId}`);
     if (isKeyEventV2(event)) this.authority.apply(record);
     this.#notify(record);
     return { status: 'accepted' };
@@ -258,20 +307,63 @@ export class Replica {
     return { status: 'rejected', reason: 'conflicting event (fork)' };
   }
 
-  #park(key: string, item: WeaveEvent | WireItemV2, reason: string): IngestResult {
-    if (this.#pending.size >= MAX_PENDING) return { status: 'rejected', reason: 'pending pool full' };
-    this.#pending.set(key, item);
+  #park(key: string, item: WeaveEvent | WireItemV2, reason: string, waits: 'chain' | 'auth'): IngestResult {
+    // Waiting already: it stays (a retry on a full pool doesn't throw it out).
+    const parked = this.#pending.get(key);
+    if (parked) {
+      parked.waits = waits;
+      return { status: 'pending', reason };
+    }
+    const signer = this.#about(item).signer;
+    const mine = this.#pendingBySigner.get(signer) ?? 0;
+    if (mine >= MAX_PENDING_PER_SIGNER) return { status: 'rejected', reason: 'too many events of this key waiting' };
+    if (this.#pending.size >= MAX_PENDING) {
+      // Full: make room from the key with the most waiting, if that's not this one.
+      let most: Did | undefined;
+      for (const [s, n] of this.#pendingBySigner) if (!most || n > this.#pendingBySigner.get(most)!) most = s;
+      if (!most || most === signer || this.#pendingBySigner.get(most)! <= mine + 1) return { status: 'rejected', reason: 'pending pool full' };
+      for (const [k, p] of this.#pending) {
+        if (p.signer === most) {
+          this.#unpark(k);
+          break;
+        }
+      }
+    }
+    this.#pending.set(key, { item, signer, waits });
+    this.#pendingBySigner.set(signer, mine + 1);
     return { status: 'pending', reason };
   }
 
-  #drainPending(): void {
-    let progress = true;
-    while (progress && this.#pending.size > 0) {
-      progress = false;
-      for (const [key, item] of this.#pending) {
-        const result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
-        if (result.status === 'accepted') progress = true;
-        else if (result.status !== 'pending') this.#pending.delete(key);
+  #unpark(key: string): void {
+    const parked = this.#pending.get(key);
+    if (!parked) return;
+    this.#pending.delete(key);
+    const n = (this.#pendingBySigner.get(parked.signer) ?? 1) - 1;
+    if (n > 0) this.#pendingBySigner.set(parked.signer, n);
+    else this.#pendingBySigner.delete(parked.signer);
+  }
+
+  /** Who signed an event of either version, as it travels, and what kind it is. */
+  #about(item: unknown): { signer: Did; kind: string } {
+    const e = (isWireItemV2(item) ? item.e : item) as { signer: Did; kind: string };
+    return { signer: e.signer, kind: e.kind };
+  }
+
+  /**
+   * After an event is accepted, retry only what may have waited for it: events
+   * of the same key (the gap it filled), and after a key event, those waiting
+   * for their signer to be allowed (KtpOfhGu: not every parked event each time).
+   */
+  #drainPending(first: { signer: Did; kind: string }): void {
+    const queue = [first];
+    while (queue.length && this.#pending.size > 0) {
+      const accepted = queue.shift()!;
+      const keyEvent = KEY_KINDS.has(accepted.kind);
+      for (const [key, parked] of [...this.#pending]) {
+        if (!this.#pending.has(key) || (parked.signer !== accepted.signer && !(keyEvent && parked.waits === 'auth'))) continue;
+        const result = isWireItemV2(parked.item) ? this.#ingestV2(parked.item.e, parked.item.b) : this.#ingestOne(parked.item);
+        if (result.status === 'accepted') queue.push(this.#about(parked.item));
+        else if (result.status !== 'pending') this.#unpark(key);
       }
     }
   }

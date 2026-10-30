@@ -84,7 +84,7 @@ A company's own projects and groups are its company spaces.
 
   init <name>                create your identity; shows your 24 recovery words once, and applies
                              weave.bundle.json (contacts and free tiers the app ships with) unless --bare
-  enroll <link> --id-token <token> [--name <name>]
+  enroll <link> [--name <name>]
                              set up a company account: the company holds it and its recovery (no words shown)
   recover-request / recover <answer>   a company account on a new computer: ask, then set up from the company's answer
   restore                    set up this computer as another device of your identity, from your recovery words
@@ -293,7 +293,7 @@ memberships, Patreon-style (tiers buy access to a tier's chat and the projects i
                              or link one you made: --gumroad <product page> --gumroad-product <id> [--gumroad-variant <tier>]
                              your node lets buyers in and renews monthly; --gumroad off stops
   tier open|close|hide <tier>   take new members, stop taking them, or take it off your hub
-  support <tier>             ask to join a tier               [--text "how I paid"] [--license <key from your Gumroad receipt>]
+  support <tier>             ask to join a tier               [--creator <who>: when others publish under its id] [--text "how I paid"] [--license <key from your Gumroad receipt>]
                              [--payment <tx hash>: for tiers paid on chain, from your linked wallet]
   requests                   people asking to join your tiers
   grant <tier> <who>         let them in, or renew            [--months 1]
@@ -523,6 +523,7 @@ const { values, positionals } = parseArgs({
     'gumroad-token': { type: 'string' },
     license: { type: 'string' },
     usdc: { type: 'string' },
+    creator: { type: 'string' },
     show: { type: 'string' },
     tiers: { type: 'string' },
     signature: { type: 'string' },
@@ -1984,7 +1985,7 @@ ${postLine(p)}`);
       }
       if (!space) throw new Error('usage: weave sso <space> <id token>');
       await b.signIn({ space, idToken: token });
-      return out({ ok: true }, () => `signed in to ${space}: the company's attestor vouches for you once it has checked it`);
+      return out({ ok: true }, () => `handed in for ${space}: a token from elsewhere only renews a sign-in the company vouches for already (a first one goes through "weave sso", in the browser)`);
     }
 
     case 'audit': {
@@ -2013,7 +2014,7 @@ ${postLine(p)}`);
       // The company's link from the computer's managed settings, unless one is given.
       const link = args[0] ?? machinePolicy().enroll;
       const idToken = values['id-token'] ?? process.env.WEAVE_ID_TOKEN;
-      if (!link) throw new Error('usage: weave enroll <enrollment link> [--name <name>]   (signs in with your company account in the browser; or --id-token <token>)');
+      if (!link) throw new Error('usage: weave enroll <enrollment link> [--name <name>]   (signs in with your company account in the browser)');
       const node = await WeaveNode.enroll(link, home.dir, {
         ...(idToken ? { idToken } : {}),
         ...(values.name ? { name: values.name } : {}),
@@ -2081,7 +2082,7 @@ ${postLine(p)}`);
         }
         case 'link': {
           const link = await b.enrollLink(values.days ? { days: Number(values.days) } : {});
-          return out({ link }, () => `for a new colleague (weave enroll <link> --id-token <their sign-in>):\n${link}`);
+          return out({ link }, () => `for a new colleague (weave enroll <link>):\n${link}`);
         }
         case 'invite': {
           if (!rest[0]) throw new Error('usage: weave company invite <email> [--days n]');
@@ -2380,7 +2381,7 @@ ${postLine(p)}`);
     case 'support': {
       const tier = args.join(' ').trim();
       if (!tier) throw new Error('usage: weave support <tier id> [--text "how I paid"]');
-      await (await backend()).requestMembership({ tier, note: values.text, license: values.license, payment: values.payment });
+      await (await backend()).requestMembership({ tier, ...(values.creator ? { creator: values.creator } : {}), note: values.text, license: values.license, payment: values.payment });
       return out({ requested: tier }, () => (values.license ? "sent your license key: you're in once the creator's node has checked it with Gumroad" : values.payment ? "sent your payment: you're in once the creator's node has read it on chain" : 'asked to join; the creator decides'));
     }
 

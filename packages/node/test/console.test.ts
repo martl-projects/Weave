@@ -121,7 +121,7 @@ describe('the admin console', { timeout: 120_000 }, () => {
 
       // The link in it sets the account up.
       const link = joinUrl.split('#')[1];
-      const noah = await WeaveNode.enroll(link, mkdtempSync(join(tmpdir(), 'weave-invite-noah-')), { idToken: oidc.token({ sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
+      const noah = await WeaveNode.enroll(link, mkdtempSync(join(tmpdir(), 'weave-invite-noah-')), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
       // A company-owned identity: the company it belongs to is in its inception.
       expect(noah.replica.authority.keys(noah.identity.author).org).toBe(acme.identity.author);
       await noah.close();
@@ -168,7 +168,7 @@ describe('the admin console', { timeout: 120_000 }, () => {
 
     // Noah enrolls, and his node gets an agent.
     const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
-    const noah = await WeaveNode.enroll(await acme.enrollLink(), mkdtempSync(join(tmpdir(), 'weave-roles-noah-')), { idToken: oidc.token({ sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
+    const noah = await WeaveNode.enroll(await acme.enrollLink(), mkdtempSync(join(tmpdir(), 'weave-roles-noah-')), { idToken: ({ nonce }) => oidc.token({ nonce, sub: 'noah', email: 'noah@acme.example', groups: ['employees'] }), name: 'Noah' });
     const both = async () => {
       sync(acme, noah);
       sync(noah, acme);
@@ -222,6 +222,8 @@ describe('the admin console', { timeout: 120_000 }, () => {
     expect((await hal.post('/enroll-link', { days: 7 })).status).toBe(200);
     for (const path of ['/audit', '/agents', '/scim', '/streams']) expect((await hal.get(path)).status, path).toBe(403);
     expect((await hal.post('/action', { action: 'freeze', person: noah.identity.author })).status).toBe(403);
+    // An admin's identity (the company's own included) is recovered by an admin, never the helpdesk (oreXqcSP).
+    expect((await hal.post('/recovery', { person: acme.identity.author, request: 'x' })).status).toBe(403);
 
     // Searching the audit: by person, by words, by date.
     type Lines = { lines: Array<{ kind: string; by: string; detail: Record<string, unknown> }> };

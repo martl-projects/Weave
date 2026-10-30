@@ -60,8 +60,11 @@ export class Fetchers {
   readonly #homeOf: () => Home;
   readonly #runtime: Runtime;
   readonly #shippedDir: () => string | undefined;
+  /** Those its person added from releases (clientapps.ts): run exactly as the ones Weave ships. */
+  readonly #fromReleases: () => ShippedService[];
 
-  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined) {
+  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined, fromReleases: () => ShippedService[] = () => []) {
+    this.#fromReleases = fromReleases;
     this.#homeOf = home;
     this.#runtime = runtime;
     this.#shippedDir = shippedDir;
@@ -85,7 +88,7 @@ export class Fetchers {
 
   /** The fetchers this Weave ships. */
   shipped(): ShippedService[] {
-    return [...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.fetcher);
+    return [...[...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.fetcher), ...this.#fromReleases()];
   }
 
   #info(f: StoredFetcher): FetcherInfo {

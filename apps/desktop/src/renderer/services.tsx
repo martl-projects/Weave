@@ -33,6 +33,18 @@ export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
   return <div className="small muted">From {where}, version {origin.tag}</div>;
 }
 
+/**
+ * Where a service comes from, in a word, in its card's title: Weave's own (checked), a project's release (which), or
+ * someone's own code. So nothing passes for Weave's own, or for another project's, by its name.
+ */
+export function OriginBadge({ origin }: { origin: ServiceOriginInfo }) {
+  if (origin.kind === 'weave' || (origin.kind === 'shipped' && origin.checked === 'verified')) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
+  if (origin.kind === 'shipped') return <span className="tag origin-warn" title="It says it's one Weave ships, but not as this Weave ships it">another Weave's</span>;
+  if (origin.kind === 'unreleased') return <span className="tag" title="Its person's own code, released nowhere">own code</span>;
+  if (origin.checked === 'unmatched') return <span className="tag origin-warn" title="It claims a release it isn't">⚠ not what it claims</span>;
+  return <span className="tag" title={`A release of ${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, version ${origin.tag}`}>{origin.project.name ? `p/${origin.project.name}` : 'another project'}</span>;
+}
+
 /** Every kind name, comma or space separated. */
 const kinds = (text: string) => text.split(/[\s,]+/).map((k) => k.trim()).filter(Boolean);
 
@@ -107,7 +119,7 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
         <div className="field-row">
           <input type="radio" id="svc-reads-kinds" checked={reads === 'kinds'} onChange={() => setReads('kinds')} />
           <label htmlFor="svc-reads-kinds">That, and some kinds:</label>
-          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.github.account" spellCheck={false} />
+          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.account" spellCheck={false} />
         </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-space" checked={reads === 'space'} onChange={() => setReads('space')} />

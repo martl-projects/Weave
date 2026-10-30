@@ -70,7 +70,7 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
       className="form"
       onSubmit={async (e: FormEvent) => {
         e.preventDefault();
-        const sent = await attempt(() => api('requestMembership', { tier: tier.id, note, license }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has checked your key with Gumroad`);
+        const sent = await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note, license }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has checked your key with Gumroad`);
         if (sent !== undefined) onClose();
       }}
     >
@@ -109,7 +109,7 @@ function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   if (wallet === undefined) return null;
   if (!wallet) return <WalletNeeded why={`Paying in ${tier.onchain!.symbol} goes from your own wallet, so ${creator} knows the payment is yours.`} />;
-  return <PayFromWallet tier={tier.id} payee={creator} onDone={onClose} />;
+  return <PayFromWallet tier={tier.id} creator={tier.creator.did} payee={creator} onDone={onClose} />;
 }
 
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
@@ -139,7 +139,7 @@ function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
         className="form"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          if (await attempt(() => api('requestMembership', { tier: tier.id, note }).then(bump), `Asked ${creator}`)) onClose();
+          if (await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note }).then(bump), `Asked ${creator}`)) onClose();
         }}
       >
         <p className="small">
