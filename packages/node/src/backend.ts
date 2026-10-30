@@ -641,15 +641,13 @@ export interface MarkServiceInfo {
   settings: Json;
   reads: string[];
   slots: MarkSlot[];
-  /** Yours: the newest release of its project runs. */
-  follow?: true;
   /** Weave ships it: yours unless you turn it off. */
   shipped?: true;
   /** One Weave ships that you turned off (markServices with off). */
   off?: true;
   /** A space's: the one its gates ask. */
   gate?: true;
-  /** A newer release of it, when it doesn't follow its project. */
+  /** A newer release of it (its tag): it runs only with another yes. */
   newer?: string;
   /** Why it shows nothing (it couldn't be fetched, its fold failed, its state grew too large). */
   problem?: string;
@@ -2071,8 +2069,8 @@ export interface Backend {
   marks(input: { slot: string; space?: string; subjects: unknown[] }): Promise<MarksAnswer[]>;
   /** Your own mark services, or (space) the ones a project or community pinned. */
   markServices(input?: { space?: string; off?: boolean }): Promise<MarkServiceInfo[]>;
-  /** Take a project's mark service into your own domain (follow: its newest release), or one Weave ships back after turning it off (shipped), or as a maintainer pin a project's to a space. */
-  addMarks(input: { project?: string; shipped?: string; app?: string; tag?: string; space?: string; settings?: Json; follow?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo>;
+  /** Take a project's mark service into your own domain (approve: your yes to exactly that release), or one Weave ships back after turning it off (shipped), or as a maintainer pin a project's to a space. */
+  addMarks(input: { project?: string; shipped?: string; app?: string; tag?: string; space?: string; settings?: Json; approve?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo>;
   /** Take a mark service out of your own domain, or unpin it from a space. */
   removeMarks(input: { service: string; space?: string; as?: string }): Promise<void>;
   /** Maintainers of the Weave project: say that something comes from Weave (on: false, no longer). From Weave shows it. */

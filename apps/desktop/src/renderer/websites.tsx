@@ -254,7 +254,16 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
             <>
               {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
               {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
-              {a.mine && a.kind === 'marks' && <AsyncButton onClick={() => attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag }), `${a.name} is yours: View → Marks…`)}>Take in</AsyncButton>}
+              {a.mine && a.kind === 'marks' && (
+                <AsyncButton
+                  onClick={async () =>
+                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, with no key and no network, and shows what it says next to names everywhere you look.`, 'Take it in')) &&
+                    attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Marks…`)
+                  }
+                >
+                  Take in…
+                </AsyncButton>
+              )}
               {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'keyvault' && a.kind !== 'marks' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
               {/* Yours, beside Weave's own: approved once, pinned to what was released. */}
               {a.mine && (a.kind === 'fetcher' || a.kind === 'keyvault') && (

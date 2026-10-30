@@ -67,7 +67,7 @@ beforeAll(async () => {
   built = { badges: await buildComponent(join(MARKS, 'badges', 'src', 'service.js'), 'marks', { bundle: true }), 'from-weave': await buildComponent(join(MARKS, 'from-weave', 'src', 'service.js'), 'marks', { bundle: true }) };
   NONE = shippedFolder({});
   SHIPPED = shippedFolder(built);
-  fetchImpl = registry({ 'badges:1.0': await image(join(MARKS, 'badges')), 'from-weave:1.0': await image(join(MARKS, 'from-weave')), 'labels:1.0': await image(STARTER, join(STARTER, 'src', 'marks.js')) });
+  fetchImpl = registry({ 'badges:1.0': await image(join(MARKS, 'badges')), 'badges:1.1': await image(join(MARKS, 'badges')), 'from-weave:1.0': await image(join(MARKS, 'from-weave')), 'labels:1.0': await image(STARTER, join(STARTER, 'src', 'marks.js')) });
 }, 300_000);
 
 function person(name: string, shipped = NONE): WeaveNode {
@@ -100,8 +100,9 @@ describe('mark services', { timeout: 240_000 }, () => {
     expect(await ola.marks({ slot: 'author', subjects: [{ did: ola.identity.author }] })).toEqual([{ subject: { did: ola.identity.author }, marks: [] }]);
     await expect(nic.addMarks({ project: 'Weave Badges' })).rejects.toThrow(/not|no project/i);
 
-    // Ola takes it into her own domain: shown everywhere she looks, with who says so.
-    const taken = await ola.addMarks({ project: 'Weave Badges' });
+    // Ola takes it into her own domain, with her yes to exactly that release: shown everywhere she looks, with who says so.
+    await expect(ola.addMarks({ project: 'Weave Badges' })).rejects.toThrow(/approve it first: Weave would run Badges 1\.0, released in Weave Badges, over .*weave\.badge.* \(no key, no network\), and show what it says next to authors/);
+    const taken = await ola.addMarks({ project: 'Weave Badges', approve: true });
     expect(taken).toMatchObject({ service: 'weave-badges', name: 'Badges', tag: '1.0', domain: { kind: 'user' }, slots: ['author', 'member', 'chat', 'profile'] });
     const [answer] = await ola.marks({ slot: 'author', subjects: [{ did: ola.identity.author }, { did: ola.identity.author }] });
     expect(answer.marks).toEqual([{ kind: 'symbol', symbol: '🐦', tooltip: 'Early bird #1 of 20, from martl: “first in”', ref: given.id, issuer: expect.objectContaining({ service: 'weave-badges', name: 'Badges', domain: { kind: 'user' }, digest: expect.stringMatching(/^sha256:/) }) }]);
@@ -113,6 +114,13 @@ describe('mark services', { timeout: 240_000 }, () => {
     await ola.transferBadge({ badge: given.id, to: martl.identity.author });
     expect((await ola.marks({ slot: 'author', subjects: [{ did: ola.identity.author }] }))[0].marks).toEqual([]);
     expect((await ola.marks({ slot: 'author', subjects: [{ did: martl.identity.author }] }))[0].marks.map((m) => m.ref)).toEqual([given.id]);
+
+    // A newer release doesn't run by itself: it waits for another yes.
+    await martl.releaseService({ project: 'Weave Badges', image: 'ghcr.io/martl/badges:1.1' });
+    sync([martl, ola, nic]);
+    expect((await ola.markServices())[0]).toMatchObject({ tag: '1.0', newer: '1.1' });
+    expect(await ola.addMarks({ project: 'Weave Badges', tag: '1.1', approve: true })).toMatchObject({ tag: '1.1' });
+    expect((await ola.markServices())[0]).not.toHaveProperty('newer');
 
     // Removed: nothing again.
     await ola.removeMarks({ service: 'Badges' });
@@ -157,7 +165,7 @@ describe('mark services', { timeout: 240_000 }, () => {
     await expect(nic.setOfficial({ subject: { did: nic.identity.author } })).rejects.toThrow(/only the maintainers/);
     // Nor can a project's service take the name of one Weave ships.
     await nic.releaseService({ project: 'Weave (real)', image: 'ghcr.io/martl/from-weave:1.0' });
-    await expect(nic.addMarks({ project: 'Weave (real)' })).rejects.toThrow(/Weave ships/);
+    await expect(nic.addMarks({ project: 'Weave (real)', approve: true })).rejects.toThrow(/the name of one Weave ships/);
 
     // Taken back: no longer from Weave.
     await martl.setOfficial({ subject: { did: martl.identity.author }, on: false });
@@ -183,10 +191,10 @@ describe('mark services', { timeout: 240_000 }, () => {
     const phil = person('Phil');
     await lena.createProject({ name: 'My labels' });
     await lena.releaseService({ project: 'My labels', image: 'ghcr.io/martl/labels:1.0' });
-    await lena.addMarks({ project: 'My labels', settings: { labels: { [phil.identity.author]: 'friend from the climbing gym' } } });
+    await lena.addMarks({ project: 'My labels', approve: true, settings: { labels: { [phil.identity.author]: 'friend from the climbing gym' } } });
     const [m] = await lena.marks({ slot: 'chat', subjects: [{ did: phil.identity.author }, { space: 'not-a-person' }] });
     expect(m.marks).toMatchObject([{ kind: 'label', text: 'friend from the', tooltip: 'On your list: friend from the climbing gym' }]);
-    await lena.addMarks({ project: 'My labels', settings: { labels: { [phil.identity.author]: 'colleague' } } });
+    await lena.addMarks({ project: 'My labels', approve: true, settings: { labels: { [phil.identity.author]: 'colleague' } } });
     expect((await lena.marks({ slot: 'chat', subjects: [{ did: phil.identity.author }] }))[0].marks).toMatchObject([{ kind: 'label', text: 'colleague' }]);
   });
 
@@ -194,7 +202,7 @@ describe('mark services', { timeout: 240_000 }, () => {
     const martl = person('martl');
     await martl.createProject({ name: 'Weave Badges' });
     await martl.releaseService({ project: 'Weave Badges', image: 'ghcr.io/martl/badges:1.0' });
-    await martl.addMarks({ project: 'Weave Badges' });
+    await martl.addMarks({ project: 'Weave Badges', approve: true });
     const series = await martl.createBadgeSeries({ project: 'Weave Badges', name: 'Helper', symbol: '🛟' });
     const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
     await settle(); // taking it in said so already

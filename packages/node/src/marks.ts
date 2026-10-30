@@ -32,6 +32,9 @@ interface Folded {
   version: number;
 }
 
+/** Where a slot shows, in words. */
+const SLOT_WORDS: Record<MarkSlot, string> = { member: 'in member lists', author: 'next to authors', chat: 'in chats', profile: 'on profiles', gate: 'at gates' };
+
 const orderKey = (d: Decoded) => `${d.event.time}\u0000${d.id}`;
 
 export class Marks {
@@ -58,7 +61,7 @@ export class Marks {
       .decodeAll()
       .filter((d) => d.private && d.inner.kind === KIND_MARKS_MINE)
       .map((d) => ({ kind: d.inner.kind, body: d.inner.body, event: { author: me, time: d.event.time, seq: d.event.seq } }));
-    // Weave's own unless turned off; and no project's service takes one's name.
+    // Weave's own unless turned off; and no project's service takes the name of anything Weave ships.
     const shipped = this.#shipped();
     const off = new Set<string>();
     for (const e of [...own].sort((a, b) => a.event.time.localeCompare(b.event.time) || a.event.seq - b.event.seq)) {
@@ -66,8 +69,8 @@ export class Marks {
       if (typeof service === 'string') on === false ? off.add(service) : off.delete(service);
     }
     const weaves = [...shipped.values()].filter((s) => !off.has(s.manifest.app)).map((s) => this.#fromShipped(s));
-    const released = markServicesOf(own, KIND_MARKS_MINE).filter((s) => !shipped.has(s.service));
-    return [...weaves, ...released.map((s) => (s.follow ? this.#newest(s) ?? s : s))];
+    const released = markServicesOf(own, KIND_MARKS_MINE).filter((s) => !this.#reserved(s.service));
+    return [...weaves, ...released];
   }
 
   /** The mark services this Weave ships, by their app id (read again only when the folder changes). */
@@ -79,6 +82,12 @@ export class Marks {
 
   #shippedFrom?: { dir: string | undefined; services: Map<string, ShippedService> };
 
+  /** Whether a name is one of what Weave ships (a mark service, a service, keyvault, fetcher or verifier): never a project's. */
+  #reserved(app: string): boolean {
+    const all = shippedServices(this.h.shippedDir() ?? SHIPPED_DIR);
+    return all.has(app) || [...all.values()].some((s) => s.manifest.app === app);
+  }
+
   #fromShipped(s: ShippedService): MarkService {
     return { service: s.manifest.app, name: s.manifest.name, tag: 'Weave', origin: { project: '', release: s.digest }, manifest: s.manifest, settings: {}, shipped: true, by: this.h.identity.author, time: '' };
   }
@@ -86,8 +95,7 @@ export class Marks {
   /** A space's, as its maintainers pinned them. */
   #pinned(space: ReturnType<ServicesHost['space']>): MarkService[] {
     if (space.kind !== 'project' && space.kind !== 'community') return [];
-    const shipped = this.#shipped();
-    return markServicesOf(this.h.entries(space), KIND_MARKS_PIN, this.h.state(space).maintainers).filter((s) => !shipped.has(s.service));
+    return markServicesOf(this.h.entries(space), KIND_MARKS_PIN, this.h.state(space).maintainers).filter((s) => !this.#reserved(s.service));
   }
 
   /** The releases of mark services in a project held here: the newest first. */
@@ -95,13 +103,6 @@ export class Marks {
     const project = this.h.spaces.get(projectId);
     if (!project || project.kind !== 'project') return [];
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).filter((a) => a.manifest.marks && (!app || a.manifest.app === app));
-  }
-
-  /** A service that follows its project, at the project's newest release of it (if that's newer). */
-  #newest(s: MarkService): MarkService | undefined {
-    const newest = this.#releases(s.origin.project, s.service)[0];
-    if (!newest || newest.id === s.origin.release || newest.time <= s.time) return undefined;
-    return { ...s, tag: newest.tag, name: newest.manifest.name, manifest: newest.manifest, origin: { project: s.origin.project, release: newest.id } };
   }
 
   /** The services that may answer at a slot: yours everywhere (Weave's own first); a space's only in that space. */
@@ -119,7 +120,7 @@ export class Marks {
    * pinned), or a change of the services themselves. Anything else leaves the marks as they are.
    */
   reads(kind: string): boolean {
-    // A new release, too: a service that follows its project runs it.
+    // A new release, too: what's taken in shows it's newer.
     if (kind === KIND_MARKS_PIN || kind === KIND_MARKS_MINE || kind === KIND_APP) {
       this.#reads = undefined;
       return true;
@@ -327,7 +328,7 @@ export class Marks {
   #info(s: MarkService, domain: Domain): MarkServiceInfo {
     const issuer = this.#issuer(s, domain);
     const project = s.shipped ? undefined : this.h.spaces.get(s.origin.project);
-    const newest = s.follow || s.shipped ? undefined : this.#releases(s.origin.project, s.service)[0];
+    const newest = s.shipped ? undefined : this.#releases(s.origin.project, s.service)[0];
     const problem = this.#problems.get(foldKey(s, domain));
     return {
       service: s.service,
@@ -340,7 +341,6 @@ export class Marks {
       settings: s.settings,
       reads: s.manifest.marks!.reads,
       slots: s.manifest.marks!.slots,
-      ...(s.follow ? { follow: true as const } : {}),
       ...(s.shipped ? { shipped: true as const } : {}),
       ...(s.gate ? { gate: true as const } : {}),
       ...(newest && newest.id !== s.origin.release && newest.time > s.time ? { newer: newest.tag } : {}),
@@ -351,11 +351,12 @@ export class Marks {
   }
 
   /**
-   * Take a mark service in: a release of a project you're in (its newest, or a tag), into your own domain, or (as one
-   * of its maintainers) pinned to a space. Yours may follow its project's newest release; a space's stays as pinned,
-   * so every member's node runs the same. One Weave ships (shipped: its name) comes back after you turned it off.
+   * Take a mark service in: a release of a project you're in (its newest, or a tag), into your own domain (approved:
+   * your yes to exactly that release, as for a keyvault or fetcher), or (as one of its maintainers) pinned to a space
+   * (the pin is their yes). Either stays as taken in: a newer release only with another yes, so every node holding
+   * the space runs the same. One Weave ships (shipped: its name) comes back after you turned it off.
    */
-  async addMarks(input: { project?: string; shipped?: string; app?: string; tag?: string; space?: string; settings?: Json; follow?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo> {
+  async addMarks(input: { project?: string; shipped?: string; app?: string; tag?: string; space?: string; settings?: Json; approve?: boolean; gate?: boolean; as?: string }): Promise<MarkServiceInfo> {
     if (input.shipped) {
       const wanted = input.shipped.toLowerCase();
       const shipped = this.#shipped().get(input.shipped) ?? [...this.#shipped().values()].find((s) => s.name === input.shipped || s.manifest.name.toLowerCase() === wanted);
@@ -370,7 +371,7 @@ export class Marks {
     const releases = this.#releases(project.id, input.app);
     const release = input.tag ? releases.find((a) => a.tag === input.tag) : releases[0];
     if (!release) throw new Error(`${this.h.spaceName(project)} has released no mark service${input.app ? ` "${input.app}"` : ''}${input.tag ? ` ${input.tag}` : ''} (a release whose manifest has "marks")`);
-    if (this.#shipped().has(release.manifest.app)) throw new Error(`${release.manifest.app} is the name of a mark service Weave ships: a project's can't take it`);
+    if (this.#reserved(release.manifest.app)) throw new Error(`${release.manifest.app} is the name of one Weave ships: a project's release can't stand in for it`);
     if (!release.manifest.install?.image && !release.manifest.install?.assets?.wasm) throw new Error(`${release.manifest.name} ${release.tag} has nothing a node can fetch: release it as an image for wasi/wasm, or a release file for wasm`);
     const settings = input.settings && typeof input.settings === 'object' && !Array.isArray(input.settings) ? input.settings : {};
     const body: Record<string, Json> = { service: release.manifest.app, origin: { project: project.id, release: release.id }, manifest: release.manifest as unknown as Json, settings, on: true };
@@ -383,7 +384,7 @@ export class Marks {
       this.#servicesChanged();
       return (await this.markServices({ space: space.id })).find((s) => s.service === release.manifest.app)!;
     }
-    if (input.follow) body.follow = true;
+    if (!input.approve) throw new Error(`approve it first: Weave would run ${release.manifest.name} ${release.tag}, released in ${this.h.spaceName(project)}, over ${release.manifest.marks!.reads.join(', ') || 'nothing'} (no key, no network), and show what it says ${release.manifest.marks!.slots.filter((s) => s !== 'gate').map((s) => SLOT_WORDS[s]).join(', ')}`);
     this.h.replica.write(this.h.identity, this.h.sealForSelf({ kind: KIND_MARKS_MINE, body }));
     this.#servicesChanged();
     return (await this.markServices()).find((s) => s.service === release.manifest.app)!;

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { BadgeInfo, MarkInfo, MarksAnswer, MarkServiceInfo, SpaceInfo } from '@weave/node/client';
 import { BadgeCard } from './badges.tsx';
 import { api, onItem, useApi, useBlobUrl } from './lib.ts';
-import { AsyncButton, attempt, Modal } from './ui.tsx';
+import { ask as askYes, AsyncButton, attempt, Modal } from './ui.tsx';
 
 /*
  * Marks next to names (stage 19): what the mark services you and the space chose say, each with who says so on
@@ -170,6 +170,12 @@ export function Marks({ did, slot, space, size = 16 }: { did: string; slot: Slot
   );
 }
 
+/** Where a mark service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
+function MarksOrigin({ service: s }: { service: MarkServiceInfo }) {
+  if (s.shipped) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
+  return <span className="tag" title={`A release of ${s.project?.name ? `p/${s.project.name}` : "a project you aren't in"}, version ${s.tag}`}>{s.project?.name ? `p/${s.project.name}` : 'another project'}</span>;
+}
+
 /** View → Marks…: your own mark services (shown everywhere you look), and taking one in from a project you're in. */
 export function MarksSettings({ onClose }: { onClose(): void }) {
   const mine = useApi(() => api<MarkServiceInfo[]>('markServices', { off: true }), []);
@@ -178,7 +184,17 @@ export function MarksSettings({ onClose }: { onClose(): void }) {
   const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
   const remove = (s: MarkServiceInfo) => attempt(() => api('removeMarks', { service: s.service }), `${s.name} removed`).then(mine.reload);
   const turnOn = (s: MarkServiceInfo) => attempt(() => api('addMarks', { shipped: s.service }), `${s.name} is back`).then(mine.reload);
-  const add = () => attempt(() => api('addMarks', { project, follow: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
+  // Your yes to exactly that release, as for a keyvault or fetcher: a newer one asks again.
+  const yes = (what: string) => askYes(`Take in ${what}? Weave runs exactly that release over what your Weave holds, with no key and no network, and shows what it says next to names everywhere you look.`, 'Take it in');
+  const add = async () => {
+    const name = projects.find((p) => p.id === project)?.name ?? 'the project';
+    if (!(await yes(`the newest mark service p/${name} released`))) return;
+    await attempt(() => api('addMarks', { project, approve: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
+  };
+  const update = async (s: MarkServiceInfo) => {
+    if (!s.project || !s.newer || !(await yes(`${s.name} ${s.newer}, released in p/${s.project.name ?? s.project.id}`))) return;
+    await attempt(() => api('addMarks', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), `${s.name} ${s.newer} is yours now`).then(mine.reload);
+  };
   return (
     <Modal title="Marks" onClose={onClose}>
       <p className="small muted">
@@ -189,7 +205,12 @@ export function MarksSettings({ onClose }: { onClose(): void }) {
       {(mine.data ?? []).map((s) => (
         <div className="marks-row" key={s.service}>
           <div>
-            <b>{s.name}</b> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : `${s.tag} · from ${s.project?.name ?? 'a project you’re not in'}`}{s.follow ? ' · follows its newest release' : ''}</span>
+            <b>{s.name}</b> <MarksOrigin service={s} /> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : s.tag}</span>
+            {s.newer && (
+              <div className="small">
+                {s.newer} is out: it runs only with your yes. <AsyncButton onClick={() => update(s)}>Update…</AsyncButton>
+              </div>
+            )}
             {s.problem && <div className="small error">Shows nothing: {s.problem}</div>}
             {s.shipped && s.service === 'from-weave' && <div className="small muted">Without it, a look-alike of Weave can’t be told apart at a glance.</div>}
           </div>

@@ -315,7 +315,7 @@ From Weave) are yours until you remove them:
   marks [who]                what they say about someone (default: you)   [--slot author|member|chat|profile] [--space <project>]
   marks list                 your mark services (shown everywhere you look); --space <project>: the ones pinned there
   marks add <project>        take a project's mark service into your own domain   [--app <id>] [--tag 1.0]
-                             [--follow: its newest release] [--settings <json>]; --space <project>: pin it there instead
+                             [--approve: yes to exactly that release; a newer one asks again] [--settings <json>]; --space <project>: pin it there instead
                              (maintainers), shown in that project only   [--gate: the one its gates ask]
   marks add --shipped <name> take one Weave ships back after removing it
   marks remove <service>     take it out of your own domain; --space <project>: unpin it there
@@ -497,7 +497,6 @@ const { values, positionals } = parseArgs({
     slot: { type: 'string' },
     tag: { type: 'string' },
     app: { type: 'string' },
-    follow: { type: 'boolean', default: false },
     gate: { type: 'boolean', default: false },
     settings: { type: 'string' },
     site: { type: 'string' },
@@ -861,10 +860,10 @@ const markLine = (m: MarkInfo): string => {
 /** A mark service as text. */
 const markServiceLine = (s: MarkServiceInfo): string =>
   [
-    `${s.name} (${s.service}) ${s.shipped ? `Weave ships it${s.off ? ', turned off' : ''}` : `${s.tag}  from ${s.project?.name ?? s.project?.id}`}${s.follow ? ', follows its newest release' : ''}${s.gate ? ', the gate service' : ''}`,
+    `${s.name} (${s.service}) ${s.shipped ? `Weave ships it${s.off ? ', turned off' : ''}` : `${s.tag}  from ${s.project?.name ?? s.project?.id}`}${s.gate ? ', the gate service' : ''}`,
     `  shows at ${s.slots.join(', ')}; reads ${s.reads.join(', ') || 'nothing'}`,
     `  ${s.digest}`,
-    ...(s.newer ? [`  newer: ${s.newer}`] : []),
+    ...(s.newer ? [`  newer: ${s.newer}, runs only with your yes: weave marks add ${s.project?.name ?? s.project?.id} --app ${s.service} --tag ${s.newer}${s.domain.kind === 'user' ? ' --approve' : ` --space ${s.domain.name ?? s.domain.id}`}`] : []),
     ...(s.problem ? [`  shows nothing: ${s.problem}`] : []),
   ].join('\n');
 
@@ -2451,7 +2450,7 @@ ${postLine(p)}`);
         return out(list, () => list.map(markServiceLine).join('\n\n') || (values.space ? '(no mark services pinned there)' : '(no mark services: weave marks add <project>)'));
       }
       if (sub === 'add' && (ref || values.shipped)) {
-        const s = await b.addMarks({ ...(values.shipped ? { shipped: values.shipped } : { project: ref }), app: values.app, tag: values.tag, space: values.space, settings, follow: values.follow, gate: values.gate, as: values.as });
+        const s = await b.addMarks({ ...(values.shipped ? { shipped: values.shipped } : { project: ref }), app: values.app, tag: values.tag, space: values.space, settings, approve: values.approve, gate: values.gate, as: values.as });
         return out(s, () => `${values.space ? `pinned to ${values.space}` : 'yours now'}: ${markServiceLine(s)}`);
       }
       if (sub === 'remove' && ref) {
