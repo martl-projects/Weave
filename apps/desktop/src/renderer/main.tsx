@@ -255,6 +255,8 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
       {link(`${base}/available`, 'store', 'Available', view === 'available')}
       {link(`${base}/services`, 'zap', 'Services', view === 'services')}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
+      {link(`${base}/catalog`, 'bookmark', 'Catalog', view === 'catalog')}
+      {link(`${base}/routines`, 'clock', 'Routines', view === 'routines')}
       {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
     </nav>
   );
