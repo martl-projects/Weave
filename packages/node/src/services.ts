@@ -724,6 +724,18 @@ export class Services {
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
   }
 
+  /**
+   * The manifest a service runs as, where this Weave can vouch for it: one it ships (the same component), or a release
+   * of a project here, published by a maintainer and matching what the service's profile claims. Anyone's service
+   * gets what Weave's own get from it (its lists): nothing is Weave's alone.
+   */
+  #checkedManifest(origin: ServiceOriginInfo): AppManifest | undefined {
+    if (origin.kind === 'shipped') return origin.checked === 'verified' ? shippedHere(this.h).get(origin.name)?.manifest : undefined;
+    if (origin.kind !== 'release' || origin.checked !== 'verified') return undefined;
+    const project = this.h.spaces.get(origin.project.id);
+    return project ? artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release)?.manifest : undefined;
+  }
+
   /** A shipped service's panels' folder (its pages ship with this Weave), if it has one. */
   shippedPanelFolder(name: string): string | undefined {
     return shippedHere(this.h).get(name)?.panel;
@@ -760,10 +772,8 @@ export class Services {
   async serviceLists(input: { space: string; service: string }): Promise<ServiceListInfo[]> {
     const did = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === did);
-    if (profile?.origin.kind !== 'shipped' || profile.origin.checked !== 'verified') return [];
-    const s = shippedHere(this.h).get(profile.origin.name);
-    const lists = s?.manifest.wasm?.lists ?? [];
-    if (!lists.length) return [];
+    const lists = (profile && this.#checkedManifest(profile.origin)?.lists) || [];
+    if (!profile || !lists.length) return [];
     const actions = await this.serviceActions(input);
     const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
     const runner = profile.person.did === this.h.identity.author && this.storedServices().some((x) => this.serviceKey(x.name).did === did);

@@ -97,6 +97,12 @@ export interface AppManifest {
    */
   verifier?: AppVerifier;
   /**
+   * A service's lists, shown by Weave in its card the same way for every service, however it runs (WebAssembly, a
+   * container, a program): what's in each (an action answers its items), + to add one, a trash can to remove one, and
+   * each item's main button: each only for who may (as its action says, or whoever runs it for what's theirs).
+   */
+  lists?: AppList[];
+  /**
    * A keyvault: a client app of its person's that holds their access to a platform (their GitHub App, say) and hands
    * their services only access derived from it, cut to what each declared (uses, in its contract) and to what its
    * person handed each project. Shown in Keys & devices, never in a project.
@@ -160,12 +166,6 @@ export interface AppWasm {
    * network: they act only through its actions (checked as buttons are), and get what they show by asking one.
    */
   panels?: AppPanel[];
-  /**
-   * Its lists, shown by Weave in its card the same way for every service: what's in each (an action answers its
-   * items), + to add one, a trash can to remove one, and each item's main button: each only for who may (as its
-   * action says, or whoever runs it for what's theirs).
-   */
-  lists?: AppList[];
 }
 
 /**
@@ -526,7 +526,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault']);
+const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'lists']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -632,17 +632,19 @@ export function checkManifest(input: unknown): ManifestCheck {
       if (!/^[a-z][a-z0-9-]{0,39}$/.test(name) || !who || !page) problems.push(`wasm.panels[${i}] is {"name": "launch", "title": "Launch a website", "who": "maintainers", "page": "launch.html"}`);
       else panels.push({ name, title: text(o.title, 60) || name, who, page, ...(covers.length ? { covers } : {}) });
     }
-    const lists: AppList[] = [];
-    for (const [i, l] of (Array.isArray(raw.lists) ? raw.lists : []).slice(0, 6).entries()) {
-      const got = parseList(l);
-      if (typeof got === 'string') problems.push(`wasm.lists[${i}] is ${got}`);
-      else lists.push(got);
-    }
     if (!component || !/\.wasm$/i.test(component)) problems.push('"wasm.component" is where the component is in the package, like "service.wasm"');
     else if (raw.site !== undefined && !site) problems.push('"wasm.site" is the folder of its website\'s files in the package, like "site"');
     else if (panels.length && !panel) problems.push('"wasm.panel" is the folder of its panels\' pages in the package, like "panel"');
-    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}), ...(lists.length ? { lists } : {}) };
+    else wasm = { component, ...(site ? { site } : {}), ...(panel ? { panel } : {}), ...(panels.length ? { panels } : {}) };
   }
+  // Its lists: however it runs, the same in every card.
+  const lists: AppList[] = [];
+  for (const [i, l] of (Array.isArray(m.lists) ? m.lists : []).slice(0, 6).entries()) {
+    const got = parseList(l);
+    if (typeof got === 'string') problems.push(`lists[${i}] is ${got}`);
+    else lists.push(got);
+  }
+  if (lists.length && !m.service) problems.push('"lists" are a service\'s: its actions answer them, so it needs a contract ("service")');
   // A fetcher: a component (wasm) that fetches artifacts for its person, reaching only the hosts it names.
   let fetcher: AppFetcher | undefined;
   if (m.fetcher !== undefined) {
@@ -742,14 +744,14 @@ export function checkManifest(input: unknown): ManifestCheck {
     }
   }
 
-  for (const l of wasm?.lists ?? []) {
+  for (const l of lists) {
     const named = [l.list, ...(l.add && 'action' in l.add ? [l.add.action] : []), ...(l.remove ? [l.remove.action] : []), ...(l.use && 'action' in l.use ? [l.use.action] : []), ...(l.covers ?? [])];
-    for (const a of named) if (!service?.actions?.some((x) => x.name === a)) problems.push(`wasm.lists: ${l.name} names the action ${a}, but its service has no such action`);
+    for (const a of named) if (!service?.actions?.some((x) => x.name === a)) problems.push(`lists: ${l.name} names the action ${a}, but its service has no such action`);
   }
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}) } };
+  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(lists.length && service ? { lists } : {}) } };
 }
 
 /**
@@ -808,7 +810,7 @@ export const MANIFEST_RULES = [
   'service: its contract, for a program that acts on events in the spaces it\'s added to, under a key of its own. It says what it reads ("nothing", "addressed": requests to it, "space": everything, or {"kinds": [...]}), which kinds it writes, "website": true if it serves one itself (POST /website, or weave.serve), and its version, like {"reads": "addressed", "writes": [], "version": "1.0"}. "net" lists the hosts a WebAssembly service may reach over HTTPS (["api.example.com", "*.example.com"]); without it, it reaches none. "actions" says what people may ask it to do, and who: [{"name": "publish", "label": "Publish a new version", "who": "maintainers", "input": [{"name": "tag", "label": "Version"}]}] (who: members, maintainers, owner or {"board": "<name>"}); Weave checks the asker before the service sees a request naming one, and a project can only make who narrower. "expires" says how long a request counts, in seconds, by action or protocol ({"artifact.fetch": 300}): one older when the service gets to it (it was off) is answered by Weave as expired. Without, requests wait for it. What is asked and answered is sealed for the service and the asker. Installed, it gets exactly those rights; a release asking for more needs a new yes. It reads and writes through WEAVE_SERVICE_API with WEAVE_SERVICE_TOKEN (GET /events, GET /watch, POST /publish, POST /answer). A release with a web page in services serves it as a website in the projects it is added to.',
   `A Weave service is an OCI image carrying this manifest in its "${SERVICE_LABEL}" label (as JSON, without start or install: the image is what runs). Release it with weave service release <image:tag>: Weave pins the tag to its digest and reads the manifest from the image. It runs in Weave's sandbox only (read-only, limited, with /data to keep things in).`,
   'wasm: a WebAssembly service (packages/sdk/wit/service.wit), which Weave runs itself with nothing installed, no Docker: {"component": "service.wasm", "site": "site"}, paths in its package. Its image is built for wasi/wasm (docker buildx --platform wasi/wasm, FROM scratch, the component and its site copied in), or its release file is for the platform "wasm" (weave app release --asset wasm=<file>). A website (the website world) has "site": Weave serves those files and holds its players\' connections.',
-  'wasm.lists: what a service hands out, shown by Weave the same way in every card (search, pages, each button only for who may): its lists come first, before any page of its own. Each names the action that answers its items, + (add: an action, or {"hand": "github"}: whoever runs it hands one from their keyvault), the trash can (remove: an action, given {id}) and each item’s main button (use: an action and a label, or {"account": "github", "label": "Get access"}), and "covers" for other actions its items offer: [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github"}, "remove": {"action": "decline"}, "use": {"account": "github", "label": "Get access"}}]. Its list action answers [{id, icon?, title, badge?, detail?, url?, done? (said instead of the main button: "✓ You have access"), use?: false, remove?: false, more?: [{action, label, icon?, confirm?}]}], or, for a long list it pages itself, {items, next}, asked again with {query, cursor}. A page of its own (wasm.panels) only for what isn’t a list: a form of several steps, a live view.',
+  'lists: what a service hands out, shown by Weave the same way in every card, however it runs (WebAssembly, a container, a program), whoever made it (search, pages, each button only for who may): its lists come first, before any page of its own. Each names the action that answers its items, + (add: an action, or {"hand": "github"}: whoever runs it hands one from their keyvault), the trash can (remove: an action, given {id}) and each item’s main button (use: an action and a label, or {"account": "github", "label": "Get access"}), and "covers" for other actions its items offer: [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github"}, "remove": {"action": "decline"}, "use": {"account": "github", "label": "Get access"}}]. Its list action answers [{id, icon?, title, badge?, detail?, url?, done? (said instead of the main button: "✓ You have access"), use?: false, remove?: false, more?: [{action, label, icon?, confirm?}]}], or, for a long list it pages itself, {items, next}, asked again with {query, cursor}. A page of its own (wasm.panels) only for what isn’t a list: a form of several steps, a live view.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
   'install.steps: how to install it by hand, for agents (where there is no release build). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
   'The app should read its files relative to the folder it runs in (process.cwd()), listen on the ports in services, and serve the open paths.',

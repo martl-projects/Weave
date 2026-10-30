@@ -13,8 +13,8 @@
     ],
     "version": "1.0"
   },
+  "lists": [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github", "label": "Offer repositories of yours"}, "remove": {"action": "decline", "label": "Decline here"}, "use": {"account": "github", "label": "Get access"}, "covers": ["accept"]}],
   "wasm": {
-    "component": "github-access.wasm",
-    "lists": [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github", "label": "Offer repositories of yours"}, "remove": {"action": "decline", "label": "Decline here"}, "use": {"account": "github", "label": "Get access"}, "covers": ["accept"]}]
+    "component": "github-access.wasm"
   }
 }
