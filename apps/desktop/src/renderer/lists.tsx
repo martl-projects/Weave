@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { KeyvaultInfo, ServiceActionInfo, ServiceListInfo, SpaceInfo } from '@weave/node/client';
 import { AccountProofDialog } from './accounts.tsx';
-import { Icon, type IconName } from './icons.tsx';
+import { Icon, isIconName, type IconName } from './icons.tsx';
 import { HandDialog } from './keyvaults.tsx';
 import { api, bump, navigate, onItem } from './lib.ts';
 import { ActionDialog, askAndWait, SERVICE_CHANGED } from './services.tsx';
@@ -191,17 +191,17 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
       ) : (
         it.title
       ),
-      ...(it.icon ? { icon: it.icon as IconName } : {}),
+      ...(isIconName(it.icon) ? { icon: it.icon } : {}),
       ...(it.badge ? { badge: it.badge } : {}),
       search: `${it.title} ${it.detail ?? ''}`,
       ...(it.detail ? { detail: it.detail } : {}),
       tools: (it.more ?? [])
-        .filter((m) => m.icon && mine(m.action))
+        .filter((m) => isIconName(m.icon) && mine(m.action))
         .map((m) => ({ icon: m.icon as IconName, label: m.label, run: () => void (async () => (!m.confirm || (await ask(`${m.label}: ${it.title}?`, m.label))) && act(m.action, it.id, `${m.label}: ${it.title}`))() })),
       main: (
         <>
           {(it.more ?? [])
-            .filter((m) => !m.icon && mine(m.action))
+            .filter((m) => !isIconName(m.icon) && mine(m.action))
             .map((m) => (
               <AsyncButton key={m.action} onClick={() => act(m.action, it.id, `${m.label}: ${it.title}`)}>
                 {m.label}

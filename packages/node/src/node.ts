@@ -483,6 +483,7 @@ import {
   type MyAccountInfo,
   type FetcherInfo,
   type KeyvaultInfo,
+  type AppReleases,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -918,14 +919,6 @@ export class WeaveNode implements Backend {
   /** Tests only: hosts WebAssembly services' requests go to over plain HTTP on this computer, by port. */
   wasmSetup: { testHosts: Record<string, number>; shippedDir?: string } = { testHosts: {} };
 
-  /** Repos this node keeps in step (lowercase owner/name): when each was last synced, what it looked like then, and any problem. */
-  #githubSynced = new Map<string, { at: number; shape: string; problem?: string }>();
-  /** Gist proofs already checked (gist:login:did → answer), so each is asked once per run. */
-  #gistProofs = new Map<string, Promise<boolean | undefined>>();
-  /** Members' GitHub proofs as checked for access: when, and whether it held. */
-  #accessProofs = new Map<string, { at: number; proven: boolean }>();
-  /** The GitHub login this device's earlier shares were given proofs for (once per run). */
-  #githubSharesProven?: string;
   /** The time, in milliseconds (tests move it forward to reach renewals). */
   clock: () => number = Date.now;
   /** Paired phones using this node remotely (see remote.ts). */
@@ -2219,7 +2212,7 @@ export class WeaveNode implements Backend {
     const agent = this.#agents.find((a) => a.name === input.as);
     if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
     const kinds = [...new Set(input.kinds.map((k) => k.trim()))].filter((k) => /^weave\.[a-z0-9.*-]{1,60}$/.test(k));
-    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.github.repo');
+    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.app');
     const missing = kinds.filter((k) => !permits(agent.permissions, k));
     const now = new Date(this.clock()).toISOString();
     if (!missing.length) return { id: '', agent: agent.name, kinds, reason: '', time: now, state: 'allowed' };
@@ -3589,15 +3582,15 @@ export class WeaveNode implements Backend {
   #releaseSource(project: StoredSpace, given?: string): { ref: string; provider?: string } {
     const before = this.#app(project)?.install?.source;
     const ref = given?.trim() || before?.ref || '';
-    if (!ref) throw new Error('where does the release come from? (a repository, owner/name, for GitHub releases)');
+    if (!ref) throw new Error("where does the release come from? (what its provider understands: a repository's owner/name, say)");
     return { ref, ...(before && (!given || given.trim() === before.ref) ? { provider: before.provider } : {}) };
   }
 
-  /** The releases on GitHub a project could publish: as its provider sees them, with its access. */
-  async appReleases(ref: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }> {
+  /** The releases a project could publish, as its provider sees them (with its access), in its words: where they are, what to do without any. */
+  async appReleases(ref: string): Promise<AppReleases> {
     const project = this.#project(ref);
     const from = this.#releaseSource(project);
-    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as { repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }> };
+    return (await this.#services.askProvider(project, 'releases', { source: from.ref }, undefined, from.provider)) as unknown as AppReleases;
   }
 
   // ---------------------------------------------------------------- app API

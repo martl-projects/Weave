@@ -131,6 +131,8 @@ export interface AppVerifier {
   howto?: string;
   /** An account's page there, with {handle} in it: https://github.com/{handle}. */
   page?: string;
+  /** Its platform's icon, one of Weave's by name ("github"): Weave knows no platform's look. */
+  icon?: string;
   /**
    * It makes the proof itself (prove in the WIT), with a sign-in with a code there, used once and forgotten: one click
    * instead of making a proof by hand.
@@ -662,7 +664,7 @@ export function checkManifest(input: unknown): ManifestCheck {
     if (prove?.problem) problems.push(`"verifier.prove" is a sign-in with a code: ${prove.problem}`);
     if (!platforms.length) problems.push('"verifier.platforms" names the platforms it checks accounts on, like ["github"]');
     else if (!m.wasm) problems.push('a verifier is a WebAssembly component: say where it is ("wasm": {"component": "verifier.wasm"})');
-    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}), ...(prove?.oauth?.device ? { prove: prove.oauth } : {}) };
+    else verifier = { platforms, ...(net.length ? { net: [...new Set(net as string[])].slice(0, 20) } : {}), ...(text(raw.howto, 400) ? { howto: text(raw.howto, 400) } : {}), ...(/^https:\/\/[^\s]*\{handle\}/.test(page) ? { page } : {}), ...(prove?.oauth?.device ? { prove: prove.oauth } : {}), ...(typeof raw.icon === 'string' && /^[a-z][a-zA-Z0-9]{0,30}$/.test(raw.icon) ? { icon: raw.icon } : {}) };
   }
   // A keyvault: the platform it holds access to, and where it may reach.
   let keyvault: AppKeyvault | undefined;

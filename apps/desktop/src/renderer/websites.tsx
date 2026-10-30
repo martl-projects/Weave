@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, AppReleases, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
@@ -134,11 +134,13 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   );
 }
 
-type Release = { tag: string; name: string; published?: string; files: number; prerelease: boolean };
-
-/** Maintainers: release one of the repository's GitHub releases as an artifact (Weave reads weave.app.json at that tag and fingerprints the files). */
+/**
+ * Maintainers: publish one of the releases the project's provider sees (Weave reads weave.app.json at that tag and
+ * fingerprints the files). The provider says where they are and what to do without any, in its words: Weave knows
+ * no GitHub.
+ */
 function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: AppManifest; onClose(): void }) {
-  const { data, error } = useApi(() => api<{ repo: string; releases: Release[]; releaseWorkflow?: boolean }>('appReleases', project.id), [project.id]);
+  const { data, error } = useApi(() => api<AppReleases>('appReleases', project.id), [project.id]);
   const [busy, setBusy] = useState<string>();
   const use = async (tag: string) => {
     setBusy(tag);
@@ -147,49 +149,30 @@ function ReleasePicker({ project, app, onClose }: { project: SpaceInfo; app: App
     if (done !== undefined) onClose();
   };
   return (
-    <Modal title={`Release from GitHub · ${app.name}`} onClose={onClose}>
-      {error ? (
-        <p>{error}</p>
-      ) : !data ? (
-        <p className="small">Asking GitHub for releases…</p>
-      ) : data.releases.length === 0 ? (
-        <p>
-          <b>{data.repo}</b> has no releases yet.{' '}
-          {data.releaseWorkflow === false ? (
-            <>
-              It has no workflow that makes releases from tags either, so a pushed tag alone won't do: add Weave's release workflow (<code>weave app workflow</code>, or ask your agent), or create
-              a release on GitHub and attach the builds.
-            </>
-          ) : (
-            <>Push a version tag (like v0.1.0): its release workflow builds the release in a few minutes. Then come back here.</>
-          )}
+    <Modal title={`Publish a release · ${app.name}`} onClose={onClose}>
+      {data && (
+        <p className="small">
+          Releases of <b>{data.where ?? data.repo}</b>. Weave reads <code>weave.app.json</code> at the one you pick and fingerprints each file once; then everyone in {project.name} can start it.
         </p>
-      ) : (
-        <>
-          <p className="small">
-            Releases of <b>{data.repo}</b>. Weave reads <code>weave.app.json</code> at the tag you pick and fingerprints each file once; then everyone in {project.name} can start it as a service.
-          </p>
-          <table className="release-list">
-            <tbody>
-              {data.releases.map((r) => (
-                <tr key={r.tag}>
-                  <td>
-                    <b>{r.name}</b> {r.name !== r.tag && <span className="small muted">{r.tag}</span>} {r.prerelease && <span className="tag">pre-release</span>}
-                    <div className="small muted">
-                      {r.published ? ago(r.published) : ''} · {r.files} file{r.files === 1 ? '' : 's'}
-                    </div>
-                  </td>
-                  <td>
-                    <button className="default" disabled={!!busy || r.files === 0} title={r.files === 0 ? "No files to run: GitHub's source archives don't count" : undefined} onClick={() => use(r.tag)}>
-                      {busy === r.tag ? 'Fingerprinting…' : 'Release this'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
       )}
+      <ItemList
+        title=""
+        error={error}
+        empty={data ? `${data.where ?? data.repo} has no releases yet. ${data.empty ?? ''}` : 'Asking for releases…'}
+        {...(data ? { rows: data.releases.map((r) => ({
+          key: r.tag,
+          icon: 'store' as const,
+          title: r.name,
+          ...(r.name !== r.tag ? { badge: r.tag } : r.prerelease ? { badge: 'pre-release' } : {}),
+          search: `${r.name} ${r.tag}`,
+          detail: [r.published ? ago(r.published) : '', `${r.files} file${r.files === 1 ? '' : 's'}`, r.problem ?? ''].filter(Boolean).join(' · '),
+          main: (
+            <button className="default" disabled={!!busy || !!r.problem || r.files === 0} onClick={() => use(r.tag)}>
+              {busy === r.tag ? 'Fingerprinting…' : 'Publish'}
+            </button>
+          ),
+        })) } : {})}
+      />
       <div className="buttons">
         <button onClick={onClose}>Close</button>
       </div>
@@ -203,7 +186,7 @@ function PublishApp({ project }: { project: SpaceInfo }) {
     <fieldset>
       <legend>Describe the project's artifact</legend>
       <p className="small">
-        Paste its <code>weave.app.json</code>: what it's called, its web page's port, how it starts and the settings it asks for. Then release it from a GitHub release. (Or:{' '}
+        Paste its <code>weave.app.json</code>: what it's called, its web page's port, how it starts and the settings it asks for. Then publish a release of it. (Or:{' '}
         <code>weave app publish -p "{project.name}"</code> in its folder.)
       </p>
       <textarea className="wide code" rows={8} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder={'{\n  "app": "my-app",\n  "name": "My App",\n  "services": [{ "id": "web", "port": 3000 }]\n}'} />
@@ -237,8 +220,8 @@ const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.web
 const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.packaged ? 'store' : 'plug');
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
 
-/** A service that provides a project's GitHub releases (Weave's GitHub access, or the GitHub releases it ships). */
-export const handsOutGitHub = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && !!s.contract.actions?.some((a) => a.name === 'publish') && (!s.contract.sources || s.contract.sources.includes('github'));
+/** A service that publishes a project's releases and hands them out (a provider: GitHub releases, or anyone's for another source). */
+export const publishesReleases = (s: ServiceProfileInfo): boolean => !!s.contract.offers?.includes('artifact.fetch') && !!s.contract.actions?.some((a) => a.name === 'publish');
 
 /**
  * Whether a service hands out an artifact: it offers artifact.fetch for where the artifact's files are (any source, if
@@ -463,7 +446,7 @@ function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onCl
   );
 }
 
-/** What a service provides here: its artifacts; maintainers publish more from GitHub. */
+/** What a service provides here: its artifacts; maintainers publish more from where it reads them. */
 function ServiceReleases({ project, artifacts, app, maintainer, publish }: { project: SpaceInfo; artifacts: ArtifactInfo[]; app: AppManifest | null | undefined; maintainer: boolean; publish?(): void }) {
   const [describing, setDescribing] = useState(false);
   return (
@@ -514,7 +497,7 @@ export function ProjectAvailableView({ project }: { project: SpaceInfo }) {
       actions={
         maintainer && app ? (
           <button onClick={() => setPicking(true)}>
-            <Icon name="plus" /> Publish from GitHub…
+            <Icon name="plus" /> Publish a release…
           </button>
         ) : undefined
       }
@@ -769,9 +752,9 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <OriginText origin={service.origin} />
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
       {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
-      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={handsOutGitHub(service) ? app : undefined} maintainer={maintainer} {...(maintainer && app && handsOutGitHub(service) ? { publish: () => setPublishing(true) } : {})} />}
+      {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} app={publishesReleases(service) ? app : undefined} maintainer={maintainer} {...(maintainer && app && publishesReleases(service) ? { publish: () => setPublishing(true) } : {})} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
-      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : handsOutGitHub(service) ? ['publish', 'releases'] : undefined} />
+      <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : publishesReleases(service) ? ['publish', 'releases'] : undefined} />
       {opening && mine && <OpenWebsiteDialog project={project} service={mine.name} away={mine.node?.name} members={members} meDid={meDid} groups={groups} shows={shows} onClose={() => setOpening(false)} />}
       {asking && <ServiceCard space={project} service={service} onClose={() => setAsking(false)} />}
       {setting && <KeptSettingsDialog space={{ id: project.id, name: `p/${project.name}` }} service={service} onClose={() => setSetting(false)} />}

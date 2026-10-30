@@ -199,7 +199,8 @@ describe('accounts elsewhere', { timeout: 120_000 }, () => {
         const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
         return String(url).endsWith('/device/code') ? json({ device_code: 'd-9', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', interval: 0.01 }) : json({ access_token: 'gho-gist', scope: 'gist' });
       };
-      expect((await martl.platforms())[0]).toMatchObject({ platform: 'github', prove: true });
+      // Its look, too, is its verifier's: Weave knows no platform.
+      expect((await martl.platforms())[0]).toMatchObject({ platform: 'github', prove: true, icon: 'github' });
       const started = await martl.startAccountProof({ platform: 'github' });
       expect(started).toMatchObject({ code: 'ABCD-EFGH', url: 'https://github.com/login/device' });
       const proven = await martl.finishAccountProof({ id: started.id });

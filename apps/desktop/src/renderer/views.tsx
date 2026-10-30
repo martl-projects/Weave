@@ -907,7 +907,7 @@ const SETTINGS_TABS = [
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number][0];
 
-/** A project's settings, one tab at a time (#/p/<id>/settings/<tab>): its page, boards, people (and what newcomers read), GitHub, payments, ownership. */
+/** A project's settings, one tab at a time (#/p/<id>/settings/<tab>): its page, boards, people (and what newcomers read), payments, ownership. */
 export function ProjectSettings({ project, spaces, members, meDid, tab: asked }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string; tab?: string }) {
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: admissions } = useApi(() => api<Admission[]>('admissions', project.id), [project.id]);
@@ -1151,7 +1151,7 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
   );
 }
 
-/** A group's settings: its GitHub repositories, who owns it, leaving and closing. */
+/** A group's settings: who owns it, leaving and closing. */
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>

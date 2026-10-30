@@ -165,7 +165,15 @@ async function releasesOf(space, input) {
   const res = await github(`/repos/${repo}/releases?per_page=30`, token);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo}'s releases`);
   const all = await res.json();
-  return { data: { repo, releases: all.filter((r) => !r.draft).map((r) => ({ tag: r.tag_name, name: r.name || r.tag_name, ...(r.published_at ? { published: r.published_at } : {}), files: r.assets.length, prerelease: !!r.prerelease })) } };
+  // In its own words (Weave knows no GitHub): where they are, what to do without any, and why one can't be published.
+  return {
+    data: {
+      repo,
+      where: `${repo} on GitHub`,
+      empty: 'Push a version tag (like v0.1.0) with a release workflow that builds it (weave app workflow), or create a release on GitHub and attach the builds; then come back here.',
+      releases: all.filter((r) => !r.draft).map((r) => ({ tag: r.tag_name, name: r.name || r.tag_name, ...(r.published_at ? { published: r.published_at } : {}), files: r.assets.length, prerelease: !!r.prerelease, ...(r.assets.length ? {} : { problem: "no files attached: GitHub's source archives don't count" }) })),
+    },
+  };
 }
 
 /** What it grants for a release's file for a platform: GitHub's address for it, or the release when it's public. */

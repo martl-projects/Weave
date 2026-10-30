@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ArtifactInfo, CatalogEntryInfo, ServiceInfo, ShippedServiceInfo, SpaceInfo } from '@weave/node/client';
 import type { AppSetting, ServiceContract } from '@weave/core';
 import { InstallFromCatalog } from './catalog.tsx';
-import { Icon, type IconName } from './icons.tsx';
+import { Icon, isIconName, type IconName } from './icons.tsx';
 import { api, bump, useApi } from './lib.ts';
 import { contractText, KeptSettingsDialog } from './services.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
@@ -14,11 +14,12 @@ import { InstallRelease, SettingInput, useArtifacts } from './websites.tsx';
  * this computer, and your own services elsewhere. Picking one shows what it does and asks for its settings.
  */
 
-/** An icon for a service, by what it is: its kind, or its name. */
+/** An icon for a service, by what it is: its kind, the platform it uses or hands out from (where Weave has its icon), or its name. */
 export function serviceIcon(s: { name: string; builtin?: string; contract?: ServiceContract }): IconName {
   const name = s.name.toLowerCase();
   if (s.builtin === 'website' || s.contract?.website || s.contract?.websites === 'host') return 'globe';
-  if (s.builtin === 'github' || name.includes('github')) return 'github';
+  const platform = [...Object.keys(s.contract?.uses ?? {}), ...(s.contract?.sources ?? [])].find(isIconName);
+  if (platform) return platform;
   if (/s3|storage|bucket|backup/.test(name)) return 'database';
   if (/file|drive|docs/.test(name)) return 'folder';
   if (s.contract?.offers?.length) return 'download';

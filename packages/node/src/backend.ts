@@ -342,6 +342,18 @@ export interface ShippedServiceInfo {
  * A fetcher of yours: a client app that fetches artifacts for you, with what providers grant you, in the projects
  * you allow (or all). Its settings are yours (your own sign-in), kept sealed on your node: only which are filled in.
  */
+/**
+ * The releases a project's provider could publish, in its own words (Weave knows no platform): where they are (its
+ * source's ref, and in words), what to do when there are none, and why one can't be published (problem).
+ */
+export interface AppReleases {
+  repo: string;
+  where?: string;
+  empty?: string;
+  releases: Array<{ tag: string; name: string; problem?: string; published?: string; files: number; prerelease: boolean }>;
+  releaseWorkflow?: boolean;
+}
+
 /** A keyvault of yours: what it holds access to, what you handed which project, who uses it, and what it minted. */
 export interface KeyvaultInfo {
   name: string;
@@ -2047,7 +2059,7 @@ export interface Backend {
   /** Release a Weave service (maintainers): an image, ref:tag, with its manifest in its "dev.weave.service" label; pinned to its digest. */
   releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
-  appReleases(project: string): Promise<{ repo: string; releases: Array<{ tag: string; name: string; published?: string; files: number; prerelease: boolean }>; releaseWorkflow?: boolean }>;
+  appReleases(project: string): Promise<AppReleases>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.

@@ -107,7 +107,7 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
         <div className="field-row">
           <input type="radio" id="svc-reads-kinds" checked={reads === 'kinds'} onChange={() => setReads('kinds')} />
           <label htmlFor="svc-reads-kinds">That, and some kinds:</label>
-          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.github.account" spellCheck={false} />
+          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.account" spellCheck={false} />
         </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-space" checked={reads === 'space'} onChange={() => setReads('space')} />

@@ -19,6 +19,8 @@ export interface PlatformInfo {
   prove?: true;
   /** The verifier that checks it. */
   verifier: string;
+  /** Its icon, as its verifier names it (one of Weave's). */
+  icon?: string;
   title: string;
   howto?: string;
   page?: string;
@@ -50,7 +52,7 @@ export class Verifiers {
 
   /** The platforms accounts can be proven on here, with how. */
   platforms(): PlatformInfo[] {
-    return this.shipped().flatMap((s) => s.manifest.verifier!.platforms.map((platform) => ({ platform, verifier: s.name, title: s.manifest.name, ...(s.manifest.verifier!.prove?.device ? { prove: true as const } : {}), ...(s.manifest.verifier!.howto ? { howto: s.manifest.verifier!.howto } : {}), ...(s.manifest.verifier!.page ? { page: s.manifest.verifier!.page } : {}) })));
+    return this.shipped().flatMap((s) => s.manifest.verifier!.platforms.map((platform) => ({ platform, verifier: s.name, title: s.manifest.name, ...(s.manifest.verifier!.prove?.device ? { prove: true as const } : {}), ...(s.manifest.verifier!.icon ? { icon: s.manifest.verifier!.icon } : {}), ...(s.manifest.verifier!.howto ? { howto: s.manifest.verifier!.howto } : {}), ...(s.manifest.verifier!.page ? { page: s.manifest.verifier!.page } : {}) })));
   }
 
   /** An account's page on its platform, if its verifier says where. */
