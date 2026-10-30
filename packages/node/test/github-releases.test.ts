@@ -168,6 +168,9 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       expect(published.install).toMatchObject({ source: { provider: 'github', ref: 'martl/bot' }, fetcher: 'github-checkout', tag: 'v1.0', access: 'grant', assets: { [platformKey()]: { file: `Bot-${platformKey()}.tar.gz`, sha256: createHash('sha256').update(github.bytes).digest('hex'), size: github.bytes.length } } });
       expect(((await martl.releaseApp({ project: 'Bot', tag: 'v9', repo: 'martl/bot' }).catch((e: Error) => e)) as Error).message).toMatch(/github-releases \(martl\): GitHub shows no release v9/);
       expect((await martl.appReleases('Bot')).releases.map((r) => r.tag)).toEqual(['v1.0']);
+      // Offered, and said in the project's chat: a message carrying the release, which Weave shows as a card to get it.
+      const [offered] = await martl.artifacts('Bot');
+      expect((await martl.messages('Bot')).filter((m) => m.announce)).toMatchObject([{ text: `${published.name} v1.0 is available`, announce: { kind: 'release', id: offered.id } }]);
       github.delivered = 0;
 
       // Lena adds the fetcher it names, for this project only: hers, not the project's.

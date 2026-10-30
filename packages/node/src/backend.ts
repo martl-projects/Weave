@@ -35,7 +35,7 @@ export interface FeedItem {
  * activity: new posts, issues and proposals in your projects.
  */
 export interface Notice {
-  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine';
+  type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine' | 'live';
   category: NoticeCategory;
   title: string;
   text: string;
@@ -352,6 +352,17 @@ export interface ShippedServiceInfo {
  * The releases a project's provider could publish, in its own words (Weave knows no platform): where they are (its
  * source's ref, and in words), what to do when there are none, and why one can't be published (problem).
  */
+/** One of a project's artifacts, as a line of releases: its id, name and kind, where it's released from, and its latest version. */
+export interface ArtifactLine {
+  id: string;
+  name: string;
+  kind: ArtifactKind;
+  source?: ArtifactSource;
+  /** Released as a container image instead (weave service release <image:tag>): its name. */
+  image?: string;
+  tag?: string;
+}
+
 export interface AppReleases {
   repo: string;
   where?: string;
@@ -1632,6 +1643,8 @@ export interface MessageInfo {
   /** The message this one answers, if it is still known. */
   replyTo?: { id: string; by: Actor; text: string };
   reactions: ReactionInfo[];
+  /** It announces something live: a website opened (its id, or the service hosting it) or a version offered (its artifact id). */
+  announce?: { kind: 'website' | 'release'; id: string };
 }
 
 export interface IssueInfo {
@@ -2182,6 +2195,14 @@ export interface Backend {
   releaseService(input: { project: string; image: string; as?: string }): Promise<AppManifest>;
   /** The GitHub releases a project's app can be pointed at: its repository's recent ones, newest first. */
   appReleases(project: string): Promise<AppReleases>;
+  /** A project's artifacts, each a line of releases from its own source: any number of them. */
+  artifactLines(project: string): Promise<ArtifactLine[]>;
+  /** The releases one of a project's artifacts could publish (or a new source's), as its provider sees them. */
+  artifactReleases(input: { project: string; artifact?: string; source?: string }): Promise<AppReleases>;
+  /** Maintainers: release one of a project's artifacts (or a new one, from a new source), by tag: fingerprinted by its provider. */
+  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  /** Maintainers: describe one of a project's artifacts (its weave.app.json): a new one, or the next description of one. */
+  publishArtifact(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
   /**
    * Is there a newer Weave than `current`? Looks at release posts in the Weave project, signed by its
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
@@ -2352,7 +2373,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',

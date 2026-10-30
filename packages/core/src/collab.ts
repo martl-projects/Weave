@@ -111,7 +111,20 @@ export interface Message {
   post?: string;
   replyTo?: string;
   reactions: Reaction[];
+  /** It announces something live in the project: a website opened, a version offered (by its id there). */
+  announce?: Announce;
 }
+
+/** What a message announces: a website (its id, or the service hosting it) or a released version (its artifact id). */
+export interface Announce {
+  kind: 'website' | 'release';
+  id: string;
+}
+
+const announceOf = (body: Json): Announce | undefined => {
+  const a = field(body, 'announce') as Record<string, unknown> | undefined;
+  return a && (a.kind === 'website' || a.kind === 'release') && typeof a.id === 'string' && a.id.length <= 200 ? { kind: a.kind, id: a.id } : undefined;
+};
 
 export interface Channel {
   name: string;
@@ -231,7 +244,9 @@ export function messagesOf(entries: Entry[], where: { channel?: string; post?: s
     .map((e) => {
       const replyTo = str(e.body, 'replyTo', 200);
       const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);
+      const announce = e.kind === KIND_MSG ? announceOf(e.body) : undefined;
       return {
+        ...(announce ? { announce } : {}),
         id: e.id,
         author: e.event.author,
         signer: e.event.signer,

@@ -10,6 +10,7 @@ import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
 import { Marks } from './marks.tsx';
 import { HintSigns, useHints } from './notify.tsx';
+import { AnnounceCard } from './announce.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -61,14 +62,14 @@ function Message({
   moderating,
   space,
 }: {
+  /** The space it's in: its own mark services show too, and its announcements open from here. */
+  space: SpaceInfo;
   row: Extract<Row, { kind: 'msg' }>;
   meDid: string;
   mentionNames: string[];
   onReply(m: MessageInfo): void;
   /** You maintain or moderate the space: you may take down anyone's message. */
   moderating: boolean;
-  /** The space it's in: its own mark services show too. */
-  space: string;
 }) {
   const { m, compact } = row;
   const [picking, setPicking] = useState(false);
@@ -81,7 +82,7 @@ function Message({
   }, [html]);
   const mentionsMe = mentionNames.some((name) => new RegExp(`@${name}\\b`, 'i').test(m.text));
   // What your hint services say about it (Spotlight: someone close to you, your contacts); asks of all rows go in one batch.
-  const [hint] = useHints('message', [{ message: { space, id: m.id } }]);
+  const [hint] = useHints('message', [{ message: { space: space.id, id: m.id } }]);
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));
   const mayDelete = m.by.did === meDid || moderating;
   const remove = async () => {
@@ -91,7 +92,7 @@ function Message({
   const author = (
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
       <a href={`#/space/${encodeURIComponent(m.by.did)}`}>{nameOf(m.by, meDid)}</a>
-      {!m.by.agent && <Marks did={m.by.did} slot="author" space={space} />}
+      {!m.by.agent && <Marks did={m.by.did} slot="author" space={space.id} />}
       <HintSigns signs={hint.signs} />
       {m.by.agent && (
         <span className="agent-tag" title={`${m.by.name ?? 'Someone'}'s agent, signing with its own key`}>
@@ -121,6 +122,7 @@ function Message({
             </div>
           )}
           <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />
+          {m.announce && <AnnounceCard space={space} announce={m.announce} />}
           {m.reactions.length > 0 && (
             <div className="reactions">
               {m.reactions.map((r) => (
@@ -364,7 +366,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
                     <span>{row.label}</span>
                   </div>
                 ) : (
-                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} space={space.id} />
+                  <Message row={row} meDid={meDid} mentionNames={mentionNames} onReply={setReplyTo} moderating={moderating} space={space} />
                 )}
               </div>
             );
