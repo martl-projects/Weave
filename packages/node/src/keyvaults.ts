@@ -84,12 +84,15 @@ export class Keyvaults {
   readonly #homeOf: () => Home;
   readonly #runtime: Runtime;
   readonly #shippedDir: () => string | undefined;
+  /** Those its person added from releases (clientapps.ts): run exactly as the ones Weave ships. */
+  readonly #fromReleases: () => ShippedService[];
   /** Access minted, by keyvault, app and what it's cut to: used again while it lasts. */
   #minted = new Map<string, { token: string; expires?: number }>();
   /** Apps being made: each waits for the provider. */
   #making = new Map<string, Promise<KeyvaultState>>();
 
-  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined) {
+  constructor(home: () => Home, runtime: Runtime, shippedDir: () => string | undefined, fromReleases: () => ShippedService[] = () => []) {
+    this.#fromReleases = fromReleases;
     this.#homeOf = home;
     this.#runtime = runtime;
     this.#shippedDir = shippedDir;
@@ -142,7 +145,7 @@ export class Keyvaults {
 
   /** The keyvaults this Weave ships. */
   shipped(): ShippedService[] {
-    return [...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.keyvault);
+    return [...[...shippedServices(this.#shippedDir() ?? SHIPPED_DIR).values()].filter((s) => s.manifest.keyvault), ...this.#fromReleases()];
   }
 
   state(k: StoredKeyvault): KeyvaultState {

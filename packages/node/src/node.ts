@@ -530,10 +530,11 @@ import {
   type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
-import { Runtime } from './runtime.ts';
+import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
+import { ClientApps } from './clientapps.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
 import type { Grant as ServiceGrant } from './servicesettings.ts';
@@ -936,9 +937,11 @@ export class WeaveNode implements Backend {
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
-  #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir));
+  /** Keyvaults and fetchers I added from releases (clientapps.ts): beside the ones Weave ships, run the same. */
+  #clientApps = new ClientApps(() => this.home, () => this.#releases);
+  #fetchersMade = (this.#releases.fetchers = new Fetchers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir, () => this.#clientApps.asShipped('fetcher')));
   /** My keyvaults (keyvaults.ts): my access to platforms, of which my services get only what's derived. */
-  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
+  #keyvaults = new Keyvaults(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir, () => this.#clientApps.asShipped('keyvault'));
   /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
@@ -9032,6 +9035,26 @@ export class WeaveNode implements Backend {
 
   async removeKeyvault(name: string): Promise<void> {
     this.#keyvaults.remove(name);
+  }
+
+  async addClientApp(input: { project: string; artifact?: string; approve?: boolean }): Promise<KeyvaultInfo | FetcherInfo> {
+    const { project, artifact } = this.#services.artifact(input.project, input.artifact);
+    const kind = artifact.kind === 'keyvault' || artifact.kind === 'fetcher' ? artifact.kind : undefined;
+    if (!kind) throw new Error(`${artifact.manifest.name} ${artifact.tag} is a ${artifact.kind}, not a keyvault or fetcher: add it where it goes (a project's services)`);
+    const reaches = (artifact.manifest.keyvault?.net ?? artifact.manifest.fetcher?.net ?? []).join(', ') || 'nothing';
+    if (!input.approve) throw new Error(`approve it first: Weave would run ${artifact.manifest.name} ${artifact.tag}, released in ${this.#spaceName(project)}, as your ${kind}${kind === 'keyvault' ? ` for ${artifact.manifest.keyvault!.platform} (it holds your access there)` : ''}; it reaches ${reaches} over HTTPS`);
+    const taken = new Set([...this.#keyvaults.shipped(), ...this.#fetchers.shipped()].filter((s) => !this.#clientApps.list().some((c) => c.name === s.name)).map((s) => s.name));
+    const added = await this.#clientApps.add({ kind, artifact: { project: project.id, id: artifact.id, tag: artifact.tag, manifest: artifact.manifest }, approved: releaseApproval(artifact), taken });
+    if (kind === 'keyvault') return this.#keyvaultInfo(this.#keyvaults.add({ shipped: added.name }));
+    return this.#fetcherInfo(this.#fetchers.add({ shipped: added.name, projects: [project.id] }));
+  }
+
+  async removeClientApp(name: string): Promise<void> {
+    const c = this.#clientApps.list().find((x) => x.name === name);
+    if (!c) throw new Error(`nothing named ${name} was added from a release here`);
+    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) this.#keyvaults.remove(name);
+    if (c.kind === 'fetcher' && this.#fetchers.list().some((f) => f.name === name)) this.#fetchers.remove(name);
+    this.#clientApps.remove(name);
   }
 
   async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {

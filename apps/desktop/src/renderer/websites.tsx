@@ -215,9 +215,9 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
 /** What an artifact is, in a word. */
-const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', app: 'App', file: 'File' };
+const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', app: 'App', file: 'File' };
 const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.website ? 'Website and service' : KIND_WORDS[a.kind]);
-const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.packaged ? 'store' : 'plug');
+const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.kind === 'keyvault' ? 'lock' : a.packaged ? 'store' : 'plug');
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
 
 /** A service that publishes a project's releases and hands them out (a provider: GitHub releases, or anyone's for another source). */
@@ -254,7 +254,18 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
             <>
               {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
               {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
-              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
+              {a.mine && a.kind !== 'file' && a.kind !== 'fetcher' && a.kind !== 'keyvault' && a.kind !== 'website' && <button onClick={() => setAdding(a)}>Add to…</button>}
+              {/* Yours, beside Weave's own: approved once, pinned to what was released. */}
+              {a.mine && (a.kind === 'fetcher' || a.kind === 'keyvault') && (
+                <AsyncButton
+                  onClick={async () =>
+                    (await ask(`Add ${a.name} ${a.tag}, released in p/${a.project.name}, as your ${a.kind}? Weave runs exactly this release, sandboxed, beside its own${a.kind === 'keyvault' ? ': it would hold the access you give it' : ''}.`, 'Add it')) &&
+                    attempt(() => api('addClientApp', { project: a.project.id, artifact: a.id, approve: true }).then(bump), `${a.name} is yours now: in Keys & devices`)
+                  }
+                >
+                  Add to Keys &amp; devices…
+                </AsyncButton>
+              )}
             </>
           ),
           ...(maintainer
@@ -469,6 +480,7 @@ const KIND_GROUPS: Array<{ kind: ArtifactInfo['kind']; title: string; about: str
   { kind: 'board-view', title: 'Board views', about: 'Show a board their way.' },
   { kind: 'file', title: 'Files', about: 'Get one: it comes checked against what was released.' },
   { kind: 'fetcher', title: 'Fetchers', about: 'Client apps that fetch artifacts for you.' },
+  { kind: 'keyvault', title: 'Keyvaults', about: 'Client apps that hold your access to a platform: your services get only what they derive from it.' },
   { kind: 'app', title: 'Apps', about: 'Programs its people run on their computers, in rooms.' },
 ];
 
