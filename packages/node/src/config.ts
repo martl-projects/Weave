@@ -31,9 +31,17 @@ export interface Config {
   desk?: { space: string; folder?: string; driver?: { provider: string; id: string; host?: string; folder?: string } };
 }
 
+/** What this build reads of the config; anything else in the file is kept as it is (see loadConfig). */
+const KNOWN: ReadonlySet<string> = new Set<keyof Config>([
+  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk',
+]);
+
 export function loadConfig(home: Home): Config {
   const stored = readJson<Partial<Config>>(home.config) ?? {};
+  // A newer build's settings survive an older one saving (a desk once vanished that way): kept, never read.
+  const unknown = Object.fromEntries(Object.entries(stored).filter(([key]) => !KNOWN.has(key)));
   return {
+    ...unknown,
     topics: stored.topics ?? [],
     bootstrap: stored.bootstrap ?? [],
     pendingMemberships: stored.pendingMemberships ?? [],
