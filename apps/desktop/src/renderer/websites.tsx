@@ -671,8 +671,24 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const [port, setPort] = useState('');
   const [busy, setBusy] = useState(false);
   const [announce, setAnnounce] = useState(true);
-  const ready = !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  // What it shows: a website released in one of your projects (launched here), or a program of yours on a port.
+  const released = useArtifacts(project);
+  const launchable = away ? [] : (released ?? []).filter((a) => a.kind === 'website' && a.mine && a.runs);
+  const [what, setWhat] = useState<string>();
+  const picked = what === 'port' ? undefined : launchable.find((a) => a.id === what) ?? (what ? undefined : launchable[0]);
+  const ready = picked ? true : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const launch = async () => {
+    setBusy(true);
+    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce }), `${picked!.name} is launching in p/${project.name}`);
+    setBusy(false);
+    if (done !== undefined) {
+      bump();
+      onClose();
+      location.hash = `#/p/${project.id}/live`;
+    }
+  };
   const open = async () => {
+    if (picked) return launch();
     setBusy(true);
     // A new show is set up first; if the website then fails, it's picked, not set up twice.
     const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
@@ -693,71 +709,100 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   return (
     <Modal title={`Open a website · p/${project.name}`} onClose={onClose} wide>
       <div className="form">
-        <div className="field-row-stacked">
-          <label htmlFor="room-name">Name</label>
-          <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="field-row-stacked">
-          <label htmlFor="room-port">Port of a program running {away ? `on ${away}` : 'on this computer'}</label>
-          <input id="room-port" inputMode="numeric" placeholder="3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
-          <p className="small muted">
-            Weave starts nothing: the website's visitors reach that port, and nothing else on {away ?? 'your computer'}. An app a project released runs as a service instead (Add a service): it shows up here
-            by itself.
-          </p>
-        </div>
         <fieldset>
-          <legend>Who may visit</legend>
-          {(
-            [
-              ['everyone', `Everyone in p/${project.name}`],
-              ['people', 'Only…'],
-              ['tickets', 'Ticket holders of a show'],
-              ...(groups.length ? [['tiers', 'Members of tiers']] : []),
-            ] as Array<[typeof who, string]>
-          ).map(([value, label]) => (
-            <div key={value}>
-              <div className="field-row">
-                <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
-                <label htmlFor={`who-${value}`}>{label}</label>
-              </div>
-              {who === 'people' &&
-                value === 'people' &&
-                members
-                  .filter((m) => m.did !== meDid)
-                  .map((m) => (
-                    <div className="field-row indent" key={m.did}>
-                      <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
-                      <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
-                    </div>
-                  ))}
-              {who === 'tickets' && value === 'tickets' && (
-                <>
-                  <div className="field-row indent">
-                    <label htmlFor="who-show">Show</label>
-                    <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
-                      {myShows.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                      <option value="new">A new show…</option>
-                    </select>
-                  </div>
-                  {show === 'new' && <div className="indent">{newShow.fields}</div>}
-                </>
-              )}
-              {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
-                groups.map((g) => (
-                  <div className="field-row indent" key={g.id}>
-                    <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
-                    <label htmlFor={`who-tier-${g.id}`}>
-                      {who === 'tickets' ? 'also ' : ''}members of {g.name}
-                    </label>
-                  </div>
-                ))}
+          <legend>What it shows</legend>
+          {!released && !away && <p className="small muted">Looking for released websites…</p>}
+          {launchable.map((a) => (
+            <div className="field-row" key={a.id}>
+              <input id={`what-${a.id}`} type="radio" checked={picked?.id === a.id} onChange={() => setWhat(a.id)} />
+              <label htmlFor={`what-${a.id}`}>
+                <span>
+                  <b>{a.name}</b> {a.tag} <span className="muted small">· released in p/{a.project.name} · {a.runs === 'wasm' ? 'runs in Weave' : 'runs in a container'}</span>
+                </span>
+              </label>
             </div>
           ))}
+          <div className="field-row">
+            <input id="what-port" type="radio" checked={!picked} onChange={() => setWhat('port')} />
+            <label htmlFor="what-port">A program of yours, on a port {away ? `of ${away}` : 'of this computer'}</label>
+          </div>
         </fieldset>
+        {picked ? (
+          <>
+            <p className="small">
+              Weave runs {picked.name} {picked.tag}, released in p/{picked.project.name}, {picked.runs === 'wasm' ? 'in Weave, as WebAssembly' : 'in a container, sealed off from your files'}. It only shows its page: it reads nothing and writes nothing in
+              the project. It's a running website everyone in p/{project.name} can visit, in Live, until you close it.
+            </p>
+            <p className="small muted">It's other people's code: only launch it if you trust p/{picked.project.name}.</p>
+          </>
+        ) : (
+          <>
+            <div className="field-row-stacked">
+              <label htmlFor="room-name">Name</label>
+              <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="field-row-stacked">
+              <label htmlFor="room-port">Port of a program running {away ? `on ${away}` : 'on this computer'}</label>
+              <input id="room-port" inputMode="numeric" placeholder="3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
+              <p className="small muted">
+                Weave starts nothing: the website's visitors reach that port, and nothing else on {away ?? 'your computer'}.
+              </p>
+            </div>
+            <fieldset>
+              <legend>Who may visit</legend>
+              {(
+                [
+                  ['everyone', `Everyone in p/${project.name}`],
+                  ['people', 'Only…'],
+                  ['tickets', 'Ticket holders of a show'],
+                  ...(groups.length ? [['tiers', 'Members of tiers']] : []),
+                ] as Array<[typeof who, string]>
+              ).map(([value, label]) => (
+                <div key={value}>
+                  <div className="field-row">
+                    <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
+                    <label htmlFor={`who-${value}`}>{label}</label>
+                  </div>
+                  {who === 'people' &&
+                    value === 'people' &&
+                    members
+                      .filter((m) => m.did !== meDid)
+                      .map((m) => (
+                        <div className="field-row indent" key={m.did}>
+                          <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
+                          <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
+                        </div>
+                      ))}
+                  {who === 'tickets' && value === 'tickets' && (
+                    <>
+                      <div className="field-row indent">
+                        <label htmlFor="who-show">Show</label>
+                        <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                          {myShows.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                          <option value="new">A new show…</option>
+                        </select>
+                      </div>
+                      {show === 'new' && <div className="indent">{newShow.fields}</div>}
+                    </>
+                  )}
+                  {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
+                    groups.map((g) => (
+                      <div className="field-row indent" key={g.id}>
+                        <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                        <label htmlFor={`who-tier-${g.id}`}>
+                          {who === 'tickets' ? 'also ' : ''}members of {g.name}
+                        </label>
+                      </div>
+                    ))}
+                </div>
+              ))}
+            </fieldset>
+          </>
+        )}
         <div className="field-row">
           <input type="checkbox" id="open-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
           <label htmlFor="open-announce">Announce it in the project's chat: people find it there, and come and join</label>
@@ -765,7 +810,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
         <div className="buttons">
           <button onClick={onClose}>Cancel</button>
           <button className="default" disabled={!ready || busy} onClick={() => void open()}>
-            {busy ? 'Opening…' : 'Open website'}
+            {busy ? (picked ? 'Launching…' : 'Opening…') : picked ? 'Launch' : 'Open website'}
           </button>
         </div>
       </div>
@@ -895,7 +940,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
   // Its settings kept in the project, for its maintainers to change (rather than only on this computer).
   const [keep, setKeep] = useState(maintainer);
   const [busy, setBusy] = useState(false);
-  const usable = (artifacts ?? []).filter((a) => a.runs && (a.website || a.applet));
+  const usable = (artifacts ?? []).filter((a) => a.runs && a.kind === 'service');
   const chosen = usable.find((a) => a.id === picked);
   useEffect(() => setValues({}), [chosen?.id]);
   const missing = chosen?.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim()) ?? [];
