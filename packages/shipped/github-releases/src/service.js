@@ -64,7 +64,7 @@ const accessTo = async (space, repo) => fromKeyvault(space, repo) ?? (await appT
 /** A release by its tag, as GitHub has it: its files and whether its repository is public. */
 async function releaseAt(repo, tag, token) {
   const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
-  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}`);
+  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': a private repository's releases come through its person's GitHub keyvault (Keys & devices): an app of theirs installed on it, made for its owner, has to hand it to this project'}`);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
   return res.json();
 }
@@ -97,7 +97,7 @@ async function publishRelease(space, input) {
   if (!tag) throw new Error('which release? (its tag, like v1.0)');
   const token = await accessTo(space, repo);
   const info = await github(`/repos/${repo}`, token);
-  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}` : `GitHub said ${info.status} for ${repo}`);
+  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': a private repository's releases come through its person's GitHub keyvault (Keys & devices): an app of theirs installed on it, made for its owner, has to hand it to this project'}` : `GitHub said ${info.status} for ${repo}`);
   // Public: its files are anyone's, so fetchers get them directly. Private: only through a grant of this service.
   const access = (await info.json()).private ? 'grant' : 'direct';
   const found = await releaseAt(repo, tag, token);
