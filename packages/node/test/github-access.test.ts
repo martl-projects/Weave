@@ -296,6 +296,13 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       expect(new URL(unescape(orgPage.match(/action="([^"]+)"/)![1])).pathname).toBe('/organizations/acme/settings/apps/new');
       expect(JSON.parse(unescape(orgPage.match(/name="manifest" value="([^"]+)"/)![1])).name).toBe("acme's Weave connect");
       await expect(martl.startKeyvaultApp({ name: 'github-keyvault', setting: 'GITHUB_APP', owner: 'acme/../x' })).rejects.toThrow(/an organization is named by its name there/);
+      // A misspelled organization: GitHub makes it for him instead. Weave says so, and points to his own page to delete it.
+      const typo = await martl.startKeyvaultApp({ name: 'github-keyvault', setting: 'GITHUB_APP', owner: 'acmee' });
+      const typoPage = await (await fetch(typo.url)).text();
+      const typoSent = JSON.parse(unescape(typoPage.match(/name="manifest" value="([^"]+)"/)![1])) as { redirect_url: string };
+      await fetch(`${typoSent.redirect_url}?code=c-2&state=${new URL(unescape(typoPage.match(/action="([^"]+)"/)![1])).searchParams.get('state')}`, { redirect: 'manual' });
+      await expect(martl.finishKeyvaultApp({ id: typo.id })).rejects.toThrow(/made for martl, not acmee/);
+      expect((await martl.keyvaults())[0].apps.map((a) => a.manage)).toEqual(['https://github.com/settings/apps/weave-access-t/advanced']);
       // Not installed anywhere yet; then on all three.
       await expect(martl.keyvaultReachable({ name: 'github-keyvault' })).rejects.toThrow(/isn't installed on any repository yet/);
       github.app!.installed = new Set(['acme/site', 'acme/secret', 'martl/notes']);
