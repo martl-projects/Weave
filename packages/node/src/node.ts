@@ -9677,7 +9677,8 @@ export class WeaveNode implements Backend {
     this.#clientApps.remove(name);
   }
 
-  async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {
+  /** Make one of a keyvault's apps: for your own account, or (owner) for an organization of yours. */
+  async startKeyvaultApp(input: { name: string; setting: string; owner?: string }): Promise<{ id: string; url: string }> {
     const k = this.#keyvaults.list().find((x) => x.name === input.name);
     // Named for whose it is: the account you proved there, else your name here.
     const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;

@@ -232,12 +232,12 @@ export class Keyvaults {
   }
 
   /** Make an app for one of its settings (GitHub's App manifest flow): another, if it has some. The page to open, and an id to wait on. */
-  async startApp(input: { name: string; setting: string; account: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
+  async startApp(input: { name: string; setting: string; account: string; owner?: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
     const k = this.#stored().find((x) => x.name === input.name);
     if (!k) throw new Error(`no keyvault ${input.name} here: add it first`);
     const asked = this.state(k).settings.find((e) => e.name === input.setting);
     if (!asked?.register) throw new Error(`${input.name} makes no app called ${input.setting}`);
-    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {} })) });
+    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, ...(input.owner ? { owner: input.owner } : {}), fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {} })) });
     const id = randomBytes(16).toString('base64url');
     const done = started.done.then(() => this.state(this.#stored().find((x) => x.name === input.name)!)).finally(() => setTimeout(() => this.#making.delete(id), 60_000).unref());
     done.catch(() => {});

@@ -1960,7 +1960,7 @@ export interface Backend {
   /** Setup packs this Weave ships: steps it walks you through, like adding GitHub to a project (a keyvault, its app, services). */
   setupPacks(): Promise<Pack[]>;
   /** Make your app for a keyvault (GitHub's App manifest flow): the page to open, and an id to wait on (finishKeyvaultApp). */
-  startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }>;
+  startKeyvaultApp(input: { name: string; setting: string; owner?: string }): Promise<{ id: string; url: string }>;
   finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo>;
   /** What one of a keyvault's apps reaches (its only one, unless named), to hand to projects. */
   keyvaultReachable(input: { name: string; app?: string }): Promise<Array<{ value: string; note?: string }>>;

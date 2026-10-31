@@ -283,6 +283,11 @@ export interface AppSetting {
 export interface AppRegister {
   /** The provider's page the manifest is posted to (a form field "manifest"), with ?state=… */
   page: string;
+  /**
+   * The page for making it under another account of theirs, an organization ({owner} in it, its name there): an
+   * organization's resources are reached only by an app made for it. Without, it's made for their own account only.
+   */
+  pageFor?: string;
   /** Where the code the provider sends back becomes the app ({code} in it): POSTed, JSON back. */
   exchange: string;
   /**
@@ -311,9 +316,11 @@ export function parseRegister(value: unknown): { register?: AppRegister; problem
   const key = field(o.key) ? (o.key as string) : '';
   const then = typeof o.then === 'string' && /^https:\/\/|^\{[a-z_]+\}\//i.test(o.then) ? o.then.slice(0, 300) : undefined;
   const platform = typeof o.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(o.platform) ? o.platform : undefined;
+  const pageFor = typeof o.pageFor === 'string' && o.pageFor.length <= 300 && o.pageFor.includes('{owner}') && httpsUrl(o.pageFor.replace('{owner}', 'owner')) ? o.pageFor : undefined;
+  if (o.pageFor !== undefined && !pageFor) return { problem: '"register.pageFor" is the provider\'s page for making it under an organization, with {owner} for its name: "https://…/{owner}/…"' };
   if (!page || !exchange?.includes('{code}') || !manifest || JSON.stringify(manifest).length > 8000 || !keep.length || !key)
     return { problem: '"register" names the provider\'s page, where its code becomes the app, the app\'s manifest, what\'s kept and its key: {"page": "https://…", "exchange": "https://…/{code}/…", "manifest": {...}, "keep": ["id", "slug"], "key": "pem", "then": "{html_url}/installations/new"}' };
-  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}) } };
+  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}), ...(pageFor ? { pageFor } : {}) } };
 }
 
 /** A setting's choices, checked: the action that lists them, and whether several are picked. */
