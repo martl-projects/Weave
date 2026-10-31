@@ -42,6 +42,8 @@ export interface AppService {
 export interface AppManifest {
   app: string;
   name: string;
+  /** What it does, in a sentence or two: shown where people take it in or add it. */
+  about?: string;
   version: number;
   /** The only ports a room may ever forward. */
   services: AppService[];
@@ -548,7 +550,7 @@ export interface ManifestCheck {
   manifest?: AppManifest;
 }
 
-const KNOWN = new Set(['app', 'name', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'marks', 'hints', 'lists']);
+const KNOWN = new Set(['app', 'name', 'about', 'version', 'services', 'start', 'install', 'env', 'service', 'wasm', 'client', 'fetcher', 'file', 'verifier', 'keyvault', 'marks', 'hints', 'lists']);
 
 /** Check a manifest (weave.app.json) from untrusted input, collecting every problem rather than stopping at the first. */
 export function checkManifest(input: unknown): ManifestCheck {
@@ -562,6 +564,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   if (!SLUG.test(app)) problems.push('"app" is a short id: lowercase letters, digits and dashes, like "band-ab"');
   const name = text(m.name, 40) || app;
   if (!text(m.name, 40)) warnings.push('"name" is what people see; without it they see the id');
+  const about = text(m.about, 300);
 
   // A service's contract, like {"reads": "addressed", "writes": ["weave.post"], "version": "1.0"}; "website": true
   // when it serves one itself (weave.serve). A web page in "services" is served without saying so.
@@ -774,7 +777,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(hints ? { hints } : {}), ...(lists.length && service ? { lists } : {}) } };
+  return { problems, warnings, manifest: { app, name, ...(about ? { about } : {}), version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(hints ? { hints } : {}), ...(lists.length && service ? { lists } : {}) } };
 }
 
 /**

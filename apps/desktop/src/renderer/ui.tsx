@@ -309,7 +309,7 @@ function Questions() {
   };
   return (
     <Modal title="Weave" onClose={() => done(false)}>
-      <p>{question.text}</p>
+      <p className="question-text">{question.text}</p>
       <div className="buttons">
         <button onClick={() => done(false)}>Cancel</button>
         <button className="default" autoFocus onClick={() => done(true)}>

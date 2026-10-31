@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
@@ -10,6 +10,7 @@ import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { ActionScopes, askAndWait, contractText, OriginBadge, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, ShippedUpdate, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
+import { HandDialog } from './keyvaults.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -134,6 +135,19 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   );
 }
 
+/** What a marks or hints service sees, in words: "your messages, posts and contacts". */
+const READ_WORDS: Record<string, string> = { 'weave.msg': 'messages', 'weave.post': 'posts', 'weave.contact': 'contacts', 'weave.seen': 'what you have read', 'weave.reply': 'replies', 'weave.react': 'reactions', 'weave.issue': 'issues' };
+function readWords(kinds: string[]): string {
+  const words = [...new Set(kinds.map((k) => READ_WORDS[k] ?? k))];
+  return `your ${words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0]}`;
+}
+
+/** Taking in a marks or hints service: what it does (its own words, or the standard ones), and what it can't. */
+function takeInText(a: ArtifactInfo, standard: string): string {
+  const sees = a.reads?.length ? `It sees ${readWords(a.reads)}, but it` : 'It';
+  return `Take in ${a.name} ${a.tag} from p/${a.project.name}?\n\n${a.about ?? standard}\n\n${sees} can't post or change anything, and nothing it sees leaves your computer: it runs only inside your Weave.`;
+}
+
 /**
  * Maintainers: publish a release of one of the project's artifacts (any number of them, each from its own source), or
  * of a new one from a new source. First which, then its releases as the project's provider sees them, in its words
@@ -142,13 +156,16 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
 function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): void }) {
   const { data: lines } = useApi(() => api<ArtifactLine[]>('artifactLines', project.id), [project.id]);
   const [chosen, setChosen] = useState<{ artifact?: string; source?: string; name: string }>();
-  const [source, setSource] = useState('');
   // Only one artifact with a source: straight to its releases.
   const only = lines?.filter((l) => l.source);
   const which = chosen ?? (only?.length === 1 && lines!.length === 1 ? { artifact: only[0].id, name: only[0].name } : undefined);
+  const taken = (lines ?? []).flatMap((l) => (l.source ? [l.source.ref.toLowerCase()] : []));
+  const pick = (source: string) => setChosen({ source, name: source });
   return (
     <Modal title={`Publish a release · p/${project.name}${which ? ` · ${which.name}` : ''}`} onClose={onClose} wide>
-      {!which ? (
+      {!which && lines?.length === 0 ? (
+        <NewSource project={project} taken={taken} first onPick={pick} />
+      ) : !which ? (
         <>
           <ItemList
             title="Which artifact?"
@@ -163,15 +180,7 @@ function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): vo
               ...(l.source ? { main: <button className="default" onClick={() => setChosen({ artifact: l.id, name: l.name })}>Its releases…</button> } : {}),
             })) } : {})}
           />
-          <fieldset>
-            <legend>Or a new one, from its source</legend>
-            <div className="field-row">
-              <input className="grow" placeholder="Where its releases are: a repository's owner/name, say" value={source} onChange={(e) => setSource(e.target.value)} />
-              <button className="default" disabled={!source.trim()} onClick={() => setChosen({ source: source.trim(), name: source.trim() })}>
-                Its releases…
-              </button>
-            </div>
-          </fieldset>
+          <NewSource project={project} taken={taken} onPick={pick} />
         </>
       ) : (
         <Releases project={project} which={which} onDone={onClose} />
@@ -181,6 +190,52 @@ function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): vo
         <button onClick={onClose}>Close</button>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * A new artifact's source: the repositories handed to the project from your GitHub keyvault, or any owner/name.
+ * Handing it more is the keyvault's own dialog.
+ */
+function NewSource({ project, taken, first, onPick }: { project: SpaceInfo; taken: string[]; first?: boolean; onPick(source: string): void }) {
+  const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults').catch(() => []), []);
+  const vault = vaults?.find((k) => k.added && k.platform === 'github');
+  const [source, setSource] = useState('');
+  const [handing, setHanding] = useState(false);
+  const repos = [...new Set(vault?.apps.flatMap((a) => a.handed.find((h) => h.project.id === project.id)?.resources ?? []) ?? [])].filter((r) => !taken.includes(r.toLowerCase())).sort();
+  return (
+    <>
+      {vault && (
+        <ItemList
+          title={first ? 'Where are its releases?' : 'Or a new one, from its source'}
+          add={{ label: `Hand p/${project.name} more of your repositories`, run: () => setHanding(true) }}
+          empty={`p/${project.name} has no repositories from your ${vault.title} yet: + hands it some.`}
+          rows={repos.map((r) => ({
+            key: r,
+            icon: 'folder' as const,
+            title: r,
+            search: r,
+            detail: `handed to p/${project.name}`,
+            main: (
+              <button className="default" onClick={() => onPick(r)}>
+                Its releases…
+              </button>
+            ),
+          }))}
+        />
+      )}
+      <fieldset>
+        <legend>{vault ? 'Another repository' : first ? 'Where are its releases?' : 'Or a new one, from its source'}</legend>
+        <div className="field-row">
+          <input className="grow" placeholder="owner/name" value={source} onChange={(e) => setSource(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && source.trim() && onPick(source.trim())} />
+          <button className="default" disabled={!source.trim()} onClick={() => onPick(source.trim())}>
+            Its releases…
+          </button>
+        </div>
+        {!vault && <p className="small muted">A private repository's releases need your GitHub keyvault (Keys &amp; devices), with the repository handed to p/{project.name}.</p>}
+      </fieldset>
+      {handing && vault && <HandDialog vault={vault} project={project} onClose={() => setHanding(false)} />}
+    </>
   );
 }
 
@@ -305,7 +360,7 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
               {a.mine && a.kind === 'marks' && (
                 <AsyncButton
                   onClick={async () =>
-                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, with no key and no network, and shows what it says next to names everywhere you look.`, 'Take it in')) &&
+                    (await ask(takeInText(a, `${a.name} adds short labels next to people's names, wherever they show in Weave.`), 'Take it in')) &&
                     attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Marks…`)
                   }
                 >
@@ -315,7 +370,7 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
               {a.mine && a.kind === 'hints' && (
                 <AsyncButton
                   onClick={async () =>
-                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, what's sealed to you too, with no key and no network, and shows its counts in your Places.`, 'Take it in')) &&
+                    (await ask(takeInText(a, `${a.name} adds counts, colors and small signs (like a heart) next to your projects, boards, channels and messages.`), 'Take it in')) &&
                     attempt(() => api('addHints', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Notifications…`)
                   }
                 >
