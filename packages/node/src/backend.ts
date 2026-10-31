@@ -215,6 +215,8 @@ export interface ServiceInfo {
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
+  /** Websites it launched that don't serve their page yet: starting (fetching what they run), or why they can't. */
+  launching?: LaunchingWebsiteInfo[];
   /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
   artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
@@ -279,6 +281,17 @@ export interface HostedWebsiteInfo {
   note?: string;
   running: boolean;
   /** Fetching the serving service's release, or why it doesn't run. */
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+}
+
+/** A website launched from a release, before it serves its page: what it runs, where, and how starting it goes. */
+export interface LaunchingWebsiteInfo {
+  /** What stops it (removeService): no name anyone sees otherwise. */
+  id: string;
+  project: SpaceRef;
+  name: string;
+  tag: string;
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
 }
@@ -1919,7 +1932,7 @@ export interface Backend {
    * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
    * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
    */
-  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; name?: string }): Promise<ServiceInfo>;
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
   /** Maintainers: hand out a file of a GitHub release as an artifact of the project (a document, a dataset), fingerprinted. */
   releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
   /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */

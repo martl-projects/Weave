@@ -512,7 +512,8 @@ export class Website {
       project: { id: r.project, kind: 'project', name: project ? this.h.spaceName(project) : r.project },
       name: r.name,
       port: r.port,
-      handler: r.servedBy ? { kind: 'service', service: r.servedBy } : { kind: 'address' },
+      // A launched website by what it runs: it has no name of its own anyone sees.
+      handler: r.servedBy ? { kind: 'service', service: serving?.launchedBy ? `${serving.artifact?.manifest.name ?? 'a release'} ${serving.artifact?.tag ?? ''}`.trim() : r.servedBy } : { kind: 'address' },
       running: here && (!r.servedBy || (!!serving?.enabled && this.h.runtime.running(`service:${r.servedBy}`))),
       ...(r.note ? { note: r.note } : {}),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),

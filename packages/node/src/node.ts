@@ -625,6 +625,11 @@ export interface StoredService {
   name: string;
   /** Launched as a website (launchWebsite): it's there for its website, and goes when that's closed. */
   launched?: true;
+  /**
+   * The website service that launched it: then it's no service of its own (no key, no profile, not listed), only what
+   * runs that website, and that website service signs for it. Before 0.22 a launched website had a key of its own.
+   */
+  launchedBy?: string;
   description: string;
   icon?: string;
   contract: ServiceContract;
@@ -9553,7 +9558,10 @@ export class WeaveNode implements Backend {
   async launchWebsite(input: Parameters<Services['launchWebsite']>[0] & { announce?: boolean }): Promise<ServiceInfo> {
     const { announce, ...rest } = input;
     const service = await this.#services.launchWebsite(rest);
-    if (announce !== false) await this.#announce(this.#project(input.project).id, { kind: 'website', id: service.did }, `started ${service.artifact?.name ?? service.name}: come and join`);
+    // Said once its website is there: the announcement names that website, not its website service.
+    const project = this.#project(input.project).id;
+    if (announce !== false)
+      void this.#services.launchedWebsite(service.name).then((room) => (room ? this.#announce(project, { kind: 'website', id: room }, `started ${service.artifact?.name ?? service.name}: come and join`) : undefined)).catch(() => {});
     return service;
   }
 

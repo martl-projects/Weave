@@ -371,6 +371,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   const [announce, setAnnounce] = useState(true);
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
   const runs = artifact.command?.join(' ') ?? artifact.name;
+  const [values, setValues] = useState<Record<string, string>>({});
   return (
     <Modal title={`Launch ${artifact.name} ${artifact.tag}`} onClose={onClose}>
       {services && !projects.length ? (
@@ -393,6 +394,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
             writes nothing in the project. Your Websites service makes it a running website{project ? ` everyone in p/${project.name} can visit` : ''}, in Live, until you close it.
           </p>
           <p className="small muted">It's other people's code: only launch it if you trust p/{artifact.project.name}.</p>
+          <LaunchSettings artifact={artifact} values={values} onChange={setValues} />
           <div className="field-row">
             <input type="checkbox" id="launch-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
             <label htmlFor="launch-announce">Announce it in the project's chat: people find it there, and come and join</label>
@@ -402,10 +404,10 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
       <div className="buttons">
         <AsyncButton
           className="default"
-          disabled={!project}
+          disabled={!project || !settingsReady(artifact, values)}
           onClick={() =>
             attempt(async () => {
-              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce });
+              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce, settings: givenSettings(values) });
               bump();
               onClose();
               location.hash = `#/p/${project!.id}/live`;
@@ -419,6 +421,20 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
     </Modal>
   );
 }
+
+/** What a website asks for when it's launched (a key for the AI it talks to, say): kept for that website alone. */
+function LaunchSettings({ artifact, values, onChange }: { artifact: ArtifactInfo; values: Record<string, string>; onChange(values: Record<string, string>): void }) {
+  return (
+    <>
+      {artifact.settings.map((s) => (
+        <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => onChange({ ...values, [s.name]: v })} />
+      ))}
+    </>
+  );
+}
+
+const settingsReady = (artifact: ArtifactInfo, values: Record<string, string>) => artifact.settings.every((s) => s.optional || s.oauth || !!values[s.name]?.trim());
+const givenSettings = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
 
 /** Get a file artifact: its project's provider grants it, your fetcher gets it, Weave checks it; then show where it is. */
 function GetFileButton({ artifact }: { artifact: ArtifactInfo }) {
@@ -676,10 +692,11 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const launchable = away ? [] : (released ?? []).filter((a) => a.kind === 'website' && a.mine && a.runs);
   const [what, setWhat] = useState<string>();
   const picked = what === 'port' ? undefined : launchable.find((a) => a.id === what) ?? (what ? undefined : launchable[0]);
-  const ready = picked ? true : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const ready = picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
   const launch = async () => {
     setBusy(true);
-    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce }), `${picked!.name} is launching in p/${project.name}`);
+    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce, settings: givenSettings(values) }), `${picked!.name} is launching in p/${project.name}`);
     setBusy(false);
     if (done !== undefined) {
       bump();
@@ -734,6 +751,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
               the project. It's a running website everyone in p/{project.name} can visit, in Live, until you close it.
             </p>
             <p className="small muted">It's other people's code: only launch it if you trust p/{picked.project.name}.</p>
+            <LaunchSettings artifact={picked} values={values} onChange={setValues} />
           </>
         ) : (
           <>
@@ -887,7 +905,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <OriginText origin={service.origin} />
       {own && mine?.update && <ShippedUpdate service={mine} />}
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
-      {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
+      {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} launching={(mine?.launching ?? []).filter((l) => l.project.id === project.id)} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
       {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} maintainer={maintainer} {...(maintainer && publishesReleases(service) ? { publish: () => setPublishing(true) } : {})} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
       <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : publishesReleases(service) ? ['publish', 'releases'] : undefined} />
@@ -903,7 +921,20 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
  * A website service's running websites, as Weave knows them: each a website artifact running (or a page of a service),
  * who may visit, who opened it; your own you close, and maintainers close any (asking the service that hosts it).
  */
-function RunningWebsites({ project, service, rooms, shows, maintainer, open }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; maintainer: boolean; open?(): void }) {
+function RunningWebsites({ project, service, rooms, launching, shows, maintainer, open }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; launching: NonNullable<ServiceInfo['launching']>; shows: ShowInfo[]; maintainer: boolean; open?(): void }) {
+  // Launched, not serving yet: starting (its release on the way), or why it can't. Stopping it ends the launch.
+  useEffect(() => {
+    if (!launching.some((l) => !l.error)) return;
+    const timer = setInterval(bump, 1000);
+    return () => clearInterval(timer);
+  }, [launching.length, launching.some((l) => !l.error)]);
+  const starting = launching.map((l) => ({
+    key: l.id,
+    title: l.name,
+    badge: l.tag,
+    detail: l.error ?? (l.progress ? `starting: ${l.progress.state} ${l.progress.total ? `${Math.round((l.progress.done / l.progress.total) * 100)}%` : ''}`.trim() : 'starting…'),
+    remove: { label: 'Stop it', run: () => void attempt(() => api('removeService', l.id).then(bump), `${l.name} is stopped`) },
+  }));
   const visitors = (room: WebsiteInfo) => {
     const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
     const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
@@ -918,13 +949,13 @@ function RunningWebsites({ project, service, rooms, shows, maintainer, open }: {
       title="Running websites"
       {...(open ? { add: { label: 'Open a website', run: open } } : {})}
       empty="No running websites yet."
-      rows={rooms.map((room) => ({
+      rows={[...starting, ...rooms.map((room) => ({
         key: room.id,
         title: room.name,
         detail: [room.from ? `${room.from.name ?? 'a release'} ${room.from.tag}${room.from.project.name && room.from.project.id !== project.id ? ` from p/${room.from.project.name}` : ''}` : '', `for ${visitors(room)}`, `opened by ${room.host.name ?? shortDid(room.host.did)}`].filter(Boolean).join(' · '),
         main: <button onClick={() => navigate(`#/p/${project.id}/live`)}>Visit</button>,
         ...(room.mine || maintainer ? { remove: { label: 'Close website', run: () => close(room) } } : {}),
-      }))}
+      }))]}
     />
   );
 }

@@ -1,5 +1,5 @@
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -118,8 +118,12 @@ export class Services {
 
   serviceKey(name: string): AgentKey {
     const key = this.h.agents.find((a) => a.name === name);
-    if (!key) throw new Error(`the key of service "${name}" is missing on this node`);
-    return key;
+    if (key) return key;
+    // A launched website has no key: the website service that runs it signs for it.
+    const by = this.storedServices().find((s) => s.name === name)?.launchedBy;
+    const site = by ? this.h.agents.find((a) => a.name === by) : undefined;
+    if (!site) throw new Error(`the key of service "${name}" is missing on this node`);
+    return site;
   }
 
   /** The spaces a service may be added to: groups, projects and communities you're in (never direct chats). */
@@ -159,7 +163,7 @@ export class Services {
       ...(stored.wasm ? { wasm: stored.wasm } : {}),
       ...(stored.site ? { site: stored.site } : {}),
       ...(stored.builtin ? { builtin: stored.builtin } : {}),
-      ...(hostsWebsites(stored) ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)) } : {}),
+      ...(hostsWebsites(stored) ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)), launching: this.launching(stored.name) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
       settings: Object.keys(stored.settings).sort(),
       enabled: stored.enabled,
@@ -366,7 +370,7 @@ export class Services {
     }
     // The names of what Weave ships are its own: nothing else goes by them, so nothing passes for them.
     if (this.reservedName(name) && shipped?.name !== name) throw new Error(`"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
-    if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
+    if (this.h.agents.some((a) => a.name === name) || this.storedServices().some((s) => s.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
     const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
@@ -414,7 +418,8 @@ export class Services {
   }
 
   async services(): Promise<ServiceInfo[]> {
-    const here = this.storedServices().map((s) => this.serviceInfo(s));
+    // Websites it launched are its website service's, listed as running websites: no services of their own.
+    const here = this.storedServices().filter((s) => !s.launchedBy).map((s) => this.serviceInfo(s));
     // On a computer: also those it handed to always-on nodes (the node lists them as its own).
     const away = this.h.isLinkedNode ? [] : [...this.handedOver().values()].map((h) => this.handoverInfo(h));
     return [...here, ...away];
@@ -632,6 +637,7 @@ export class Services {
       return this.handoverInfo(this.handedOver().get(input.name)!);
     }
     const before = this.storedService(input.name);
+    if (before.launchedBy) throw new Error(`${before.artifact?.manifest.name ?? before.name} is a website ${before.launchedBy} launched, no service: close the website to end it`);
     if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its websites say what they run`);
     if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
     if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
@@ -712,6 +718,8 @@ export class Services {
     await this.web.closeHostedRooms(name);
     await this.web.unserve(name);
     this.stopService(name);
+    // A launched website has no key to revoke: its website service signed for it, and stays.
+    if (stored.launchedBy) return this.saveServices(this.storedServices().filter((s) => s.name !== stored.name));
     const key = this.serviceKey(name);
     this.announceService(key.did, stored.spaces, []);
     // Everything it signs from now on counts nowhere.
@@ -1014,10 +1022,11 @@ export class Services {
   }
 
   /**
-   * Launch a website artifact in a project you host websites in: it runs here as a service of yours (approved, as any
-   * code from others), your website service hosts what it serves, and closing that website ends it.
+   * Launch a website artifact in a project you host websites in: your website service runs it here (approved, as any
+   * code from others) and hosts what it serves, and closing that website ends it. It's no service of its own: no key,
+   * no name anyone sees, nothing listed but the running website.
    */
-  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; name?: string }): Promise<ServiceInfo> {
+  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     const project = this.h.project(input.project);
     const from = this.h.project(input.artifact.project);
     const a = artifactsOf(this.h.entries(from), this.h.state(from).maintainers).find((x) => x.id === input.artifact.id);
@@ -1025,15 +1034,61 @@ export class Services {
     if (a.kind !== 'website') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}, not a website to launch`);
     const no = this.artifactRefusal(from, a.id, this.h.identity.author);
     if (no) throw new Error(no);
-    if (!this.storedServices().some((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id))) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
-    // Its own name, unlike any service of yours (or one Weave ships).
-    const base = serviceName(a.manifest.app) ? a.manifest.app : 'website';
-    const taken = new Set([...this.h.agents.map((a) => a.name), ...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
-    let name = base;
-    for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
-    const added = await this.addService({ name, artifact: { project: from.id, tag: a.id }, spaces: [project.id], ...(input.approve ? { approve: true } : {}) });
-    this.saveServices(this.storedServices().map((s) => (s.name === added.name ? { ...s, launched: true as const } : s)));
-    return (await this.services()).find((s) => s.name === added.name) ?? added;
+    const site = this.storedServices().find((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id) && this.h.agents.some((k) => k.name === s.name));
+    if (!site) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
+    const manifest = a.manifest;
+    if (!this.h.runtime.runs(manifest)) throw new Error(this.h.runtime.whyNot(manifest));
+    const found = this.artifact(from.id, a.id);
+    if (!input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${from.name}, as a website in ${project.name} that reads nothing and writes nothing`);
+    const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
+    this.checkSettings(manifest, settings);
+    const missing = (manifest.env ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !settings[e.name]);
+    if (missing.length) throw new Error(`${manifest.name} needs ${missing.map((e) => e.label).join(', ')}`);
+    // Named only for this computer (its folder, its run): nobody sees it.
+    const taken = new Set([...this.h.agents.map((k) => k.name), ...this.storedServices().map((s) => s.name)]);
+    let name: string;
+    do name = `website-${Buffer.from(randomBytes(4)).toString('hex')}`;
+    while (taken.has(name));
+    const stored: StoredService = {
+      name,
+      launched: true,
+      launchedBy: site.name,
+      description: `${manifest.name} ${found.artifact.tag}, from ${from.name}`,
+      contract: this.artifactContract(manifest),
+      spaces: [project.id],
+      artifact: { project: from.id, id: found.artifact.id, tag: found.artifact.tag, manifest },
+      approved: [releaseApproval(found.artifact)],
+      settings,
+      token: b64u.encode(randomBytes(24)),
+      enabled: true,
+      since: new Date(this.h.clock()).toISOString(),
+    };
+    this.saveServices([...this.storedServices(), stored]);
+    if (this.serviceApi) await this.web.startAppApi();
+    this.startService(stored);
+    return this.serviceInfo(stored);
+  }
+
+  /** The websites a website service launched that serve no page yet: starting, or failing to. */
+  launching(site: string): LaunchingWebsiteInfo[] {
+    const served = new Set(this.web.hosted().map((h) => h.room.servedBy));
+    return this.storedServices()
+      .filter((s) => s.launchedBy === site && s.artifact && !served.has(s.name))
+      .map((s) => {
+        const project = this.h.spaces.get(s.spaces[0] ?? '');
+        const job = this.h.releases.jobs.get(`service:${s.name}`);
+        return { id: s.name, project: { id: s.spaces[0] ?? '', kind: 'project' as const, name: project?.name ?? '' }, name: s.artifact!.manifest.name, tag: s.artifact!.tag, ...(job?.progress ? { progress: { ...job.progress } } : {}), ...(job?.error ? { error: job.error } : {}) };
+      });
+  }
+
+  /** The website a launched website serves, once it does (it starts first). */
+  async launchedWebsite(name: string, timeout = 30_000): Promise<string | undefined> {
+    for (const until = Date.now() + timeout; Date.now() < until; await new Promise((r) => setTimeout(r, 250))) {
+      const room = this.web.hosted().find((h) => h.room.servedBy === name)?.room;
+      if (room) return room.id;
+      if (!this.storedServices().some((s) => s.name === name)) return undefined;
+    }
+    return undefined;
   }
 
   /**
@@ -1393,6 +1448,27 @@ export class Services {
     }
   }
 
+  /**
+   * Websites that ran as services of their own (launched before 0.22, or added as a service): the website service of
+   * their project runs them now, and their own keys go. Their websites stay as they are: that service announced them.
+   */
+  adoptWebsites(): void {
+    if (this.h.isLinkedNode) return;
+    for (const s of this.storedServices()) {
+      if (s.launchedBy || !s.artifact || artifactKindOf(s.artifact.manifest) !== 'website') continue;
+      const site = this.storedServices().find((x) => hostsWebsites(x) && !x.launchedBy && x.spaces.some((id) => s.spaces.includes(id)) && this.h.agents.some((k) => k.name === x.name));
+      if (!site) continue;
+      const key = this.h.agents.find((k) => k.name === s.name);
+      if (key) {
+        this.announceService(key.did, s.spaces, []);
+        this.h.replica.write(this.h.identity, revocation(key.did, this.h.replica.number(key.did)));
+        this.h.agents = this.h.agents.filter((k) => k.name !== s.name);
+        rmSync(joinPath(this.h.home.agents, `${s.name}.json`), { force: true });
+      }
+      this.saveServices(this.storedServices().map((x) => (x.name === s.name ? { ...x, launched: true as const, launchedBy: site.name, spaces: x.spaces.filter((id) => site.spaces.includes(id)) } : x)));
+    }
+  }
+
   /** Keep a website of a website service as it is now. */
   saveWebsite(site: string, room: StoredRoom): void {
     this.saveServices(this.storedServices().map((s) => (s.name === site ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
@@ -1426,7 +1502,7 @@ export class Services {
         const d = this.h.decode(event);
         if (d?.inner.kind !== KIND_SERVICE_SETTING) return;
         const of = (d.inner.body as { service?: unknown } | null)?.service;
-        for (const stored of this.storedServices()) if (stored.spaces.includes(d.space?.id ?? '') && this.serviceKey(stored.name).did === of) restart(stored.name);
+        for (const stored of this.storedServices()) if (!stored.launchedBy && stored.spaces.includes(d.space?.id ?? '') && this.serviceKey(stored.name).did === of) restart(stored.name);
       });
       setInterval(() => {
         const running = this.storedServices().filter((x) => x.enabled && this.h.runtime.running(`service:${x.name}`));
@@ -1436,6 +1512,11 @@ export class Services {
     }
     void this.web.startAppApi().then(async () => {
       await this.migrateWebsites().catch(() => {});
+      try {
+        this.adoptWebsites();
+      } catch (error) {
+        console.error(`weave: websites running as services stay so for now: ${(error as Error).message}`);
+      }
       for (const stored of this.storedServices()) {
         this.startService(stored);
       }

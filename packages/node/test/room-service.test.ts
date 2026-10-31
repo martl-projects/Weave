@@ -163,7 +163,7 @@ describe('the website service', { timeout: 60_000 }, () => {
 });
 
 describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
-  it('keeps a release running as a service of its own, at the same website; a command is yours to start now', async () => {
+  it('keeps a release running at the same website, run by the website service; a command is yours to start now', async () => {
     const racePort = await freePort();
     const { manifest, script } = horsesRelease('v1.0', racePort);
     const martl = person('martl');
@@ -190,14 +190,14 @@ describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     lena.runServices({ port: api.port });
     try {
-      // The release runs as a service now, with the setting it had, and serves the same website.
-      await vi.waitFor(async () => expect((await lena.services()).map((s) => s.name).sort()).toEqual(['horses', 'website']), { timeout: 10_000, interval: 200 });
-      const horses = (await lena.services()).find((s) => s.name === 'horses')!;
-      expect(horses).toMatchObject({ spaces: [{ name: 'Party' }], contract: { reads: 'nothing', website: true }, artifact: { tag: 'v1.0' }, settings: ['API_KEY'] });
+      // The release runs again, with the setting it had, and serves the same website: the website service runs it, no
+      // service of its own (no key, not listed).
+      const sites = async () => (await lena.services()).find((s) => s.name === 'website')!.websites!;
+      await vi.waitFor(async () => expect((await sites()).find((r) => r.id === 'raceRoom0020')).toMatchObject({ name: 'Race night', handler: { kind: 'service', service: 'Horse race v1.0' }, running: true }), { timeout: 10_000, interval: 200 });
+      expect((await lena.services()).map((s) => s.name)).toEqual(['website']);
+      expect((await lena.whoami()).agents.some((a) => a.name === 'horses')).toBe(false);
       await lena.serviceReady('horses');
       expect(await answers(racePort)).toMatchObject({ version: 'v1.0', service: 'horses', key: 'k-020' });
-      const sites = async () => (await lena.services()).find((s) => s.name === 'website')!.websites!;
-      await vi.waitFor(async () => expect((await sites()).find((r) => r.id === 'raceRoom0020')).toMatchObject({ name: 'Race night', handler: { kind: 'service', service: 'horses' }, running: true }), { timeout: 10_000, interval: 200 });
       // The command's website stays at its port, and says Lena starts it now.
       expect((await sites()).find((r) => r.id === 'quizRoom0020')).toMatchObject({ name: 'Quiz', port: 4321, handler: { kind: 'address' }, note: expect.stringMatching(/no longer starts "node quiz\.js" in C:\\games\\quiz[^]*start it yourself/) });
       // Nothing of the old shape is left.
@@ -205,7 +205,7 @@ describe('websites from Weave 0.20', { timeout: 60_000 }, () => {
       expect(Object.values(after.hosted ?? {}).some((r) => 'handler' in r || 'settings' in r)).toBe(false);
       expect(Object.keys(after.hosted ?? {}).sort()).toEqual(['quizRoom0020', 'raceRoom0020']);
     } finally {
-      await lena.removeService('horses').catch(() => {});
+      await lena.closeWebsite('raceRoom0020').catch(() => {});
       await api.close();
     }
   });

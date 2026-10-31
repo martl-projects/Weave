@@ -59,7 +59,8 @@ export class ServiceSettings {
 
   /** The service by its key, if it runs here: yours. */
   #mine(did: Did): StoredService | undefined {
-    return this.services.storedServices().find((s) => this.services.serviceKey(s.name).did === did);
+    // Never a launched website: it signs with its website service's key, whose settings aren't its own.
+    return this.services.storedServices().find((s) => !s.launchedBy && this.services.serviceKey(s.name).did === did);
   }
 
   /** The names of the settings a service asks for as its person's own. */
@@ -199,6 +200,8 @@ export class ServiceSettings {
 
   /** What a service's spaces' maintainers set for it, opened with its key: by space id, then name (sign-ins as their access token). */
   valuesOf(stored: StoredService): Record<string, Record<string, string>> {
+    // A launched website has only what was given when it was launched.
+    if (stored.launchedBy) return {};
     const key = this.services.serviceKey(stored.name);
     const yours = this.#yours(stored);
     const out: Record<string, Record<string, string>> = {};
@@ -263,6 +266,7 @@ export class ServiceSettings {
           console.error(`weave: ${stored.name}'s sign-in for ${name} couldn't be renewed: ${(error as Error).message}`);
         }
       }
+      if (stored.launchedBy) continue;
       const key = this.services.serviceKey(stored.name);
       for (const id of stored.spaces) {
         const space = this.h.spaces.get(id);
