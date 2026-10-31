@@ -50,7 +50,7 @@ weave.hints.mine  {service, origin, manifest, settings, on} or {service, shipped
 
 ## 4. Unread
 
-The hint service Weave ships (`packages/shipped/unread`).
+The hint service Weave ships (Unread: its repository martl-projects/weave-unread, pinned in `packages/shipped/pinned.json`).
 
 - **What it folds:** `weave.notice` and `weave.seen`.
 - **What it counts:** notices in a place newer than when you last opened what shows them: the whole place, its channel (general by default), its board, or the post.
@@ -67,7 +67,7 @@ From the same day: "Projekt hat Nachricht vom internal board: gelber Hintergrund
 - **Your address book as input:** `weave.contact` (sealed to you) is read like any kind; a hint service is about you, so it may.
 - **Settings in `ask`:** the marks world's `ask` gets no settings. A change of settings folds again from the start (they're part of the fold's key), so a service keeps what it needs of them in its state.
 
-**Spotlight** (`packages/shipped/spotlight`) shows nothing until its settings say who and what:
+**Spotlight** (martl-projects/weave-spotlight, pinned like Unread) shows nothing until its settings say who and what:
 
 ```
 {"boards": [{"board": "internal", "tone": "yellow"}],

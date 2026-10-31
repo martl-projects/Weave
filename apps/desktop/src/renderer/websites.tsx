@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HintServiceInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
@@ -336,6 +336,9 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
   const [launching, setLaunching] = useState<ArtifactInfo>();
   // Yours to get; maintainers see them all, and set who may get each.
   const shown = artifacts.filter((a) => a.mine || maintainer);
+  // A hint service Weave ships (pinned to its project's release): yours already, nothing to take in.
+  const { data: hintServices } = useApi(() => (artifacts.some((a) => a.kind === 'hints') ? api<HintServiceInfo[]>('hintServices', { off: true }) : Promise.resolve([])).catch(() => []), [artifacts.length]);
+  const weaveShips = (a: ArtifactInfo) => a.kind === 'hints' && !!hintServices?.some((s) => s.shipped && s.service === a.app);
   return (
     <>
       <ItemList
@@ -367,7 +370,8 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
                   Take in…
                 </AsyncButton>
               )}
-              {a.mine && a.kind === 'hints' && (
+              {a.mine && weaveShips(a) && <span className="small muted">Weave ships it</span>}
+              {a.mine && a.kind === 'hints' && !weaveShips(a) && (
                 <AsyncButton
                   onClick={async () =>
                     (await ask(takeInText(a, `${a.name} adds counts, colors and small signs (like a heart) next to your projects, boards, channels and messages.`), 'Take it in')) &&

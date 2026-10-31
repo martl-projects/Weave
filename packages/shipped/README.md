@@ -4,6 +4,11 @@ Each folder here is a Weave service built into a WebAssembly component that ship
 contract, settings and `wasm.component`) and `src/service.js`. `node packages/shipped/build.ts` builds them into
 `dist/`, with `shipped.json` listing each component's SHA-256.
 
+Some live in repositories of their own instead, and Weave ships one release of each: `pinned.json` names its
+repository, tag, archive and the archive's SHA-256 (`pinned.ts` fetches it once into `.cache/`, with GH_TOKEN or the GitHub CLI login,
+checks it and unpacks it). Their source is only there, and what Weave ships is the very file their Weave project
+releases. A new version: tag it there, release it in its project, then move its pin here.
+
 The packaged daemon carries those digests (apps/desktop/package.ts): a component that isn't exactly what Weave ships
 doesn't start, and a service's profile names its digest, so every member's Weave can tell whether it runs what their
 own Weave ships. Add one with `weave service add --shipped <name> --spaces <project>`.
@@ -16,7 +21,7 @@ A folder whose manifest says `marks` is a mark service (docs/v2-stage19.md): wha
 remove`); only these may show a bare check. Their source is bundled with what it imports of Weave's core.
 
 A folder whose manifest says `hints` is a hint service (docs/v2-stage20.md): numbers, tints and signs about your own
-state next to places and on messages, built the same way. Weave's own (`unread`, `spotlight`) are everyone's until they
+state next to places and on messages. Weave's own (Unread and Spotlight, both pinned) are everyone's until they
 turn one off (View → Notifications…, or `weave hints remove`); Unread's settings are the rules for what counts,
 Spotlight's say which boards and people stand out (it shows nothing until they do).
 
