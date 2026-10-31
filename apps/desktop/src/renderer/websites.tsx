@@ -410,7 +410,8 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
               await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce, settings: givenSettings(values) });
               bump();
               onClose();
-              location.hash = `#/p/${project!.id}/live`;
+              // Its Services: under Running websites it shows starting, then in Live once it serves its page.
+              location.hash = `#/p/${project!.id}/services`;
             }, `${artifact.name} is launching in p/${project?.name}`)
           }
         >
@@ -692,16 +693,18 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const launchable = away ? [] : (released ?? []).filter((a) => a.kind === 'website' && a.mine && a.runs);
   const [what, setWhat] = useState<string>();
   const picked = what === 'port' ? undefined : launchable.find((a) => a.id === what) ?? (what ? undefined : launchable[0]);
+  // Until it's known what there is to launch, nothing below: the form for a port of yours would flash, then go.
+  const looking = !released && !away && what !== 'port';
   const [values, setValues] = useState<Record<string, string>>({});
-  const ready = picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const ready = looking ? false : picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
   const launch = async () => {
     setBusy(true);
     const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce, settings: givenSettings(values) }), `${picked!.name} is launching in p/${project.name}`);
     setBusy(false);
+    // It shows under Running websites, starting (its release on the way), then in Live once it serves its page.
     if (done !== undefined) {
       bump();
       onClose();
-      location.hash = `#/p/${project.id}/live`;
     }
   };
   const open = async () => {
@@ -740,11 +743,11 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
             </div>
           ))}
           <div className="field-row">
-            <input id="what-port" type="radio" checked={!picked} onChange={() => setWhat('port')} />
+            <input id="what-port" type="radio" checked={!picked && !looking} onChange={() => setWhat('port')} />
             <label htmlFor="what-port">A program of yours, on a port {away ? `of ${away}` : 'of this computer'}</label>
           </div>
         </fieldset>
-        {picked ? (
+        {looking ? null : picked ? (
           <>
             <p className="small">
               Weave runs {picked.name} {picked.tag}, released in p/{picked.project.name}, {picked.runs === 'wasm' ? 'in Weave, as WebAssembly' : 'in a container, sealed off from your files'}. It only shows its page: it reads nothing and writes nothing in
