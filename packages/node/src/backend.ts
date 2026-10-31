@@ -1242,8 +1242,10 @@ export interface ClaudeCodeFollow {
 export interface PermissionRequest {
   id: string;
   agent: string;
-  /** The kinds it asks for (only those it doesn't have yet). */
+  /** The kinds it asks for (only those it doesn't have yet); none when it asks for repositories instead (hand). */
   kinds: string[];
+  /** Asking you to hand a project resources (repositories) your keyvault's app reaches: allowing hands them, with what it has. */
+  hand?: { keyvault: string; title: string; platform: string; app: string; project: { id: string; name: string }; resources: string[] };
   /** What it wants to do with them, in its words. */
   reason: string;
   time: string;
@@ -2006,6 +2008,8 @@ export interface Backend {
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
+  /** An agent asks its person to hand a project repositories from their keyvault for a platform (github): waits in their Inbox, like a permission. */
+  requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
   openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
@@ -2083,7 +2087,7 @@ export interface Backend {
   nameSession(input: { session: SessionRef; name?: string; about?: string; description?: string; rename?: boolean }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
-  /** Allow (adds the kinds to the agent) or decline an agent's request. */
+  /** Allow (adds the kinds to the agent, or hands the project the repositories) or decline an agent's request. */
   answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
   editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
@@ -2371,7 +2375,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'find', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',

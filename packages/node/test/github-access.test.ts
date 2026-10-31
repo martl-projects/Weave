@@ -301,6 +301,16 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       await choose('Site', ['acme/site', 'acme/secret']);
       // What it hands which project is the app's own (a keyvault may hold several apps).
       expect((await martl.keyvaults())[0].apps[0].handed).toEqual([{ project: { id: expect.any(String), name: 'Site' }, resources: ['acme/site', 'acme/secret'] }]);
+      // His agent asks for one more; he allows it with one click, and Site has it too. What the App doesn't reach it can't ask for.
+      await martl.addAgent('scout', []);
+      await expect(martl.requestHand({ as: 'scout', project: 'Site', resources: ['acme/elsewhere'] })).rejects.toThrow(/doesn't reach acme\/elsewhere/);
+      const asked = await martl.requestHand({ as: 'scout', project: 'Site', resources: ['martl/notes', 'acme/site'], reason: 'its notes' });
+      expect(asked).toMatchObject({ state: 'pending', kinds: [], hand: { keyvault: 'github-keyvault', app: '42', project: { name: 'Site' }, resources: ['martl/notes'] } });
+      expect((await martl.requestHand({ as: 'scout', project: 'Site', resources: ['martl/notes'] })).id).toBe(asked.id);
+      await martl.answerPermission({ id: asked.id, allow: true });
+      expect((await martl.keyvaults())[0].apps[0].handed).toEqual([{ project: { id: expect.any(String), name: 'Site' }, resources: ['acme/site', 'acme/secret', 'martl/notes'] }]);
+      expect((await martl.requestHand({ as: 'scout', project: 'Site', resources: ['martl/notes'] })).state).toBe('allowed');
+      await choose('Site', ['acme/site', 'acme/secret']);
 
       // Lena proves her GitHub account and shares it with Site; Kofi only says it's his (no proof, so nothing to check).
       gistFor(github, '0123456789abcdef01234567', 'lena-gh', lena);

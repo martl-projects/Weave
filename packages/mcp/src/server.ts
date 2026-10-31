@@ -99,7 +99,7 @@ Linking to people: people have urls too (http://weave.localhost:7710/@phil~fP5Q3
 
 Accounts elsewhere (GitHub, X…): your person says an account is theirs with a proof that names their Weave id there (a gist on GitHub), made by them as that account; weave_accounts shows them, each checked by that platform's verifier (a client app every Weave runs itself). weave_link_account adds one, on their hub or in a space; Weave knows no platform, only its verifier does.
 
-GitHub access for a project's members is the GitHub access service's (shipped with Weave), not Weave's: a maintainer adds it to the project. It holds no GitHub access of its own: whoever runs it keeps theirs in their GitHub keyvault (Keys & devices: their own GitHub App, made with one click on GitHub and installed on their repositories) and hands each project the repositories it gets there; only they do. Members who proved their GitHub account and shared it with the project (Keys & devices, or weave_link_account with the space) then get access, and lose it when they leave: read access to an organization's repository, write access to a person's. Never ask for or handle a token or key yourself.
+GitHub access for a project's members is the GitHub access service's (shipped with Weave), not Weave's: a maintainer adds it to the project. It holds no GitHub access of its own: whoever runs it keeps theirs in their GitHub keyvault (Keys & devices: their own GitHub App, made with one click on GitHub and installed on their repositories) and hands each project the repositories it gets there; only they do (ask them with weave_request_repository: they allow it with one click). Members who proved their GitHub account and shared it with the project (Keys & devices, or weave_link_account with the space) then get access, and lose it when they leave: read access to an organization's repository, write access to a person's. Never ask for or handle a token or key yourself.
 
 A project's artifact, which websites run with one click (prefer this to asking people to install Node.js or build anything):
 1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
@@ -683,6 +683,27 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
       return request.state === 'allowed'
         ? { ...request, note: 'You have these already.' }
         : { ...request, note: "Waiting in your person's Weave Inbox. Tell them what you asked for and why; check weave_whoami once they answer." };
+    }),
+  );
+
+  server.registerTool(
+    'weave_request_repository',
+    {
+      title: 'Ask for repositories for a project',
+      description:
+        "Ask your person to hand a project repositories from their GitHub keyvault (Keys & devices), so its services (GitHub releases, GitHub access) reach them: a private repository's releases, say. Their GitHub App must be installed there already. The request waits in their Weave app, where they allow or decline it with one click; then go on. Say what for.",
+      inputSchema: {
+        project: z.string().describe('Project name or id'),
+        repositories: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/)).min(1).max(20).describe('owner/name'),
+        reason: z.string().max(300).describe('What for, in one sentence'),
+      },
+    },
+    run(async ({ project, repositories, reason }: { project: string; repositories: string[]; reason: string }) => {
+      if (!as) throw new Error('you act as the person themself: hand repositories in Keys & devices');
+      const request = await backend.requestHand({ as, project, resources: repositories, reason });
+      return request.state === 'allowed'
+        ? { ...request, note: 'The project has these already.' }
+        : { ...request, note: "Waiting in your person's Weave app. Tell them what you asked for and why; try again once they allow it." };
     }),
   );
 

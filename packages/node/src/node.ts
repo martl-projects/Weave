@@ -2394,6 +2394,52 @@ export class WeaveNode implements Backend {
     return request;
   }
 
+  async requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest> {
+    const agent = this.#agents.find((a) => a.name === input.as);
+    if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    const platform = input.platform ?? 'github';
+    const resources = [...new Set(input.resources.map((r) => String(r).trim()).filter((r) => r && r.length <= 200))].slice(0, 20);
+    if (!resources.length) throw new Error('name the repositories, like owner/name');
+    const project = this.#project(input.project);
+    const vault = this.#keyvaults.forPlatform(platform);
+    if (!vault) throw new Error(`your person has no ${platform} keyvault yet: they add one in Keys & devices`);
+    const keys = Object.keys(vault.apps);
+    if (!keys.length) throw new Error(`your person's ${platform} keyvault has no app yet: they make one in Keys & devices`);
+    // The app that reaches them all: asking for what none reaches would be allowed for nothing.
+    let app: string | undefined;
+    const problems: string[] = [];
+    for (const key of keys) {
+      try {
+        const reach = new Set((await this.#keyvaults.reachable(vault.name, key)).map((r) => r.value.toLowerCase()));
+        if (resources.every((r) => reach.has(r.toLowerCase()))) {
+          app = key;
+          break;
+        }
+      } catch (e) {
+        problems.push((e as Error).message);
+      }
+    }
+    if (!app) throw new Error(`your person's ${platform} App doesn't reach ${resources.join(', ')}${problems.length ? ` (${problems.join('; ')})` : ''}: they install it there on ${platform} first`);
+    const handed = new Set(vault.apps[app].handed[project.id] ?? []);
+    const now = new Date(this.clock()).toISOString();
+    const title = this.#keyvaults.state(vault).title;
+    const hand = { keyvault: vault.name, title, platform, app, project: { id: project.id, name: project.name }, resources: resources.filter((r) => !handed.has(r)) };
+    if (!hand.resources.length) return { id: '', agent: agent.name, kinds: [], hand: { ...hand, resources }, reason: '', time: now, state: 'allowed' };
+    const requests = this.#requests();
+    const open = requests.find((r) => r.state === 'pending' && r.agent === agent.name && r.hand?.project.id === project.id && hand.resources.every((x) => r.hand!.resources.includes(x)));
+    if (open) return open;
+    const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: [], hand, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
+    writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
+    this.#emitLive({
+      type: 'permission',
+      category: 'requests',
+      title: `Your agent ${agent.name} asks for ${hand.resources.length === 1 ? 'a repository' : 'repositories'}`,
+      text: `To give ${project.name} ${hand.resources.join(', ')} from your ${title}${request.reason ? `: “${request.reason}”` : ''}`,
+      open: { inbox: true },
+    });
+    return request;
+  }
+
   async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
     if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
     if (input.what === 'person') {
@@ -2936,7 +2982,12 @@ export class WeaveNode implements Backend {
     const request = requests.find((r) => r.id === input.id);
     if (!request) throw new Error('no such request (it may have been answered already)');
     if (request.state !== 'pending') return request;
-    if (input.allow) {
+    if (input.allow && request.hand) {
+      // Added to what the project has from that app: handing replaces it.
+      const { keyvault, app, project, resources } = request.hand;
+      const had = this.#keyvaults.list().find((k) => k.name === keyvault)?.apps.find((a) => a.key === app)?.handed[project.id] ?? [];
+      await this.handKeyvault({ name: keyvault, app, project: project.id, resources: [...new Set([...had, ...resources])] });
+    } else if (input.allow) {
       const agent = this.#agents.find((a) => a.name === request.agent);
       if (!agent) throw new Error(`the agent ${request.agent} is gone`);
       await this.updateAgent({ name: agent.name, permissions: [...agent.permissions, ...request.kinds] });
