@@ -917,7 +917,8 @@ export function artifactsOf(entries: Array<{ id: string; kind: string; body: Jso
     if (!tag || !(manifest.install?.assets || manifest.install?.image)) continue;
     // A weave.artifact is a file, and only that: never something to run.
     if (e.kind === KIND_ARTIFACT && (!manifest.file || !manifest.install?.assets?.file)) continue;
-    if (e.kind === KIND_APP && manifest.file) continue;
+    // A weave.app that is a file is an installer: one file per platform (Weave's own releases), never a single one.
+    if (e.kind === KIND_APP && manifest.file && (!manifest.install?.assets || manifest.install.assets.file)) continue;
     const source = artifactSourceOf(manifest);
     byTag.set(`${manifest.app}\0${tag}`, { id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
   }

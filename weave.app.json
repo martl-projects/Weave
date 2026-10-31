@@ -1,0 +1,13 @@
+{
+  "app": "weave-desktop",
+  "name": "Weave",
+  "services": [],
+  "file": {},
+  "install": {
+    "steps": [
+      "Weave's desktop app: each release's installers are its files, one per computer (win32-x64, linux-x64, darwin-arm64, darwin-x64).",
+      "After the release workflow has attached them: weave app release vX.Y.Z -p Weave --asset win32-x64=Weave-X.Y.Z-win-x64.exe --asset linux-x64=Weave-X.Y.Z-linux-x64.AppImage --asset darwin-arm64=Weave-X.Y.Z-mac-arm64.zip --asset darwin-x64=Weave-X.Y.Z-mac-x64.zip",
+      "The app then installs the file for its computer by itself, once its SHA-256 matches this signed entry (docs/auto-update.md)."
+    ]
+  }
+}
