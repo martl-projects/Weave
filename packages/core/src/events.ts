@@ -39,6 +39,8 @@ export interface EventFields {
   class?: EventClass;
   /** Signing as v2: a sealed event's inner hash (see eventsV2). v1 ignores it. */
   ih?: string;
+  /** Signing as v2 in the shape nodes before protocol 3 read: no inner hash (ih), no content number (cs). For the farewell to peers on an older protocol, nothing else. */
+  legacy?: true;
 }
 
 /** A fresh root identity: a person. */

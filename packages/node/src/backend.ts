@@ -127,6 +127,10 @@ export interface Status {
   projects: number;
   communities: number;
   peers: number;
+  /** Of those, peers on an older protocol: they get a message asking them to update, and nothing else (see @weave/net WIRE_VERSION). */
+  olderPeers: number;
+  /** Peers on a newer protocol: this Weave is the one to update, to sync with them again. */
+  newerPeers: number;
   logs: number;
   events: number;
   pending: number;

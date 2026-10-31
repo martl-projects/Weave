@@ -9,13 +9,13 @@ import type { BlobSource } from './session.ts';
  * prove, on this very connection, that they hold its key.
  *
  * Messages, one JSON object per line:
- * - `hello {v: 2, tags}`: per space this node holds, HMAC(authKey, role ‖
- *   handshake hash) for its current and previous key. The handshake hash is
- *   known only to the two ends of this connection, so a tag can't be replayed
- *   on another one and tells nobody else anything. The role (initiator or
- *   responder) makes each end's tags its own: a peer echoing ours back proves
- *   nothing, it must show the other role's tag. Sent again when this node's
- *   spaces change.
+ * - `hello {v, tags}`: `v` is the protocol this node speaks (WIRE_VERSION), and
+ *   per space it holds, HMAC(authKey, role ‖ handshake hash) for its current
+ *   and previous key. The handshake hash is known only to the two ends of this
+ *   connection, so a tag can't be replayed on another one and tells nobody
+ *   else anything. The role (initiator or responder) makes each end's tags its
+ *   own: a peer echoing ours back proves nothing, it must show the other
+ *   role's tag. Sent again when this node's spaces change.
  * - `chains {space, heads}`: per signer, the last seq of its control chain in
  *   the space; the other side sends what comes after.
  * - `sync {space, since, until?, bare?}`: content from `since` on, please
@@ -46,9 +46,17 @@ import type { BlobSource } from './session.ts';
  * `public` is shared with everyone. A peer whose first message is `heads` is
  * v0.3: it gets the v1 logs (ending in a farewell, where this node wrote one)
  * and nothing is taken from it.
+ *
+ * Protocol versions: a peer whose hello says a lower `v` than ours proves
+ * nothing to us and gets nothing of ours, except one thing: the node's
+ * farewell (`access.farewells`), a message in each shared group and project
+ * asking it to update, served in the shape it reads (a hello of its version,
+ * with the role-less tags of protocol 2, then the farewell events). A peer with
+ * a higher `v` is the newer one: it does the same for us, so its hello is
+ * taken as any, and the node can tell its person to update (`peerStanding`).
  */
 export type Message2 =
-  | { t: 'hello'; v: 2; tags: string[]; features?: string[] }
+  | { t: 'hello'; v: number; tags: string[]; features?: string[] }
   | { t: 'neg'; space: string; since: string; until?: string; bare?: true; init?: true; ranges: Array<Partial<ReconRange>> }
   | { t: 'chains'; space: string; heads: Record<string, number> }
   | { t: 'sync'; space: string; since: string; until?: string; bare?: true }
@@ -83,6 +91,8 @@ export interface SpaceAccess {
   wantsBody?(space: string, id: string): boolean;
   /** Keepers (stage 5), decided by the node from the spaces this connection shares (a direct chat says which friend it is). */
   keep?: KeepAccess;
+  /** For a peer on an older protocol: this node's farewell in each group and project, signed in the shape that protocol reads. The only thing such a peer gets. */
+  farewells?(): WireItemV2[];
 }
 
 export interface KeepAccess {
@@ -108,9 +118,24 @@ export const authKey = (key: Uint8Array): Uint8Array => sha256(new Uint8Array([.
 /** Which end of the connection made a tag: the one that dialled, or the one that answered. */
 export type Role = 'initiator' | 'responder';
 
+/**
+ * The protocol this node speaks, said in its hello. 3 since the review before
+ * the first public release: tags carry the role, sealed events sign their inner
+ * hash (ih), content is numbered in its space (cs), joins prove their link.
+ * Nodes before it drop such events as malformed, so the two sides don't sync:
+ * the older one gets the farewell and nothing else.
+ */
+export const WIRE_VERSION = 3;
+
 /** A space's tag on one connection, made by one end: the other end's tag for the same key differs, so a reflected tag never matches. */
 export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array, role: Role): string =>
   b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8(`weave/tag/v3/${role}`), ...handshakeHash])));
+
+/** A space's tag as protocol 2 made it, the same at both ends: only for the hello that carries the farewell to a peer still on it. */
+export const legacyTag = (key: Uint8Array, handshakeHash: Uint8Array): string => b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8('weave/tag/v2'), ...handshakeHash])));
+
+/** How a peer's protocol stands to ours: `older` peers get the farewell and nothing else; `newer` ones speak ours to us, and our person should update. */
+export type PeerStanding = 'current' | 'older' | 'newer';
 
 export class PeerSession2 {
   readonly replica: Replica;
@@ -138,8 +163,12 @@ export class PeerSession2 {
   /** What the peer is known to hold: v1 heads, and v2 events by canonical id (`<id>+body` with the body). */
   #peerHeads = new Map<string, number>();
   #peerHas = new Set<string>();
-  /** null until the peer's first message says which protocol it speaks. */
-  #peerVersion: 1 | 2 | null = null;
+  /** null until the peer's first message says which protocol it speaks: 1 for v0.3 (it sends heads first), else what its hello says. */
+  #peerVersion: number | null = null;
+  /** The peer said a higher version than ours in some hello (it speaks ours to us afterwards, as we do for older peers). */
+  #peerNewer = false;
+  /** An older peer was given the farewell: once per connection. */
+  #toldOlder = false;
   #buffer = '';
   #unsubscribe: () => void;
   #closed = false;
@@ -171,15 +200,32 @@ export class PeerSession2 {
     if (wanted.length) this.want(wanted);
   }
 
-  /** Spaces this connection shares, public included. */
+  /** Spaces this connection shares, public included (nothing, with a peer on an older protocol). */
   get shared(): ReadonlySet<string> {
     return this.#shared;
   }
 
-  /** Tell the peer which spaces this node holds (again, after they changed). */
+  /** The protocol the peer speaks, once its first message said: 1 for v0.3, else its hello's `v`. */
+  get peerVersion(): number | null {
+    return this.#peerVersion;
+  }
+
+  /** How the peer's protocol stands to ours, once known. */
+  get peerStanding(): PeerStanding | undefined {
+    if (this.#peerVersion === null) return undefined;
+    return this.#peerNewer ? 'newer' : this.#peerVersion < WIRE_VERSION ? 'older' : 'current';
+  }
+
+  /** The peer speaks our protocol (or a newer one, in which case it speaks ours to us): what it sends counts. */
+  #speaks(): boolean {
+    return this.#peerVersion !== null && this.#peerVersion >= WIRE_VERSION;
+  }
+
+  /** Tell the peer which spaces this node holds (again, after they changed). A peer on an older protocol was told all it gets. */
   announce(): void {
+    if (this.#peerVersion !== null && !this.#speaks()) return;
     const tags = this.#access.spaces().flatMap(({ keys }) => keys.map((key) => spaceTag(key, this.#handshakeHash, this.#role)));
-    this.#send({ t: 'hello', v: 2, tags, ...(this.neg ? { features: ['neg'] } : {}) });
+    this.#send({ t: 'hello', v: WIRE_VERSION, tags, ...(this.neg ? { features: ['neg'] } : {}) });
     // Spaces new here may be ones the peer already said it holds.
     if (this.#peerTags) this.#hello(this.#peerTags);
   }
@@ -224,16 +270,27 @@ export class PeerSession2 {
   }
 
   #handle(message: Message2): void {
-    // The first message tells the versions apart: v0.4 says hello first, v0.3 sends its heads.
-    if (this.#peerVersion === null) this.#peerVersion = message.t === 'hello' ? 2 : 1;
-    const v2 = this.#peerVersion === 2;
+    // The first message tells the versions apart: v0.4 and later say hello first (with their protocol's number since 3), v0.3 sends its heads.
+    if (this.#peerVersion === null) this.#peerVersion = message.t === 'hello' ? (Number.isSafeInteger(message.v) && message.v >= 2 ? message.v : 2) : 1;
+    // What a peer on an older protocol sends never counts; v0.3 peers still get v1 logs and blobs, as they did.
+    const v2 = this.#speaks();
+    const serves = v2 || this.#peerVersion === 1;
     switch (message.t) {
-      case 'hello':
+      case 'hello': {
+        if (this.#peerVersion === 1) break;
+        const v = Number.isSafeInteger(message.v) && message.v >= 2 ? message.v : 2;
+        if (v < WIRE_VERSION) {
+          this.#tellOlder(Array.isArray(message.tags) ? message.tags : []);
+          break;
+        }
+        // A newer peer's first hello is in its own protocol (its tags match nothing here); it then says hello in ours, as we do for older peers.
+        if (v > WIRE_VERSION) this.#peerNewer = true;
         if (v2 && Array.isArray(message.tags)) {
           this.#peerNeg = this.neg && Array.isArray(message.features) && message.features.includes('neg');
           this.#hello(message.tags);
         }
         break;
+      }
       case 'neg':
         if (v2 && this.neg && this.#shared.has(message.space) && typeof message.since === 'string' && Array.isArray(message.ranges)) {
           const until = typeof message.until === 'string' ? message.until : undefined;
@@ -245,7 +302,7 @@ export class PeerSession2 {
         }
         break;
       case 'heads':
-        if (message.heads && typeof message.heads === 'object') {
+        if (serves && message.heads && typeof message.heads === 'object') {
           for (const [signer, seq] of Object.entries(message.heads)) if (Number.isSafeInteger(seq)) this.#notePeerHead(signer, seq);
           this.#sendMissingV1();
         }
@@ -349,7 +406,7 @@ export class PeerSession2 {
         }
         break;
       case 'want':
-        if (Array.isArray(message.hashes) && this.blobs) {
+        if (serves && Array.isArray(message.hashes) && this.blobs) {
           for (const hash of message.hashes.slice(0, 256)) {
             const data = typeof hash === 'string' ? this.blobs.get(hash) : undefined;
             if (data) this.#send({ t: 'blob', hash, data: Buffer.from(data).toString('base64url') });
@@ -357,9 +414,29 @@ export class PeerSession2 {
         }
         break;
       case 'blob':
-        if (typeof message.hash === 'string' && typeof message.data === 'string' && this.blobs) this.blobs.receive(message.hash, new Uint8Array(Buffer.from(message.data, 'base64url')));
+        if (serves && typeof message.hash === 'string' && typeof message.data === 'string' && this.blobs) this.blobs.receive(message.hash, new Uint8Array(Buffer.from(message.data, 'base64url')));
         break;
     }
+  }
+
+  /**
+   * A peer on an older protocol: it shares nothing with us (not even public) and
+   * gets one thing, once: the node's farewell in each group and project it showed
+   * a key of, so its person hears why nothing else comes. Served as that protocol
+   * reads it: a hello of its version with role-less tags (so it takes the spaces
+   * as shared), then the farewell events, signed without the fields it rejects.
+   */
+  #tellOlder(tags: unknown[]): void {
+    this.#shared = new Set();
+    this.#started.clear();
+    if (this.#toldOlder) return;
+    this.#toldOlder = true;
+    const held = this.#access.spaces();
+    this.#send({ t: 'hello', v: 2, tags: held.flatMap(({ keys }) => keys.map((key) => legacyTag(key, this.#handshakeHash))) });
+    const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
+    const shown = new Set(held.filter(({ keys }) => keys.some((key) => theirs.has(legacyTag(key, this.#handshakeHash)))).map((h) => h.space));
+    const items = (this.#access.farewells?.() ?? []).filter((item) => shown.has(item.e.space));
+    for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'items', items: items.slice(i, i + BATCH) });
   }
 
   /** The peer's spaces: start syncing those newly shared. */
@@ -398,7 +475,7 @@ export class PeerSession2 {
   }
 
   #askKeepingSoon(): void {
-    if (this.#keepSoon || this.#peerVersion !== 2 || !this.#access.keep) return;
+    if (this.#keepSoon || !this.#speaks() || !this.#access.keep) return;
     this.#keepSoon = setTimeout(() => {
       this.#keepSoon = undefined;
       this.#askKeeping();
@@ -495,9 +572,9 @@ export class PeerSession2 {
     this.#peerHas.add('b' in item || item.e.class === 'control' ? `${id}+body` : id);
   }
 
-  /** New v2 events: to the peer if it shares their space and doesn't have them yet. */
+  /** New v2 events: to the peer if it shares their space and doesn't have them yet (a peer on an older protocol shares none). */
   #offer(items: WireItemV2[]): void {
-    if (this.#peerVersion === 1) return;
+    if (this.#peerVersion !== null && !this.#speaks()) return;
     this.#sendItems(items.filter((item) => this.#shared.has(item.e.space)));
     // A new key of a space the peer is behind in: theirs to take, if a box is for them.
     for (const item of items) if (this.#behind.has(item.e.space) && item.e.class === 'control' && /\.rekey$/.test(item.e.kind)) this.#send({ t: 'keys', space: item.e.space, items: [{ e: item.e }] });

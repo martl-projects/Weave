@@ -1228,6 +1228,8 @@ async function main(): Promise<void> {
         [
           `${s.name ?? '(no name)'}  ${s.did}`,
           `  ${s.online ? `online, ${s.peers} peer${s.peers === 1 ? '' : 's'}` : 'offline (no daemon running)'}`,
+          ...(s.olderPeers ? [`  ${s.olderPeers} peer${s.olderPeers === 1 ? ' runs' : 's run'} an older Weave: they get a message asking them to update, and nothing else`] : []),
+          ...(s.newerPeers ? [`  ${s.newerPeers} peer${s.newerPeers === 1 ? ' runs' : 's run'} a newer Weave: update to sync with them (weave update)`] : []),
           `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.communities} communit${s.communities === 1 ? 'y' : 'ies'}`,
           `  ${s.events} events in ${s.logs} logs${s.pending ? `, ${s.pending} pending` : ''}`,
           ...(s.heldBack ? [`  ${s.heldBack} events held back: their authors were over their budget`] : []),

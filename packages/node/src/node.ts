@@ -1111,7 +1111,10 @@ export class WeaveNode implements Backend {
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
     const node = new WeaveNode(home, identity);
-    if (options.migrate !== false) node.#migrate();
+    if (options.migrate !== false) {
+      node.#migrate();
+      node.#moveToProtocol3();
+    }
     return node;
   }
 
@@ -1544,6 +1547,8 @@ export class WeaveNode implements Backend {
       projects: spaces.filter((s) => s.kind === 'project').length,
       communities: spaces.filter((s) => s.kind === 'community').length,
       peers: this.#swarm?.sessions.size ?? 0,
+      olderPeers: [...(this.#swarm?.sessions ?? [])].filter((s) => s.peerStanding === 'older').length,
+      newerPeers: [...(this.#swarm?.sessions ?? [])].filter((s) => s.peerStanding === 'newer').length,
       logs: signers.length,
       events: signers.reduce((sum, signer) => sum + this.replica.number(signer), 0),
       pending: this.replica.pendingCount,
@@ -4134,6 +4139,54 @@ export class WeaveNode implements Backend {
     }
   }
 
+  // ---------------------------------------------------------------- moving to protocol 3
+
+  /** The farewells this node wrote for peers on protocol 2, by space: their ids, kept in the home so a restart serves them again. */
+  #farewellIds?: Record<string, string>;
+
+  /**
+   * The first start on protocol 3 (the review before the first public release;
+   * see @weave/net WIRE_VERSION): a message in each group and project shared
+   * with others, for those still on protocol 2, signed in the shape they read
+   * (no ih, no cs: fields their nodes reject). It's the one thing an older peer
+   * gets from a session (SpaceAccess.farewells); nodes on protocol 3 hide it.
+   * Written once; a space whose key is locked right now is tried again at the
+   * next start.
+   */
+  #moveToProtocol3(): void {
+    const file = joinPath(this.home.dir, 'protocol-3.json');
+    if (existsSync(file)) {
+      try {
+        this.#farewellIds = (JSON.parse(readFileSync(file, 'utf8')) as { farewells?: Record<string, string> }).farewells ?? {};
+      } catch {
+        this.#farewellIds = {};
+      }
+      return;
+    }
+    const farewells: Record<string, string> = {};
+    const text = `I've moved to a newer Weave, which this version can't talk to. Please update: ${RELEASES_URL}`;
+    let locked = false;
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group' && space.kind !== 'project') continue;
+      if (this.#state(space).members.size < 2) continue;
+      try {
+        farewells[space.id] = this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MSG, body: { text, moved: 3 } }, { legacy: true })).id;
+      } catch {
+        locked = true;
+      }
+    }
+    this.#farewellIds = farewells;
+    if (!locked) writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), farewells }, null, 2) + '\n');
+  }
+
+  /** This node's farewells to peers on protocol 2, as wire items, for the sessions. */
+  #farewells(): WireItemV2[] {
+    return Object.values(this.#farewellIds ?? {}).flatMap((id) => {
+      const record = this.replica.record2(id);
+      return record && isWireItemV2(record.wire) ? [record.wire] : [];
+    });
+  }
+
   async rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo> {
     const words = normalizeWords(input.words);
     const me = this.identity.author;
@@ -5779,7 +5832,13 @@ export class WeaveNode implements Backend {
     return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
   }
 
-  /** Close our invites that expired, naming who came in with each: later joins with them don't count, whatever date they claim. */
+  /**
+   * Close our invites that expired, naming who came in with each: later joins
+   * with them don't count, whatever date they claim. Also our links from before
+   * protocol 3, which have no key of their own (xQ0as76W): anyone in the space
+   * could read their id and cite it, so they close as soon as this node runs
+   * protocol 3, whoever came in with them staying in.
+   */
   #closeInvites(space: StoredSpace): number {
     if (space.kind === 'direct') return 0;
     const now = new Date(this.clock()).toISOString();
@@ -5788,8 +5847,8 @@ export class WeaveNode implements Backend {
     let n = 0;
     for (const d of decoded) {
       if (canonicalKind(d.inner.kind) !== KIND_INVITE || d.event.author !== this.identity.author) continue;
-      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown };
-      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || b.expires > now || closed.has(b.invite)) continue;
+      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown; key?: unknown };
+      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || (b.expires > now && b.key === true) || closed.has(b.invite)) continue;
       const state = this.#state(space);
       const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
       this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
@@ -6125,7 +6184,7 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
-    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess };
+    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess, farewells: () => this.#farewells() };
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)
