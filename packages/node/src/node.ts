@@ -127,6 +127,7 @@ import {
   isPlatform,
   KIND_SERVICE_REQUEST,
   artifactsOf,
+  type Artifact,
   KIND_BOARD,
   KIND_CURATE,
   KIND_BLOCK,
@@ -408,6 +409,9 @@ import {
   type Admission,
   type AgentInfo,
   type UpdateInfo,
+  type UpdateFile,
+  type UpdateReady,
+  type UpdateState,
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
@@ -510,7 +514,7 @@ import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
-import { guessPlatform } from './appinstall.ts';
+import { guessPlatform, platformKey } from './appinstall.ts';
 import { publicReleases, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -548,6 +552,7 @@ import {
 import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
 import { ClientApps } from './clientapps.ts';
@@ -1007,6 +1012,8 @@ export class WeaveNode implements Backend {
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  /** Weave's own updates (update.ts): new versions of the app, fetched like any release file, for the app to install. */
+  #updates = new Updates(() => joinPath(this.home.dir, 'updates'), () => this.#releases, () => this.#emitLive());
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   /** Keyvaults and fetchers I added from releases (clientapps.ts): beside the ones Weave ships, run the same. */
   #clientApps = new ClientApps(() => this.home, () => this.#releases);
@@ -1104,7 +1111,10 @@ export class WeaveNode implements Backend {
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
     const node = new WeaveNode(home, identity);
-    if (options.migrate !== false) node.#migrate();
+    if (options.migrate !== false) {
+      node.#migrate();
+      node.#moveToProtocol3();
+    }
     return node;
   }
 
@@ -1537,6 +1547,8 @@ export class WeaveNode implements Backend {
       projects: spaces.filter((s) => s.kind === 'project').length,
       communities: spaces.filter((s) => s.kind === 'community').length,
       peers: this.#swarm?.sessions.size ?? 0,
+      olderPeers: [...(this.#swarm?.sessions ?? [])].filter((s) => s.peerStanding === 'older').length,
+      newerPeers: [...(this.#swarm?.sessions ?? [])].filter((s) => s.peerStanding === 'newer').length,
       logs: signers.length,
       events: signers.reduce((sum, signer) => sum + this.replica.number(signer), 0),
       pending: this.replica.pendingCount,
@@ -3783,7 +3795,7 @@ export class WeaveNode implements Backend {
     if (!current) throw new Error(`"${input?.current}" isn't a version like 0.3.0`);
     // A company's IT rolls out versions itself (managed settings): no prompts.
     if (machinePolicy().updates === false) return { current: input.current } as UpdateInfo;
-    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
+    const source = this.#updateSource();
     const found: NonNullable<UpdateInfo['latest']>[] = [];
 
     // Release posts in the Weave project, signed by its maintainers: every member has them, no sign-in needed.
@@ -3794,6 +3806,13 @@ export class WeaveNode implements Backend {
         const version = /^weave\b/i.test(post.title) ? parseVersion(post.title) : undefined;
         if (!version || !maintainers.has(post.by.did)) continue;
         found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
+      }
+      // The desktop app released as the project's artifact (weave app release), with its file for this computer and
+      // its SHA-256 in the maintainer's signed entry: what the app may install by itself.
+      for (const [version, { release, install }] of this.#updateReleases(project, source.artifact)) {
+        const same = found.find((f) => f.version === version && f.source === 'weave');
+        if (same) same.install = install;
+        else found.push({ version, url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(release.tag)}`, published: release.time, source: 'weave', install });
       }
     }
     // The repository's releases, as anyone sees them (a private repository's: its release posts are enough).
@@ -3809,7 +3828,58 @@ export class WeaveNode implements Backend {
 
     // The newest version; for the same version, the release post (it has the notes) wins.
     const latest = found.sort((a, b) => compareVersions(b.version, a.version) || (a.source === 'weave' ? -1 : 1))[0];
-    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
+    // A download of this version or an older one is of no use anymore.
+    this.#updates.prune(formatVersion(current));
+    const ready = this.#updates.ready();
+    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0, auto: this.config.updates?.auto !== false, ...(ready ? { ready } : {}) };
+  }
+
+  /** Where Weave's own updates come from: the Weave project, its repository and its desktop artifact, unless the config says otherwise. */
+  #updateSource(): { project: string; repo: string; artifact: string } {
+    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
+    // Its fetcher gets Weave's updates without being added by hand: Weave's own code, as shipped.
+    this.#fetchers.builtInFor.add(source.project);
+    return source;
+  }
+
+  /** The desktop app's releases in the project, by version: each with its file for this computer, as a maintainer signed it. */
+  #updateReleases(project: StoredSpace, artifact: string): Map<string, { release: Artifact; install: UpdateFile }> {
+    const found = new Map<string, { release: Artifact; install: UpdateFile }>();
+    for (const release of artifactsOf(this.#entries(project), this.#state(project).maintainers)) {
+      if (release.manifest.app !== artifact || release.kind !== 'file') continue;
+      const version = parseVersion(release.tag);
+      const asset = release.manifest.install?.assets?.[platformKey()];
+      if (!version || !asset) continue;
+      found.set(formatVersion(version), { release, install: { artifact: release.id, tag: release.tag, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
+    }
+    return found;
+  }
+
+  async updateFetch(input: { version: string }): Promise<UpdateState> {
+    if (machinePolicy().updates === false) throw new Error('this computer gets new versions from its IT (managed settings): nothing to download');
+    const version = parseVersion(String(input?.version ?? ''));
+    if (!version) throw new Error(`"${input?.version}" isn't a version like 0.3.0`);
+    const source = this.#updateSource();
+    const project = this.#spaces.get(source.project);
+    const release = project?.kind === 'project' ? this.#updateReleases(project, source.artifact).get(formatVersion(version)) : undefined;
+    if (!release) throw new Error(`no release of Weave ${formatVersion(version)} for this computer that the app can install itself: its maintainers haven't released it in the Weave project`);
+    this.#updates.reset();
+    return this.#updates.fetch(formatVersion(version), { project: project!.id, id: release.release.id, tag: release.release.tag, manifest: release.release.manifest }, release.install);
+  }
+
+  async updateState(): Promise<UpdateState> {
+    return this.#updates.state();
+  }
+
+  async updateReady(input: { version: string }): Promise<UpdateReady | null> {
+    return this.#updates.readyFor(String(input?.version ?? '')) ?? null;
+  }
+
+  async updateSettings(input: { auto: boolean }): Promise<{ auto: boolean }> {
+    const { auto: _auto, ...rest } = this.config.updates ?? {};
+    this.config = { ...this.config, updates: { ...rest, ...(input.auto === false ? { auto: false } : {}) } };
+    saveConfig(this.home, this.config);
+    return { auto: input.auto !== false };
   }
 
   /**
@@ -4067,6 +4137,54 @@ export class WeaveNode implements Backend {
       if (this.#state(space).members.size < 2) continue;
       this.replica.append(this.#identity, sealFor(this.#cipher(space), { kind: KIND_MSG, body: { text, moved: '0.4' } }));
     }
+  }
+
+  // ---------------------------------------------------------------- moving to protocol 3
+
+  /** The farewells this node wrote for peers on protocol 2, by space: their ids, kept in the home so a restart serves them again. */
+  #farewellIds?: Record<string, string>;
+
+  /**
+   * The first start on protocol 3 (the review before the first public release;
+   * see @weave/net WIRE_VERSION): a message in each group and project shared
+   * with others, for those still on protocol 2, signed in the shape they read
+   * (no ih, no cs: fields their nodes reject). It's the one thing an older peer
+   * gets from a session (SpaceAccess.farewells); nodes on protocol 3 hide it.
+   * Written once; a space whose key is locked right now is tried again at the
+   * next start.
+   */
+  #moveToProtocol3(): void {
+    const file = joinPath(this.home.dir, 'protocol-3.json');
+    if (existsSync(file)) {
+      try {
+        this.#farewellIds = (JSON.parse(readFileSync(file, 'utf8')) as { farewells?: Record<string, string> }).farewells ?? {};
+      } catch {
+        this.#farewellIds = {};
+      }
+      return;
+    }
+    const farewells: Record<string, string> = {};
+    const text = `I've moved to a newer Weave, which this version can't talk to. Please update: ${RELEASES_URL}`;
+    let locked = false;
+    for (const space of this.#spaces.values()) {
+      if (space.kind !== 'group' && space.kind !== 'project') continue;
+      if (this.#state(space).members.size < 2) continue;
+      try {
+        farewells[space.id] = this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MSG, body: { text, moved: 3 } }, { legacy: true })).id;
+      } catch {
+        locked = true;
+      }
+    }
+    this.#farewellIds = farewells;
+    if (!locked) writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), farewells }, null, 2) + '\n');
+  }
+
+  /** This node's farewells to peers on protocol 2, as wire items, for the sessions. */
+  #farewells(): WireItemV2[] {
+    return Object.values(this.#farewellIds ?? {}).flatMap((id) => {
+      const record = this.replica.record2(id);
+      return record && isWireItemV2(record.wire) ? [record.wire] : [];
+    });
   }
 
   async rotateRoot(input: { words: string; encryption?: boolean }): Promise<IdentityInfo> {
@@ -5714,7 +5832,13 @@ export class WeaveNode implements Backend {
     return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
   }
 
-  /** Close our invites that expired, naming who came in with each: later joins with them don't count, whatever date they claim. */
+  /**
+   * Close our invites that expired, naming who came in with each: later joins
+   * with them don't count, whatever date they claim. Also our links from before
+   * protocol 3, which have no key of their own (xQ0as76W): anyone in the space
+   * could read their id and cite it, so they close as soon as this node runs
+   * protocol 3, whoever came in with them staying in.
+   */
   #closeInvites(space: StoredSpace): number {
     if (space.kind === 'direct') return 0;
     const now = new Date(this.clock()).toISOString();
@@ -5723,8 +5847,8 @@ export class WeaveNode implements Backend {
     let n = 0;
     for (const d of decoded) {
       if (canonicalKind(d.inner.kind) !== KIND_INVITE || d.event.author !== this.identity.author) continue;
-      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown };
-      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || b.expires > now || closed.has(b.invite)) continue;
+      const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown; key?: unknown };
+      if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || (b.expires > now && b.key === true) || closed.has(b.invite)) continue;
       const state = this.#state(space);
       const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
       this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
@@ -6060,7 +6184,7 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
-    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess };
+    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess, farewells: () => this.#farewells() };
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)
@@ -9867,7 +9991,7 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 const FREE_TIER_MONTHS = 1200;
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
-const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
+const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave', artifact: 'weave-desktop' };
 /** Where the farewell to v0.3 peers sends them. */
 const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 

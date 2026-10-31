@@ -55,11 +55,15 @@ export interface FetchInput {
 
 /** How long a fetcher may take for one file. */
 export const FETCH_MS = 30 * 60_000;
+/** The fetcher Weave ships for GitHub releases, which gets Weave's own updates. */
+export const WEAVE_FETCHER = 'github-checkout';
 
 export class Fetchers {
   readonly #homeOf: () => Home;
   readonly #runtime: Runtime;
   readonly #shippedDir: () => string | undefined;
+  /** Projects (ids) whose releases Weave's own fetcher gets without being added: the Weave project, for Weave's updates. */
+  readonly builtInFor = new Set<string>();
   /** Those its person added from releases (clientapps.ts): run exactly as the ones Weave ships. */
   readonly #fromReleases: () => ShippedService[];
 
@@ -143,6 +147,8 @@ export class Fetchers {
     const s = this.shipped().find((x) => (ref.startsWith('sha256:') ? x.digest === ref : x.name === ref));
     if (!s) return { missing: ref.startsWith('sha256:') ? `a fetcher this Weave doesn't ship (${ref.slice(0, 19)}…)` : `the fetcher ${ref}, which this Weave doesn't ship` };
     const f = this.#stored().find((x) => x.shipped === s.name);
+    // Weave's own updates: its own fetcher, exactly as shipped (nobody's sign-in), without adding it by hand.
+    if (!f && this.builtInFor.has(project) && s.name === WEAVE_FETCHER) return { fetcher: { name: s.name, shipped: s.name, digest: s.digest, projects: [project], settings: {} }, shipped: s };
     if (!f) return { missing: `the fetcher ${s.manifest.name} (${s.name}): add it for this project` };
     if (f.projects !== 'all' && !f.projects.includes(project)) return { missing: `the fetcher ${s.manifest.name} (${s.name}) for this project: you added it for others only` };
     if (f.digest !== s.digest) return { missing: `the fetcher ${s.manifest.name} (${s.name}) again: it changed since you added it` };

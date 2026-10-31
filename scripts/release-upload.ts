@@ -4,13 +4,14 @@
 //
 //   GITHUB_TOKEN=… GITHUB_REPOSITORY=owner/name node scripts/release-upload.ts <tag> <file or folder>...
 //
-// A folder stands for the installers in it (.exe .msi .dmg .pkg .AppImage): no shell globbing, the same on Windows.
+// A folder stands for the installers in it (.exe .msi .dmg .pkg .zip .AppImage; the zip is the Mac app as its updater
+// takes it): no shell globbing, the same on Windows.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const [tag, ...given] = process.argv.slice(2);
-const files = given.flatMap((p) => (statSync(p).isDirectory() ? readdirSync(p).filter((f) => /\.(exe|msi|dmg|pkg|AppImage)$/.test(f)).map((f) => join(p, f)) : [p]));
+const files = given.flatMap((p) => (statSync(p).isDirectory() ? readdirSync(p).filter((f) => /\.(exe|msi|dmg|pkg|zip|AppImage)$/.test(f)).map((f) => join(p, f)) : [p]));
 const token = process.env.GITHUB_TOKEN;
 const repo = process.env.GITHUB_REPOSITORY;
 if (!tag || !given.length || !token || !repo) throw new Error('usage: GITHUB_TOKEN=… GITHUB_REPOSITORY=owner/name node scripts/release-upload.ts <tag> <file or folder>...');

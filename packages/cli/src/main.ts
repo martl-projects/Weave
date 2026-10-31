@@ -1211,7 +1211,14 @@ async function main(): Promise<void> {
         const l = u.latest;
         if (!l) return `Weave ${u.current}; no release found (are you in the Weave project?)`;
         if (!u.newer) return `Weave ${u.current} is the newest version`;
-        return [`Weave ${l.version} is available (you have ${u.current})`, l.url ? `  get it: ${l.url}` : '', l.post ? `  release post: ${l.post}` : ''].filter(Boolean).join('\n');
+        return [
+          `Weave ${l.version} is available (you have ${u.current})`,
+          l.url ? `  get it: ${l.url}` : '',
+          l.post ? `  release post: ${l.post}` : '',
+          u.ready ? `  downloaded and checked: ${u.ready.path} (the Weave app installs it on Restart to update)` : l.install ? `  the Weave app installs it by itself: ${l.install.file}, SHA-256 ${l.install.sha256}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
       });
     }
 
@@ -1221,6 +1228,8 @@ async function main(): Promise<void> {
         [
           `${s.name ?? '(no name)'}  ${s.did}`,
           `  ${s.online ? `online, ${s.peers} peer${s.peers === 1 ? '' : 's'}` : 'offline (no daemon running)'}`,
+          ...(s.olderPeers ? [`  ${s.olderPeers} peer${s.olderPeers === 1 ? ' runs' : 's run'} an older Weave: they get a message asking them to update, and nothing else`] : []),
+          ...(s.newerPeers ? [`  ${s.newerPeers} peer${s.newerPeers === 1 ? ' runs' : 's run'} a newer Weave: update to sync with them (weave update)`] : []),
           `  ${s.groups} group${s.groups === 1 ? '' : 's'}, ${s.projects} project${s.projects === 1 ? '' : 's'}, ${s.communities} communit${s.communities === 1 ? 'y' : 'ies'}`,
           `  ${s.events} events in ${s.logs} logs${s.pending ? `, ${s.pending} pending` : ''}`,
           ...(s.heldBack ? [`  ${s.heldBack} events held back: their authors were over their budget`] : []),

@@ -1,4 +1,4 @@
-import { checkForUpdates, UpdatePrompt } from './update.tsx';
+import { checkForUpdates, UpdatePrompt, UpdateSettings } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest, ServiceProfileInfo } from '@weave/node/client';
@@ -43,7 +43,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -646,6 +646,7 @@ function Shell() {
             { label: 'Refresh', onClick: bump },
             { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
             { label: 'Marks…', onClick: () => setDialog({ kind: 'marks' }) },
+            ...(bridge.update ? [{ label: 'Updates…', onClick: () => setDialog({ kind: 'updates' as const }) }] : []),
             'sep',
             ...(Object.keys(SKINS) as Skin[]).map((s) => ({
               label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
@@ -717,6 +718,16 @@ function Shell() {
           <Avatar did={me.did} size={12} /> {me.name ?? 'You'}
         </p>
         <p className="status-bar-field">{status ? (online ? `${status.peers} peer${status.peers === 1 ? '' : 's'} connected` : 'no peers right now') : 'connecting…'}</p>
+        {status?.olderPeers ? (
+          <p className="status-bar-field" title="Peers on an older Weave can't sync with you. They get a message in each shared group asking them to update, and nothing else.">
+            {status.olderPeers} on an older Weave
+          </p>
+        ) : null}
+        {status?.newerPeers ? (
+          <p className="status-bar-field" title="Peers on a newer Weave can't sync with you until you update.">
+            {status.newerPeers} on a newer Weave: update to sync
+          </p>
+        ) : null}
         <p className="status-bar-field">
           <Icon name="lock" size={12} /> end-to-end encrypted
         </p>
@@ -726,6 +737,7 @@ function Shell() {
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
       {dialog?.kind === 'marks' && <MarksSettings onClose={close} />}
+      {dialog?.kind === 'updates' && <UpdateSettings onClose={close} />}
       {dialog?.kind === 'desk' && <SetupDeskDialog onClose={close} />}
     </div>
   );

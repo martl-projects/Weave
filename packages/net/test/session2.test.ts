@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { createIdentity, Replica, signContentEventV2, type SigningIdentity } from '@weave/core';
-import { duplexPair, PeerSession, PeerSession2, spaceTag, type HeldSpace } from '../src/index.ts';
+import { createIdentity, Replica, signContentEventV2, type SigningIdentity, type WireItemV2 } from '@weave/core';
+import { duplexPair, legacyTag, PeerSession, PeerSession2, spaceTag, WIRE_VERSION, type HeldSpace, type Message2 } from '../src/index.ts';
 
 /** A node for these tests: a replica, a person, and the spaces it holds with their keys. */
 interface Peer {
@@ -279,5 +279,91 @@ describe('PeerSession2: members-only sync', () => {
     expect(byIds.types.has('neg')).toBe(false);
     expect(byIds.types.has('have')).toBe(true);
     expect(byRanges.bytes).toBeLessThan(byIds.bytes / 3);
+  });
+});
+
+describe('PeerSession2: protocol versions (-ZhUAOGC)', () => {
+  /** The other end as a node on another protocol speaks it: raw lines on the stream, and everything this side sends, read back. */
+  function rawPeer(a: Peer, farewells: WireItemV2[] = []) {
+    const [sa, sb] = duplexPair();
+    const left = new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces, farewells: () => farewells } });
+    const received: Array<Message2 & Record<string, unknown>> = [];
+    let buffer = '';
+    sb.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      let newline: number;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        received.push(JSON.parse(buffer.slice(0, newline)));
+        buffer = buffer.slice(newline + 1);
+      }
+    });
+    const send = (message: unknown) => sb.write(JSON.stringify(message) + '\n');
+    const hash = (sb as unknown as { handshakeHash: Uint8Array }).handshakeHash;
+    return { left, received, send, hash };
+  }
+  const wait = async () => {
+    for (let i = 0; i < 30; i++) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const farewell = (p: Peer, space: string) => p.replica.append2(p.me, { kind: 'weave.msg', space, body: { text: 'please update', moved: 3 }, legacy: true }).wire as WireItemV2;
+
+  it('a peer on protocol 2 shares nothing and gets only the farewell, in the shape it reads', async () => {
+    const a = peer('group:a', 'group:b');
+    say(a, 'group:a', 'members only');
+    say(a, 'public', 'for all');
+    const { left, received, send, hash } = rawPeer(a, [farewell(a, 'group:a'), farewell(a, 'group:b')]);
+    // The old node holds group:a and says so as protocol 2 did: role-less tags, v: 2, then its v1 heads.
+    send({ t: 'hello', v: 2, tags: [legacyTag(KEYS['group:a'], hash)] });
+    send({ t: 'heads', heads: {} });
+    await wait();
+    expect(left.peerVersion).toBe(2);
+    expect(left.peerStanding).toBe('older');
+    expect([...left.shared]).toEqual([]);
+    // Our own hello first (as to anyone), then one in its shape, so it takes the space as shared and reads what follows.
+    const hellos = received.filter((m) => m.t === 'hello');
+    expect(hellos.map((m) => m.v)).toEqual([WIRE_VERSION, 2]);
+    expect(hellos[1].tags).toContain(legacyTag(KEYS['group:a'], hash));
+    // The farewell of the space it showed, without the fields its node rejects; not group:b's, not public, nothing else.
+    const items = received.filter((m) => m.t === 'items').flatMap((m) => m.items as WireItemV2[]);
+    expect(items.map((item) => item.e.space)).toEqual(['group:a']);
+    expect(items[0].e).not.toHaveProperty('ih');
+    expect(items[0].e).not.toHaveProperty('cs');
+    expect(received.map((m) => m.t).filter((t) => !['hello', 'items', 'heads'].includes(t))).toEqual([]);
+    // Nothing it sends counts, and nothing more goes to it, live or asked for.
+    const b = peer('group:a');
+    const foreign = b.replica.append2(b.me, { kind: 'weave.msg', space: 'group:a', body: { text: 'from an old node' } }).wire;
+    send({ t: 'items', items: [foreign] });
+    send({ t: 'sync', space: 'group:a', since: '' });
+    send({ t: 'chains', space: 'group:a', heads: {} });
+    say(a, 'group:a', 'later');
+    say(a, 'public', 'later for all');
+    await wait();
+    expect(texts(a, 'group:a')).not.toContain('from an old node');
+    expect(received.filter((m) => m.t === 'items')).toHaveLength(1);
+    expect(received.filter((m) => m.t === 'have' || m.t === 'neg' || m.t === 'chains')).toHaveLength(0);
+  });
+
+  it('a peer on a newer protocol is noted, and syncs once it speaks ours', async () => {
+    const a = peer('group:a');
+    say(a, 'group:a', 'hi');
+    const { left, received, send, hash } = rawPeer(a);
+    send({ t: 'hello', v: WIRE_VERSION + 1, tags: ['tags of a protocol we do not know'] });
+    await wait();
+    expect(left.peerStanding).toBe('newer');
+    expect([...left.shared]).toEqual(['public']);
+    // As we do for older peers, it then says hello in our protocol, with the tags we expect of it.
+    send({ t: 'hello', v: WIRE_VERSION, tags: [spaceTag(KEYS['group:a'], hash, 'responder')] });
+    await wait();
+    expect(left.peerStanding).toBe('newer');
+    expect([...left.shared].sort()).toEqual(['group:a', 'public']);
+    expect(received.some((m) => m.t === 'chains' && m.space === 'group:a')).toBe(true);
+  });
+
+  it('two nodes on the same protocol stand as current to each other', async () => {
+    const [a, b] = [peer('group:a'), peer('group:a')];
+    const { left, right } = connect(a, b);
+    await settle(a, b);
+    expect(left.peerVersion).toBe(WIRE_VERSION);
+    expect(left.peerStanding).toBe('current');
+    expect(right.peerStanding).toBe('current');
   });
 });

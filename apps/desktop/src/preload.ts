@@ -38,6 +38,15 @@ contextBridge.exposeInMainWorld('weave', {
     ipcRenderer.on('weave:window-state', (_event, state) => listener(state));
   },
   attention: () => ipcRenderer.invoke('weave:attention'),
+  // New versions (src/update.ts): where one stands, what to do about it, and the setting.
+  update: {
+    state: () => ipcRenderer.invoke('weave:update'),
+    action: (action: string) => ipcRenderer.invoke('weave:update-action', action),
+    setAuto: (on: boolean) => ipcRenderer.invoke('weave:update-auto', on),
+    onChange: (listener: (view: unknown) => void) => {
+      ipcRenderer.on('weave:update', (_event, view: unknown) => listener(view));
+    },
+  },
   lensBase: (release: string) => `weave-lens://lens/${encodeURIComponent(release)}/`,
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('weave:call', method, args),
   onEvent: (listener: (item: FeedItem) => void) => {

@@ -1,7 +1,9 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { RPC_METHODS, type Backend, type RpcMethod, type ServiceGate } from './backend.ts';
+import { updateFeed } from './update.ts';
 
 export interface ApiServer {
   port: number;
@@ -21,6 +23,7 @@ const MAX_BODY = 4 * 1024 * 1024;
  *   POST /v1/rpc    {method, args}  calls one Backend method (allow-listed)
  *   GET  /v1/watch                  server-sent events: every new readable event
  *   POST /v1/stop                   the daemon stops properly and exits (weave daemon stop, the app on quit)
+ *   GET  /v1/update/<version>/latest.yml, /<file>   a new version of the app, downloaded and checked, for electron-updater
  *
  * A service's own token opens only its gate (see ServiceGate), never the rest:
  *
@@ -76,6 +79,20 @@ async function handle(backend: Backend, token: string, req: IncomingMessage, res
     send(res, 200, { stopping: true });
     // After the answer is out: stopping closes this server.
     return void setImmediate(hooks.stop);
+  }
+  // A new version of the app, downloaded and checked (update.ts): its feed and its file, as electron-updater reads them.
+  const update = /^GET \/v1\/update\/([^/]+)\/([^/]+)$/.exec(route);
+  if (update) {
+    const [version, name] = update.slice(1).map(decodeURIComponent);
+    const ready = await backend.updateReady({ version });
+    if (!ready) return send(res, 404, { error: `no update ${version} is ready here` });
+    if (/^latest(-mac|-linux)?\.yml$/.test(name)) {
+      res.writeHead(200, { 'content-type': 'text/yaml; charset=utf-8', 'cache-control': 'no-cache' });
+      return void res.end(updateFeed(ready));
+    }
+    if (name !== ready.file) return send(res, 404, { error: `the update ${version} is ${ready.file}, not ${name}` });
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(ready.size) });
+    return new Promise<void>((resolve) => createReadStream(ready.path).on('error', () => res.destroy()).on('close', resolve).pipe(res));
   }
   if (route === 'GET /v1/watch') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });

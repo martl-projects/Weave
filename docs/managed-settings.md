@@ -21,7 +21,7 @@ Weave reads these before anything the person sets:
 | `CompanyOnly` | 1/true: only company accounts on this computer; no private identities are created or restored. |
 | `Companies` | The ids (`did:key:…`) of the companies whose accounts may be set up here. Empty: any. |
 | `DeviceCert`, `DeviceKey` | Paths to this computer's certificate from the company's device authority and its private key (PEM). |
-| `Updates` | 0/false: no update prompts; IT rolls out new versions. |
+| `Updates` | 0/false: no update prompts and no downloads; IT rolls out new versions. (The MSI never updates itself, whatever this says: see docs/auto-update.md.) |
 
 Where they come from:
 

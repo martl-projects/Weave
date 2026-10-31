@@ -88,12 +88,15 @@ describe('spaces', () => {
     expect(replica.events()).toHaveLength(2);
   });
 
-  it('round-trips invites and rejects expired or damaged ones', () => {
+  it('round-trips invites and rejects expired, damaged or keyless ones', () => {
     const { founder, space, expires } = setup('group');
-    const invite = { v: 2 as const, space, invite: 'abc', inviter: founder.did, expires, entry: { topics: [founder.did], bootstrap: [] } };
+    const invite = { v: 2 as const, space, invite: 'abc', key: 'the link’s own secret half', inviter: founder.did, expires, entry: { topics: [founder.did], bootstrap: [] } };
     expect(decodeInvite(encodeInvite(invite))).toEqual(invite);
     expect(() => decodeInvite(encodeInvite({ ...invite, expires: '2000-01-01T00:00:00Z' }))).toThrow(/expired/);
     expect(() => decodeInvite('weave:invite:garbage')).toThrow(/damaged/);
+    // A link from before protocol 3, without a key of its own (xQ0as76W): its maker's node closed it, so it says to ask for a new one.
+    const { key: _key, ...keyless } = invite;
+    expect(() => decodeInvite(encodeInvite(keyless))).toThrow(/older Weave/);
   });
 
   it('lets any group member invite, and keeps the invite chain', () => {

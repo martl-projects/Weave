@@ -1,5 +1,6 @@
 import type { FeedItem } from '@weave/node/client';
 import type { RendererMethod } from '../methods.ts';
+import type { UpdateAction, UpdateView } from '../updatestate.ts';
 
 export interface AppState {
   home: string;
@@ -78,6 +79,13 @@ interface Bridge {
     forget(): Promise<void>;
     /** Open a room's app (its address on the computer) on the phone, through the computer. */
     openRoom(room: string, url: string): Promise<void>;
+  };
+  /** New versions, in the desktop app (src/update.ts): where one stands, Check / Download / Restart to update, and the setting. Missing in a browser and on the phone. */
+  update?: {
+    state(): Promise<UpdateView>;
+    action(action: UpdateAction): Promise<void>;
+    setAuto(on: boolean): Promise<void>;
+    onChange(listener: (view: UpdateView) => void): void;
   };
 }
 
