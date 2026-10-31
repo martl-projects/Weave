@@ -3,7 +3,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, wasmReleaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -952,11 +952,20 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'A release workflow for a project app',
       description:
-        "A GitHub Actions workflow that, on every pushed version tag, builds the app as a container image (with the repository's Dockerfile, or one made for Node.js), pushes it to ghcr.io and publishes the GitHub release. Hosts with Docker run it from Weave, sealed off from their computer: Weave runs no programs from releases. Returns the file to add, the start.image to put in weave.app.json, and notes to check. Writes nothing itself.",
-      inputSchema: { app: z.string().describe('The app id from weave.app.json'), entry: z.string().describe('The file the app starts from, like server.js'), owner: z.string().optional().describe('The GitHub account or organization the repository belongs to') },
+        "A GitHub Actions workflow that, on every pushed version tag, builds the app and publishes the GitHub release. A WebAssembly app (wasm in weave.app.json: give its component and site) is built with npm run build and attached as one archive: Weave runs it itself, hosts need nothing installed. Otherwise it's built as a container image (with the repository's Dockerfile, or one made for Node.js) and pushed to ghcr.io: hosts with Docker run it, sealed off from their computer. Weave runs no programs from releases. Returns the file to add, notes to check, and for a container the start.image to put in weave.app.json. Writes nothing itself.",
+      inputSchema: {
+        app: z.string().describe('The app id from weave.app.json'),
+        entry: z.string().optional().describe('A container app: the file it starts from, like server.js'),
+        owner: z.string().optional().describe('A container app: the GitHub account or organization the repository belongs to'),
+        wasm: z.object({ component: z.string(), site: z.string().optional() }).optional().describe("A WebAssembly app: weave.app.json's wasm (component, site)"),
+      },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ app, entry, owner }: { app: string; entry: string; owner?: string }) => releaseWorkflow(app, entry, owner)),
+    run(async ({ app, entry, owner, wasm }: { app: string; entry?: string; owner?: string; wasm?: { component: string; site?: string } }) => {
+      if (wasm) return wasmReleaseWorkflow(app, wasm);
+      if (!entry) throw new Error('give entry (the file a container app starts from), or wasm for a WebAssembly app');
+      return releaseWorkflow(app, entry, owner);
+    }),
   );
 
   server.registerTool(

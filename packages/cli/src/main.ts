@@ -18,6 +18,7 @@ import {
   MANIFEST_RULES,
   KEYSTORE_NAMES,
   releaseWorkflow,
+  wasmReleaseWorkflow,
   loadConfig,
   parseBootstrap,
   resolveHome,
@@ -2689,6 +2690,11 @@ ${postLine(p)}`);
       }
       if (sub === 'example') {
         return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
+      }
+      // A WebAssembly app: its component (and its site folder), as in weave.app.json's wasm.
+      if (sub === 'workflow' && args[1] && args[2]?.endsWith('.wasm')) {
+        const w = wasmReleaseWorkflow(args[1], { component: args[2], ...(args[3] ? { site: args[3] } : {}) });
+        return out(w, () => `# ${w.file}\n${w.content}\n# attaches ${w.asset}\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
       }
       if (sub === 'workflow' && args[1] && args[2]) {
         const w = releaseWorkflow(args[1], args[2], args[3]);
