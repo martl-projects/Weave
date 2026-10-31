@@ -286,16 +286,22 @@ export const currentEpoch = (space: SpaceKeys): number => Math.max(...Object.key
 
 const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave/${space.kind}/v1:${space.id}:${epoch}`;
 
-/** Event fields for an encrypted event in a space, sealed with the current epoch key. */
-export function sealFor(space: SpaceKeys, inner: Inner): EventFields {
+/**
+ * Event fields for an encrypted event in a space, sealed with the current epoch
+ * key. `legacy`: in the shape nodes before protocol 3 read (no salt, no inner
+ * hash, no content number), for the farewell that tells them to update.
+ */
+export function sealFor(space: SpaceKeys, inner: Inner, options: { legacy?: true } = {}): EventFields {
   const epoch = currentEpoch(space);
   const newest = space.keys[String(epoch)];
   // A newest key that isn't here (a managed epoch still locked): nothing goes out under an older one instead.
   if (!newest) throw new Error(`the newest key of ${space.name} is locked: nothing can be written there until it unlocks`);
   const key = b64u.decode(newest);
+  const scope = spaceScope(space);
+  if (options.legacy) return { kind: KIND_SEALED, scope, class: classOf(inner.kind), legacy: true, body: { epoch, ...seal(key, { kind: inner.kind, body: inner.body } as unknown as Json, context(space, epoch)) } };
   // A secret salt sealed inside, and the salted hash signed outside: a carry can restate it checkably (see innerHash).
   const sealed = { kind: inner.kind, body: inner.body, salt: b64u.encode(randomBytes(16)) };
-  return { kind: KIND_SEALED, scope: spaceScope(space), class: classOf(inner.kind), ih: innerHash(sealed), body: { epoch, ...seal(key, sealed as unknown as Json, context(space, epoch)) } };
+  return { kind: KIND_SEALED, scope, class: classOf(inner.kind), ih: innerHash(sealed), body: { epoch, ...seal(key, sealed as unknown as Json, context(space, epoch)) } };
 }
 
 /** Decrypt a sealed event of a space, or undefined if we lack the key or it doesn't decrypt. */
@@ -439,6 +445,8 @@ export function decodeInvite(text: string): Invite {
   if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
     throw new Error('invite is damaged or from an older Weave version');
   }
+  // A link without its own key (made before protocol 3) proves nothing about who holds it: its maker's node closed it (xQ0as76W), and a join with it wouldn't count.
+  if (typeof invite.key !== 'string') throw new Error('this link was made by an older Weave and no longer works: ask for a new one');
   if (Date.parse(invite.expires) < Date.now()) throw new Error('invite has expired');
   return invite;
 }

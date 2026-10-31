@@ -173,6 +173,8 @@ export interface EventFieldsV2 {
   ih?: string;
   /** A content event's number in its space (see UnsignedContentEventV2.cs). */
   cs?: number;
+  /** Shaped for nodes before protocol 3 (see EventFields.legacy): Replica.append2 gives it no cs. The signers never write it. */
+  legacy?: true;
 }
 
 const SIGNING_CONTEXT = 'weave/event/v2\n';

@@ -156,8 +156,8 @@ export class Replica {
   /** Create, sign and store the next v2 event from a local identity: numbered after the key's last, chained if control. */
   append2(identity: SigningIdentity, fields: Omit<EventFieldsV2, 'n'>): WeaveRecord {
     const space = fields.space ?? 'public';
-    // Content is numbered in its space too (cs): what a removal names as seen there.
-    const content = (fields.class ?? classOf(fields.kind)) === 'content';
+    // Content is numbered in its space too (cs): what a removal names as seen there. Not the farewell to older peers (legacy): they don't know the field.
+    const content = (fields.class ?? classOf(fields.kind)) === 'content' && !fields.legacy;
     const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1, ...(content ? { cs: this.store.contentCount(identity.did, space) + 1 } : {}) });
     const result = this.ingest({ e: event, ...(body !== undefined ? { b: body } : {}) });
     if (result.status !== 'accepted') throw new Error(`local event not accepted: ${'reason' in result ? result.reason : result.status}`);

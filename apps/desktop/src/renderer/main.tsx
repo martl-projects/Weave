@@ -702,6 +702,16 @@ function Shell() {
           <Avatar did={me.did} size={12} /> {me.name ?? 'You'}
         </p>
         <p className="status-bar-field">{status ? (online ? `${status.peers} peer${status.peers === 1 ? '' : 's'} connected` : 'no peers right now') : 'connecting…'}</p>
+        {status?.olderPeers ? (
+          <p className="status-bar-field" title="Peers on an older Weave can't sync with you. They get a message in each shared group asking them to update, and nothing else.">
+            {status.olderPeers} on an older Weave
+          </p>
+        ) : null}
+        {status?.newerPeers ? (
+          <p className="status-bar-field" title="Peers on a newer Weave can't sync with you until you update.">
+            {status.newerPeers} on a newer Weave: update to sync
+          </p>
+        ) : null}
         <p className="status-bar-field">
           <Icon name="lock" size={12} /> end-to-end encrypted
         </p>
