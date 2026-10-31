@@ -1,13 +1,13 @@
 // Services Weave ships from repositories of their own: one release of each, pinned by its archive's SHA-256
 // (pinned.json). Their source lives only there; what Weave ships is the very file their project releases.
 //
-// An archive is fetched once (with the GitHub CLI: the repositories may be private) into .cache/, checked against its
-// pin and unpacked there; after that it builds offline.
+// An archive is fetched once into .cache/, checked against its pin and unpacked there; after that it builds offline.
+// The repositories may be private: GitHub access comes from GH_TOKEN (CI: a secret that reads them), or the GitHub
+// CLI's login.
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
@@ -28,13 +28,13 @@ export function pins(): Record<string, Pin> {
 }
 
 /** A pinned release, unpacked: its folder (weave.app.json, its component, README.md). Fetched the first time. */
-export function pinnedRelease(name: string): string {
+export async function pinnedRelease(name: string): Promise<string> {
   const pin = pins()[name];
   if (!pin) throw new Error(`pinned.json pins no ${name}`);
   const dir = join(here, '.cache', `${name}-${pin.sha256.slice(0, 16)}`);
   if (existsSync(join(dir, 'weave.app.json'))) return dir;
   const archive = join(here, '.cache', `${pin.sha256}.tar.gz`);
-  if (!existsSync(archive)) download(pin, archive);
+  if (!existsSync(archive)) await download(pin, archive);
   const bytes = readFileSync(archive);
   const got = createHash('sha256').update(bytes).digest('hex');
   if (got !== pin.sha256) {
@@ -51,18 +51,31 @@ export function pinnedRelease(name: string): string {
   return dir;
 }
 
-function download(pin: Pin, to: string): void {
-  const into = mkdtempSync(join(tmpdir(), 'weave-pinned-'));
+/** GitHub access: GH_TOKEN or GITHUB_TOKEN, else the GitHub CLI's login, else none (public repositories). */
+function token(): string | undefined {
+  const set = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  if (set) return set;
   try {
-    execFileSync('gh', ['release', 'download', pin.tag, '--repo', pin.repo, '--pattern', pin.asset, '--dir', into], { stdio: ['ignore', 'ignore', 'pipe'] });
-  } catch (e) {
-    rmSync(into, { recursive: true, force: true });
-    const said = (e as { stderr?: Buffer }).stderr?.toString().trim();
-    throw new Error(`couldn't fetch ${pin.repo} ${pin.tag} (${pin.asset}) with the GitHub CLI (gh, logged in with access to it)${said ? `: ${said}` : ''}; or put the archive at ${to}`);
+    return execFileSync('gh', ['auth', 'token'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || undefined;
+  } catch {
+    return undefined;
   }
+}
+
+async function download(pin: Pin, to: string): Promise<void> {
+  const auth = token();
+  const headers = { 'user-agent': 'weave-shipped', 'x-github-api-version': '2022-11-28', ...(auth ? { authorization: `Bearer ${auth}` } : {}) };
+  const failed = (why: string) => new Error(`couldn't fetch ${pin.repo} ${pin.tag} (${pin.asset}): ${why}. Set GH_TOKEN to a token that reads it (or log in with gh), or put the archive at ${to}`);
+  const release = await fetch(`https://api.github.com/repos/${pin.repo}/releases/tags/${pin.tag}`, { headers: { ...headers, accept: 'application/vnd.github+json' } });
+  if (!release.ok) throw failed(`GitHub said ${release.status}${auth ? '' : ' (no GitHub access found)'}`);
+  const asset = ((await release.json()) as { assets: Array<{ name: string; url: string }> }).assets.find((a) => a.name === pin.asset);
+  if (!asset) throw failed('the release has no such file');
+  // GitHub sends it on to its file store; the token isn't passed there (another origin).
+  const file = await fetch(asset.url, { headers: { ...headers, accept: 'application/octet-stream' } });
+  if (!file.ok) throw failed(`GitHub said ${file.status} for the file`);
   mkdirSync(join(here, '.cache'), { recursive: true });
-  renameSync(join(into, pin.asset), to);
-  rmSync(into, { recursive: true, force: true });
+  writeFileSync(`${to}.part`, Buffer.from(await file.arrayBuffer()));
+  renameSync(`${to}.part`, to);
 }
 
 /** A tar archive's plain files at its top level, by name: all a release's archive holds. */

@@ -5,7 +5,7 @@ contract, settings and `wasm.component`) and `src/service.js`. `node packages/sh
 `dist/`, with `shipped.json` listing each component's SHA-256.
 
 Some live in repositories of their own instead, and Weave ships one release of each: `pinned.json` names its
-repository, tag, archive and the archive's SHA-256 (`pinned.ts` fetches it once with the GitHub CLI into `.cache/`,
+repository, tag, archive and the archive's SHA-256 (`pinned.ts` fetches it once into `.cache/`, with GH_TOKEN or the GitHub CLI login,
 checks it and unpacks it). Their source is only there, and what Weave ships is the very file their Weave project
 releases. A new version: tag it there, release it in its project, then move its pin here.
 

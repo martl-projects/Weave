@@ -28,6 +28,8 @@ jobs:
     env:
       # The build bundles the app with esbuild; the Electron binary itself isn't needed.
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      # Services Weave ships from repositories of their own (packages/shipped/pinned.json): a token that reads them.
+      GH_TOKEN: ${{ secrets.WEAVE_SERVICES_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

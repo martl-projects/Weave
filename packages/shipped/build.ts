@@ -56,7 +56,7 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
 // From repositories of their own: the component their release holds, not built here.
 for (const [name, pin] of Object.entries(pins())) {
   if (shipped[name]) throw new Error(`${name} is both a folder here and pinned: one source only`);
-  const dir = pinnedRelease(name);
+  const dir = await pinnedRelease(name);
   const raw = JSON.parse(readFileSync(join(dir, 'weave.app.json'), 'utf8')) as unknown;
   const { manifest, problems } = checkManifest(raw);
   const pure = manifest?.marks ?? manifest?.hints;

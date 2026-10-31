@@ -34,7 +34,7 @@ beforeAll(async () => {
   const list: Record<string, unknown> = {};
   // As Weave ships them: their repositories' pinned releases (packages/shipped/pinned.json).
   for (const name of ['unread', 'spotlight']) {
-    const release = pinnedRelease(name);
+    const release = await pinnedRelease(name);
     const manifest = JSON.parse(readFileSync(join(release, 'weave.app.json'), 'utf8')) as { hints: { component: string } };
     const component = join(release, manifest.hints.component);
     copyFileSync(component, join(SHIPPED, manifest.hints.component));
