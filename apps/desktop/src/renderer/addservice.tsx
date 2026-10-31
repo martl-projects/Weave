@@ -88,8 +88,12 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
     // Setup packs first: several parts set up in a few clicks (GitHub: its keyvault, app and services).
     ...(packs ?? []).map((p): Entry => ({ key: `pack:${p.name}`, icon: 'zap', title: p.title, by: 'Weave', about: p.about ?? `${p.steps.length} steps`, badge: `setup · ${p.steps.length} steps`, source: FROM_WEAVE, open: () => setPacking(p) })),
     ...(shipped ?? [])
-      .filter((x) => !services.some((s) => s.shipped === x.name) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && s.spaces.some((sp) => sp.id === project.id))))
-      .map((x): Entry => ({ key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: 'Weave ✓', source: FROM_WEAVE, open: () => setPicked({ kind: 'shipped', shipped: x }) })),
+      .filter((x) => !services.some((s) => s.shipped === x.name && here(s)) && !(x.contract.websites === 'host' && services.some((s) => s.builtin === 'website' && here(s))))
+      .map((x): Entry => {
+        // One you run elsewhere already: it's still Weave's, and adding it here takes that one in.
+        const mine = services.find((s) => s.shipped === x.name && !s.node);
+        return { key: `shipped:${x.name}`, icon: serviceIcon({ name: x.name, shipped: x.name, contract: x.contract }), title: x.title, by: 'Weave', about: x.about ?? `It ${contractText(x.contract)}`, badge: mine ? 'Weave ✓ · yours elsewhere' : 'Weave ✓', source: FROM_WEAVE, open: () => setPicked(mine ? { kind: 'mine', service: mine } : { kind: 'shipped', shipped: x }) };
+      }),
     ...(['website'] as const)
       // Websites ship with Weave now: the built-in one only where this Weave ships none.
       .filter((b) => !services.some((s) => s.builtin === b) && !(b === 'website' && (shipped ?? []).some((x) => x.contract.websites === 'host')))
@@ -102,7 +106,8 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
       .filter((a) => a.runs && a.kind === 'service')
       .map((a): Entry => ({ key: `release:${a.id}`, icon: serviceIcon({ name: a.name, contract: a.applet }), title: `${a.name} ${a.tag}`, by: `p/${a.project.name}`, about: a.applet ? `It ${contractText(a.applet)}` : 'A website', source: fromProject(a.project, project.id), open: () => setPicked({ kind: 'release', artifact: a }) })),
     ...services
-      .filter((s) => !s.node && !here(s) && s.builtin !== 'github')
+      // What Weave ships stays under From Weave, also where you run it already.
+      .filter((s) => !s.node && !here(s) && s.builtin !== 'github' && !s.shipped)
       .map((s): Entry => ({ key: `mine:${s.name}`, icon: serviceIcon(s), title: s.name, by: 'you', about: s.description || `It ${contractText(s.contract)}`, source: YOURS, open: () => setPicked({ kind: 'mine', service: s }) })),
   ];
   const shown = entries.filter((e) => !query.trim() || `${e.title} ${e.by} ${e.about}`.toLowerCase().includes(query.trim().toLowerCase()));
