@@ -1,10 +1,24 @@
 {
   "app": "weave-spotlight",
   "name": "Spotlight",
+  "about": "Highlights what matters to you, as you set it up: boards that color a project (news on its internal board turns it yellow, say), a sign like a heart for people you pick, and messages from your contacts.",
   "hints": {
     "component": "spotlight.wasm",
-    "reads": ["weave.seen", "weave.msg", "weave.post", "weave.contact"],
-    "slots": ["place", "message"],
-    "subjects": ["space", "board", "channel", "message"]
+    "reads": [
+      "weave.seen",
+      "weave.msg",
+      "weave.post",
+      "weave.contact"
+    ],
+    "slots": [
+      "place",
+      "message"
+    ],
+    "subjects": [
+      "space",
+      "board",
+      "channel",
+      "message"
+    ]
   }
 }

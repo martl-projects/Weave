@@ -135,6 +135,19 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   );
 }
 
+/** What a marks or hints service sees, in words: "your messages, posts and contacts". */
+const READ_WORDS: Record<string, string> = { 'weave.msg': 'messages', 'weave.post': 'posts', 'weave.contact': 'contacts', 'weave.seen': 'what you have read', 'weave.reply': 'replies', 'weave.react': 'reactions', 'weave.issue': 'issues' };
+function readWords(kinds: string[]): string {
+  const words = [...new Set(kinds.map((k) => READ_WORDS[k] ?? k))];
+  return `your ${words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0]}`;
+}
+
+/** Taking in a marks or hints service: what it does (its own words, or the standard ones), and what it can't. */
+function takeInText(a: ArtifactInfo, standard: string): string {
+  const sees = a.reads?.length ? `It sees ${readWords(a.reads)}, but it` : 'It';
+  return `Take in ${a.name} ${a.tag} from p/${a.project.name}?\n\n${a.about ?? standard}\n\n${sees} can't post or change anything, and nothing it sees leaves your computer: it runs only inside your Weave.`;
+}
+
 /**
  * Maintainers: publish a release of one of the project's artifacts (any number of them, each from its own source), or
  * of a new one from a new source. First which, then its releases as the project's provider sees them, in its words
@@ -347,7 +360,7 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
               {a.mine && a.kind === 'marks' && (
                 <AsyncButton
                   onClick={async () =>
-                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, with no key and no network, and shows what it says next to names everywhere you look.`, 'Take it in')) &&
+                    (await ask(takeInText(a, `${a.name} adds short labels next to people's names, wherever they show in Weave.`), 'Take it in')) &&
                     attempt(() => api('addMarks', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Marks…`)
                   }
                 >
@@ -357,7 +370,7 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
               {a.mine && a.kind === 'hints' && (
                 <AsyncButton
                   onClick={async () =>
-                    (await ask(`Take in ${a.name} ${a.tag}, released in p/${a.project.name}? Weave runs exactly this release over what your Weave holds, what's sealed to you too, with no key and no network, and shows its counts in your Places.`, 'Take it in')) &&
+                    (await ask(takeInText(a, `${a.name} adds counts, colors and small signs (like a heart) next to your projects, boards, channels and messages.`), 'Take it in')) &&
                     attempt(() => api('addHints', { project: a.project.id, app: a.app, tag: a.tag, approve: true }), `${a.name} is yours: View → Notifications…`)
                   }
                 >

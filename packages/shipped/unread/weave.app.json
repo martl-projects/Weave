@@ -1,5 +1,20 @@
 {
   "app": "weave-unread",
   "name": "Unread",
-  "hints": { "component": "unread.wasm", "reads": ["weave.notice", "weave.seen"], "slots": ["place"], "subjects": ["space", "board", "channel"] }
+  "about": "Counts what you haven't read yet, next to each project, board and channel in your Places.",
+  "hints": {
+    "component": "unread.wasm",
+    "reads": [
+      "weave.notice",
+      "weave.seen"
+    ],
+    "slots": [
+      "place"
+    ],
+    "subjects": [
+      "space",
+      "board",
+      "channel"
+    ]
+  }
 }

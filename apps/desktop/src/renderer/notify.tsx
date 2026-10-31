@@ -445,7 +445,7 @@ function HintServices() {
   const [project, setProject] = useState('');
   const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
   // Your yes to exactly that release, as for a keyvault or fetcher: a newer one asks again.
-  const yes = (what: string) => ask(`Take in ${what}? Weave runs exactly that release over what your Weave holds, what's sealed to you too, with no key and no network, and shows its counts in your Places.`, 'Take it in');
+  const yes = (what: string) => ask(`Take in ${what}? It shows counts, colors and signs next to your places and messages, and runs inside Weave with no key and no network.`, 'Take it in');
   const add = async () => {
     if (!(await yes(`the newest hint service p/${projects.find((p) => p.id === project)?.name ?? 'the project'} released`))) return;
     await attempt(() => api('addHints', { project, approve: true }), 'Taken in').then(() => (setProject(''), mine.reload()));

@@ -303,6 +303,10 @@ export interface ArtifactInfo {
   tag: string;
   app: string;
   name: string;
+  /** What it does, in its manifest's words. */
+  about?: string;
+  /** A marks or hints service: the kinds of events it reads (it has no key and no network). */
+  reads?: string[];
   released: Actor;
   time: string;
   /** It has a web page: a website can run it. */

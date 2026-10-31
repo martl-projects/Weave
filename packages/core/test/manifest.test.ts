@@ -11,6 +11,14 @@ describe('app settings in a manifest', () => {
     expect(checkManifest(MANIFEST_EXAMPLE).problems).toEqual([]);
   });
 
+  it('says what it does, in a sentence or two', () => {
+    const checked = checkManifest({ ...base, about: '  Counts what you have not read. ' });
+    expect(checked.warnings.join('\n')).not.toMatch(/about/);
+    expect(checked.manifest?.about).toBe('Counts what you have not read.');
+    expect(checkManifest({ ...base, about: 'x'.repeat(400) }).manifest?.about).toHaveLength(300);
+    expect(checkManifest(base).manifest).not.toHaveProperty('about');
+  });
+
   it('refuses values, variables that change how programs start, and odd names, all at once', () => {
     const checked = checkManifest({
       ...base,

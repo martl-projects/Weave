@@ -203,6 +203,8 @@ export class Services {
         tag: a.tag,
         app: a.manifest.app,
         name: a.manifest.name,
+        ...(a.manifest.about ? { about: a.manifest.about } : {}),
+        ...((a.manifest.hints ?? a.manifest.marks)?.reads ? { reads: (a.manifest.hints ?? a.manifest.marks)!.reads } : {}),
         released: this.h.actor(a.author, a.signer as Did),
         time: a.time,
         website: !!this.artifactWeb(a.manifest) || !!a.manifest.wasm?.site,
