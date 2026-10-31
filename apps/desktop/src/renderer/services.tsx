@@ -26,7 +26,7 @@ export function contractText(c: ServiceContract): string {
 export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
   if (origin.kind === 'weave') return <div className="small muted">Part of Weave</div>;
   if (origin.kind === 'unreleased') return null;
-  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">✓ Made by Weave</div> : <div className="small muted">Made by another version of Weave</div>;
+  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">✓ Made by Weave</div> : <div className="small muted">Made by Weave, an older or newer version: it updates when the Weave that runs it restarts</div>;
   const where = origin.project.name ? `p/${origin.project.name}` : "a project you aren't in";
   if (origin.checked === 'verified') return <div className="small muted">✓ From {where}, version {origin.tag}</div>;
   if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but isn't: don't trust it</div>;
@@ -39,7 +39,7 @@ export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
  */
 export function OriginBadge({ origin }: { origin: ServiceOriginInfo }) {
   if (origin.kind === 'weave' || (origin.kind === 'shipped' && origin.checked === 'verified')) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
-  if (origin.kind === 'shipped') return <span className="tag origin-warn" title="It says it's one Weave ships, but not as this Weave ships it">another Weave's</span>;
+  if (origin.kind === 'shipped') return <span className="tag" title="Made by Weave, an older or newer version: it updates when the Weave that runs it restarts">outdated</span>;
   if (origin.kind === 'unreleased') return <span className="tag" title="Its person's own code, released nowhere">own code</span>;
   if (origin.checked === 'unmatched') return <span className="tag origin-warn" title="It claims a release it isn't">⚠ not what it claims</span>;
   return <span className="tag" title={`A release of ${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, version ${origin.tag}`}>{origin.project.name ? `p/${origin.project.name}` : 'another project'}</span>;
