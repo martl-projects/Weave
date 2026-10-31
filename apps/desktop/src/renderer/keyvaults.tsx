@@ -121,40 +121,49 @@ export function KeyvaultsBox() {
 function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void }) {
   const setting = vault.settings.find((s) => s.register)!;
   const what = vault.resources ?? 'resources';
-  const owners = [...new Set(vault.apps.map((a) => String(a.info['owner.login'] ?? '')).filter(Boolean))];
-  const [org, setOrg] = useState(false);
-  const [owner, setOwner] = useState('');
+  // Whom for: your account, the organizations it shows you're in, or one you name (a membership you keep private).
+  const { data: whom } = useApi(() => api<{ login?: string; owners: Array<{ value: string; note?: string }> }>('keyvaultOwners', { name: vault.name }).catch(() => ({ owners: [] as Array<{ value: string; note?: string }> }) as { login?: string; owners: Array<{ value: string; note?: string }> }), [vault.name]);
+  const mine = vault.apps.some((a) => whom?.login && String(a.info['owner.login'] ?? '').toLowerCase() === whom.login.toLowerCase());
+  const [pick, setPick] = useState<string>();
+  const [typed, setTyped] = useState('');
+  const chosen = pick ?? (mine ? whom?.owners[0]?.value ?? 'other' : 'me');
+  const owner = chosen === 'me' ? undefined : chosen === 'other' ? typed.trim() : chosen;
   const [busy, setBusy] = useState(false);
   const make = async () => {
     setBusy(true);
     await attempt(async () => {
-      const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: vault.name, setting: setting.name, ...(org ? { owner: owner.trim() } : {}) });
+      const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: vault.name, setting: setting.name, ...(owner ? { owner } : {}) });
       window.open(url, '_blank', 'noopener');
       await api('finishKeyvaultApp', { id });
       bump();
       onClose();
-    }, `${setting.label} is made${org ? ` for ${owner.trim()}` : ''}: install it on ${org ? 'its' : 'your'} ${what}`);
+    }, `${setting.label} is made${owner ? ` for ${owner}` : ''}: install it on ${owner ? 'its' : 'your'} ${what}`);
     setBusy(false);
   };
+  const option = (value: string, label: string, note?: string) => (
+    <div className="field-row" key={value}>
+      <input id={`app-for-${value}`} type="radio" checked={chosen === value} onChange={() => setPick(value)} />
+      <label htmlFor={`app-for-${value}`}>
+        {label} {note && <span className="small muted">{note}</span>}
+      </label>
+    </div>
+  );
   return (
     <Modal title={`Make ${vault.apps.length ? 'another app' : setting.label.charAt(0).toLowerCase() + setting.label.slice(1)} on ${vault.platform}`} onClose={onClose}>
-      <p className="small">An app reaches only the {what} of the account it's made for. {owners.length ? `Yours so far: ${owners.join(', ')}.` : ''}</p>
-      <div className="field-row">
-        <input id="app-for-me" type="radio" checked={!org} onChange={() => setOrg(false)} />
-        <label htmlFor="app-for-me">For my own account</label>
-      </div>
-      <div className="field-row">
-        <input id="app-for-org" type="radio" checked={org} onChange={() => setOrg(true)} />
-        <label htmlFor="app-for-org">For an organization I manage</label>
-      </div>
-      {org && (
+      <p className="small">An app reaches only the {what} of the account it's made for: one for yours, one for each organization whose {what} you hand to projects.</p>
+      {!whom && <p className="small muted">Asking {vault.platform} which organizations you're in…</p>}
+      {option('me', whom?.login ? `${whom.login} (your account)` : 'My own account', mine ? 'has one already' : undefined)}
+      {(whom?.owners ?? []).map((o) => option(o.value, o.value, o.note ?? 'organization'))}
+      {option('other', 'Another organization…')}
+      {chosen === 'other' && (
         <div className="field-row indent">
-          <input autoFocus className="grow" placeholder="its name, as in its address" value={owner} onChange={(e) => setOwner(e.target.value.trim())} />
+          <input autoFocus className="grow" placeholder="its name" value={typed} onChange={(e) => setTyped(e.target.value.trim())} />
         </div>
       )}
-      <p className="small muted">{vault.platform} opens: you name nothing there, it's made as you confirm. Then install it on the {what} you want to hand to projects.</p>
+      {chosen === 'other' && <p className="small muted">Only organizations you show you're in are listed: on {vault.platform}, a membership you keep private is named here instead.</p>}
+      <p className="small muted">{vault.platform} opens and makes it as you confirm. Then install it on the {what} you want to hand to projects.</p>
       <div className="buttons">
-        <button className="default" disabled={busy || (org && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner))} onClick={() => void make()}>
+        <button className="default" disabled={busy || (chosen === 'other' && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(typed))} onClick={() => void make()}>
           {busy ? 'Waiting for it…' : 'Make it'}
         </button>
         <button onClick={onClose}>Cancel</button>

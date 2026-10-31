@@ -9685,6 +9685,21 @@ export class WeaveNode implements Backend {
     return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
   }
 
+  /**
+   * Whom you may make one of a keyvault's apps for: your own account there (the one your apps are made for, else the
+   * one you proved) and the organizations it shows you're in, less those that have an app of yours already.
+   */
+  async keyvaultOwners(input: { name: string }): Promise<{ login?: string; owners: Array<{ value: string; note?: string }> }> {
+    const k = this.#keyvaults.list().find((x) => x.name === input.name);
+    if (!k) throw new Error(`no keyvault ${input.name} here`);
+    const made = new Set(k.apps.map((a) => String(a.info['owner.login'] ?? '').toLowerCase()).filter(Boolean));
+    const proven = (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle;
+    // Your own: the account an app of yours was made for that isn't an organization's, else the one you proved.
+    const login = proven ?? k.apps.map((a) => String(a.info['owner.login'] ?? '')).find(Boolean);
+    const owners = login ? await this.#keyvaults.owners(input.name, login) : [];
+    return { ...(login ? { login } : {}), owners: owners.filter((o) => !made.has(o.value.toLowerCase())) };
+  }
+
   async finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo> {
     return this.#keyvaultInfo(await this.#keyvaults.finishApp(input.id));
   }

@@ -44,6 +44,15 @@ const said = (fn) => async (text) => {
   }
 };
 
+/** The organizations someone shows they're in, without signing in: only those they made public on GitHub. */
+export const owners = said(async (text) => {
+  const { login } = JSON.parse(text);
+  if (typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login)) return '[]';
+  const res = await fetch(`${API}/users/${login}/orgs?per_page=100`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-keyvault', 'x-github-api-version': '2022-11-28' } });
+  if (!res.ok) return '[]';
+  return JSON.stringify((await res.json()).map((o) => ({ value: o.login })));
+});
+
 /** The repositories its App is installed on: to hand to projects. */
 export const reachable = said(async () => {
   const a = app();
