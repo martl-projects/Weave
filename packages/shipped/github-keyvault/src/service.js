@@ -32,7 +32,7 @@ async function github(token, method, path, body) {
     const said = await res.json().catch(() => ({}));
     throw new Error(`GitHub said ${res.status} for ${method} ${path}${said?.message ? `: ${said.message}` : ''}`);
   }
-  return res.json();
+  return res.status === 204 ? {} : res.json();
 }
 
 /** An export's error, as its result's error: a string (an Error thrown as it is would trap). */
@@ -43,6 +43,15 @@ const said = (fn) => async (text) => {
     throw String(error?.message ?? error);
   }
 };
+
+/** The organizations someone shows they're in, without signing in: only those they made public on GitHub. */
+export const owners = said(async (text) => {
+  const { login } = JSON.parse(text);
+  if (typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login)) return '[]';
+  const res = await fetch(`${API}/users/${login}/orgs?per_page=100`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-keyvault', 'x-github-api-version': '2022-11-28' } });
+  if (!res.ok) return '[]';
+  return JSON.stringify((await res.json()).map((o) => ({ value: o.login })));
+});
 
 /** The repositories its App is installed on: to hand to projects. */
 export const reachable = said(async () => {
@@ -57,6 +66,15 @@ export const reachable = said(async () => {
   return JSON.stringify(out);
 });
 
+/** Forgotten: uninstalled everywhere, so its access ends now. The App itself stays until its person deletes it. */
+export const forget = said(async () => {
+  const a = app();
+  const all = await github(jwt(a.id), 'GET', '/app/installations?per_page=100');
+  for (const installation of all) await github(jwt(a.id), 'DELETE', `/app/installations/${installation.id}`);
+  log(`uninstalled ${a.slug} from ${all.map((i) => i.account?.login ?? i.id).join(', ') || 'nothing'}`);
+  return JSON.stringify({ uninstalled: all.map((i) => i.account?.login ?? String(i.id)) });
+});
+
 /** An installation token for these repositories (one owner's), with exactly these permissions. */
 export const mint = said(async (text) => {
   const { resources, rights } = JSON.parse(text);
@@ -67,6 +85,10 @@ export const mint = said(async (text) => {
   try {
     installation = (await github(jwt(a.id), 'GET', `/repos/${resources[0]}/installation`)).id;
   } catch (error) {
+    const owner = resources[0].split('/')[0];
+    // An app reaches only its own account's repositories: an organization's need one made for it.
+    if (/ 404 /.test(error?.message ?? '') && a['owner.login'] && owner.toLowerCase() !== String(a['owner.login']).toLowerCase())
+      throw new Error(`${a.slug} is ${a['owner.login']}'s and reaches only their repositories, not ${resources[0]}: make another app for ${owner} (Keys & devices, GitHub keyvault)`);
     if (/ 404 /.test(error?.message ?? '')) throw new Error(`${a.slug} isn't installed on ${resources[0]}: install it there (${a.html_url}/installations/new)`);
     throw error;
   }

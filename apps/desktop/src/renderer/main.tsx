@@ -255,6 +255,8 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
       {link(`${base}/available`, 'store', 'Available', view === 'available')}
       {link(`${base}/services`, 'zap', 'Services', view === 'services')}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
+      {link(`${base}/catalog`, 'bookmark', 'Catalog', view === 'catalog')}
+      {link(`${base}/routines`, 'clock', 'Routines', view === 'routines')}
       {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
     </nav>
   );
@@ -458,6 +460,19 @@ function openLink(link: string): void {
 bridge.onLink(openLink);
 // The side panel's links open here.
 bridge.onRoute?.(navigate);
+
+/**
+ * A post in a list (and a line in the side panel) opens anywhere you click or tap it, not only on its title: a
+ * plain click outside its buttons and links follows its title link. Selecting text doesn't count as a click.
+ */
+document.addEventListener('click', (event) => {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const target = event.target as Element | null;
+  const row = target?.closest?.<HTMLElement>('.post-row, .panel-line');
+  if (!row || target!.closest('a, button, input, textarea, select, label, summary, [role="button"], .votes')) return;
+  if (getSelection()?.toString()) return;
+  row.querySelector<HTMLAnchorElement>('a.post-title, .panel-line > a')?.click();
+});
 
 /** Ctrl+click (Cmd+click on a Mac) on a post: work on it in the Claude app. */
 document.addEventListener(

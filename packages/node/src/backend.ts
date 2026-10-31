@@ -215,6 +215,8 @@ export interface ServiceInfo {
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
+  /** Websites it launched that don't serve their page yet: starting (fetching what they run), or why they can't. */
+  launching?: LaunchingWebsiteInfo[];
   /** An applet: the release it runs, pinned; `latest` when its project released a newer one. */
   artifact?: ServiceArtifactInfo;
   /** The names of its settings (the values stay on this node). */
@@ -283,6 +285,17 @@ export interface HostedWebsiteInfo {
   error?: string;
 }
 
+/** A website launched from a release, before it serves its page: what it runs, where, and how starting it goes. */
+export interface LaunchingWebsiteInfo {
+  /** What stops it (removeService): no name anyone sees otherwise. */
+  id: string;
+  project: SpaceRef;
+  name: string;
+  tag: string;
+  progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
+  error?: string;
+}
+
 /** A release of a project, as it can be started as a service. */
 export interface ArtifactInfo {
   id: string;
@@ -299,8 +312,8 @@ export interface ArtifactInfo {
   settings: AppSetting[];
   /** A Weave service: an image carrying its manifest, run in the sandbox only. */
   packaged?: true;
-  /** How it would run on this node: its release file for this platform, its container (Docker), or in Weave itself (WebAssembly). */
-  runs?: 'release' | 'container' | 'wasm';
+  /** How it would run on this node: its container (Docker), or in Weave itself (WebAssembly). Never as a program. */
+  runs?: 'container' | 'wasm';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
   /** Where its files are: a GitHub release (handed out by a service that offers artifact.fetch), or an image. */
@@ -372,6 +385,13 @@ export interface AppReleases {
 }
 
 /** A keyvault of yours: what it holds access to, what you handed which project, who uses it, and what it minted. */
+/** An app of a keyvault let go of: uninstalled (unless a problem says why not), and where its person deletes it. */
+export interface ForgottenAppInfo {
+  app: string;
+  page?: string;
+  problem?: string;
+}
+
 export interface KeyvaultInfo {
   name: string;
   title: string;
@@ -381,7 +401,7 @@ export interface KeyvaultInfo {
   resources?: string;
   settings: AppSetting[];
   /** Your apps in it: what's kept of each (never its key), its next page (installing it), and what it handed which project. */
-  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; handed: Array<{ project: { id: string; name: string }; resources: string[] }> }>;
+  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; manage?: string; handed: Array<{ project: { id: string; name: string }; resources: string[] }> }>;
   /** Your services that use it, with the rights their contracts declare. */
   users: Array<{ service: string; rights: Record<string, string>; projects: Array<{ id: string; name: string }> }>;
   log: Array<{ time: string; service: string; project: { id: string; name: string }; resources: string[]; rights: Record<string, string>; app?: string }>;
@@ -1242,8 +1262,10 @@ export interface ClaudeCodeFollow {
 export interface PermissionRequest {
   id: string;
   agent: string;
-  /** The kinds it asks for (only those it doesn't have yet). */
+  /** The kinds it asks for (only those it doesn't have yet); none when it asks for repositories instead (hand). */
   kinds: string[];
+  /** Asking you to hand a project resources (repositories) your keyvault's app reaches: allowing hands them, with what it has. */
+  hand?: { keyvault: string; title: string; platform: string; app: string; project: { id: string; name: string }; resources: string[] };
   /** What it wants to do with them, in its words. */
   reason: string;
   time: string;
@@ -1775,7 +1797,8 @@ export interface Backend {
   // groups and projects
   spaces(kind?: SpaceKind): Promise<SpaceInfo[]>;
   createGroup(name: string): Promise<SpaceInfo>;
-  createProject(input: { name: string; description?: string }): Promise<ProjectInfo>;
+  /** A new project, yours (you found it). An agent (as) may start one for you with the weave.space.create permission. */
+  createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo>;
   /** An invite link for a group (any member) or a project (maintainers), valid for `hours`. */
   invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
@@ -1960,7 +1983,7 @@ export interface Backend {
    * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
    * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
    */
-  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; name?: string }): Promise<ServiceInfo>;
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
   /** Maintainers: hand out a file of a GitHub release as an artifact of the project (a document, a dataset), fingerprinted. */
   releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
   /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */
@@ -1976,7 +1999,8 @@ export interface Backend {
   keyvaults(): Promise<KeyvaultInfo[]>;
   /** Add a keyvault Weave ships: an app you made for a service before moves into it. */
   addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo>;
-  removeKeyvault(name: string): Promise<void>;
+  /** Remove a keyvault: its apps taken off everything first (uninstalled), and where to delete each on its platform. */
+  removeKeyvault(name: string): Promise<{ forgotten: ForgottenAppInfo[] }>;
   /**
    * Add a keyvault or fetcher someone released in a project (its release by id or tag, or its latest): approved once,
    * its component fetched, checked against what was released and pinned. It then shows in Keys & devices, beside
@@ -1988,12 +2012,14 @@ export interface Backend {
   /** Setup packs this Weave ships: steps it walks you through, like adding GitHub to a project (a keyvault, its app, services). */
   setupPacks(): Promise<Pack[]>;
   /** Make your app for a keyvault (GitHub's App manifest flow): the page to open, and an id to wait on (finishKeyvaultApp). */
-  startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }>;
+  startKeyvaultApp(input: { name: string; setting: string; owner?: string }): Promise<{ id: string; url: string }>;
+  /** Whom you may make one of a keyvault's apps for: your account there, and organizations it shows you're in. */
+  keyvaultOwners(input: { name: string }): Promise<{ login?: string; owners: Array<{ value: string; note?: string }> }>;
   finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo>;
   /** What one of a keyvault's apps reaches (its only one, unless named), to hand to projects. */
   keyvaultReachable(input: { name: string; app?: string }): Promise<Array<{ value: string; note?: string }>>;
   /** Forget one of a keyvault's apps, and what it handed out: it stays on the provider until you delete it there. */
-  removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo>;
+  removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo & { forgotten: ForgottenAppInfo }>;
   /** Hand a project (name or id) these resources (repositories) of one of a keyvault's apps, instead of what it had: yours alone to say. */
   handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo>;
   /** Requests to services in a space, with their answers (optionally for one service). */
@@ -2046,6 +2072,8 @@ export interface Backend {
   updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo>;
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
   requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest>;
+  /** An agent asks its person to hand a project repositories from their keyvault for a platform (github): waits in their Inbox, like a permission. */
+  requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
   openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
@@ -2123,7 +2151,7 @@ export interface Backend {
   nameSession(input: { session: SessionRef; name?: string; about?: string; description?: string; rename?: boolean }): Promise<SessionInfo>;
   /** Your agents' requests waiting for your answer. */
   permissionRequests(): Promise<PermissionRequest[]>;
-  /** Allow (adds the kinds to the agent) or decline an agent's request. */
+  /** Allow (adds the kinds to the agent, or hands the project the repositories) or decline an agent's request. */
   answerPermission(input: { id: string; allow: boolean }): Promise<PermissionRequest>;
   /** Your own post: change its title, text, link or image (empty removes a link or image), or name its co-authors anew (`with`, as in submit; [] for none). Leave out what stays. */
   editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
@@ -2418,12 +2446,12 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'directory', 'find', 'contactLink', 'addContact',
-  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
+  'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',

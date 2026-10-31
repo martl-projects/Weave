@@ -158,6 +158,12 @@ world keyvault {
   export reachable: func(input: string) -> result<string, string>;
   /// Access cut to {resources, rights} (JSON): {token, expires?} as JSON, or why not.
   export mint: func(input: string) -> result<string, string>;
+  /// Other accounts its person may make an app for (organizations of theirs), from {login} (JSON, their own account's
+  /// name there): [{value, note?}] as JSON, or [] when it can't tell. Their own account isn't among them.
+  export owners: func(input: string) -> result<string, string>;
+  /// One of its apps is being forgotten (its setting, as called for it): take it off everything it was given on the
+  /// platform (uninstall it), so its access ends now. Weave can't delete the app itself: its person does, on its page.
+  export forget: func(input: string) -> result<string, string>;
 }
 
 /// A client service: a board's lens, run by every member's own node. Pure: it gets nothing from Weave but what it's

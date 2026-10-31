@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { HarnessInfo, PermissionRequest } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
@@ -125,8 +125,36 @@ const KIND_WORDS: Record<string, string> = {
   'weave.app': "publish projects' apps and point them at releases",
   'weave.project.page': "change your projects' pages",
   'weave.project.public': 'show projects on your public hub',
+  'weave.space.create': 'start projects for you',
 };
 const kindWords = (kinds: string[]) => kinds.map((k) => KIND_WORDS[k] ?? k).join(', ');
+
+/** What a request asks, in words: kinds to sign, or repositories for a project. */
+function asked(r: PermissionRequest): { title: string; what: ReactNode; detail: string; done: string } {
+  if (r.hand) {
+    const many = r.hand.resources.length > 1;
+    return {
+      title: `${r.agent} asks for ${many ? 'repositories' : 'a repository'}`,
+      what: (
+        <>
+          to give <b>{r.hand.project.name}</b> {many ? 'the repositories' : 'the repository'} <b>{r.hand.resources.join(', ')}</b> from your {r.hand.title}
+        </>
+      ),
+      detail: `Its services there (like GitHub releases) then reach ${many ? 'them' : 'it'} with your App's access; take ${many ? 'them' : 'it'} back in Keys & devices.`,
+      done: `${r.hand.project.name} has ${r.hand.resources.join(', ')}`,
+    };
+  }
+  return {
+    title: `${r.agent} asks for a permission`,
+    what: (
+      <>
+        to <b>{kindWords(r.kinds)}</b>
+      </>
+    ),
+    detail: `${r.kinds.join(', ')}. Allowing lets it do this from now on, signed with its own key; take it back in Keys & devices.`,
+    done: `${r.agent} may now ${kindWords(r.kinds)}`,
+  };
+}
 
 /**
  * Over the whole app: an agent waiting for a permission. Later hides it
@@ -137,19 +165,18 @@ export function AgentAsks() {
   const [later, setLater] = useState<string[]>([]);
   const r = data?.find((x) => !later.includes(x.id));
   if (!r) return null;
-  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? `${r.agent} may now ${kindWords(r.kinds)}` : 'Declined');
+  const a = asked(r);
+  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : 'Declined');
   return (
-    <Modal title={`${r.agent} asks for a permission`} onClose={() => setLater([...later, r.id])}>
+    <Modal title={a.title} onClose={() => setLater([...later, r.id])}>
       <div className="approve-launch">
         <Icon name="user" size={32} />
         <div>
           <p>
-            Your agent <b>{r.agent}</b> asks to <b>{kindWords(r.kinds)}</b>.
+            Your agent <b>{r.agent}</b> asks {a.what}.
           </p>
           {r.reason && <p>“{r.reason}”</p>}
-          <p className="small">
-            {r.kinds.join(', ')}. Allowing lets it do this from now on, signed with its own key; take it back in Keys &amp; devices.
-          </p>
+          <p className="small">{a.detail}</p>
         </div>
       </div>
       <div className="buttons">
@@ -165,16 +192,17 @@ export function AgentAsks() {
 
 /** In the Inbox: one of your agents asks to do more. */
 export function PermissionCard({ request: r }: { request: PermissionRequest }) {
-  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? `${r.agent} may now ${kindWords(r.kinds)}` : 'Declined');
+  const a = asked(r);
+  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : 'Declined');
   return (
     <div className="admission window">
       <div className="window-body">
         <Icon name="user" size={32} />
         <div className="grow">
-          Your agent <b>{r.agent}</b> asks to <b>{kindWords(r.kinds)}</b>
+          Your agent <b>{r.agent}</b> asks {a.what}
           {r.reason && <>: “{r.reason}”</>}
           <div className="small muted">
-            {r.kinds.join(', ')} · {ago(r.time)}. Allowing lets it do this from now on, signed with its own key; take it back in Keys &amp; devices.
+            {ago(r.time)} · {a.detail}
           </div>
         </div>
         <AsyncButton onClick={() => answer(false)}>Decline</AsyncButton>

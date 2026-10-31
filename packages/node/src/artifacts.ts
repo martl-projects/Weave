@@ -152,9 +152,10 @@ export class Releases {
     const folder = join(dir, tagFolder(a.tag));
     if (this.#runtime.runs(a.manifest) === 'container' || existsSync(folder)) return then();
     if (this.jobs.get(job)?.progress) return;
-    // A WebAssembly service: its release file for wasm, or its image, pulled by Weave itself (no Docker).
+    // A WebAssembly service: its release file for wasm, or its image, pulled by Weave itself (no Docker). Nothing else
+    // is fetched to run: Weave starts no programs from releases.
     const wasm = this.#runtime.runs(a.manifest) === 'wasm';
-    const asset = a.manifest.install?.assets?.[wasm ? 'wasm' : platformKey()];
+    const asset = wasm ? a.manifest.install?.assets?.wasm : undefined;
     const image = wasm && !asset ? a.manifest.install?.image : undefined;
     if (!asset && !image) {
       this.jobs.set(job, { error: this.#runtime.whyNot(a.manifest) });

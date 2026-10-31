@@ -4,7 +4,7 @@ import type { FeedItem, MarkInfo, MarkIssuerInfo, MarksAnswer, MarkServiceInfo }
 import { releaseFolder } from './lenses.ts';
 import type { Decoded, ServicesHost } from './node.ts';
 import { prepareWasm } from './runtime.ts';
-import { SHIPPED_DIR, shippedProblem, shippedServices, type ShippedService } from './shipped.ts';
+import { SHIPPED_DIR, shippedProblem, shippedServices, shippedStamp, type ShippedService } from './shipped.ts';
 
 /*
  * Mark services (docs/v2-stage19.md): what shows next to names, from issuers you or a space chose. Each is a pure
@@ -178,14 +178,15 @@ export class Marks {
     return [...weaves, ...released];
   }
 
-  /** The mark services this Weave ships, by their app id (read again only when the folder changes). */
+  /** The mark services this Weave ships, by their app id (read again when the folder or its list changes). */
   #shipped(): Map<string, ShippedService> {
     const dir = this.h.shippedDir() ?? SHIPPED_DIR;
-    if (!this.#shippedFrom || this.#shippedFrom.dir !== dir) this.#shippedFrom = { dir, services: new Map([...shippedServices(dir).values()].filter((s) => s.manifest.marks).map((s) => [s.manifest.app, s])) };
+    const stamp = shippedStamp(dir);
+    if (this.#shippedFrom?.stamp !== stamp) this.#shippedFrom = { stamp, services: new Map([...shippedServices(dir).values()].filter((s) => s.manifest.marks).map((s) => [s.manifest.app, s])) };
     return this.#shippedFrom.services;
   }
 
-  #shippedFrom?: { dir: string | undefined; services: Map<string, ShippedService> };
+  #shippedFrom?: { stamp: string; services: Map<string, ShippedService> };
 
   /** Whether a name is one of what Weave ships (a mark service, a service, keyvault, fetcher or verifier): never a project's. */
   #reserved(app: string): boolean {

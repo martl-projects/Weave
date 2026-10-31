@@ -18,6 +18,7 @@ import {
   MANIFEST_RULES,
   KEYSTORE_NAMES,
   releaseWorkflow,
+  wasmReleaseWorkflow,
   loadConfig,
   parseBootstrap,
   resolveHome,
@@ -361,7 +362,7 @@ artifacts and websites: a project's releases, and websites that run them (needs 
   app show -p <project>      what it describes: its web page's port, how it starts, its settings
   app check [file]           check a weave.app.json (default: here), every problem at once
   app example                an annotated weave.app.json and its rules
-  app workflow <app> <entry> a GitHub Actions workflow that builds standalone programs and releases them on each version tag
+  app workflow <app> <entry> [owner]  a GitHub Actions workflow that builds a container image and releases it on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
   catalog <space>            the Weave services a space's maintainers list there, to install
@@ -2697,9 +2698,14 @@ ${postLine(p)}`);
       if (sub === 'example') {
         return out({ rules: MANIFEST_RULES, example: MANIFEST_EXAMPLE }, () => `${JSON.stringify(MANIFEST_EXAMPLE, null, 2)}\n\n${MANIFEST_RULES.map((r) => `- ${r}`).join('\n')}`);
       }
+      // A WebAssembly app: its component (and its site folder), as in weave.app.json's wasm.
+      if (sub === 'workflow' && args[1] && args[2]?.endsWith('.wasm')) {
+        const w = wasmReleaseWorkflow(args[1], { component: args[2], ...(args[3] ? { site: args[3] } : {}) });
+        return out(w, () => `# ${w.file}\n${w.content}\n# attaches ${w.asset}\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
+      }
       if (sub === 'workflow' && args[1] && args[2]) {
-        const w = releaseWorkflow(args[1], args[2]);
-        return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "release": ${JSON.stringify(w.startRelease)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
+        const w = releaseWorkflow(args[1], args[2], args[3]);
+        return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "image": ${JSON.stringify(w.startImage)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
       }
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));

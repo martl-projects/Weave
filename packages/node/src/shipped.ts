@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkManifest, parsePack, type AppManifest, type Pack } from '@weave/core';
@@ -39,6 +39,15 @@ const builtIn = (): Record<string, string> | undefined => (typeof WEAVE_SHIPPED 
 export const digestOf = (file: string): string => `sha256:${createHash('sha256').update(readFileSync(file)).digest('hex')}`;
 
 /** The services this Weave ships, from a folder (tests give their own). */
+/** When the folder's list last changed: what's kept of it is read again after a build (shipped.json's time). */
+export function shippedStamp(dir: string | undefined): string {
+  try {
+    return dir ? `${dir}|${statSync(join(dir, 'shipped.json')).mtimeMs}` : '';
+  } catch {
+    return `${dir}|`;
+  }
+}
+
 export function shippedServices(dir: string | undefined = SHIPPED_DIR): Map<string, ShippedService> {
   const out = new Map<string, ShippedService>();
   if (!dir || !existsSync(join(dir, 'shipped.json'))) return out;

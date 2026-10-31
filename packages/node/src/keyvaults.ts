@@ -33,6 +33,16 @@ export interface StoredApp extends Registered {
   handed: Record<string, string[]>;
   /** What was taken back from each project, and when: still minted for a day, for services to undo what they did with it. */
   withdrawn?: Record<string, Record<string, string>>;
+  /** The organization it was made for (its name there), not its person's own account. */
+  owner?: string;
+}
+
+/** An app let go of: whether its access ended (uninstalled), and where its person deletes it on the provider. */
+export interface ForgottenApp {
+  app: string;
+  page?: string;
+  /** Why its access couldn't be ended here: it's still installed until its person deletes it. */
+  problem?: string;
 }
 
 export interface StoredKeyvault {
@@ -66,7 +76,7 @@ export interface KeyvaultState {
   digest: string;
   settings: AppSetting[];
   /** Its apps: what's kept of each (never its key), its next page (installing it), and what it handed which project. */
-  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; handed: Record<string, string[]> }>;
+  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; manage?: string; handed: Record<string, string[]> }>;
   log: KeyvaultUse[];
   problem?: string;
 }
@@ -155,7 +165,8 @@ export class Keyvaults {
     const apps = Object.entries(k.apps).map(([key, app]) => {
       const then = settings.find((e) => e.name === app.setting)?.register?.then;
       const next = then ? filled(then, app.info) : undefined;
-      return { key, setting: app.setting, info: app.info, ...(next ? { next } : {}), handed: app.handed };
+      const manage = this.#manage(settings, app);
+      return { key, setting: app.setting, info: app.info, ...(next ? { next } : {}), ...(manage ? { manage } : {}), handed: app.handed };
     });
     return { name: k.name, title: s?.manifest.name ?? k.name, ...(s?.about ? { about: s.about } : {}), platform: s?.manifest.keyvault?.platform ?? k.name, ...(s?.manifest.keyvault?.resources ? { resources: s.manifest.keyvault.resources } : {}), digest: k.digest, settings, apps, log: k.log.slice(-50), ...(problem ? { problem } : {}) };
   }
@@ -192,21 +203,47 @@ export class Keyvaults {
     return this.state(next);
   }
 
-  remove(name: string): void {
-    const all = this.#stored();
-    if (!all.some((k) => k.name === name)) throw new Error(`no keyvault ${name} here`);
-    this.#write(all.filter((k) => k.name !== name));
+  /** Remove it with all its apps: each let go of first (uninstalled), and where to delete it on the provider. */
+  async remove(name: string): Promise<ForgottenApp[]> {
+    const k = this.#stored().find((x) => x.name === name);
+    if (!k) throw new Error(`no keyvault ${name} here`);
+    const forgotten = await Promise.all(Object.entries(k.apps).map(([key, app]) => this.#letGo(k, key, app)));
+    this.#write(this.#stored().filter((x) => x.name !== name));
     this.#forget(name);
+    return forgotten;
   }
 
-  /** Forget one of its apps (and what it handed out): your services lose what they got through it. It stays on the provider until you delete it there. */
-  removeApp(input: { name: string; app: string }): KeyvaultState {
-    const k = this.#change(input.name, (k) => {
-      this.#app(k, input.app);
-      delete k.apps[input.app];
-    });
-    this.#forget(input.name, input.app);
-    return this.state(k);
+  /**
+   * Forget one of its apps (and what it handed out): your services lose what they got through it, and it's taken off
+   * everything it was given (uninstalled). The app stays on the provider until you delete it there: its page says where.
+   */
+  async removeApp(input: { name: string; app: string }): Promise<{ state: KeyvaultState; forgotten: ForgottenApp }> {
+    const before = this.#stored().find((x) => x.name === input.name);
+    if (!before) throw new Error(`no keyvault ${input.name} here: add it first (Keys & devices)`);
+    const [key, app] = this.#app(before, input.app);
+    const forgotten = await this.#letGo(before, key, app);
+    const k = this.#change(input.name, (k) => void delete k.apps[key]);
+    this.#forget(input.name, key);
+    return { state: this.state(k), forgotten };
+  }
+
+  /** Where its person deletes an app on the provider: their own account's page, or the organization's it was made for. */
+  #manage(settings: AppSetting[], app: StoredApp): string | undefined {
+    const register = settings.find((e) => e.name === app.setting)?.register;
+    const template = app.owner ? register?.manageFor?.replace('{owner}', encodeURIComponent(app.owner)) : register?.manage;
+    return template ? filled(template, app.info) : undefined;
+  }
+
+  /** Ask the keyvault to end an app's access (uninstall it), before Weave forgets its key: after, nobody could. */
+  async #letGo(k: StoredKeyvault, key: string, app: StoredApp): Promise<ForgottenApp> {
+    const page = this.#manage(this.state(k).settings, app);
+    const name = String(app.info.slug ?? app.info.id ?? key);
+    try {
+      await this.#call(k, app, key, 'forget', '{}');
+      return { app: name, ...(page ? { page } : {}) };
+    } catch (error) {
+      return { app: name, ...(page ? { page } : {}), problem: (error as Error).message };
+    }
   }
 
   /** Hand a project (by id) these resources (repositories) of one of its apps, instead of what it had: yours alone to say. */
@@ -232,12 +269,12 @@ export class Keyvaults {
   }
 
   /** Make an app for one of its settings (GitHub's App manifest flow): another, if it has some. The page to open, and an id to wait on. */
-  async startApp(input: { name: string; setting: string; account: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
+  async startApp(input: { name: string; setting: string; account: string; owner?: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
     const k = this.#stored().find((x) => x.name === input.name);
     if (!k) throw new Error(`no keyvault ${input.name} here: add it first`);
     const asked = this.state(k).settings.find((e) => e.name === input.setting);
     if (!asked?.register) throw new Error(`${input.name} makes no app called ${input.setting}`);
-    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {} })) });
+    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, ...(input.owner ? { owner: input.owner } : {}), fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {}, ...(input.owner ? { owner: input.owner } : {}) })) });
     const id = randomBytes(16).toString('base64url');
     const done = started.done.then(() => this.state(this.#stored().find((x) => x.name === input.name)!)).finally(() => setTimeout(() => this.#making.delete(id), 60_000).unref());
     done.catch(() => {});
@@ -257,6 +294,19 @@ export class Keyvaults {
     if (!k) throw new Error(`no keyvault ${name} here`);
     const [key, a] = this.#app(k, app);
     return JSON.parse(String(await this.#call(k, a, key, 'reachable', '{}'))) as Array<{ value: string; note?: string }>;
+  }
+
+  /** Other accounts its person may make an app for (organizations of theirs), from their own account's name there. */
+  async owners(name: string, login: string): Promise<Array<{ value: string; note?: string }>> {
+    const k = this.#stored().find((x) => x.name === name);
+    if (!k) throw new Error(`no keyvault ${name} here`);
+    try {
+      const got = JSON.parse(String(await this.#call(k, undefined, 'owners', 'owners', JSON.stringify({ login })))) as unknown;
+      return Array.isArray(got) ? got.filter((o): o is { value: string; note?: string } => typeof o?.value === 'string').slice(0, 100) : [];
+    } catch {
+      // One built before it could tell: nothing to pick from, the name is typed instead.
+      return [];
+    }
   }
 
   /**
@@ -283,7 +333,7 @@ export class Keyvaults {
   }
 
   /** Call one of a keyvault's functions, in a worker of its own for that call. */
-  async #call(k: StoredKeyvault, app: StoredApp, appKey: string, fn: string, input: string): Promise<unknown> {
+  async #call(k: StoredKeyvault, app: StoredApp | undefined, appKey: string, fn: string, input: string): Promise<unknown> {
     const s = this.shipped().find((x) => x.name === k.shipped);
     if (!s) throw new Error(`this Weave ships no keyvault ${k.shipped}`);
     const problem = shippedProblem(s);
@@ -302,8 +352,8 @@ export class Keyvaults {
         net: s.manifest.keyvault?.net ?? [],
         host: (name, args) => {
           // The app it's called for: what's kept of it (never its key), as the setting it was made for, and signing with its key.
-          if (name === 'setting') return String(args[0]) === app.setting ? JSON.stringify(app.info) : undefined;
-          if (name === 'sign') return signWith(String(args[0]) === app.setting ? app.key : undefined, String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (name === 'setting') return app && String(args[0]) === app.setting ? JSON.stringify(app.info) : undefined;
+          if (name === 'sign') return signWith(app && String(args[0]) === app.setting ? app.key : undefined, String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (name === 'log') return void appendFileSync(join(dir, 'keyvault.log'), `${String(args[0]).slice(0, 2000)}\n`);
           throw new Error(`a keyvault has no ${name}`);
         },

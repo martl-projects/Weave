@@ -35,8 +35,13 @@ export const filled = (template: string, info: Record<string, Json>): string | u
  * Start registering: the page to open in the browser, and the app once it's made (10 minutes at most). `keep` is
  * called with it before the browser goes on, so what's shown next already knows it.
  */
-export async function startRegistration(input: { register: AppRegister; label: string; account: string; fetch: Fetch; keep(app: Registered): void | Promise<void> }): Promise<{ url: string; done: Promise<Registered> }> {
-  const { register, label, account } = input;
+export async function startRegistration(input: { register: AppRegister; label: string; account: string; owner?: string; fetch: Fetch; keep(app: Registered): void | Promise<void> }): Promise<{ url: string; done: Promise<Registered> }> {
+  const { register, label } = input;
+  // For an organization of theirs: made on its page, and named for it.
+  if (input.owner !== undefined && !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(input.owner)) throw new Error('an organization is named by its name there: letters, digits and dashes');
+  if (input.owner !== undefined && !register.pageFor) throw new Error(`a ${label} is made for your own account only`);
+  const page = input.owner !== undefined ? register.pageFor!.replace('{owner}', encodeURIComponent(input.owner)) : register.page;
+  const account = input.owner ?? input.account;
   const state = randomBytes(16).toString('base64url');
   let finish!: (code: string) => void;
   const coming = new Promise<string>((resolve) => (finish = resolve));
@@ -55,9 +60,9 @@ export async function startRegistration(input: { register: AppRegister; label: s
         named.name = named.name.replace('{account}', account.length > room ? account.slice(0, room) : account);
       }
       const manifest = JSON.stringify({ ...named, redirect_url: `${base}back` });
-      const action = `${register.page}${register.page.includes('?') ? '&' : '?'}state=${encodeURIComponent(state)}`;
+      const action = `${page}${page.includes('?') ? '&' : '?'}state=${encodeURIComponent(state)}`;
       const esc = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
-      return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`<form method="post" action="${esc(action)}"><input type="hidden" name="manifest" value="${esc(manifest)}"><p>Creating your ${esc(label)} on ${esc(new URL(register.page).hostname)}…</p><button>Go on</button></form><script>document.forms[0].submit()</script>`));
+      return void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html(`<form method="post" action="${esc(action)}"><input type="hidden" name="manifest" value="${esc(manifest)}"><p>Creating your ${esc(label)} on ${esc(new URL(page).hostname)}…</p><button>Go on</button></form><script>document.forms[0].submit()</script>`));
     }
     if (url.pathname === '/back' && url.searchParams.get('code')) {
       finish(url.searchParams.get('code')!);

@@ -107,7 +107,7 @@ export type {
   Whoami,
 } from './backend.ts';
 export { noAgent, PROJECT_STATUSES, RPC_METHODS } from './backend.ts';
-export { releaseWorkflow, type ReleaseWorkflow } from './releaseworkflow.ts';
+export { releaseWorkflow, wasmReleaseWorkflow, type ReleaseWorkflow, type WasmReleaseWorkflow } from './releaseworkflow.ts';
 export { MARKS_TIMING } from './marks.ts';
 export { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, type ManifestCheck } from '@weave/core';
 export { checkGumroadLicense, createGumroadMembership, startGumroadSignIn, type CreatedGumroadMembership, type GumroadSignIn, type NewGumroadMembership } from './gumroad.ts';

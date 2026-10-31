@@ -98,7 +98,8 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
       .filter(({ e }) => !e.installed)
       .map(({ e, s }): Entry => ({ key: `catalog:${s.id}:${e.app}`, icon: serviceIcon({ name: e.app }), title: e.name, by: e.origin.project.name ? `p/${e.origin.project.name}` : (e.by.name ?? 'a project'), about: e.summary || `Listed in ${s.name}`, source: inCatalog(s), open: () => setFromCatalog({ space: s, entry: e }) })),
     ...(artifacts ?? [])
-      .filter((a) => a.runs && (a.website || a.applet))
+      // Websites aren't services to add: the Websites service launches them, each until it's closed.
+      .filter((a) => a.runs && a.kind === 'service')
       .map((a): Entry => ({ key: `release:${a.id}`, icon: serviceIcon({ name: a.name, contract: a.applet }), title: `${a.name} ${a.tag}`, by: `p/${a.project.name}`, about: a.applet ? `It ${contractText(a.applet)}` : 'A website', source: fromProject(a.project, project.id), open: () => setPicked({ kind: 'release', artifact: a }) })),
     ...services
       .filter((s) => !s.node && !here(s) && s.builtin !== 'github')

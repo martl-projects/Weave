@@ -203,8 +203,11 @@ describe('WebAssembly services as releases', { timeout: 120_000 }, () => {
       await martl.addService({ builtin: 'website', spaces: ['Arcade'] });
       await expect(martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id } })).rejects.toThrow(/approve it first: Weave would run/);
       const launched = await martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true });
-      expect(launched.name).toBe('counter');
-      await martl.serviceReady('counter');
+      await martl.serviceReady(launched.name);
+      // No service of its own: no key, no name anyone sees, not listed. The website service runs it, and signs for it.
+      expect(launched.name).toMatch(/^website-[0-9a-f]{8}$/);
+      expect((await martl.services()).map((s) => s.name)).toEqual(['website']);
+      expect((await martl.whoami()).agents.some((a) => a.name === launched.name)).toBe(false);
       // In Live, for everyone there, with the release it runs.
       const site = await vi.waitFor(
         async () => {
@@ -215,17 +218,53 @@ describe('WebAssembly services as releases', { timeout: 120_000 }, () => {
         { timeout: 30_000, interval: 200 },
       );
       expect(site.from).toEqual({ project: { id: artifact.project.id, name: 'Arcade' }, release: artifact.id, tag: '1.0', name: 'Counter' });
+      expect(site.offeredBy?.did).toBe((await martl.services())[0].did);
       sync([martl, lena]);
       expect((await lena.websites('Arcade')).find((r) => r.id === site.id)?.from).toMatchObject({ name: 'Counter', tag: '1.0' });
-      // Launched again: a second one, under its own name.
-      expect((await martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true })).name).toBe('counter-2');
-      await martl.removeService('counter-2');
-      // Closed, it's over: its service goes with it.
-      await martl.closeWebsite(site.id);
-      expect((await martl.services()).map((s) => s.name)).not.toContain('counter');
+      // Launched again: a second website of it, beside the first.
+      const again = await martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true });
+      expect(again.name).not.toBe(launched.name);
+      await vi.waitFor(async () => expect((await martl.websites('Arcade')).filter((r) => r.name === 'Counter')).toHaveLength(2), { timeout: 30_000, interval: 200 });
+      // Closed, each is over, and what ran it with it; the website service stays.
+      for (const r of (await martl.websites('Arcade')).filter((r) => r.name === 'Counter')) await martl.closeWebsite(r.id);
+      expect(await martl.websites('Arcade')).toEqual([]);
+      expect((await martl.services()).map((s) => s.name)).toEqual(['website']);
+      expect(martl.replica.authority.grant((await martl.services())[0].did)?.revokedAfter).toBeUndefined();
       await expect(martl.launchWebsite({ project: 'Arcade', artifact: { project: 'Arcade', id: (await martl.artifacts('Arcade'))[0].id + 'x' }, approve: true })).rejects.toThrow(/no such artifact/);
     } finally {
-      await martl.removeService('counter').catch(() => {});
+      await api.close();
+    }
+  });
+
+  it('takes over a website that ran as a service of its own: its website service runs it, and its key goes', async () => {
+    process.env.FAKE_DOCKER_DOWN = '1';
+    const label = { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' }, wasm: { component: 'counter.wasm', site: 'site' } };
+    const fetchImpl = registry({ 'counter:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(label) }, wasm: layer } });
+    const martl = person('martl', fetchImpl);
+    await martl.createProject({ name: 'Arcade' });
+    await martl.releaseService({ project: 'Arcade', image: 'ghcr.io/martl/counter:1.0' });
+    await martl.addService({ builtin: 'website', spaces: ['Arcade'] });
+    // As Weave let it be added before: a service named counter, with a key.
+    const old = await martl.addService({ artifact: { project: 'Arcade' }, spaces: ['Arcade'], approve: true });
+    expect(old.name).toBe('counter');
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    try {
+      martl.runServices({ port: api.port });
+      await vi.waitFor(async () => expect((await martl.whoami()).agents.some((a) => a.name === 'counter')).toBe(false), { timeout: 10_000, interval: 100 });
+      expect((await martl.services()).map((s) => s.name)).toEqual(['website']);
+      expect(martl.replica.authority.grant(old.did)?.revokedAfter).toBeDefined();
+      // Its website runs on, closed like any launched one.
+      const site = await vi.waitFor(
+        async () => {
+          const found = (await martl.websites('Arcade')).find((r) => r.name === 'Counter');
+          expect(found).toBeTruthy();
+          return found!;
+        },
+        { timeout: 30_000, interval: 200 },
+      );
+      await martl.closeWebsite(site.id);
+      expect(await martl.websites('Arcade')).toEqual([]);
+    } finally {
       await api.close();
     }
   });

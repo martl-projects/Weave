@@ -554,7 +554,7 @@ import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
-import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
+import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
 import { ClientApps } from './clientapps.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
@@ -630,6 +630,11 @@ export interface StoredService {
   name: string;
   /** Launched as a website (launchWebsite): it's there for its website, and goes when that's closed. */
   launched?: true;
+  /**
+   * The website service that launched it: then it's no service of its own (no key, no profile, not listed), only what
+   * runs that website, and that website service signs for it. Before 0.22 a launched website had a key of its own.
+   */
+  launchedBy?: string;
   description: string;
   icon?: string;
   contract: ServiceContract;
@@ -1602,7 +1607,9 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(await this.#createSpace('group', name));
   }
 
-  async createProject(input: { name: string; description?: string }): Promise<ProjectInfo> {
+  async createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo> {
+    // An agent counts as its person: it may start a project for them, which is theirs, never its own.
+    if (input.as) this.#agentMay(input.as, KIND_SPACE_CREATE);
     const project = await this.#createSpace('project', input.name);
     if (input.description) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
     return this.project(project.id);
@@ -2399,6 +2406,52 @@ export class WeaveNode implements Backend {
     return request;
   }
 
+  async requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest> {
+    const agent = this.#agents.find((a) => a.name === input.as);
+    if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    const platform = input.platform ?? 'github';
+    const resources = [...new Set(input.resources.map((r) => String(r).trim()).filter((r) => r && r.length <= 200))].slice(0, 20);
+    if (!resources.length) throw new Error('name the repositories, like owner/name');
+    const project = this.#project(input.project);
+    const vault = this.#keyvaults.forPlatform(platform);
+    if (!vault) throw new Error(`your person has no ${platform} keyvault yet: they add one in Keys & devices`);
+    const keys = Object.keys(vault.apps);
+    if (!keys.length) throw new Error(`your person's ${platform} keyvault has no app yet: they make one in Keys & devices`);
+    // The app that reaches them all: asking for what none reaches would be allowed for nothing.
+    let app: string | undefined;
+    const problems: string[] = [];
+    for (const key of keys) {
+      try {
+        const reach = new Set((await this.#keyvaults.reachable(vault.name, key)).map((r) => r.value.toLowerCase()));
+        if (resources.every((r) => reach.has(r.toLowerCase()))) {
+          app = key;
+          break;
+        }
+      } catch (e) {
+        problems.push((e as Error).message);
+      }
+    }
+    if (!app) throw new Error(`your person's ${platform} App doesn't reach ${resources.join(', ')}${problems.length ? ` (${problems.join('; ')})` : ''}: they install it there on ${platform} first`);
+    const handed = new Set(vault.apps[app].handed[project.id] ?? []);
+    const now = new Date(this.clock()).toISOString();
+    const title = this.#keyvaults.state(vault).title;
+    const hand = { keyvault: vault.name, title, platform, app, project: { id: project.id, name: project.name }, resources: resources.filter((r) => !handed.has(r)) };
+    if (!hand.resources.length) return { id: '', agent: agent.name, kinds: [], hand: { ...hand, resources }, reason: '', time: now, state: 'allowed' };
+    const requests = this.#requests();
+    const open = requests.find((r) => r.state === 'pending' && r.agent === agent.name && r.hand?.project.id === project.id && hand.resources.every((x) => r.hand!.resources.includes(x)));
+    if (open) return open;
+    const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: [], hand, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
+    writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
+    this.#emitLive({
+      type: 'permission',
+      category: 'requests',
+      title: `Your agent ${agent.name} asks for ${hand.resources.length === 1 ? 'a repository' : 'repositories'}`,
+      text: `To give ${project.name} ${hand.resources.join(', ')} from your ${title}${request.reason ? `: “${request.reason}”` : ''}`,
+      open: { inbox: true },
+    });
+    return request;
+  }
+
   async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
     if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
     if (input.what === 'person') {
@@ -2941,7 +2994,12 @@ export class WeaveNode implements Backend {
     const request = requests.find((r) => r.id === input.id);
     if (!request) throw new Error('no such request (it may have been answered already)');
     if (request.state !== 'pending') return request;
-    if (input.allow) {
+    if (input.allow && request.hand) {
+      // Added to what the project has from that app: handing replaces it.
+      const { keyvault, app, project, resources } = request.hand;
+      const had = this.#keyvaults.list().find((k) => k.name === keyvault)?.apps.find((a) => a.key === app)?.handed[project.id] ?? [];
+      await this.handKeyvault({ name: keyvault, app, project: project.id, resources: [...new Set([...had, ...resources])] });
+    } else if (input.allow) {
       const agent = this.#agents.find((a) => a.name === request.agent);
       if (!agent) throw new Error(`the agent ${request.agent} is gone`);
       await this.updateAgent({ name: agent.name, permissions: [...agent.permissions, ...request.kinds] });
@@ -9618,7 +9676,10 @@ export class WeaveNode implements Backend {
   async launchWebsite(input: Parameters<Services['launchWebsite']>[0] & { announce?: boolean }): Promise<ServiceInfo> {
     const { announce, ...rest } = input;
     const service = await this.#services.launchWebsite(rest);
-    if (announce !== false) await this.#announce(this.#project(input.project).id, { kind: 'website', id: service.did }, `started ${service.artifact?.name ?? service.name}: come and join`);
+    // Said once its website is there: the announcement names that website, not its website service.
+    const project = this.#project(input.project).id;
+    if (announce !== false)
+      void this.#services.launchedWebsite(service.name).then((room) => (room ? this.#announce(project, { kind: 'website', id: room }, `started ${service.artifact?.name ?? service.name}: come and join`) : undefined)).catch(() => {});
     return service;
   }
 
@@ -9703,8 +9764,9 @@ export class WeaveNode implements Backend {
     return this.#keyvaultInfo(this.#keyvaults.add({ shipped: input.shipped, apps }));
   }
 
-  async removeKeyvault(name: string): Promise<void> {
-    this.#keyvaults.remove(name);
+  /** Remove a keyvault: its apps uninstalled first, and where to delete each on its platform. */
+  async removeKeyvault(name: string): Promise<{ forgotten: ForgottenApp[] }> {
+    return { forgotten: await this.#keyvaults.remove(name) };
   }
 
   async addClientApp(input: { project: string; artifact?: string; approve?: boolean }): Promise<KeyvaultInfo | FetcherInfo> {
@@ -9729,16 +9791,32 @@ export class WeaveNode implements Backend {
   async removeClientApp(name: string): Promise<void> {
     const c = this.#clientApps.list().find((x) => x.name === name);
     if (!c) throw new Error(`nothing named ${name} was added from a release here`);
-    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) this.#keyvaults.remove(name);
+    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) await this.#keyvaults.remove(name);
     if (c.kind === 'fetcher' && this.#fetchers.list().some((f) => f.name === name)) this.#fetchers.remove(name);
     this.#clientApps.remove(name);
   }
 
-  async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {
+  /** Make one of a keyvault's apps: for your own account, or (owner) for an organization of yours. */
+  async startKeyvaultApp(input: { name: string; setting: string; owner?: string }): Promise<{ id: string; url: string }> {
     const k = this.#keyvaults.list().find((x) => x.name === input.name);
     // Named for whose it is: the account you proved there, else your name here.
     const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;
     return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
+  }
+
+  /**
+   * Whom you may make one of a keyvault's apps for: your own account there (the one your apps are made for, else the
+   * one you proved) and the organizations it shows you're in, less those that have an app of yours already.
+   */
+  async keyvaultOwners(input: { name: string }): Promise<{ login?: string; owners: Array<{ value: string; note?: string }> }> {
+    const k = this.#keyvaults.list().find((x) => x.name === input.name);
+    if (!k) throw new Error(`no keyvault ${input.name} here`);
+    const made = new Set(k.apps.map((a) => String(a.info['owner.login'] ?? '').toLowerCase()).filter(Boolean));
+    const proven = (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle;
+    // Your own: the account an app of yours was made for that isn't an organization's, else the one you proved.
+    const login = proven ?? k.apps.map((a) => String(a.info['owner.login'] ?? '')).find(Boolean);
+    const owners = login ? await this.#keyvaults.owners(input.name, login) : [];
+    return { ...(login ? { login } : {}), owners: owners.filter((o) => !made.has(o.value.toLowerCase())) };
   }
 
   async finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo> {
@@ -9749,10 +9827,11 @@ export class WeaveNode implements Backend {
     return this.#keyvaults.reachable(input.name, input.app);
   }
 
-  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo> {
-    const k = this.#keyvaultInfo(this.#keyvaults.removeApp(input));
+  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo & { forgotten: ForgottenApp }> {
+    const { state, forgotten } = await this.#keyvaults.removeApp(input);
+    const k = this.#keyvaultInfo(state);
     for (const u of k.users) this.#services.restartSoon(u.service);
-    return k;
+    return { ...k, forgotten };
   }
 
   async handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {

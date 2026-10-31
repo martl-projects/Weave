@@ -2,7 +2,7 @@ import { artifactsOf, checkHintAnswer, hintKey, hintSubjectKind, HINT_SLOTS, KIN
 import type { HintInfo, HintsAnswer, HintServiceInfo, Notice } from './backend.ts';
 import { Folder, MARKS_TIMING, orderKey, timeout } from './marks.ts';
 import type { Decoded, ServicesHost } from './node.ts';
-import { SHIPPED_DIR, shippedServices, type ShippedService } from './shipped.ts';
+import { SHIPPED_DIR, shippedServices, shippedStamp, type ShippedService } from './shipped.ts';
 
 /*
  * Hint services (docs/v2-stage20.md): numbers about your own state next to places, like unread counts, from
@@ -66,14 +66,15 @@ export class Hints {
     return [...weaves, ...released];
   }
 
-  /** The hint services this Weave ships, by their app id (read again only when the folder changes). */
+  /** The hint services this Weave ships, by their app id (read again when the folder or its list changes). */
   #shipped(): Map<string, ShippedService> {
     const dir = this.h.shippedDir() ?? SHIPPED_DIR;
-    if (!this.#shippedFrom || this.#shippedFrom.dir !== dir) this.#shippedFrom = { dir, services: new Map([...shippedServices(dir).values()].filter((s) => s.manifest.hints).map((s) => [s.manifest.app, s])) };
+    const stamp = shippedStamp(dir);
+    if (this.#shippedFrom?.stamp !== stamp) this.#shippedFrom = { stamp, services: new Map([...shippedServices(dir).values()].filter((s) => s.manifest.hints).map((s) => [s.manifest.app, s])) };
     return this.#shippedFrom.services;
   }
 
-  #shippedFrom?: { dir: string | undefined; services: Map<string, ShippedService> };
+  #shippedFrom?: { stamp: string; services: Map<string, ShippedService> };
 
   /** Whether a name is one of what Weave ships: never a project's. */
   #reserved(app: string): boolean {
