@@ -7,7 +7,8 @@
 // A folder stands for the installers in it (.exe .msi .dmg .pkg .zip .AppImage; the zip is the Mac app as its updater
 // takes it): no shell globbing, the same on Windows.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, readdirSync, statSync } from 'node:fs';
+import { request } from 'node:https';
 import { basename, join } from 'node:path';
 
 const [tag, ...given] = process.argv.slice(2);
@@ -29,13 +30,35 @@ const releases = (await (await api(`/repos/${repo}/releases?per_page=30`)).json(
 const release = releases.find((r) => r.tag_name === tag);
 if (!release) throw new Error(`no release for ${tag} in ${repo}: the release workflow's draft job makes it`);
 
+// The file goes up as a stream over plain https: GitHub answers only once all of it is in, and fetch gives up on an
+// answer after 5 minutes, which a big installer from a slow runner takes longer than.
+const upload = (url: string, file: string, size: number) =>
+  new Promise<number>((done, fail) => {
+    const req = request(url, { method: 'POST', headers: { ...headers, 'content-type': 'application/octet-stream', 'content-length': size } }, (res) => {
+      let text = '';
+      res.on('data', (chunk) => (text += chunk));
+      res.on('end', () => (res.statusCode && res.statusCode < 300 ? done(res.statusCode) : fail(new Error(`GitHub said ${res.statusCode}: ${text}`))));
+    });
+    req.on('error', fail);
+    createReadStream(file).on('error', fail).pipe(req);
+  });
+
 for (const file of files) {
   const name = basename(file);
-  const kept = release.assets.find((a) => a.name === name);
-  if (kept) await api(`/repos/${repo}/releases/assets/${kept.id}`, { method: 'DELETE' });
+  const size = statSync(file).size;
   const url = `${release.upload_url.replace(/\{.*\}$/, '')}?name=${encodeURIComponent(name)}`;
-  const res = await api(url, { method: 'POST', body: readFileSync(file), headers: { 'content-type': 'application/octet-stream' } });
-  console.log(`${name}: ${statSync(file).size} bytes`);
-  if (!res.ok) throw new Error(`uploading ${name} failed: ${res.status}`);
+  console.log(`${name}: ${size} bytes`);
+  // Up to three tries; what an earlier one left half there goes first, as a file of the same name from an earlier run.
+  for (let attempt = 1; ; attempt++) {
+    const assets = (await (await api(`/repos/${repo}/releases/${release.id}/assets?per_page=100`)).json()) as Array<{ id: number; name: string }>;
+    for (const kept of assets.filter((a) => a.name === name)) await api(`/repos/${repo}/releases/assets/${kept.id}`, { method: 'DELETE' });
+    try {
+      await upload(url, file, size);
+      break;
+    } catch (err) {
+      if (attempt === 3) throw new Error(`uploading ${name} failed: ${(err as Error).message}`);
+      console.log(`  try ${attempt} failed (${(err as Error).message}), again`);
+    }
+  }
   console.log(`  attached to ${tag}`);
 }
