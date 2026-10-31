@@ -52,11 +52,20 @@ async function appToken(repo) {
 /** Access through its person's GitHub keyvault, for a project and a repository they handed it: read-only, short-lived. */
 function fromKeyvault(space, repo) {
   try {
-    return JSON.parse(keyvaultToken('github', space, [repo])).token;
-  } catch {
+    const token = JSON.parse(keyvaultToken('github', space, [repo])).token;
+    refused.delete(repo);
+    return token;
+  } catch (error) {
+    refused.set(repo, String(error?.message ?? error).slice(0, 300));
     return undefined;
   }
 }
+
+/** Why Weave gave it no keyvault access to a repository the last time it asked: said along when GitHub then shows nothing. */
+const refused = new Map();
+
+/** What to say when GitHub shows nothing of a repository to it without access. */
+const withoutAccess = (repo) => `: a private repository comes through the GitHub keyvault of whoever runs this service (Keys & devices), handed to this project by an app made for its owner and installed on it${refused.has(repo) ? ` (the keyvault: ${refused.get(repo)})` : ''}`;
 
 /** Its access to a repository for a project: its person's keyvault's, its own App's, a sign-in, or a token; none for public repositories only. */
 const accessTo = async (space, repo) => fromKeyvault(space, repo) ?? (await appToken(repo)) ?? setting('GITHUB') ?? setting('GITHUB_TOKEN');
@@ -64,7 +73,7 @@ const accessTo = async (space, repo) => fromKeyvault(space, repo) ?? (await appT
 /** A release by its tag, as GitHub has it: its files and whether its repository is public. */
 async function releaseAt(repo, tag, token) {
   const res = await github(`/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, token);
-  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}`);
+  if (res.status === 404) throw new Error(`GitHub shows no release ${tag} in ${repo}${token ? ' that it may see' : withoutAccess(repo)}`);
   if (!res.ok) throw new Error(`GitHub said ${res.status} for ${repo} ${tag}`);
   return res.json();
 }
@@ -97,7 +106,7 @@ async function publishRelease(space, input) {
   if (!tag) throw new Error('which release? (its tag, like v1.0)');
   const token = await accessTo(space, repo);
   const info = await github(`/repos/${repo}`, token);
-  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : ': for a private repository, sign it in to GitHub (its Settings)'}` : `GitHub said ${info.status} for ${repo}`);
+  if (!info.ok) throw new Error(info.status === 404 ? `GitHub shows no ${repo}${token ? ' that it may see' : withoutAccess(repo)}` : `GitHub said ${info.status} for ${repo}`);
   // Public: its files are anyone's, so fetchers get them directly. Private: only through a grant of this service.
   const access = (await info.json()).private ? 'grant' : 'direct';
   const found = await releaseAt(repo, tag, token);
@@ -191,7 +200,7 @@ async function grant(space, data) {
   if (manifest.install.access === 'direct') return release_;
   // Closed: only this service reaches it, and grants one file, for a few minutes. Never the asker's own access.
   const token = await accessTo(space, repo);
-  if (!token) throw new Error(`it has no GitHub access for ${repo}: whoever runs it hands ${repo} to this project in their GitHub keyvault (Keys & devices)`);
+  if (!token) throw new Error(`it has no GitHub access for ${repo}: whoever runs it hands ${repo} to this project in their GitHub keyvault (Keys & devices)${refused.has(repo) ? ` (the keyvault: ${refused.get(repo)})` : ''}`);
   const file = (await releaseAt(repo, tag, token)).assets.find((a) => a.name === asset.file);
   if (!file) throw new Error(`the release ${tag} on GitHub has no file ${asset.file}`);
   return { ...release_, url: await downloadAddress(repo, file.id, token) };

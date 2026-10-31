@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -56,6 +57,19 @@ function person(name: string): WeaveNode {
   return node;
 }
 
+/** What a Weave ships, by name only (their manifests, a stand-in component): so their names are taken without a build. */
+function shippedNamed(...names: string[]): string {
+  const dir = tempDir('weave-applets-shipped-');
+  const listed: Record<string, unknown> = {};
+  for (const name of names) {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shipped', name, 'weave.app.json'), 'utf8')) as unknown;
+    writeFileSync(join(dir, `${name}.wasm`), name);
+    listed[name] = { component: `${name}.wasm`, digest: `sha256:${createHash('sha256').update(name).digest('hex')}`, manifest };
+  }
+  writeFileSync(join(dir, 'shipped.json'), JSON.stringify(listed));
+  return dir;
+}
+
 const syncAll = (all: WeaveNode[]) => {
   for (let round = 0; round < 2; round++) for (const from of all) for (const to of all) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 };
@@ -86,6 +100,7 @@ describe('applets', { timeout: 60_000 }, () => {
     });
     const martl = person('martl');
     const lena = person('Lena');
+    lena.wasmSetup.shippedDir = shippedNamed('github-checkout');
     dockerRunning(lena, tempDir('weave-applets-docker-'), { ...v10.script, ...v11.script });
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));

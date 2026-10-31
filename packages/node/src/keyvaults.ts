@@ -230,7 +230,10 @@ export class Keyvaults {
   /** Where its person deletes an app on the provider: their own account's page, or the organization's it was made for. */
   #manage(settings: AppSetting[], app: StoredApp): string | undefined {
     const register = settings.find((e) => e.name === app.setting)?.register;
-    const template = app.owner ? register?.manageFor?.replace('{owner}', encodeURIComponent(app.owner)) : register?.manage;
+    // Whose it is as the provider says (an organization asked for that wasn't one: made for its person's account instead).
+    const login = String(app.info['owner.login'] ?? '');
+    const org = app.owner && (!login || login.toLowerCase() === app.owner.toLowerCase()) ? app.owner : undefined;
+    const template = org ? register?.manageFor?.replace('{owner}', encodeURIComponent(org)) : register?.manage;
     return template ? filled(template, app.info) : undefined;
   }
 
@@ -274,9 +277,20 @@ export class Keyvaults {
     if (!k) throw new Error(`no keyvault ${input.name} here: add it first`);
     const asked = this.state(k).settings.find((e) => e.name === input.setting);
     if (!asked?.register) throw new Error(`${input.name} makes no app called ${input.setting}`);
-    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, ...(input.owner ? { owner: input.owner } : {}), fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {}, ...(input.owner ? { owner: input.owner } : {}) })) });
+    // Made for another account than asked (a misspelled organization: the provider makes it for its person instead).
+    const elsewhere = (app: { info: Record<string, Json> }): string | undefined => {
+      const login = String(app.info['owner.login'] ?? '');
+      return input.owner && login && login.toLowerCase() !== input.owner.toLowerCase() ? login : undefined;
+    };
+    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, ...(input.owner ? { owner: input.owner } : {}), fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {}, ...(input.owner && !elsewhere(app) ? { owner: input.owner } : {}) })) });
     const id = randomBytes(16).toString('base64url');
-    const done = started.done.then(() => this.state(this.#stored().find((x) => x.name === input.name)!)).finally(() => setTimeout(() => this.#making.delete(id), 60_000).unref());
+    const done = started.done
+      .then((app) => {
+        const madeFor = elsewhere(app);
+        if (madeFor) throw new Error(`it was made for ${madeFor}, not ${input.owner}: there's no organization ${input.owner} you may make apps for (check its name). It's kept as ${madeFor}'s app; for the organization, make another with its name as it's written there`);
+        return this.state(this.#stored().find((x) => x.name === input.name)!);
+      })
+      .finally(() => setTimeout(() => this.#making.delete(id), 60_000).unref());
     done.catch(() => {});
     this.#making.set(id, done);
     return { id, url: started.url };
