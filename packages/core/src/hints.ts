@@ -6,7 +6,7 @@ import type { Json } from './bytes.ts';
  * as a mark service is, but what it says is never a claim about someone: a count, a tint, a sign, all from a fixed
  * vocabulary the app draws itself, deciding nothing, never signed or shared. It's yours only (your own domain): it folds what your node holds
  * of the kinds it reads, including what's sealed to you, and the notices your node works out for you
- * (weave.notice). The one Weave ships (Unread, packages/shipped/unread) counts those until you open the place.
+ * (weave.notice). The one Weave ships (Unread, from its own repository, pinned in packages/shipped/pinned.json) counts those until you open the place.
  *
  *   weave.hints.mine  {service, origin, manifest, settings, on} or {service, shipped: true, settings?, on}
  *                     sealed for yourself: a hint service in your own domain, the release you said yes to (a newer

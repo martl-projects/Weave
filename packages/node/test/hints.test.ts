@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { checkHintAnswer } from '@weave/core';
 import { closeOpenStores, MARKS_TIMING, WeaveNode } from '../src/index.ts';
 import { digestOf } from '../src/shipped.ts';
-import { buildComponent } from './helpers/components.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
 
 /*
  * Hint services (stage 20): numbers about your own state next to places. Unread, shipped with Weave, counts the
@@ -26,16 +26,17 @@ afterAll(async () => {
   dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
 });
 
-const SHIPPED_SRC = join(import.meta.dirname, '..', '..', 'shipped');
 let SHIPPED: string;
 beforeAll(async () => {
   MARKS_TIMING.askMs = 20_000;
   MARKS_TIMING.foldWaitMs = 60_000;
   SHIPPED = tempDir('weave-hints-shipped-');
   const list: Record<string, unknown> = {};
+  // As Weave ships them: their repositories' pinned releases (packages/shipped/pinned.json).
   for (const name of ['unread', 'spotlight']) {
-    const component = await buildComponent(join(SHIPPED_SRC, name, 'src', 'service.js'), 'marks', { bundle: true });
-    const manifest = JSON.parse(readFileSync(join(SHIPPED_SRC, name, 'weave.app.json'), 'utf8')) as { hints: { component: string } };
+    const release = pinnedRelease(name);
+    const manifest = JSON.parse(readFileSync(join(release, 'weave.app.json'), 'utf8')) as { hints: { component: string } };
+    const component = join(release, manifest.hints.component);
     copyFileSync(component, join(SHIPPED, manifest.hints.component));
     list[name] = { component: manifest.hints.component, digest: digestOf(component), manifest };
   }

@@ -1,6 +1,7 @@
 // Builds the services Weave ships into dist/: each folder here with a weave.app.json and src/service.js becomes its
 // component (manifest's wasm.component, or marks.component / hints.component for a mark or hint service, bundled with what it imports of Weave's
-// core), and dist/shipped.json lists each one's digest and manifest. The packaged
+// core); each one pinned.json pins comes as its repository's release, as it is (pinned.ts). dist/shipped.json lists
+// each one's digest and manifest. The packaged
 // daemon has the digests built in (apps/desktop/package.ts), so a component changed next to it doesn't start.
 //
 //   node packages/shipped/build.ts
@@ -11,6 +12,7 @@ import { join } from 'node:path';
 import { componentize } from '@bytecodealliance/componentize-js';
 import { checkManifest, parsePack } from '@weave/core';
 import { build } from 'esbuild';
+import { pinnedRelease, pins } from './pinned.ts';
 
 const here = import.meta.dirname;
 const dist = join(here, 'dist');
@@ -31,7 +33,7 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
     const { component } = await componentize({ sourcePath: bundled, witWorld: wit, worldName: 'marks', disableFeatures: ['all'] } as unknown as Parameters<typeof componentize>[0]);
     rmSync(bundled);
     writeFileSync(join(dist, pure.component), component);
-    const about = readmeAbout(name);
+    const about = manifest.about ?? readmeAbout(join(here, name));
     shipped[name] = { component: pure.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
     console.log(`${name}: ${shipped[name].digest}`);
     continue;
@@ -47,9 +49,23 @@ for (const name of readdirSync(here).filter((d) => existsSync(join(here, d, 'wea
   writeFileSync(join(dist, manifest.wasm.component), component);
   if (manifest.wasm.site) cpSync(join(here, name, manifest.wasm.site), join(dist, `${name}-site`), { recursive: true });
   if (manifest.wasm.panel) cpSync(join(here, name, manifest.wasm.panel), join(dist, `${name}-panel`), { recursive: true });
-  const about = readmeAbout(name);
+  const about = manifest.about ?? readmeAbout(join(here, name));
   shipped[name] = { component: manifest.wasm.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}), ...(manifest.wasm.site ? { site: `${name}-site` } : {}), ...(manifest.wasm.panel ? { panel: `${name}-panel` } : {}) };
   console.log(`${name}: ${shipped[name].digest}`);
+}
+// From repositories of their own: the component their release holds, not built here.
+for (const [name, pin] of Object.entries(pins())) {
+  if (shipped[name]) throw new Error(`${name} is both a folder here and pinned: one source only`);
+  const dir = pinnedRelease(name);
+  const raw = JSON.parse(readFileSync(join(dir, 'weave.app.json'), 'utf8')) as unknown;
+  const { manifest, problems } = checkManifest(raw);
+  const pure = manifest?.marks ?? manifest?.hints;
+  if (!pure) throw new Error(`${pin.repo} ${pin.tag}: ${problems.join('; ') || 'only mark and hint services come pinned so far'}`);
+  const component = readFileSync(join(dir, pure.component));
+  writeFileSync(join(dist, pure.component), component);
+  const about = manifest.about ?? readmeAbout(dir);
+  shipped[name] = { component: pure.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
+  console.log(`${name}: ${shipped[name].digest} (${pin.repo} ${pin.tag})`);
 }
 writeFileSync(join(dist, 'shipped.json'), `${JSON.stringify(shipped, null, 2)}\n`);
 // Its setup packs (packs/*.json): checked, and each step naming something this Weave ships.
@@ -68,8 +84,8 @@ const checked = packs.map((f) => {
 writeFileSync(join(dist, 'packs.json'), `${JSON.stringify(checked, null, 2)}\n`);
 console.log(`${Object.keys(shipped).length} shipped service(s) in packages/shipped/dist`);
 
-/** What it's for, in the app: its README's first paragraph. */
-function readmeAbout(name: string): string | undefined {
-  const readme = existsSync(join(here, name, 'README.md')) ? readFileSync(join(here, name, 'README.md'), 'utf8') : '';
+/** What it's for, in the app: its README's first paragraph (in its folder). */
+function readmeAbout(dir: string): string | undefined {
+  const readme = existsSync(join(dir, 'README.md')) ? readFileSync(join(dir, 'README.md'), 'utf8') : '';
   return readme.split(/\r?\n\r?\n/).map((p) => p.trim()).find((p) => p && !p.startsWith('#'))?.replace(/\s+/g, ' ').slice(0, 400);
 }
