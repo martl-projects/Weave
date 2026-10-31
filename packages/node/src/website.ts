@@ -1,5 +1,5 @@
 import { hostsWebsites } from './services.ts';
-import { artifactsOf, b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
+import { releaseById, b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, randomBytes, roomsOf, sealFor, type Did, type Json, type Room, type SpaceState } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
 import { createHash, createHmac } from 'node:crypto';
@@ -209,7 +209,7 @@ export class Website {
   /** A release a room runs, as people see it: its project and artifact by name where they're known here. */
   releaseOf(r: { project: string; id: string; tag: string }): NonNullable<WebsiteInfo['from']> {
     const project = this.h.spaces.get(r.project);
-    const artifact = project ? artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === r.id) : undefined;
+    const artifact = project ? releaseById(this.h.entries(project), this.h.state(project).maintainers, r.id)?.artifact : undefined;
     return { project: { id: r.project, ...(project ? { name: project.name } : {}) }, release: r.id, tag: r.tag, ...(artifact ? { name: artifact.manifest.name } : {}) };
   }
 

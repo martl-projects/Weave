@@ -262,6 +262,8 @@ export interface ServiceArtifactInfo {
   app: string;
   name: string;
   latest?: string;
+  /** Its tag was released again (another release, maybe other files): it keeps running this one until you take that one. */
+  replaced?: true;
   /** Its files are here, checked against the release's fingerprints (or it runs as a container). */
   installed: boolean;
   /** Who delivered its files here: a provider in its project, or GitHub itself. */
@@ -296,6 +298,8 @@ export interface LaunchingWebsiteInfo {
   project: SpaceRef;
   name: string;
   tag: string;
+  /** Its tag was released again since it was launched: it still starts what it was launched from. */
+  replaced?: true;
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
 }

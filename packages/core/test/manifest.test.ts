@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { artifactKindOf, artifactSourceOf, artifactsOf, checkManifest, KIND_APP, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, MANIFEST_EXAMPLE, type Did } from '../src/index.ts';
+import { artifactKindOf, artifactSourceOf, artifactsOf, checkManifest, releaseById, KIND_APP, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, MANIFEST_EXAMPLE, type Did } from '../src/index.ts';
 
 const base = { app: 'band-ab', name: 'BAND AB!', services: [{ port: 3000 }] };
 
@@ -102,6 +102,20 @@ describe('artifacts: their kind and where their files are', () => {
     expect(artifactsOf([...released, withdraw('a', 'did:key:zSomeone', '2026-01-02')], maintainers).map((a) => a.id)).toEqual(['a']);
     // The same tag released again: a new release, there.
     expect(artifactsOf([...released, withdraw('a', 'did:key:zMaintainer', '2026-01-02'), entry('b', KIND_APP, service, '2026-01-03')], maintainers).map((a) => a.id)).toEqual(['b']);
+  });
+
+  it('stay findable by id once their tag is released again, saying which replaced them', () => {
+    const service = { ...base, service: { reads: 'addressed', writes: [], version: '1.0' }, install: { github: 'acme/bot', tag: 'v1', assets: { 'linux-x64': { file: 'bot.tgz', sha256: sha } } } };
+    const withdraw = (id: string) => ({ id: `w-${id}`, kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: id } as never, event: { author: 'did:key:zMaintainer' as Did, time: '2026-01-04' } });
+    const both = [entry('a', KIND_APP, service, '2026-01-01'), entry('b', KIND_APP, { ...service, name: 'BAND AB! (fixed)' }, '2026-01-02')];
+    // Listed once, as released now; what was launched from the first keeps running it.
+    expect(artifactsOf(both, maintainers).map((a) => a.id)).toEqual(['b']);
+    expect(releaseById(both, maintainers, 'a')).toMatchObject({ artifact: { id: 'a', manifest: { name: 'BAND AB!' } }, replacedBy: { id: 'b' } });
+    expect(releaseById(both, maintainers, 'b')).not.toHaveProperty('replacedBy');
+    // Withdrawn, it's gone; its replacement withdrawn, it's no longer replaced.
+    expect(releaseById([...both, withdraw('a')], maintainers, 'a')).toBeUndefined();
+    expect(releaseById([...both, withdraw('b')], maintainers, 'a')).not.toHaveProperty('replacedBy');
+    expect(artifactsOf([...both, withdraw('b')], maintainers)).toEqual([]);
   });
 
   it('can come from anywhere a provider knows, not only GitHub', () => {

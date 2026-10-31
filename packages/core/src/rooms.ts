@@ -903,8 +903,30 @@ export const KIND_ARTIFACT = 'weave.artifact';
 export const KIND_ARTIFACT_WITHDRAWN = 'weave.artifact.withdrawn';
 
 /** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get, never one withdrawn. */
-export function artifactsOf(entries: Array<{ id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } }>, maintainers: Set<Did>): Artifact[] {
+export function artifactsOf(entries: ReleaseEntry[], maintainers: Set<Did>): Artifact[] {
+  const { all, withdrawn } = released(entries, maintainers);
   const byTag = new Map<string, Artifact>();
+  for (const a of all) byTag.set(`${a.manifest.app}\0${a.tag}`, a);
+  return [...byTag.values()].filter((a) => !withdrawn.has(a.id)).sort((a, b) => b.time.localeCompare(a.time));
+}
+
+/**
+ * One release by its id, also where its tag was released again since (what runs or was launched keeps what it
+ * pinned): with the release that replaced it, if one did. Never one withdrawn.
+ */
+export function releaseById(entries: ReleaseEntry[], maintainers: Set<Did>, id: string): { artifact: Artifact; replacedBy?: Artifact } | undefined {
+  const { all, withdrawn } = released(entries, maintainers);
+  const artifact = all.find((a) => a.id === id);
+  if (!artifact || withdrawn.has(id)) return undefined;
+  const latest = all.filter((a) => a.manifest.app === artifact.manifest.app && a.tag === artifact.tag).at(-1)!;
+  return { artifact, ...(latest.id !== id && !withdrawn.has(latest.id) ? { replacedBy: latest } : {}) };
+}
+
+type ReleaseEntry = { id: string; kind: string; body: Json; event: { author: Did; signer?: string; time: string } };
+
+/** Every release by a maintainer with something to get, oldest first, and which were withdrawn. */
+function released(entries: ReleaseEntry[], maintainers: Set<Did>): { all: Artifact[]; withdrawn: Set<unknown> } {
+  const all: Artifact[] = [];
   for (const e of [...entries].filter((x) => x.kind === KIND_APP || x.kind === KIND_ARTIFACT).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
     if (!maintainers.has(e.event.author)) continue;
     let manifest: AppManifest;
@@ -920,10 +942,10 @@ export function artifactsOf(entries: Array<{ id: string; kind: string; body: Jso
     // A weave.app that is a file is an installer: one file per platform (Weave's own releases), never a single one.
     if (e.kind === KIND_APP && manifest.file && (!manifest.install?.assets || manifest.install.assets.file)) continue;
     const source = artifactSourceOf(manifest);
-    byTag.set(`${manifest.app}\0${tag}`, { id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
+    all.push({ id: e.id, tag, kind: artifactKindOf(manifest), ...(source ? { source } : {}), manifest, author: e.event.author, signer: e.event.signer ?? e.event.author, time: e.event.time });
   }
   const withdrawn = new Set(entries.filter((e) => e.kind === KIND_ARTIFACT_WITHDRAWN && maintainers.has(e.event.author)).map((e) => (e.body as { artifact?: unknown } | null)?.artifact));
-  return [...byTag.values()].filter((a) => !withdrawn.has(a.id)).sort((a, b) => b.time.localeCompare(a.time));
+  return { all, withdrawn };
 }
 
 export interface Room {

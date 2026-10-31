@@ -1,4 +1,4 @@
-import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -247,6 +247,7 @@ export class Services {
   serviceArtifactInfo(service: string, a: StoredArtifact, here: boolean): ServiceArtifactInfo {
     const from = this.h.spaces.get(a.project);
     const latest = from ? artifactsOf(this.h.entries(from), this.h.state(from).maintainers)[0] : undefined;
+    const replaced = from ? releaseById(this.h.entries(from), this.h.state(from).maintainers, a.id)?.replacedBy : undefined;
     const job = here ? this.h.releases.jobs.get(`service:${service}`) : undefined;
     const fetched = this.h.releases.has(service, a);
     return {
@@ -255,6 +256,7 @@ export class Services {
       app: a.manifest.app,
       name: a.manifest.name,
       ...(latest && latest.id !== a.id && latest.tag !== a.tag ? { latest: latest.tag } : {}),
+      ...(replaced ? { replaced: true } : {}),
       installed: here && (this.h.runtime.runs(a.manifest) === 'container' || fetched),
       ...(here && fetched && this.h.releases.from(service, a) ? { deliveredBy: this.h.releases.from(service, a) } : {}),
       ...(job?.progress ? { progress: { ...job.progress } } : {}),
@@ -764,7 +766,7 @@ export class Services {
     const project = this.h.spaces.get(origin.project);
     const base = { kind: 'release' as const, project: { id: origin.project, ...(project ? { name: this.h.spaceName(project) } : {}) }, tag: origin.tag, release: origin.release };
     if (!project) return { ...base, checked: 'unknown' };
-    const found = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release);
+    const found = releaseById(this.h.entries(project), this.h.state(project).maintainers, origin.release)?.artifact;
     if (!found || releaseApproval(found) !== origin.fingerprint) return { ...base, checked: 'unmatched' };
     return { ...base, checked: 'verified', publisher: this.h.actor(found.author, found.signer as Did), ...(found.manifest.install?.image?.packaged ? { packaged: true as const } : {}) };
   }
@@ -778,7 +780,7 @@ export class Services {
     if (origin.kind === 'shipped') return origin.checked === 'verified' ? shippedHere(this.h).get(origin.name)?.manifest : undefined;
     if (origin.kind !== 'release' || origin.checked !== 'verified') return undefined;
     const project = this.h.spaces.get(origin.project.id);
-    return project ? artifactsOf(this.h.entries(project), this.h.state(project).maintainers).find((a) => a.id === origin.release)?.manifest : undefined;
+    return project ? releaseById(this.h.entries(project), this.h.state(project).maintainers, origin.release)?.artifact.manifest : undefined;
   }
 
   /** A shipped service's panels' folder (its pages ship with this Weave), if it has one. */
@@ -1079,7 +1081,9 @@ export class Services {
       .map((s) => {
         const project = this.h.spaces.get(s.spaces[0] ?? '');
         const job = this.h.releases.jobs.get(`service:${s.name}`);
-        return { id: s.name, project: { id: s.spaces[0] ?? '', kind: 'project' as const, name: project?.name ?? '' }, name: s.artifact!.manifest.name, tag: s.artifact!.tag, ...(job?.progress ? { progress: { ...job.progress } } : {}), ...(job?.error ? { error: job.error } : {}) };
+        const from = this.h.spaces.get(s.artifact!.project);
+        const replaced = from && releaseById(this.h.entries(from), this.h.state(from).maintainers, s.artifact!.id)?.replacedBy;
+        return { id: s.name, project: { id: s.spaces[0] ?? '', kind: 'project' as const, name: project?.name ?? '' }, name: s.artifact!.manifest.name, tag: s.artifact!.tag, ...(replaced ? { replaced: true } : {}), ...(job?.progress ? { progress: { ...job.progress } } : {}), ...(job?.error ? { error: job.error } : {}) };
       });
   }
 
@@ -1832,7 +1836,8 @@ export class Services {
             if (!current.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH)) throw new Error(`${name} doesn't offer ${PROTOCOL_ARTIFACT_FETCH}: it reads no releases`);
             const space = this.h.spaces.get(String(args[0]));
             if (!space || !current.spaces.includes(space.id)) return undefined;
-            const found = artifactsOf(this.h.entries(space), this.h.state(space).maintainers).find((a) => a.id === String(args[1]));
+            // Also one its tag was released again since: what was launched from it keeps getting its files.
+            const found = releaseById(this.h.entries(space), this.h.state(space).maintainers, String(args[1]))?.artifact;
             return found ? JSON.stringify({ id: found.id, tag: found.tag, name: found.manifest.name, manifest: found.manifest }) : undefined;
           }
           if (call === 'readers' || call === 'accounts') {

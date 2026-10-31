@@ -1030,7 +1030,11 @@ function RunningWebsites({ project, service, rooms, launching, shows, maintainer
     key: l.id,
     title: l.name,
     badge: l.tag,
-    detail: l.error ?? (l.progress ? `starting: ${l.progress.state} ${l.progress.total ? `${Math.round((l.progress.done / l.progress.total) * 100)}%` : ''}`.trim() : 'starting…'),
+    detail: [
+      l.error ?? (l.progress ? `starting: ${l.progress.state} ${l.progress.total ? `${Math.round((l.progress.done / l.progress.total) * 100)}%` : ''}`.trim() : 'starting…'),
+      // Launched before its tag was released again: it starts what it was launched from; the new one is a new launch.
+      ...(l.replaced ? [`${l.tag} was released again since: stop this and launch it again for that one`] : []),
+    ].join(' · '),
     remove: { label: 'Stop it', run: () => void attempt(() => api('removeService', l.id).then(bump), `${l.name} is stopped`) },
   }));
   const visitors = (room: WebsiteInfo) => {

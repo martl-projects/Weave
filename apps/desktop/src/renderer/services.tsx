@@ -379,6 +379,20 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
                 {s.artifact.progress ? ' · fetching…' : ''}
                 {s.artifact.deliveredBy ? ` · delivered by ${s.artifact.deliveredBy}, checked` : ''}
                 {s.artifact.error ? <span className="error-text"> · {s.artifact.error}</span> : null}
+                {s.artifact.replaced && !s.artifact.latest && (
+                  <>
+                    {' '}
+                    · <span className="error-text">{s.artifact.tag} was released again</span> (it runs the release it was added from){' '}
+                    <AsyncButton
+                      onClick={async () =>
+                        (await ask(`Run ${s.artifact!.name} ${s.artifact!.tag} as released now? It may be other code: only take it if you trust p/${s.artifact!.project.name ?? 'its project'}.`, 'Take it')) &&
+                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.tag }, approve: true }).then(bump), `${s.name} takes ${s.artifact!.tag} as released now`)
+                      }
+                    >
+                      Take it…
+                    </AsyncButton>
+                  </>
+                )}
                 {s.artifact.latest && (
                   <>
                     {' '}
