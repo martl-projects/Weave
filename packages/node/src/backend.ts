@@ -385,6 +385,13 @@ export interface AppReleases {
 }
 
 /** A keyvault of yours: what it holds access to, what you handed which project, who uses it, and what it minted. */
+/** An app of a keyvault let go of: uninstalled (unless a problem says why not), and where its person deletes it. */
+export interface ForgottenAppInfo {
+  app: string;
+  page?: string;
+  problem?: string;
+}
+
 export interface KeyvaultInfo {
   name: string;
   title: string;
@@ -394,7 +401,7 @@ export interface KeyvaultInfo {
   resources?: string;
   settings: AppSetting[];
   /** Your apps in it: what's kept of each (never its key), its next page (installing it), and what it handed which project. */
-  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; handed: Array<{ project: { id: string; name: string }; resources: string[] }> }>;
+  apps: Array<{ key: string; setting: string; info: Record<string, Json>; next?: string; manage?: string; handed: Array<{ project: { id: string; name: string }; resources: string[] }> }>;
   /** Your services that use it, with the rights their contracts declare. */
   users: Array<{ service: string; rights: Record<string, string>; projects: Array<{ id: string; name: string }> }>;
   log: Array<{ time: string; service: string; project: { id: string; name: string }; resources: string[]; rights: Record<string, string>; app?: string }>;
@@ -1951,7 +1958,8 @@ export interface Backend {
   keyvaults(): Promise<KeyvaultInfo[]>;
   /** Add a keyvault Weave ships: an app you made for a service before moves into it. */
   addKeyvault(input: { shipped: string }): Promise<KeyvaultInfo>;
-  removeKeyvault(name: string): Promise<void>;
+  /** Remove a keyvault: its apps taken off everything first (uninstalled), and where to delete each on its platform. */
+  removeKeyvault(name: string): Promise<{ forgotten: ForgottenAppInfo[] }>;
   /**
    * Add a keyvault or fetcher someone released in a project (its release by id or tag, or its latest): approved once,
    * its component fetched, checked against what was released and pinned. It then shows in Keys & devices, beside
@@ -1970,7 +1978,7 @@ export interface Backend {
   /** What one of a keyvault's apps reaches (its only one, unless named), to hand to projects. */
   keyvaultReachable(input: { name: string; app?: string }): Promise<Array<{ value: string; note?: string }>>;
   /** Forget one of a keyvault's apps, and what it handed out: it stays on the provider until you delete it there. */
-  removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo>;
+  removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo & { forgotten: ForgottenAppInfo }>;
   /** Hand a project (name or id) these resources (repositories) of one of a keyvault's apps, instead of what it had: yours alone to say. */
   handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo>;
   /** Requests to services in a space, with their answers (optionally for one service). */

@@ -549,7 +549,7 @@ import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
-import { Keyvaults, type KeyvaultState } from './keyvaults.ts';
+import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
 import { ClientApps } from './clientapps.ts';
 import { Verifiers, type PlatformInfo } from './verifiers.ts';
 import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
@@ -9699,8 +9699,9 @@ export class WeaveNode implements Backend {
     return this.#keyvaultInfo(this.#keyvaults.add({ shipped: input.shipped, apps }));
   }
 
-  async removeKeyvault(name: string): Promise<void> {
-    this.#keyvaults.remove(name);
+  /** Remove a keyvault: its apps uninstalled first, and where to delete each on its platform. */
+  async removeKeyvault(name: string): Promise<{ forgotten: ForgottenApp[] }> {
+    return { forgotten: await this.#keyvaults.remove(name) };
   }
 
   async addClientApp(input: { project: string; artifact?: string; approve?: boolean }): Promise<KeyvaultInfo | FetcherInfo> {
@@ -9725,7 +9726,7 @@ export class WeaveNode implements Backend {
   async removeClientApp(name: string): Promise<void> {
     const c = this.#clientApps.list().find((x) => x.name === name);
     if (!c) throw new Error(`nothing named ${name} was added from a release here`);
-    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) this.#keyvaults.remove(name);
+    if (c.kind === 'keyvault' && this.#keyvaults.list().some((k) => k.name === name)) await this.#keyvaults.remove(name);
     if (c.kind === 'fetcher' && this.#fetchers.list().some((f) => f.name === name)) this.#fetchers.remove(name);
     this.#clientApps.remove(name);
   }
@@ -9761,10 +9762,11 @@ export class WeaveNode implements Backend {
     return this.#keyvaults.reachable(input.name, input.app);
   }
 
-  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo> {
-    const k = this.#keyvaultInfo(this.#keyvaults.removeApp(input));
+  async removeKeyvaultApp(input: { name: string; app: string }): Promise<KeyvaultInfo & { forgotten: ForgottenApp }> {
+    const { state, forgotten } = await this.#keyvaults.removeApp(input);
+    const k = this.#keyvaultInfo(state);
     for (const u of k.users) this.#services.restartSoon(u.service);
-    return k;
+    return { ...k, forgotten };
   }
 
   async handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {

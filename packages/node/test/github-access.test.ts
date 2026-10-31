@@ -90,6 +90,8 @@ class OrgGitHub {
       if (!ok || JSON.parse(Buffer.from(jwt[2], 'base64url').toString()).iss !== '42') return json(401, { message: 'Bad credentials' });
       this.calls.push(`${method} ${url.pathname} (app)`);
       if (url.pathname === '/app/installations') return json(200, this.app.installed.size ? [{ id: 7 }] : []);
+      // Uninstalled: it reaches nothing any more.
+      if (url.pathname === '/app/installations/7' && method === 'DELETE') return (this.app.installed.clear(), new Response(null, { status: 204 }));
       if (url.pathname === '/app/installations/7/access_tokens' && method === 'POST') return (this.mints.push(JSON.parse(String(init?.body ?? '{}'))), json(201, { token: 'ghs_inst', expires_at: new Date(Date.now() + 3600_000).toISOString() }));
       const at = url.pathname.match(/^\/repos\/([\w-]+\/[\w.-]+)\/installation$/);
       return at && this.app.installed.has(at[1]) ? json(200, { id: 7 }) : json(404, { message: 'Not Found' });
@@ -283,7 +285,7 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       // On to installing it.
       expect([back.status, back.headers.get('location')]).toEqual([302, 'https://github.com/apps/weave-access-t/installations/new']);
       const vault = await martl.finishKeyvaultApp({ id: making.id });
-      expect(vault.apps).toEqual([{ key: '42', setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new', handed: [] }]);
+      expect(vault.apps).toEqual([{ key: '42', setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new', manage: 'https://github.com/settings/apps/weave-access-t/advanced', handed: [] }]);
       expect(JSON.stringify(await martl.keyvaults())).not.toMatch(/PRIVATE KEY|shh-client/);
       expect(vault.users).toEqual([{ service: 'github-access', rights: { administration: 'write', metadata: 'read' }, projects: [{ id: expect.any(String), name: 'Site' }, { id: expect.any(String), name: 'Docs' }] }]);
       // Whom another app is for: his account, and the organizations GitHub shows he's in.
@@ -383,6 +385,13 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       expect((await ask(martl, access.did, 'offers', undefined, 'Docs')).data).toMatchObject([{ id: 'acme/site', detail: 'Declined in this project', use: false, remove: false, more: [{ action: 'accept' }] }]);
       await vi.waitFor(() => expect(github.collaborators.has('lena-gh')).toBe(false), { timeout: 60_000, interval: 200 });
       expect(github.calls).toContain('DELETE /repos/acme/site/collaborators/lena-gh');
+
+      // He forgets his app: taken off everything it was installed on at once, and he's shown where to delete it.
+      const gone = await martl.removeKeyvaultApp({ name: 'github-keyvault', app: '42' });
+      expect(gone.forgotten).toEqual({ app: 'weave-access-t', page: 'https://github.com/settings/apps/weave-access-t/advanced' });
+      expect(github.calls).toContain('DELETE /app/installations/7 (app)');
+      expect(github.app!.installed.size).toBe(0);
+      expect(gone.apps).toEqual([]);
     } finally {
       clearInterval(syncing);
       await martl.removeService('github-access').catch(() => {});

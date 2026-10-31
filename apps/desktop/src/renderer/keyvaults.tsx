@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { KeyvaultInfo } from '@weave/node/client';
+import type { ForgottenAppInfo, KeyvaultInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
@@ -20,6 +20,7 @@ export function KeyvaultsBox() {
   const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults'), []);
   const [opened, setOpened] = useState<{ vault: string; app: string }>();
   const [making, setMaking] = useState<KeyvaultInfo>();
+  const [forgotten, setForgotten] = useState<{ platform: string; apps: ForgottenAppInfo[] }>();
   if (!vaults?.length) return null;
   const open = opened && vaults.find((v) => v.name === opened.vault);
   const openApp = open?.apps.find((a) => a.key === opened!.app);
@@ -48,7 +49,15 @@ export function KeyvaultsBox() {
                     Add
                   </AsyncButton>
                 ) : (
-                  <AsyncButton onClick={async () => (await ask(`Remove ${v.title}? Your services lose the access they get through it, and what your apps handed projects is forgotten. Your apps stay on ${v.platform} until you delete them there.`, 'Remove')) && attempt(() => api('removeKeyvault', v.name).then(bump), `${v.title} is removed`)}>
+                  <AsyncButton
+                    onClick={async () =>
+                      (await ask(`Remove ${v.title}? Your services lose the access they get through it, what your apps handed projects is forgotten, and they're taken off everything on ${v.platform}. Deleting them there is yours: Weave shows where.`, 'Remove')) &&
+                      attempt(
+                        () => api<{ forgotten: ForgottenAppInfo[] }>('removeKeyvault', v.name).then((r) => (bump(), r.forgotten.length && setForgotten({ platform: v.platform, apps: r.forgotten }))),
+                        `${v.title} is removed`,
+                      )
+                    }
+                  >
                     Remove
                   </AsyncButton>
                 )}
@@ -93,8 +102,11 @@ export function KeyvaultsBox() {
                       label: 'Forget this app',
                       run: () =>
                         void (async () =>
-                          (await ask(`Forget ${appName(a)}? Your services lose what they get through it, and what it handed projects is forgotten. It stays on ${v.platform} until you delete it there.`, 'Forget it')) &&
-                          attempt(() => api('removeKeyvaultApp', { name: v.name, app: a.key }).then(bump), `${appName(a)} is forgotten`))(),
+                          (await ask(`Forget ${appName(a)}? Your services lose what they get through it, what it handed projects is forgotten, and it's taken off everything on ${v.platform}. Deleting it there is yours: Weave shows where.`, 'Forget it')) &&
+                          attempt(
+                            () => api<{ forgotten: ForgottenAppInfo }>('removeKeyvaultApp', { name: v.name, app: a.key }).then((r) => (bump(), setForgotten({ platform: v.platform, apps: [r.forgotten] }))),
+                            `${appName(a)} is forgotten`,
+                          ))(),
                     },
                   }))}
                 />
@@ -110,7 +122,33 @@ export function KeyvaultsBox() {
       })}
       {open && openApp && <AppSettingsDialog vault={open} app={openApp} onClose={() => setOpened(undefined)} />}
       {making && <NewAppDialog vault={making} onClose={() => setMaking(undefined)} />}
+      {forgotten && <ForgottenDialog {...forgotten} onClose={() => setForgotten(undefined)} />}
     </fieldset>
+  );
+}
+
+/** Apps let go of: their access ended (uninstalled), and the page where each is deleted, which only its person can do. */
+function ForgottenDialog({ platform, apps, onClose }: { platform: string; apps: ForgottenAppInfo[]; onClose(): void }) {
+  return (
+    <Modal title={`Delete ${apps.length === 1 ? 'it' : 'them'} on ${platform} too`} onClose={onClose}>
+      <p className="small">
+        {apps.length === 1 ? 'It reaches' : 'They reach'} nothing any more: taken off everything {apps.length === 1 ? 'it was' : 'they were'} installed on. {apps.length === 1 ? 'It stays' : 'They stay'} on {platform} until you delete{' '}
+        {apps.length === 1 ? 'it' : 'them'} there (Weave can't), and {apps.length === 1 ? 'its' : 'their'} name stays taken until then.
+      </p>
+      {apps.map((a) => (
+        <div className="field-row" key={a.app}>
+          <span className="grow">
+            <b>{a.app}</b> {a.problem && <span className="small error-text">still installed: {a.problem}</span>}
+          </span>
+          {a.page && <button onClick={() => window.open(a.page, '_blank', 'noopener')}>Delete on {platform}…</button>}
+        </div>
+      ))}
+      <div className="buttons">
+        <button className="default" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Modal>
   );
 }
 
