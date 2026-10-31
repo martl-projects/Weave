@@ -1273,8 +1273,49 @@ export interface UpdateInfo {
     published?: string;
     /** weave: a release post signed by a maintainer of the Weave project; github: the repository's releases. */
     source: 'weave' | 'github';
+    /**
+     * The app can install this version itself: a maintainer released it as the project's artifact, with this file for
+     * this computer and its SHA-256 (updateFetch gets and checks it). Missing: only a download link.
+     */
+    install?: UpdateFile;
   };
   newer: boolean;
+  /** Download new versions in the background (the setting; managed Updates=false turns everything off). */
+  auto?: boolean;
+  /** A new version downloaded and checked, waiting to be installed (updateState says how a download is going). */
+  ready?: UpdateReady;
+}
+
+/** A release file of the Weave desktop app for this computer, as its maintainer signed it. */
+export interface UpdateFile {
+  /** The artifact's release (its weave.app event). */
+  artifact: string;
+  tag: string;
+  file: string;
+  sha256: string;
+  size?: number;
+}
+
+/** A new version downloaded and checked against its maintainer's SHA-256: in <home>/updates, for the app to install. */
+export interface UpdateReady {
+  version: string;
+  file: string;
+  path: string;
+  size: number;
+  /** As electron-updater wants it (base64), computed over the checked file. */
+  sha512: string;
+  /** Who delivered it (the file matched either way). */
+  by: string;
+}
+
+/** How getting a new version is going: downloading (so far, of total), ready, or why it failed. */
+export interface UpdateState {
+  version?: string;
+  state: 'idle' | 'downloading' | 'ready' | 'failed';
+  done?: number;
+  total?: number;
+  error?: string;
+  ready?: UpdateReady;
 }
 
 /** How a room's handler reaches the app API on this computer (see appapi.ts): set in its environment when Weave starts it. */
@@ -2208,6 +2249,18 @@ export interface Backend {
    * maintainers (no GitHub sign-in needed), and at the repository's GitHub releases when it can reach them.
    */
   updateCheck(input: { current: string }): Promise<UpdateInfo>;
+  /**
+   * Get a new version the app may install itself (updateCheck's latest.install): downloaded in the background into
+   * <home>/updates, refused unless its SHA-256 is the one its maintainer signed. Returns at once with how it's going;
+   * updateState follows it. Managed Updates=false refuses.
+   */
+  updateFetch(input: { version: string }): Promise<UpdateState>;
+  /** How getting a new version is going, or the one ready to install. */
+  updateState(): Promise<UpdateState>;
+  /** The checked file of this version, as the app installs it (the daemon serves it at GET /v1/update/<version>/…). */
+  updateReady(input: { version: string }): Promise<UpdateReady | null>;
+  /** Download new versions in the background, or only say there is one. */
+  updateSettings(input: { auto: boolean }): Promise<{ auto: boolean }>;
   /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
   websiteEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
@@ -2373,7 +2426,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',

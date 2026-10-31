@@ -123,14 +123,23 @@ export class Releases {
    * delivered it.
    */
   async getFile(dir: string, a: ArtifactRef): Promise<{ path: string; by: string }> {
-    const asset = a.manifest.install?.assets?.file;
-    if (!asset) throw new Error(`${a.manifest.name} ${a.tag} is no file`);
+    // Its one file, or (an installer) the one for this computer.
+    const asset = a.manifest.install?.assets?.file ?? a.manifest.install?.assets?.[platformKey()];
+    if (!asset) throw new Error(`${a.manifest.name} ${a.tag} is no file${a.manifest.install?.assets ? ` for this computer (${platformKey()})` : ''}`);
+    return this.fetchFile(dir, a, asset);
+  }
+
+  /**
+   * One release file, into dir under its own name, as it is: fetched unless it's there already and still matches its
+   * fingerprint. Its path, and who delivered it. `onBytes` hears the download's progress.
+   */
+  async fetchFile(dir: string, a: ArtifactRef, asset: AppAsset, onBytes?: (n: number) => void): Promise<{ path: string; by: string }> {
     const path = join(dir, asset.file);
     if (existsSync(path) && createHash('sha256').update(readFileSync(path)).digest('hex') === asset.sha256) return { path, by: this.from(dir, a) ?? 'this computer, before' };
     mkdirSync(dir, { recursive: true });
     const download = await this.#download(a, asset);
     const partial = join(dir, `.download-${asset.file}`);
-    await saveVerified(download.body, partial, asset.sha256);
+    await saveVerified(download.body, partial, asset.sha256, onBytes);
     rmSync(path, { force: true });
     renameSync(partial, path);
     writeJson(join(dir, `.${asset.file}.from.json`), { from: download.from });

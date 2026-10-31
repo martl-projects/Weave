@@ -7,6 +7,8 @@ import { newSession, openSession, pasteBack, rememberFront, showSession, startPa
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
+import { Updater } from './update.ts';
+import type { UpdateAction } from './updatestate.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
 // --route <hash>       start on a view, e.g. "#/groups"
@@ -28,6 +30,21 @@ let connectError: string | undefined;
 let window: BrowserWindow | undefined;
 let watching = new AbortController();
 let quitting = false;
+
+// New versions (update.ts): the daemon gets and checks them, this installs them on Restart to update.
+const updater = new Updater(
+  home,
+  () => daemon?.client,
+  () => (daemon ? stopOwnDaemon(daemon) : Promise.resolve()),
+  (view) => window?.webContents.send('weave:update', view),
+);
+ipcMain.handle('weave:update', () => updater.view);
+ipcMain.handle('weave:update-action', async (_event, action: UpdateAction) => {
+  // Restart to update quits for real: the window closes instead of hiding to the tray.
+  if (action === 'restart' && updater.view.state === 'ready') quitting = true;
+  await updater.act(action);
+});
+ipcMain.handle('weave:update-auto', (_event, on: boolean) => updater.setAuto(on === true));
 
 // weave:post:… and weave:project:… (group, community) links: the OS starts the app with one (registered by the installer,
 // see `protocols` in package.ts), or hands it to the app that's already open. A company's enrollment link
@@ -560,6 +577,7 @@ app.whenReady().then(async () => {
     }
   }
   await createWindow();
+  if (!values.screenshot) updater.start();
   for (const [shortcut, tab] of PICKER_SHORTCUTS) {
     if (globalShortcut.register(shortcut, () => void showPicker(tab))) startPasteHelper();
     else console.error(`weave: ${shortcut} is taken by another app, so the address book can't use it`);
@@ -579,6 +597,7 @@ app.on('will-quit', (event) => {
   quitting = true;
   globalShortcut.unregisterAll();
   watching.abort();
+  updater.stop();
   if (daemonStopped || !daemon?.child || daemon.child.exitCode !== null) return;
   event.preventDefault();
   daemonStopped = true;

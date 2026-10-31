@@ -13,8 +13,11 @@ export interface Config {
   attestor?: { issuer: string; audience: string; hours?: number };
   /** An archive node (stage 6): it keeps everything of its spaces, never forgets or lets go of anything. */
   archive?: boolean;
-  /** Where to look for new Weave versions, instead of the Weave project and its repository. */
-  updates?: { project?: string; repo?: string };
+  /**
+   * Where to look for new Weave versions, instead of the Weave project, its repository and its artifact (the desktop
+   * app's installers); auto: false stops the app from downloading them in the background (it still says there's one).
+   */
+  updates?: { project?: string; repo?: string; artifact?: string; auto?: boolean };
   /** The company's node serves SCIM for its user management on this port (stage 12; the token is kept sealed). */
   scim?: { port: number; invite?: boolean };
   /** A standby company server (stage 14): it follows the active one and writes nothing, until promoted. */
@@ -58,7 +61,14 @@ export function loadConfig(home: Home): Config {
       ? { console: { port: stored.console.port, ...(typeof stored.console.url === 'string' ? { url: stored.console.url } : {}), ...(typeof stored.console.clientId === 'string' ? { clientId: stored.console.clientId } : {}) } }
       : {}),
     ...(stored.updates && typeof stored.updates === 'object'
-      ? { updates: { ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}), ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}) } }
+      ? {
+          updates: {
+            ...(typeof stored.updates.project === 'string' ? { project: stored.updates.project } : {}),
+            ...(typeof stored.updates.repo === 'string' ? { repo: stored.updates.repo } : {}),
+            ...(typeof stored.updates.artifact === 'string' ? { artifact: stored.updates.artifact } : {}),
+            ...(stored.updates.auto === false ? { auto: false } : {}),
+          },
+        }
       : {}),
     ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
     ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
