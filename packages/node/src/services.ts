@@ -331,6 +331,12 @@ export class Services {
     if (shipped?.manifest.marks) throw new Error(`${shipped.manifest.name} is a mark service: everyone's own already, not a project's`);
     if (shipped?.manifest.hints) throw new Error(`${shipped.manifest.name} is a hint service: everyone's own already, not a project's`);
     if (shipped?.manifest.keyvault) throw new Error(`${shipped.manifest.name} is a keyvault: yours, in Keys & devices, never a project's service`);
+    // The same artifact already runs as a service of yours: it joins these spaces too, rather than running twice.
+    const running = found && !input.name && !input.node ? this.storedServices().find((s) => !s.launched && s.artifact?.project === found.project.id && s.artifact.manifest.app === found.artifact.manifest.app) : undefined;
+    if (running) {
+      const given = Object.entries(input.settings ?? {}).length ? input.settings! : undefined;
+      return this.setService({ name: running.name, spaces: [...running.spaces, ...(input.spaces ?? [])], ...(given ? { spaceSettings: Object.fromEntries((input.spaces ?? []).map((s) => [s, given])) } : {}) });
+    }
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
@@ -351,8 +357,13 @@ export class Services {
     // A sign-in comes after: its provider's page opens once the service is there. So does a pick from what it lists.
     const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
-    const name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
+    let name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
     if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
+    // A release's name, unnamed: numbered when one of yours goes by it already.
+    if (found && !input.name) {
+      const taken = new Set([...this.h.agents.map((a) => a.name), ...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
+      for (let n = 2, base = name; taken.has(name); n++) name = `${base}-${n}`;
+    }
     // The names of what Weave ships are its own: nothing else goes by them, so nothing passes for them.
     if (this.reservedName(name) && shipped?.name !== name) throw new Error(`"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
     if (this.h.agents.some((a) => a.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
@@ -1017,7 +1028,7 @@ export class Services {
     if (!this.storedServices().some((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id))) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
     // Its own name, unlike any service of yours (or one Weave ships).
     const base = serviceName(a.manifest.app) ? a.manifest.app : 'website';
-    const taken = new Set([...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
+    const taken = new Set([...this.h.agents.map((a) => a.name), ...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
     let name = base;
     for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
     const added = await this.addService({ name, artifact: { project: from.id, tag: a.id }, spaces: [project.id], ...(input.approve ? { approve: true } : {}) });

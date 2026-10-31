@@ -130,7 +130,21 @@ describe('applets', { timeout: 60_000 }, () => {
       await lena.serviceReady('echo-bot');
       await lena.askService({ space: 'Friends', service: bot.did, text: 'and now?' });
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Friends' })).flatMap((r) => r.results.map((x) => x.text))).toContain('v1.1 Hello: and now?'), { timeout: 15_000, interval: 200 });
+
+      // Installed again elsewhere: the one she runs joins there too, with that group's setting, rather than running twice.
+      await lena.createGroup('Neighbours');
+      const again = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Neighbours'], approve: true, settings: { GREETING: 'Hi' } });
+      expect(again).toMatchObject({ name: 'echo-bot', did: bot.did });
+      expect(again.spaces.map((s) => s.name).sort()).toEqual(['Friends', 'Neighbours']);
+      expect((await lena.services()).filter((s) => s.artifact)).toHaveLength(1);
+      // Another project's release by the same name is another service: numbered, not refused.
+      await martl.createProject({ name: 'More bots' });
+      await lena.joinSpace(await martl.invite('More bots'));
+      await publishRelease(martl, { project: 'More bots', tag: 'v1.1', repo: 'martl/bot', manifest: manifest([], v11.image) });
+      syncAll([martl, lena]);
+      expect(await lena.addService({ artifact: { project: 'More bots' }, spaces: ['More bots'], approve: true, settings: { GREETING: 'Hey' } })).toMatchObject({ name: 'echo-bot-2', artifact: { project: { name: 'More bots' } } });
     } finally {
+      await lena.removeService('echo-bot-2').catch(() => {});
       await lena.removeService('echo-bot').catch(() => {});
       await api.close();
     }

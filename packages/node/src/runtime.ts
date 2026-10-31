@@ -455,14 +455,14 @@ export class Runtime {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    child.stdout?.pipe(log);
-    child.stderr?.pipe(log);
+    // The log ends once, after both outputs are drained: not by whichever pipe closes first.
+    child.stdout?.pipe(log, { end: false });
+    child.stderr?.pipe(log, { end: false });
     const entry = { child, stopping: false, ...(run.container ? { container: run.container } : {}) };
     this.#procs.set(key, entry);
-    child.on('error', (error) => log.write(`weave: couldn't start ${run.name}: ${error.message}\n`));
-    child.on('exit', (code) => {
-      log.write(`weave: ${run.name} exited (${code})\n`);
-      log.end();
+    child.on('error', (error) => !log.writableEnded && log.write(`weave: couldn't start ${run.name}: ${error.message}\n`));
+    child.on('close', (code) => {
+      log.end(`weave: ${run.name} exited (${code})\n`);
       if (this.#procs.get(key) === entry) this.#procs.delete(key);
       if (!entry.stopping) this.#again(key, again);
     });
