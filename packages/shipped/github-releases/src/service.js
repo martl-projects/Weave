@@ -131,7 +131,8 @@ async function publishRelease(space, input) {
   let app;
   if (content.ok) {
     const body = await content.json();
-    app = JSON.parse(atob(String(body.content ?? '').replace(/\s/g, '')));
+    // Base64 of its bytes, UTF-8 (atob alone reads them as Latin-1: "groÃe" for "große").
+    app = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(String(body.content ?? '').replace(/\s/g, '')), (c) => c.charCodeAt(0))));
   } else if (input.previous) app = input.previous;
   else throw new Error(`${repo} has no weave.app.json at ${found.tag_name}: add one (app, name, services, start), tag again, and publish`);
   // The same artifact as released from this source before (another is another source's, or a new one).

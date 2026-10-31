@@ -52,7 +52,7 @@ class PrivateGitHub {
   public = false;
   bytes = botArchive;
   guide = Buffer.from('%PDF-1.4 the guide\n');
-  manifest = { app: 'bot', name: 'Bot', version: 1, services: [], service: { reads: 'addressed', writes: [], version: '1.0' }, wasm: { component: 'bot.wasm' } };
+  manifest = { app: 'bot', name: 'Bot für Grüße', version: 1, services: [], service: { reads: 'addressed', writes: [], version: '1.0' }, wasm: { component: 'bot.wasm' } };
   delivered = 0;
   /** Who reached the repository: the token, or the App. */
   seen: string[] = [];
@@ -169,6 +169,8 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       await expect(lena.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' })).rejects.toThrow(/maintainer/);
       const published = await martl.releaseApp({ project: 'Bot', tag: 'v1.0', repo: 'martl/bot' });
       expect(published.install).toMatchObject({ source: { provider: 'github', ref: 'martl/bot' }, fetcher: 'github-checkout', tag: 'v1.0', access: 'grant', assets: { wasm: { file: 'Bot-wasm.tar.gz', sha256: createHash('sha256').update(github.bytes).digest('hex'), size: github.bytes.length } } });
+      // Its manifest as written, UTF-8 (not read as Latin-1).
+      expect(published.name).toBe('Bot für Grüße');
       expect(((await martl.releaseApp({ project: 'Bot', tag: 'v9', repo: 'martl/bot' }).catch((e: Error) => e)) as Error).message).toMatch(/github-releases \(martl\): GitHub shows no release v9/);
       expect((await martl.appReleases('Bot')).releases.map((r) => r.tag)).toEqual(['v1.0']);
       // Offered, and said in the project's chat: a message carrying the release, which Weave shows as a card to get it.
@@ -193,7 +195,7 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       // A file of the same release, handed out as the project's artifact: something to get, never to run.
       const guide = await martl.releaseFile({ project: 'Bot', tag: 'v1.0', file: 'Guide.pdf', name: 'Guide', type: 'application/pdf' });
       expect(guide).toMatchObject({ kind: 'file', name: 'Guide', tag: 'v1.0', source: { provider: 'github', ref: 'martl/bot' }, file: { name: 'Guide.pdf', size: github.guide.length }, type: 'application/pdf' });
-      await vi.waitFor(async () => expect((await lena.artifacts('Bot')).map((a) => [a.name, a.kind]).sort()).toEqual([['Bot', 'service'], ['Guide', 'file']]), { timeout: 10_000, interval: 100 });
+      await vi.waitFor(async () => expect((await lena.artifacts('Bot')).map((a) => [a.name, a.kind]).sort()).toEqual([['Bot für Grüße', 'service'], ['Guide', 'file']]), { timeout: 10_000, interval: 100 });
       await expect(lena.getArtifactFile({ project: 'Bot', artifact: (await lena.artifacts('Bot')).find((a) => a.kind === 'service')!.id })).rejects.toThrow(/not a file to get/);
       const got = await lena.getArtifactFile({ project: 'Bot', artifact: guide.id });
       expect(readFileSync(got.path, 'utf8')).toBe('%PDF-1.4 the guide\n');
