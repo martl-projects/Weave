@@ -1,9 +1,0 @@
-{
-  "app": "github-checkout",
-  "name": "GitHub checkout",
-  "fetcher": { "net": ["api.github.com", "*.githubusercontent.com"] },
-  "wasm": { "component": "github-checkout.wasm" },
-  "env": [
-    { "name": "GITHUB_TOKEN", "label": "Your GitHub token", "secret": true, "optional": true, "hint": "Only for releases the provider leaves to your own access: github.com → Settings → Developer settings → Fine-grained tokens, Contents read-only" }
-  ]
-}

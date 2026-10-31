@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
-import { buildComponent } from './helpers/components.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
 import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
 
 /*
@@ -31,9 +31,9 @@ const sync = (all: WeaveNode[]) => {
 
 describe('keyvaults and fetchers from releases', { timeout: 300_000 }, () => {
   it("are anyone's: added from a release, approved once, pinned to it", async () => {
-    const shipped = join(import.meta.dirname, '..', '..', 'shipped');
-    const vault = readFileSync(await buildComponent(join(shipped, 'github-keyvault', 'src', 'service.js'), 'keyvault', { http: true }));
-    const fetcher = readFileSync(await buildComponent(join(shipped, 'github-checkout', 'src', 'service.js'), 'fetcher', { http: true }));
+    // Weave's own, as it ships them (their pinned releases), released again under other names.
+    const vault = readFileSync(join(await pinnedRelease('github-keyvault'), 'github-keyvault.wasm'));
+    const fetcher = readFileSync(join(await pinnedRelease('github-checkout'), 'github-checkout.wasm'));
     const github = new PublicGitHub().add('acme/vault', 'v1', { name: 'acme-vault.wasm', bytes: vault }).add('acme/fetch', 'v1', { name: 'acme-fetch.wasm', bytes: fetcher });
     const port = await github.serve();
     const martl = person('martl');

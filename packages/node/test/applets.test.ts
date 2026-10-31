@@ -7,6 +7,7 @@ import { checkManifest } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
 import { dockerRunning, testImage } from './helpers/docker.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
 import { publishRelease, shippedCheckout } from './helpers/releases.ts';
 
 /*
@@ -58,11 +59,11 @@ function person(name: string): WeaveNode {
 }
 
 /** What a Weave ships, by name only (their manifests, a stand-in component): so their names are taken without a build. */
-function shippedNamed(...names: string[]): string {
+async function shippedNamed(...names: string[]): Promise<string> {
   const dir = tempDir('weave-applets-shipped-');
   const listed: Record<string, unknown> = {};
   for (const name of names) {
-    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'shipped', name, 'weave.app.json'), 'utf8')) as unknown;
+    const manifest = JSON.parse(readFileSync(join(await pinnedRelease(name), 'weave.app.json'), 'utf8')) as unknown;
     writeFileSync(join(dir, `${name}.wasm`), name);
     listed[name] = { component: `${name}.wasm`, digest: `sha256:${createHash('sha256').update(name).digest('hex')}`, manifest };
   }
@@ -100,7 +101,7 @@ describe('applets', { timeout: 60_000 }, () => {
     });
     const martl = person('martl');
     const lena = person('Lena');
-    lena.wasmSetup.shippedDir = shippedNamed('github-checkout');
+    lena.wasmSetup.shippedDir = await shippedNamed('github-checkout');
     dockerRunning(lena, tempDir('weave-applets-docker-'), { ...v10.script, ...v11.script });
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));

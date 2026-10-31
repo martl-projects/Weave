@@ -7,11 +7,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
 import { digestOf } from '../src/shipped.ts';
-import { buildComponent } from './helpers/components.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
 
 /*
  * Accounts elsewhere and GitHub access, shipped with Weave: people prove a GitHub account is theirs with a gist naming
- * their Weave id (github-verify, a verifier every Weave runs itself); GitHub access (packages/shipped/github-access)
+ * their Weave id (github-verify, a verifier every Weave runs itself); GitHub access (martl-projects/weave-github-access, pinned)
  * links a project's repositories through its own actions and keeps them in step with who is in it, with its own token.
  * Weave knows nothing of GitHub: it says who reads a space and whose accounts hold.
  */
@@ -146,9 +146,10 @@ let shipped: string;
 beforeAll(async () => {
   shipped = temp('weave-shipped-access-');
   const listed: Record<string, unknown> = {};
-  for (const [name, world] of [['github-access', 'service'], ['github-verify', 'verifier'], ['github-keyvault', 'keyvault']] as const) {
-    const source = join(import.meta.dirname, '..', '..', 'shipped', name);
-    const component = await buildComponent(join(source, 'src', 'service.js'), world, { http: true });
+  for (const name of ['github-access', 'github-verify', 'github-keyvault']) {
+    // As Weave ships it: its repository's pinned release (packages/shipped/pinned.json).
+    const source = await pinnedRelease(name);
+    const component = join(source, `${name}.wasm`);
     copyFileSync(component, join(shipped, `${name}.wasm`));
     listed[name] = { component: `${name}.wasm`, digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) };
   }

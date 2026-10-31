@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { parseManifest, type AppManifest, type Json } from '@weave/core';
 import type { WeaveNode } from '../../src/index.ts';
 import { digestOf } from '../../src/shipped.ts';
-import { buildComponent } from './components.ts';
+import { pinnedRelease } from '../../../shipped/pinned.ts';
 
 /*
  * Releases for tests that need one, not how it's published: a maintainer publishes it as GitHub releases would (its
@@ -72,11 +72,11 @@ export class PublicGitHub {
 
 let checkout: string | undefined;
 
-/** The fetcher Weave ships, built once: a folder of shipped services with it (and what else is listed there). */
+/** The fetcher Weave ships, its pinned release: a folder of shipped services with it (and what else is listed there). */
 export async function shippedCheckout(): Promise<string> {
   if (checkout) return checkout;
-  const source = join(import.meta.dirname, '..', '..', '..', 'shipped', 'github-checkout');
-  const component = await buildComponent(join(source, 'src', 'service.js'), 'fetcher', { http: true });
+  const source = await pinnedRelease('github-checkout');
+  const component = join(source, 'github-checkout.wasm');
   const dir = mkdtempSync(join(tmpdir(), 'weave-shipped-checkout-'));
   copyFileSync(component, join(dir, 'github-checkout.wasm'));
   writeFileSync(join(dir, 'shipped.json'), JSON.stringify({ 'github-checkout': { component: 'github-checkout.wasm', digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) } }));

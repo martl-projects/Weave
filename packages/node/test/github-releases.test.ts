@@ -8,10 +8,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
 import { digestOf } from '../src/shipped.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
 import { buildComponent } from './helpers/components.ts';
 
 /*
- * GitHub releases, the first service Weave ships (packages/shipped/github-releases): a WebAssembly component that hands
+ * GitHub releases, the first service Weave ships (martl-projects/weave-github-releases, pinned): a WebAssembly component that hands
  * a project's private release files to its participants, with a token or its person's GitHub App (whose key Weave
  * signs with for it), reaching api.github.com only, and only for releases the project's maintainers published. What it
  * grants is sealed to the asker, and their own fetcher (github-checkout, a client app of theirs) fetches with it.
@@ -126,9 +127,10 @@ beforeAll(async () => {
   botArchive = await buildArchive();
   shipped = tempDir('weave-shipped-');
   const listed: Record<string, unknown> = {};
-  for (const [name, world] of [['github-releases', 'service'], ['github-checkout', 'fetcher']] as const) {
-    const source = join(import.meta.dirname, '..', '..', 'shipped', name);
-    const component = await buildComponent(join(source, 'src', 'service.js'), world, { http: true });
+  for (const name of ['github-releases', 'github-checkout']) {
+    // As Weave ships it: its repository's pinned release (packages/shipped/pinned.json).
+    const source = await pinnedRelease(name);
+    const component = join(source, `${name}.wasm`);
     copyFileSync(component, join(shipped, `${name}.wasm`));
     listed[name] = { component: `${name}.wasm`, digest: digestOf(component), manifest: JSON.parse(readFileSync(join(source, 'weave.app.json'), 'utf8')) };
   }

@@ -59,12 +59,14 @@ for (const [name, pin] of Object.entries(pins())) {
   const dir = await pinnedRelease(name);
   const raw = JSON.parse(readFileSync(join(dir, 'weave.app.json'), 'utf8')) as unknown;
   const { manifest, problems } = checkManifest(raw);
-  const pure = manifest?.marks ?? manifest?.hints;
-  if (!pure) throw new Error(`${pin.repo} ${pin.tag}: ${problems.join('; ') || 'only mark and hint services come pinned so far'}`);
-  const component = readFileSync(join(dir, pure.component));
-  writeFileSync(join(dist, pure.component), component);
+  // A mark or hint service's component, or a service's, fetcher's, verifier's or keyvault's (wasm: no site or panel yet).
+  const file = (manifest?.marks ?? manifest?.hints ?? manifest?.wasm)?.component;
+  if (!manifest || !file) throw new Error(`${pin.repo} ${pin.tag}: ${problems.join('; ') || 'a shipped service is a WebAssembly component (wasm, marks or hints)'}`);
+  if (manifest.wasm?.site || manifest.wasm?.panel) throw new Error(`${pin.repo} ${pin.tag}: a site or panel doesn't come pinned yet`);
+  const component = readFileSync(join(dir, file));
+  writeFileSync(join(dist, file), component);
   const about = manifest.about ?? readmeAbout(dir);
-  shipped[name] = { component: pure.component, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
+  shipped[name] = { component: file, digest: `sha256:${createHash('sha256').update(component).digest('hex')}`, manifest: raw, ...(about ? { about } : {}) };
   console.log(`${name}: ${shipped[name].digest} (${pin.repo} ${pin.tag})`);
 }
 writeFileSync(join(dist, 'shipped.json'), `${JSON.stringify(shipped, null, 2)}\n`);
