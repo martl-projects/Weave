@@ -91,4 +91,13 @@ describe('working together in a group', () => {
     expect(after).toMatchObject({ yes: 1, quorumReached: true, myVote: { choice: 'yes' } });
     await expect(node.vote({ proposal: proposal.id, choice: 'no', as: 'forge' })).rejects.toThrow(/may not sign weave.vote/);
   });
+
+  it('lets an agent start a project for its person with weave.space.create, theirs and not its own', async () => {
+    const node = await setup();
+    await expect(node.createProject({ name: 'Spotlight', as: 'forge' })).rejects.toThrow(/may not sign weave.space.create/);
+    await node.addAgent('scout', ['weave.space.create']);
+    const project = await node.createProject({ name: 'Spotlight', description: 'Highlights', as: 'scout' });
+    expect(project).toMatchObject({ name: 'Spotlight', maintainer: true });
+    expect((await node.spaces('project')).find((s) => s.id === project.id)?.founder).toBe(node.identity.author);
+  });
 });

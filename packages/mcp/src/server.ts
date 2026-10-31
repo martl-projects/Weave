@@ -362,6 +362,20 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_create_project',
+    {
+      title: 'Create a project',
+      description:
+        "Start a new project for your person: it's theirs (they found it and maintain it), with the usual boards (releases, ideas, issues, proposals) and the description as its page. Nobody else is in it until they invite someone. Needs the weave.space.create permission.",
+      inputSchema: {
+        name: z.string().min(1).max(100),
+        description: z.string().max(4000).optional().describe('What it is, for its page'),
+      },
+    },
+    run(async ({ name, description }: { name: string; description?: string }) => backend.createProject({ name, description, as })),
+  );
+
+  server.registerTool(
     'weave_submit',
     {
       title: 'Submit a post',

@@ -1734,7 +1734,8 @@ export interface Backend {
   // groups and projects
   spaces(kind?: SpaceKind): Promise<SpaceInfo[]>;
   createGroup(name: string): Promise<SpaceInfo>;
-  createProject(input: { name: string; description?: string }): Promise<ProjectInfo>;
+  /** A new project, yours (you found it). An agent (as) may start one for you with the weave.space.create permission. */
+  createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo>;
   /** An invite link for a group (any member) or a project (maintainers), valid for `hours`. */
   invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */

@@ -1595,7 +1595,9 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(await this.#createSpace('group', name));
   }
 
-  async createProject(input: { name: string; description?: string }): Promise<ProjectInfo> {
+  async createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo> {
+    // An agent counts as its person: it may start a project for them, which is theirs, never its own.
+    if (input.as) this.#agentMay(input.as, KIND_SPACE_CREATE);
     const project = await this.#createSpace('project', input.name);
     if (input.description) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
     return this.project(project.id);
