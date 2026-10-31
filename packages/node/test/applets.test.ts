@@ -7,7 +7,7 @@ import { checkManifest } from '@weave/core';
 import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
 import { dockerRunning, testImage } from './helpers/docker.ts';
-import { publishRelease } from './helpers/releases.ts';
+import { publishRelease, shippedCheckout } from './helpers/releases.ts';
 
 /*
  * Applets (block 5): a release whose manifest declares a contract. Installed, it becomes a service of the installer's
@@ -113,6 +113,9 @@ describe('applets', { timeout: 60_000 }, () => {
 
     // She installs it in her own group: approved first, with its setting.
     await lena.createGroup('Friends');
+    // The names Weave's own services go by are known from the shipped services: built for the test (a checkout
+    // without a build, CI say, has no packages/shipped/dist).
+    lena.wasmSetup.shippedDir = await shippedCheckout();
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     try {
       lena.runServices({ port: api.port });

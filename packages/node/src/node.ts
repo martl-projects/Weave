@@ -127,6 +127,7 @@ import {
   isPlatform,
   KIND_SERVICE_REQUEST,
   artifactsOf,
+  type Artifact,
   KIND_BOARD,
   KIND_CURATE,
   KIND_BLOCK,
@@ -408,6 +409,9 @@ import {
   type Admission,
   type AgentInfo,
   type UpdateInfo,
+  type UpdateFile,
+  type UpdateReady,
+  type UpdateState,
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
@@ -510,7 +514,7 @@ import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
 import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
-import { guessPlatform } from './appinstall.ts';
+import { guessPlatform, platformKey } from './appinstall.ts';
 import { publicReleases, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -548,6 +552,7 @@ import {
 import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
 import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
 import { ClientApps } from './clientapps.ts';
@@ -1007,6 +1012,8 @@ export class WeaveNode implements Backend {
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  /** Weave's own updates (update.ts): new versions of the app, fetched like any release file, for the app to install. */
+  #updates = new Updates(() => joinPath(this.home.dir, 'updates'), () => this.#releases, () => this.#emitLive());
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
   /** Keyvaults and fetchers I added from releases (clientapps.ts): beside the ones Weave ships, run the same. */
   #clientApps = new ClientApps(() => this.home, () => this.#releases);
@@ -3783,7 +3790,7 @@ export class WeaveNode implements Backend {
     if (!current) throw new Error(`"${input?.current}" isn't a version like 0.3.0`);
     // A company's IT rolls out versions itself (managed settings): no prompts.
     if (machinePolicy().updates === false) return { current: input.current } as UpdateInfo;
-    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
+    const source = this.#updateSource();
     const found: NonNullable<UpdateInfo['latest']>[] = [];
 
     // Release posts in the Weave project, signed by its maintainers: every member has them, no sign-in needed.
@@ -3794,6 +3801,13 @@ export class WeaveNode implements Backend {
         const version = /^weave\b/i.test(post.title) ? parseVersion(post.title) : undefined;
         if (!version || !maintainers.has(post.by.did)) continue;
         found.push({ version: formatVersion(version), ...(post.link ? { url: post.link } : {}), post: `weave:post:${post.id}`, notes: post.text.slice(0, 4000), published: post.time, source: 'weave' });
+      }
+      // The desktop app released as the project's artifact (weave app release), with its file for this computer and
+      // its SHA-256 in the maintainer's signed entry: what the app may install by itself.
+      for (const [version, { release, install }] of this.#updateReleases(project, source.artifact)) {
+        const same = found.find((f) => f.version === version && f.source === 'weave');
+        if (same) same.install = install;
+        else found.push({ version, url: `https://github.com/${source.repo}/releases/tag/${encodeURIComponent(release.tag)}`, published: release.time, source: 'weave', install });
       }
     }
     // The repository's releases, as anyone sees them (a private repository's: its release posts are enough).
@@ -3809,7 +3823,58 @@ export class WeaveNode implements Backend {
 
     // The newest version; for the same version, the release post (it has the notes) wins.
     const latest = found.sort((a, b) => compareVersions(b.version, a.version) || (a.source === 'weave' ? -1 : 1))[0];
-    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0 };
+    // A download of this version or an older one is of no use anymore.
+    this.#updates.prune(formatVersion(current));
+    const ready = this.#updates.ready();
+    return { current: formatVersion(current), ...(latest ? { latest } : {}), newer: !!latest && compareVersions(latest.version, current) > 0, auto: this.config.updates?.auto !== false, ...(ready ? { ready } : {}) };
+  }
+
+  /** Where Weave's own updates come from: the Weave project, its repository and its desktop artifact, unless the config says otherwise. */
+  #updateSource(): { project: string; repo: string; artifact: string } {
+    const source = { ...UPDATE_SOURCE, ...(this.config.updates ?? {}) };
+    // Its fetcher gets Weave's updates without being added by hand: Weave's own code, as shipped.
+    this.#fetchers.builtInFor.add(source.project);
+    return source;
+  }
+
+  /** The desktop app's releases in the project, by version: each with its file for this computer, as a maintainer signed it. */
+  #updateReleases(project: StoredSpace, artifact: string): Map<string, { release: Artifact; install: UpdateFile }> {
+    const found = new Map<string, { release: Artifact; install: UpdateFile }>();
+    for (const release of artifactsOf(this.#entries(project), this.#state(project).maintainers)) {
+      if (release.manifest.app !== artifact || release.kind !== 'file') continue;
+      const version = parseVersion(release.tag);
+      const asset = release.manifest.install?.assets?.[platformKey()];
+      if (!version || !asset) continue;
+      found.set(formatVersion(version), { release, install: { artifact: release.id, tag: release.tag, file: asset.file, sha256: asset.sha256, ...(asset.size ? { size: asset.size } : {}) } });
+    }
+    return found;
+  }
+
+  async updateFetch(input: { version: string }): Promise<UpdateState> {
+    if (machinePolicy().updates === false) throw new Error('this computer gets new versions from its IT (managed settings): nothing to download');
+    const version = parseVersion(String(input?.version ?? ''));
+    if (!version) throw new Error(`"${input?.version}" isn't a version like 0.3.0`);
+    const source = this.#updateSource();
+    const project = this.#spaces.get(source.project);
+    const release = project?.kind === 'project' ? this.#updateReleases(project, source.artifact).get(formatVersion(version)) : undefined;
+    if (!release) throw new Error(`no release of Weave ${formatVersion(version)} for this computer that the app can install itself: its maintainers haven't released it in the Weave project`);
+    this.#updates.reset();
+    return this.#updates.fetch(formatVersion(version), { project: project!.id, id: release.release.id, tag: release.release.tag, manifest: release.release.manifest }, release.install);
+  }
+
+  async updateState(): Promise<UpdateState> {
+    return this.#updates.state();
+  }
+
+  async updateReady(input: { version: string }): Promise<UpdateReady | null> {
+    return this.#updates.readyFor(String(input?.version ?? '')) ?? null;
+  }
+
+  async updateSettings(input: { auto: boolean }): Promise<{ auto: boolean }> {
+    const { auto: _auto, ...rest } = this.config.updates ?? {};
+    this.config = { ...this.config, updates: { ...rest, ...(input.auto === false ? { auto: false } : {}) } };
+    saveConfig(this.home, this.config);
+    return { auto: input.auto !== false };
   }
 
   /**
@@ -9867,7 +9932,7 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 const FREE_TIER_MONTHS = 1200;
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
-const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave' };
+const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave', artifact: 'weave-desktop' };
 /** Where the farewell to v0.3 peers sends them. */
 const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 

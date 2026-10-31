@@ -1,4 +1,4 @@
-import { checkForUpdates, UpdatePrompt } from './update.tsx';
+import { checkForUpdates, UpdatePrompt, UpdateSettings } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest, ServiceProfileInfo } from '@weave/node/client';
@@ -43,7 +43,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -646,6 +646,7 @@ function Shell() {
             { label: 'Refresh', onClick: bump },
             { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
             { label: 'Marks…', onClick: () => setDialog({ kind: 'marks' }) },
+            ...(bridge.update ? [{ label: 'Updates…', onClick: () => setDialog({ kind: 'updates' as const }) }] : []),
             'sep',
             ...(Object.keys(SKINS) as Skin[]).map((s) => ({
               label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
@@ -726,6 +727,7 @@ function Shell() {
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
       {dialog?.kind === 'marks' && <MarksSettings onClose={close} />}
+      {dialog?.kind === 'updates' && <UpdateSettings onClose={close} />}
       {dialog?.kind === 'desk' && <SetupDeskDialog onClose={close} />}
     </div>
   );

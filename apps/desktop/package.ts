@@ -159,6 +159,10 @@ const config: Configuration = {
     // The app's executable, seen from resources/bin.
     const exe = mac ? `../../MacOS/${packager.appInfo.productFilename}` : electronPlatformName === 'win32' ? `../../${packager.appInfo.productFilename}.exe` : `../../${(packager as unknown as { executableName: string }).executableName}`;
     writeShims(join(resources, 'bin'), exe, electronPlatformName === 'win32');
+    // For the updater (src/update.ts): whether this build is signed, and by whom. A signed build takes only an update
+    // by the same publisher; an unsigned Mac app doesn't update itself at all (Squirrel.Mac refuses it).
+    const signed = mac ? developerId : electronPlatformName === 'win32' ? !!azure : false;
+    writeFileSync(join(resources, 'update.json'), JSON.stringify({ signed, ...(azure && electronPlatformName === 'win32' ? { publisher: azure.publisherName } : {}) }));
   },
   icon: 'assets/icon.png',
   artifactName: 'Weave-${version}-${os}-${arch}.${ext}',
@@ -170,12 +174,14 @@ const config: Configuration = {
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
   mac: {
-    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune). For installers
-    // they're built one architecture at a time (below): two pkg builds at once share a temporary
-    // org.weave.desktop.pkg in release/, and two hdiutil runs at once fail with "Resource busy".
+    // dmg for people; pkg for device management (installer -pkg …, Jamf, Intune); zip for the updater (Squirrel.Mac
+    // takes the app as a zip, once the app is signed). For installers they're built one architecture at a time
+    // (below): two pkg builds at once share a temporary org.weave.desktop.pkg in release/, and two hdiutil runs at
+    // once fail with "Resource busy".
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },
       { target: 'pkg', arch: ['arm64', 'x64'] },
+      { target: 'zip', arch: ['arm64', 'x64'] },
     ],
     category: 'public.app-category.social-networking',
     // With a Developer ID: signed with the hardened runtime (electron-builder's entitlements: just the JIT,
@@ -194,6 +200,6 @@ const config: Configuration = {
 const dir = process.argv.includes('--dir');
 if (process.platform === 'darwin' && !dir) {
   for (const arch of ['arm64', 'x64'] as const)
-    await build({ config: { ...config, mac: { ...config.mac, target: [{ target: 'dmg', arch: [arch] }, { target: 'pkg', arch: [arch] }] } }, publish: 'never' });
+    await build({ config: { ...config, mac: { ...config.mac, target: [{ target: 'dmg', arch: [arch] }, { target: 'pkg', arch: [arch] }, { target: 'zip', arch: [arch] }] } }, publish: 'never' });
 } else await build({ config, publish: 'never', dir });
 console.log('installers in apps/desktop/release/');

@@ -1211,7 +1211,14 @@ async function main(): Promise<void> {
         const l = u.latest;
         if (!l) return `Weave ${u.current}; no release found (are you in the Weave project?)`;
         if (!u.newer) return `Weave ${u.current} is the newest version`;
-        return [`Weave ${l.version} is available (you have ${u.current})`, l.url ? `  get it: ${l.url}` : '', l.post ? `  release post: ${l.post}` : ''].filter(Boolean).join('\n');
+        return [
+          `Weave ${l.version} is available (you have ${u.current})`,
+          l.url ? `  get it: ${l.url}` : '',
+          l.post ? `  release post: ${l.post}` : '',
+          u.ready ? `  downloaded and checked: ${u.ready.path} (the Weave app installs it on Restart to update)` : l.install ? `  the Weave app installs it by itself: ${l.install.file}, SHA-256 ${l.install.sha256}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
       });
     }
 
