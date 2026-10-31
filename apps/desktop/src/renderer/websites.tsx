@@ -10,7 +10,7 @@ import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { ActionScopes, askAndWait, contractText, OriginBadge, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, ShippedUpdate, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
-import { HandDialog } from './keyvaults.tsx';
+import { HandDialog, platformName } from './keyvaults.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -916,6 +916,41 @@ function HostedStatus({ hosted }: { hosted?: HostedWebsiteInfo }) {
   );
 }
 
+/**
+ * Your service that reaches a platform through your keyvault (its contract uses it), where that gives it nothing in this
+ * project: no keyvault, no app in it, or nothing handed to the project. It then sees only what's public there, and says
+ * only "not found", so this says why, with the step that's missing.
+ */
+function KeyvaultNote({ project, service }: { project: SpaceInfo; service: ServiceInfo }) {
+  const platforms = Object.keys(service.contract.uses ?? service.update?.uses ?? {});
+  const { data: vaults } = useApi(() => (platforms.length ? api<KeyvaultInfo[]>('keyvaults') : Promise.resolve([] as KeyvaultInfo[])), [platforms.join(' ')]);
+  const [handing, setHanding] = useState<KeyvaultInfo>();
+  if (!vaults) return null;
+  const notes = platforms.flatMap((key) => {
+    // Named as the keyvault names it (GitHub), added or not.
+    const known = vaults.find((k) => k.platform.toLowerCase() === key.toLowerCase());
+    const platform = known ? platformName(known) : key;
+    const v = vaults.find((k) => k.platform.toLowerCase() === key.toLowerCase() && k.added);
+    const what = v?.resources ?? 'resources';
+    if (!v)
+      return [{ platform, text: `It reaches ${platform} through your ${platform} keyvault, which you haven't added: it sees only what's public there.`, button: <button onClick={() => navigate('#/keys')}>Keys & devices…</button> }];
+    if (!v.apps.length) return [{ platform, text: `Your ${v.title} has no app yet: ${service.name} sees only what's public on ${platform}.`, button: <button onClick={() => navigate('#/keys')}>Keys & devices…</button> }];
+    if (v.apps.some((a) => a.handed.some((h) => h.project.id === project.id && h.resources.length))) return [];
+    return [{ platform, text: `Your ${v.title} hands p/${project.name} no ${what}: ${service.name} sees only what's public on ${platform} here.`, button: <button onClick={() => setHanding(v)}>Hand {what}…</button> }];
+  });
+  if (!notes.length) return null;
+  return (
+    <>
+      {notes.map((n) => (
+        <div className="small" key={n.platform}>
+          <span className="error-text">No {n.platform} access:</span> {n.text} {n.button}
+        </div>
+      ))}
+      {handing && <HandDialog vault={handing} project={{ id: project.id, name: project.name }} onClose={() => (setHanding(undefined), bump())} />}
+    </>
+  );
+}
+
 /** What a service is there for, in a project. */
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
 const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
@@ -962,6 +997,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       {purpose(service) && <p className="small">{purpose(service)}</p>}
       <OriginText origin={service.origin} />
       {own && mine?.update && <ShippedUpdate service={mine} />}
+      {own && mine && <KeyvaultNote project={project} service={mine} />}
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
       {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} launching={(mine?.launching ?? []).filter((l) => l.project.id === project.id)} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
       {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} maintainer={maintainer} {...(maintainer && publishesReleases(service) ? { publish: () => setPublishing(true) } : {})} />}

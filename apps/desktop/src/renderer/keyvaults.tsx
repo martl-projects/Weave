@@ -9,6 +9,23 @@ type VaultApp = KeyvaultInfo['apps'][number];
 
 const rightsText = (rights: Record<string, string>) => Object.entries(rights).map(([k, r]) => `${k.replace(/_/g, ' ')}: ${r}`).join(', ');
 const appName = (a: VaultApp) => String(a.info.slug ?? a.info.id ?? a.key);
+/** The platform as people know it (GitHub): from the keyvault's title, its platform's key otherwise. */
+export const platformName = (v: Pick<KeyvaultInfo, 'title' | 'platform'>) => v.title.replace(/\s*keyvault$/i, '') || v.platform;
+
+/**
+ * The account a repository's address names, as its Code button copies it (git@github.com:owner/repo.git,
+ * https://github.com/owner/repo, or any page of it), or owner/repo, or an account's name as it is: whom an app is made for.
+ */
+export function ownerOf(text: string): { owner: string; repo?: string } | undefined {
+  const path = text
+    .trim()
+    .replace(/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?[^/:\s]+\.[a-z]{2,}(?::\d+)?[:/]/i, '')
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/, '');
+  const [owner, repo] = path.split('/');
+  if (!owner || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner) || (repo !== undefined && !/^[\w.-]{1,100}$/.test(repo))) return undefined;
+  return { owner, ...(repo ? { repo } : {}) };
+}
 
 /**
  * In Keys & devices: your keyvaults. Each holds your access to a platform: your apps there (GitHub Apps, any number:
@@ -51,9 +68,9 @@ export function KeyvaultsBox() {
                 ) : (
                   <AsyncButton
                     onClick={async () =>
-                      (await ask(`Remove ${v.title}? Your services lose the access they get through it, what your apps handed projects is forgotten, and they're taken off everything on ${v.platform}. Deleting them there is yours: Weave shows where.`, 'Remove')) &&
+                      (await ask(`Remove ${v.title}? Your services lose the access they get through it, what your apps handed projects is forgotten, and they're taken off everything on ${platformName(v)}. Deleting them there is yours: Weave shows where.`, 'Remove')) &&
                       attempt(
-                        () => api<{ forgotten: ForgottenAppInfo[] }>('removeKeyvault', v.name).then((r) => (bump(), r.forgotten.length && setForgotten({ platform: v.platform, apps: r.forgotten }))),
+                        () => api<{ forgotten: ForgottenAppInfo[] }>('removeKeyvault', v.name).then((r) => (bump(), r.forgotten.length && setForgotten({ platform: platformName(v), apps: r.forgotten }))),
                         `${v.title} is removed`,
                       )
                     }
@@ -102,9 +119,9 @@ export function KeyvaultsBox() {
                       label: 'Forget this app',
                       run: () =>
                         void (async () =>
-                          (await ask(`Forget ${appName(a)}? Your services lose what they get through it, what it handed projects is forgotten, and it's taken off everything on ${v.platform}. Deleting it there is yours: Weave shows where.`, 'Forget it')) &&
+                          (await ask(`Forget ${appName(a)}? Your services lose what they get through it, what it handed projects is forgotten, and it's taken off everything on ${platformName(v)}. Deleting it there is yours: Weave shows where.`, 'Forget it')) &&
                           attempt(
-                            () => api<{ forgotten: ForgottenAppInfo }>('removeKeyvaultApp', { name: v.name, app: a.key }).then((r) => (bump(), setForgotten({ platform: v.platform, apps: [r.forgotten] }))),
+                            () => api<{ forgotten: ForgottenAppInfo }>('removeKeyvaultApp', { name: v.name, app: a.key }).then((r) => (bump(), setForgotten({ platform: platformName(v), apps: [r.forgotten] }))),
                             `${appName(a)} is forgotten`,
                           ))(),
                     },
@@ -165,7 +182,8 @@ function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void
   const [pick, setPick] = useState<string>();
   const [typed, setTyped] = useState('');
   const chosen = pick ?? (mine ? whom?.owners[0]?.value ?? 'other' : 'me');
-  const owner = chosen === 'me' ? undefined : chosen === 'other' ? typed.trim() : chosen;
+  const named = chosen === 'other' ? ownerOf(typed) : undefined;
+  const owner = chosen === 'me' ? undefined : chosen === 'other' ? named?.owner : chosen;
   const [busy, setBusy] = useState(false);
   const make = async () => {
     setBusy(true);
@@ -175,7 +193,7 @@ function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void
       await api('finishKeyvaultApp', { id });
       bump();
       onClose();
-    }, `${setting.label} is made${owner ? ` for ${owner}` : ''}: install it on ${owner ? 'its' : 'your'} ${what}`);
+    }, `${setting.label} is made${owner ? ` for ${owner}` : ''}: install it on ${named?.repo ? `${named.owner}/${named.repo}` : `${owner ? 'its' : 'your'} ${what}`}`);
     setBusy(false);
   };
   const option = (value: string, label: string, note?: string) => (
@@ -187,21 +205,39 @@ function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void
     </div>
   );
   return (
-    <Modal title={`Make ${vault.apps.length ? 'another app' : setting.label.charAt(0).toLowerCase() + setting.label.slice(1)} on ${vault.platform}`} onClose={onClose}>
+    <Modal title={`Make ${vault.apps.length ? 'another app' : setting.label.charAt(0).toLowerCase() + setting.label.slice(1)} on ${platformName(vault)}`} onClose={onClose}>
       <p className="small">An app reaches only the {what} of the account it's made for: one for yours, one for each organization whose {what} you hand to projects.</p>
-      {!whom && <p className="small muted">Asking {vault.platform} which organizations you're in…</p>}
+      {!whom && <p className="small muted">Asking {platformName(vault)} which organizations you're in…</p>}
       {option('me', whom?.login ? `${whom.login} (your account)` : 'My own account', mine ? 'has one already' : undefined)}
       {(whom?.owners ?? []).map((o) => option(o.value, o.value, o.note ?? 'organization'))}
-      {option('other', 'Another organization…')}
+      {option('other', 'Another organization: from one of its repositories…')}
       {chosen === 'other' && (
         <div className="field-row indent">
-          <input autoFocus className="grow" placeholder="its name" value={typed} onChange={(e) => setTyped(e.target.value.trim())} />
+          <input autoFocus className="grow" placeholder="git@github.com:organization/repository.git" value={typed} onChange={(e) => setTyped(e.target.value)} />
         </div>
       )}
-      {chosen === 'other' && <p className="small muted">Only organizations you show you're in are listed: on {vault.platform}, a membership you keep private is named here instead.</p>}
-      <p className="small muted">{vault.platform} opens and makes it as you confirm. Then install it on the {what} you want to hand to projects.</p>
+      {chosen === 'other' && (
+        <div className="small muted indent">
+          {typed.trim() && !named ? (
+            <span className="error-text">That's no repository address or organization name.</span>
+          ) : named ? (
+            <>
+              For <b>{named.owner}</b>
+              {named.repo ? `, to hand ${named.owner}/${named.repo} and the organization's other ${what}` : ''}.
+            </>
+          ) : (
+            <>Only organizations you show you're in are listed above: one whose membership you keep private comes from the address of one of its {what}, or its name.</>
+          )}
+          <details>
+            <summary>Where's the address?</summary>
+            On {platformName(vault)}, open one of the organization's {what}, press the green <b>Code</b> button and copy the address shown (HTTPS or SSH, like git@github.com:organization/repository.git). Any of its {what} will
+            do: the app is made for the organization, and you choose which {what} it reaches when you install it.
+          </details>
+        </div>
+      )}
+      <p className="small muted">{platformName(vault)} opens and makes it as you confirm. Then install it on the {what} you want to hand to projects.</p>
       <div className="buttons">
-        <button className="default" disabled={busy || (chosen === 'other' && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(typed))} onClick={() => void make()}>
+        <button className="default" disabled={busy || (chosen === 'other' && !named)} onClick={() => void make()}>
           {busy ? 'Waiting for it…' : 'Make it'}
         </button>
         <button onClick={onClose}>Cancel</button>
@@ -301,7 +337,7 @@ export function HandDialog({ vault, app, project, onClose }: { vault: KeyvaultIn
       </p>
       {error ? <p className="small error-text">{String(error)}</p> : null}
       {reachable && <p className="small muted">An organization's {what} aren't here unless this app was made for it: Keys & devices, {vault.title}, make another app for that organization.</p>}
-      {!reachable && !error && <p className="small muted">Asking {vault.platform}…</p>}
+      {!reachable && !error && <p className="small muted">Asking {platformName(vault)}…</p>}
       {all.length > 8 && <input className="grow" placeholder="Find…" value={filter} onChange={(e) => setFilter(e.target.value)} />}
       <div className="choose-list">
         {shown.map((r) => (
