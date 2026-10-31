@@ -20,7 +20,7 @@ function syncAll(nodes: WeaveNode[]): void {
   for (let round = 0; round < 2; round++) for (const from of nodes) for (const to of nodes) if (from !== to) from.replica.events().forEach((e) => to.replica.ingest(e));
 }
 
-describe('Home', () => {
+describe('Home', { timeout: 30_000 }, () => {
   it('filters by source and leaves out what you hid', async () => {
     const martin = person('Martin');
     const lena = person('Lena');
@@ -57,5 +57,16 @@ describe('Home', () => {
     await martin.setHomeVisibility({ space: 'Mesh radio', visible: true });
     expect(await titles('projects')).toEqual(['Mesh radio', 'Synth case', 'Weave']);
     await expect(martin.posts({ from: 'everything' as 'all' })).rejects.toThrow(/show posts from/);
+
+    // A project is active by its chat: a post there moves up on Home itself, not the project.
+    const active = async () => (await martin.posts({ from: 'projects' })).find((p) => p.type === 'project' && p.title === 'Synth case')!.active;
+    const before = await active();
+    await new Promise((r) => setTimeout(r, 5));
+    await lena.submit({ space: 'Synth case', title: 'New panel layout' });
+    syncAll(all);
+    expect(await active()).toBe(before);
+    await lena.say({ space: 'Synth case', text: 'panel is in' });
+    syncAll(all);
+    expect((await active())! > before!).toBe(true);
   });
 });

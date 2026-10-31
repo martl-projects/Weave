@@ -8773,7 +8773,8 @@ export class WeaveNode implements Backend {
     const page = this.#page(project, state);
     const score = scoresOf(entries).get(created.id);
     const messages = entries.filter((e) => e.kind === KIND_MSG);
-    const active = [created.event.time, ...entries.map((e) => e.event.time)].reduce((a, b) => (b > a ? b : a));
+    // Active by its chat: a post there is on Home itself and moves up there, not the project (nor services' events).
+    const active = [created.event.time, ...messages.map((e) => e.event.time)].reduce((a, b) => (b > a ? b : a));
     const saved = this.#saves().get(created.id);
     return {
       id: created.id,

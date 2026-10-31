@@ -212,6 +212,15 @@ function Badges({ post }: { post: PostInfo }) {
   );
 }
 
+/** Where a post is: its project's (or community's) little icon and name, as in the sidebar. */
+function Where({ space, spaces }: { space: NonNullable<PostInfo['space']>; spaces: SpaceInfo[] }) {
+  return (
+    <a className="where" href={spaceHref(space)}>
+      {space.kind !== 'direct' && <ProjectIcon id={space.id} icon={spaces.find((s) => s.id === space.id)?.icon} size={16} className="where-icon" />} {spaceLabel(space)}
+    </a>
+  );
+}
+
 export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate; moderator?: boolean }) {
   const href = postHref(post);
   return (
@@ -233,9 +242,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
         <div className="post-meta">
           {showWhere && post.space && (
             <>
-              <a className="where" href={spaceHref(post.space)}>
-                {spaceLabel(post.space)}
-              </a>
+              <Where space={post.space} spaces={spaces} />
               {post.space.kind === 'project' && post.board && post.type !== 'project' && <span className="where">/{post.board}</span>}
               {' · '}
             </>
@@ -475,9 +482,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
           <div className="post-meta">
             {post.space && (
               <>
-                <a className="where" href={spaceHref(post.space)}>
-                  {spaceLabel(post.space)}
-                </a>
+                <Where space={post.space} spaces={spaces} />
                 {' · '}
               </>
             )}
