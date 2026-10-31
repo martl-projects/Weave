@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
 import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
-import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, type Delivered } from './claudeapp.ts';
+import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, watchFront, type Delivered, type Front } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
@@ -155,16 +155,35 @@ function showWindow(): void {
 ipcMain.handle('weave:show', () => showWindow());
 
 let mentions: BrowserWindow | undefined;
+/** The panel is open as far as you're concerned (until you close it), though hidden while another app is in front. */
+let mentionsWanted = false;
+/** The app in front, where Weave can tell (Windows); undefined elsewhere. */
+let front: Front | undefined;
+let stopWatchingFront: (() => void) | undefined;
+
+/** The panel belongs beside the Claude app: it hides when you go to another app, and comes back with Claude. */
+function frontChanged(now: Front): void {
+  front = now;
+  if (!mentions || mentions.isDestroyed()) return;
+  if (now === 'claude' && mentionsWanted && !mentions.isVisible()) mentions.showInactive();
+  else if (now === 'other' && mentions.isVisible()) mentions.hide();
+}
 
 /**
  * The Mentions panel: a small window that stays on top beside your work (Claude
  * Code), with the posts agents point to. It comes up by itself, without taking
- * the focus, when a new one arrives; closing it only hides it.
+ * the focus, when a new one arrives, but only beside the Claude app (or Weave):
+ * with another app in front it waits until you're back in Claude. Closing it
+ * only hides it, until it's opened again.
  */
 function showMentions(focus = true): void {
+  mentionsWanted = true;
+  stopWatchingFront ??= watchFront(frontChanged);
+  // Opened by you: now. By itself: only where it belongs.
+  const now = focus || front !== 'other';
   if (mentions) {
     if (focus) mentions.show();
-    else if (!mentions.isVisible()) mentions.showInactive();
+    else if (now && !mentions.isVisible()) mentions.showInactive();
     return;
   }
   const area = screen.getPrimaryDisplay().workArea;
@@ -191,6 +210,7 @@ function showMentions(focus = true): void {
   panel.on('close', (event) => {
     if (quitting) return;
     event.preventDefault();
+    mentionsWanted = false;
     panel.hide();
   });
   panel.on('closed', () => (mentions = undefined));
@@ -204,11 +224,15 @@ function showMentions(focus = true): void {
     event.preventDefault();
     if (/^https?:\/\//.test(url)) void shell.openExternal(url);
   });
-  panel.once('ready-to-show', () => (focus ? panel.show() : panel.showInactive()));
+  panel.once('ready-to-show', () => (focus ? panel.show() : now && panel.showInactive()));
   void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
 }
 
-ipcMain.handle('weave:mentions', (_event, action: string) => (action === 'hide' ? mentions?.hide() : showMentions()));
+ipcMain.handle('weave:mentions', (_event, action: string) => {
+  if (action !== 'hide') return showMentions();
+  mentionsWanted = false;
+  mentions?.hide();
+});
 
 /**
  * Ctrl+click on a work item: the Claude app comes to the item's latest session
@@ -583,6 +607,7 @@ let daemonStopped = false;
 app.on('will-quit', (event) => {
   quitting = true;
   globalShortcut.unregisterAll();
+  stopWatchingFront?.();
   watching.abort();
   if (daemonStopped || !daemon?.child || daemon.child.exitCode !== null) return;
   event.preventDefault();

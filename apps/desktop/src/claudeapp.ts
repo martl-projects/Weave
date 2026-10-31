@@ -161,6 +161,51 @@ export async function pasteBack(text: string): Promise<Exclude<Delivered, 'link'
   return 'pasted';
 }
 
+/** Which app is in front: the Claude app, Weave itself, or another. */
+export type Front = 'claude' | 'weave' | 'other';
+
+/** Says which process has the window in front whenever that changes ("<pid> <name>"); a small loop, no hooks. */
+const FRONT_WATCHER = `
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class WeaveFront {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+}
+"@
+$last = -1
+while ($true) {
+  $id = 0; [void][WeaveFront]::GetWindowThreadProcessId([WeaveFront]::GetForegroundWindow(), [ref]$id)
+  if ($id -ne $last -and $id -ne 0) {
+    $last = $id
+    $name = (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName
+    [Console]::Out.WriteLine("$id $name"); [Console]::Out.Flush()
+  }
+  Start-Sleep -Milliseconds 250
+}
+`;
+
+/**
+ * Follow which app is in front, for the side panel to show only beside the Claude app. On Windows only (elsewhere
+ * nothing is said, and the panel stays as it is). Returns how to stop.
+ */
+export function watchFront(onChange: (front: Front) => void): () => void {
+  if (process.platform !== 'win32') return () => {};
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', FRONT_WATCHER], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  let buffer = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    buffer += chunk;
+    let end: number;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      const [pid, name = ''] = buffer.slice(0, end).trim().split(' ');
+      buffer = buffer.slice(end + 1);
+      onChange(Number(pid) === process.pid ? 'weave' : name.toLowerCase() === 'claude' ? 'claude' : 'other');
+    }
+  });
+  child.on('error', () => {});
+  return () => child.kill();
+}
+
 /** Start a new Claude Code session in `folder`, with `text` (if any) in its text box. */
 export async function newSession(folder: string, text: string): Promise<Delivered> {
   const url = `claude://code/new?folder=${encodeURIComponent(folder)}${text ? `&q=${encodeURIComponent(text.slice(0, 4000))}` : ''}`;
