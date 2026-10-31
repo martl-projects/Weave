@@ -173,14 +173,14 @@ function ForgottenDialog({ platform, apps, onClose }: { platform: string; apps: 
  * Making an app: for your own account, or for an organization of yours. An app reaches only what belongs to the
  * account it's made for, so an organization's resources need one made for it; made later too, beside yours.
  */
-function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void }) {
+function NewAppDialog({ vault, address, onClose }: { vault: KeyvaultInfo; address?: string; onClose(): void }) {
   const setting = vault.settings.find((s) => s.register)!;
   const what = vault.resources ?? 'resources';
   // Whom for: your account, the organizations it shows you're in, or one you name (a membership you keep private).
   const { data: whom } = useApi(() => api<{ login?: string; owners: Array<{ value: string; note?: string }> }>('keyvaultOwners', { name: vault.name }).catch(() => ({ owners: [] as Array<{ value: string; note?: string }> }) as { login?: string; owners: Array<{ value: string; note?: string }> }), [vault.name]);
   const mine = vault.apps.some((a) => whom?.login && String(a.info['owner.login'] ?? '').toLowerCase() === whom.login.toLowerCase());
-  const [pick, setPick] = useState<string>();
-  const [typed, setTyped] = useState('');
+  const [pick, setPick] = useState<string | undefined>(address ? 'other' : undefined);
+  const [typed, setTyped] = useState(address ?? '');
   const chosen = pick ?? (mine ? whom?.owners[0]?.value ?? 'other' : 'me');
   const named = chosen === 'other' ? ownerOf(typed) : undefined;
   const owner = chosen === 'me' ? undefined : chosen === 'other' ? named?.owner : chosen;
@@ -315,6 +315,19 @@ export function HandDialog({ vault, app, project, onClose }: { vault: KeyvaultIn
   }, [vault.name, appKey]);
   const [filter, setFilter] = useState('');
   const what = vault.resources ?? 'resources';
+  // One pasted by its address: picked when this app reaches it; another account's needs an app made for that account.
+  const [address, setAddress] = useState('');
+  const [making, setMaking] = useState(false);
+  const pasted = address.trim() ? ownerOf(address) : undefined;
+  const appOwner = String(chosen?.info['owner.login'] ?? '');
+  const elsewhere = pasted && appOwner && pasted.owner.toLowerCase() !== appOwner.toLowerCase() ? pasted.owner : undefined;
+  const found = pasted?.repo && !elsewhere ? (reachable ?? []).find((r) => r.value.toLowerCase() === `${pasted.owner}/${pasted.repo}`.toLowerCase()) : undefined;
+  const paste = (text: string) => {
+    setAddress(text);
+    const got = ownerOf(text);
+    const hit = got?.repo && (reachable ?? []).find((r) => r.value.toLowerCase() === `${got.owner}/${got.repo}`.toLowerCase());
+    if (hit && !picked.includes(hit.value)) setPicked([...picked, hit.value]);
+  };
   const all = [...new Map([...handed.map((value): { value: string; note?: string } => ({ value })), ...(reachable ?? [])].map((r) => [r.value, r])).values()];
   const shown = all.filter((r) => !filter.trim() || r.value.toLowerCase().includes(filter.trim().toLowerCase()));
   return (
@@ -336,7 +349,36 @@ export function HandDialog({ vault, app, project, onClose }: { vault: KeyvaultIn
         only to undo what it did with it (take back access it gave).
       </p>
       {error ? <p className="small error-text">{String(error)}</p> : null}
-      {reachable && <p className="small muted">An organization's {what} aren't here unless this app was made for it: Keys & devices, {vault.title}, make another app for that organization.</p>}
+      <div className="field-row">
+        <input className="grow" placeholder="Or paste one's address: git@github.com:owner/name.git" value={address} onChange={(e) => paste(e.target.value)} />
+      </div>
+      {address.trim() && (
+        <p className="small">
+          {!pasted ? (
+            <span className="error-text">That's no address of one of your {what}.</span>
+          ) : elsewhere ? (
+            <>
+              <span className="error-text">
+                {appName(chosen!)} is {appOwner}'s: it reaches no {what} of {elsewhere}.
+              </span>{' '}
+              {elsewhere}'s need an app made for {elsewhere}. <button onClick={() => setMaking(true)}>Make an app for {elsewhere}…</button>
+            </>
+          ) : found ? (
+            <>Picked: {found.value}.</>
+          ) : reachable ? (
+            <span className="error-text">
+              {appName(chosen!)} doesn't reach {pasted.repo ? `${pasted.owner}/${pasted.repo}` : `${pasted.owner}'s ${what}`} yet: install it there on {platformName(vault)}.
+              {chosen?.next ? (
+                <>
+                  {' '}
+                  <button onClick={() => window.open(chosen.next, '_blank', 'noopener')}>Install it…</button>
+                </>
+              ) : null}
+            </span>
+          ) : null}
+        </p>
+      )}
+      {reachable && !address.trim() && <p className="small muted">Only what this app reaches is listed: an organization's {what} need an app made for that organization. Paste one's address above to see which.</p>}
       {!reachable && !error && <p className="small muted">Asking {platformName(vault)}…</p>}
       {all.length > 8 && <input className="grow" placeholder="Find…" value={filter} onChange={(e) => setFilter(e.target.value)} />}
       <div className="choose-list">
@@ -355,6 +397,7 @@ export function HandDialog({ vault, app, project, onClose }: { vault: KeyvaultIn
         </AsyncButton>
         <button onClick={onClose}>Cancel</button>
       </div>
+      {making && <NewAppDialog vault={vault} address={address} onClose={() => (setMaking(false), onClose())} />}
     </Modal>
   );
 }
