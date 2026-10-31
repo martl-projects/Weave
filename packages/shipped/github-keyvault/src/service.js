@@ -32,7 +32,7 @@ async function github(token, method, path, body) {
     const said = await res.json().catch(() => ({}));
     throw new Error(`GitHub said ${res.status} for ${method} ${path}${said?.message ? `: ${said.message}` : ''}`);
   }
-  return res.json();
+  return res.status === 204 ? {} : res.json();
 }
 
 /** An export's error, as its result's error: a string (an Error thrown as it is would trap). */
@@ -64,6 +64,15 @@ export const reachable = said(async () => {
   }
   if (!out.length) throw new Error(`${a.slug} isn't installed on any repository yet: install it (${a.html_url}/installations/new)`);
   return JSON.stringify(out);
+});
+
+/** Forgotten: uninstalled everywhere, so its access ends now. The App itself stays until its person deletes it. */
+export const forget = said(async () => {
+  const a = app();
+  const all = await github(jwt(a.id), 'GET', '/app/installations?per_page=100');
+  for (const installation of all) await github(jwt(a.id), 'DELETE', `/app/installations/${installation.id}`);
+  log(`uninstalled ${a.slug} from ${all.map((i) => i.account?.login ?? i.id).join(', ') || 'nothing'}`);
+  return JSON.stringify({ uninstalled: all.map((i) => i.account?.login ?? String(i.id)) });
 });
 
 /** An installation token for these repositories (one owner's), with exactly these permissions. */

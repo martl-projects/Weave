@@ -303,6 +303,12 @@ export interface AppRegister {
   key: string;
   /** Opened once it's there, with kept fields in braces: installing it, say ({html_url}/installations/new). */
   then?: string;
+  /**
+   * Where its person deletes it on the provider, kept fields in braces (an app can't be deleted for them): shown when
+   * it's forgotten. `manageFor` is the same for one made for an organization ({owner} its name).
+   */
+  manage?: string;
+  manageFor?: string;
 }
 
 /** An app registration as a manifest names it, checked. */
@@ -316,11 +322,14 @@ export function parseRegister(value: unknown): { register?: AppRegister; problem
   const key = field(o.key) ? (o.key as string) : '';
   const then = typeof o.then === 'string' && /^https:\/\/|^\{[a-z_]+\}\//i.test(o.then) ? o.then.slice(0, 300) : undefined;
   const platform = typeof o.platform === 'string' && /^[a-z][a-z0-9-]{0,30}$/.test(o.platform) ? o.platform : undefined;
+  const template = (x: unknown) => (typeof x === 'string' && x.length <= 300 && /^https:\/\/[^\s"<>]+$/.test(x) ? x : undefined);
+  const manage = template(o.manage);
+  const manageFor = template(o.manageFor);
   const pageFor = typeof o.pageFor === 'string' && o.pageFor.length <= 300 && o.pageFor.includes('{owner}') && httpsUrl(o.pageFor.replace('{owner}', 'owner')) ? o.pageFor : undefined;
   if (o.pageFor !== undefined && !pageFor) return { problem: '"register.pageFor" is the provider\'s page for making it under an organization, with {owner} for its name: "https://…/{owner}/…"' };
   if (!page || !exchange?.includes('{code}') || !manifest || JSON.stringify(manifest).length > 8000 || !keep.length || !key)
     return { problem: '"register" names the provider\'s page, where its code becomes the app, the app\'s manifest, what\'s kept and its key: {"page": "https://…", "exchange": "https://…/{code}/…", "manifest": {...}, "keep": ["id", "slug"], "key": "pem", "then": "{html_url}/installations/new"}' };
-  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}), ...(pageFor ? { pageFor } : {}) } };
+  return { register: { page, exchange, manifest, keep, key, ...(then ? { then } : {}), ...(platform ? { platform } : {}), ...(pageFor ? { pageFor } : {}), ...(manage ? { manage } : {}), ...(manageFor ? { manageFor } : {}) } };
 }
 
 /** A setting's choices, checked: the action that lists them, and whether several are picked. */
