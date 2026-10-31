@@ -14,7 +14,13 @@ on:
         description: The tag whose release (a draft) gets the installers
         type: string
         required: false
+  # By hand too, for one release whose installers didn't all get attached (built from main, so a fixed workflow helps).
   workflow_dispatch:
+    inputs:
+      release:
+        description: The tag whose release (a draft) gets the installers; empty keeps them as workflow artifacts
+        type: string
+        required: false
 
 # Write: called for a release, each job attaches its installers to the draft.
 permissions:
