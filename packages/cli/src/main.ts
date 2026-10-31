@@ -590,8 +590,11 @@ async function backend(options: { needsDaemon?: boolean } = {}): Promise<Backend
     return daemon as unknown as Backend;
   }
   if (options.needsDaemon) throw new Error('no daemon running for this home — start one with "weave daemon"');
-  return WeaveNode.open(home.dir);
+  return (offline ??= WeaveNode.open(home.dir));
 }
+
+/** The node a command opened itself (no daemon running): closed when it's done, so what it started (mark and hint folds) ends too. */
+let offline: WeaveNode | undefined;
 
 function out(value: unknown, text: () => string): void {
   console.log(values.json ? JSON.stringify(value) : text());
@@ -2990,7 +2993,9 @@ ${postLine(p)}`);
   }
 }
 
-main().catch((error: Error) => {
-  console.error(`weave: ${error.message}`);
-  process.exitCode = 1;
-});
+main()
+  .catch((error: Error) => {
+    console.error(`weave: ${error.message}`);
+    process.exitCode = 1;
+  })
+  .finally(() => offline?.close());
