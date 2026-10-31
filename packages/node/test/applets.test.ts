@@ -1,13 +1,12 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { checkManifest } from '@weave/core';
 import { startApi } from '../src/api.ts';
-import { platformKey } from '../src/appinstall.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
-import { fetchesFrom, publishRelease, PublicGitHub } from './helpers/releases.ts';
+import { dockerRunning, testImage } from './helpers/docker.ts';
+import { publishRelease } from './helpers/releases.ts';
 
 /*
  * Applets (block 5): a release whose manifest declares a contract. Installed, it becomes a service of the installer's
@@ -43,14 +42,12 @@ async function round() {
 setInterval(() => round().catch(() => {}), 200);
 `;
 
-function buildArchive(version: string): Buffer {
-  const dir = tempDir('weave-applet-');
-  mkdirSync(join(dir, 'Bot'));
-  writeFileSync(join(dir, 'Bot', 'bot.cjs'), botCode(version));
-  const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
-  const run = spawnSync(tar, ['-czf', 'Bot.tar.gz', 'Bot'], { cwd: dir });
-  if (run.status !== 0) throw new Error(`tar failed: ${run.stderr}`);
-  return readFileSync(join(dir, 'Bot.tar.gz'));
+/** A version's image: what its container runs (the bot), by its ref@digest. */
+function botImage(version: string): { image: ReturnType<typeof testImage>; script: Record<string, string> } {
+  const image = testImage('ghcr.io/martl/bot', version);
+  const file = join(tempDir('weave-applet-'), 'bot.cjs');
+  writeFileSync(file, botCode(version));
+  return { image, script: { [`${image.ref}@${image.digest}`]: file } };
 }
 
 function person(name: string): WeaveNode {
@@ -73,38 +70,38 @@ describe('applets', { timeout: 60_000 }, () => {
   });
 
   it("installs another project's applet as your service, with its contract, pinned to its release", async () => {
-    // One archive: what GitHub serves is what was fingerprinted (two builds differ in their timestamps).
-    const v10 = { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
-    const github = new PublicGitHub().add('martl/bot', 'v1.0', v10);
-    const port = await github.serve();
-    const manifest = (writes: string[]) => ({
+    // Each version an image of its own, run in a container (Weave runs no programs from releases).
+    const v10 = botImage('v1.0');
+    const v11 = botImage('v1.1');
+    const manifest = (writes: string[], image: ReturnType<typeof testImage>) => ({
       app: 'echo-bot',
       name: 'Echo bot',
       version: 1,
       service: { reads: 'addressed', writes, actions: [{ name: 'greetings', label: 'See the greetings', who: 'members' }, { name: 'greet', label: 'Greet one', who: 'members', input: [{ name: 'id', label: 'Who' }] }], version: '1.0' },
       // Its list, like any service's: a program's, not only a WebAssembly one's, not only Weave's own.
       lists: [{ name: 'greetings', title: 'Greetings', item: 'greeting', list: 'greetings', use: { action: 'greet', label: 'Greet' } }],
-      start: { release: { [platformKey()]: ['node', 'bot.cjs'] } },
+      start: { image: image.ref, command: ['node', 'bot.cjs'] },
+      install: { image },
       env: [{ name: 'GREETING', label: 'Greeting' }],
     });
     const martl = person('martl');
     const lena = person('Lena');
-    await fetchesFrom(lena, port);
+    dockerRunning(lena, tempDir('weave-applets-docker-'), { ...v10.script, ...v11.script });
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
-    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest: manifest([]), files: { [platformKey()]: v10 } });
+    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest: manifest([], v10.image) });
     syncAll([martl, lena]);
 
-    // Lena sees an applet: a service that reads only what's asked of it.
+    // Lena sees an applet: a service that reads only what's asked of it, run in a container.
     const [artifact] = await lena.artifacts('Bots');
-    expect(artifact).toMatchObject({ tag: 'v1.0', website: false, applet: { reads: 'addressed', writes: [] }, runs: 'release' });
+    expect(artifact).toMatchObject({ tag: 'v1.0', website: false, applet: { reads: 'addressed', writes: [] }, runs: 'container' });
 
     // She installs it in her own group: approved first, with its setting.
     await lena.createGroup('Friends');
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     try {
       lena.runServices({ port: api.port });
-      await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'] })).rejects.toThrow(/approve it first: Weave would run "node bot.cjs" from Echo bot v1\.0, released in Bots, as a service that reads only what is asked of it; writes only its answers/);
+      await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'] })).rejects.toThrow(/approve it first: Weave would run "[^"]* run [^"]*ghcr\.io\/martl\/bot@sha256:[0-9a-f]{64}" from Echo bot v1\.0, released in Bots, as a service that reads only what is asked of it; writes only its answers/);
       await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true })).rejects.toThrow(/Echo bot needs Greeting/);
       // Never by a name of Weave's own: nothing passes for one of those.
       await expect(lena.addService({ name: 'github-checkout', artifact: { project: 'Bots' }, spaces: ['Friends'], approve: true, settings: { GREETING: 'Hello' } })).rejects.toThrow(/"github-checkout" is the name of one Weave ships/);
@@ -122,9 +119,7 @@ describe('applets', { timeout: 60_000 }, () => {
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Friends' }))[0].results.map((r) => r.text)).toEqual(['v1.0 Hello: are you there?']), { timeout: 15_000, interval: 200 });
 
       // martl releases v1.1, which also posts. Lena's bot stays on v1.0 until she takes it, and then may post.
-      const v11 = { name: `Bot-1.1-${platformKey()}.tar.gz`, bytes: buildArchive('v1.1') };
-      github.add('martl/bot', 'v1.1', v11);
-      await publishRelease(martl, { project: 'Bots', tag: 'v1.1', repo: 'martl/bot', manifest: manifest(['weave.post']), files: { [platformKey()]: v11 } });
+      await publishRelease(martl, { project: 'Bots', tag: 'v1.1', repo: 'martl/bot', manifest: manifest(['weave.post'], v11.image) });
       syncAll([martl, lena]);
       expect((await lena.services()).find((s) => s.name === 'echo-bot')?.artifact).toMatchObject({ tag: 'v1.0', latest: 'v1.1' });
       await expect(lena.setService({ name: 'echo-bot', artifact: {} })).rejects.toThrow(/approve it first[^]*writes weave\.post and its answers/);
@@ -135,27 +130,54 @@ describe('applets', { timeout: 60_000 }, () => {
       await lena.serviceReady('echo-bot');
       await lena.askService({ space: 'Friends', service: bot.did, text: 'and now?' });
       await vi.waitFor(async () => expect((await lena.serviceRequests({ space: 'Friends' })).flatMap((r) => r.results.map((x) => x.text))).toContain('v1.1 Hello: and now?'), { timeout: 15_000, interval: 200 });
+
+      // Installed again elsewhere: the one she runs joins there too, with that group's setting, rather than running twice.
+      await lena.createGroup('Neighbours');
+      const again = await lena.addService({ artifact: { project: 'Bots' }, spaces: ['Neighbours'], approve: true, settings: { GREETING: 'Hi' } });
+      expect(again).toMatchObject({ name: 'echo-bot', did: bot.did });
+      expect(again.spaces.map((s) => s.name).sort()).toEqual(['Friends', 'Neighbours']);
+      expect((await lena.services()).filter((s) => s.artifact)).toHaveLength(1);
+      // Another project's release by the same name is another service: numbered, not refused.
+      await martl.createProject({ name: 'More bots' });
+      await lena.joinSpace(await martl.invite('More bots'));
+      await publishRelease(martl, { project: 'More bots', tag: 'v1.1', repo: 'martl/bot', manifest: manifest([], v11.image) });
+      syncAll([martl, lena]);
+      expect(await lena.addService({ artifact: { project: 'More bots' }, spaces: ['More bots'], approve: true, settings: { GREETING: 'Hey' } })).toMatchObject({ name: 'echo-bot-2', artifact: { project: { name: 'More bots' } } });
     } finally {
+      await lena.removeService('echo-bot-2').catch(() => {});
       await lena.removeService('echo-bot').catch(() => {});
       await api.close();
-      github.close();
     }
   });
 
+  it('never starts a program from a release: one built per platform runs nowhere, and says why', async () => {
+    const sha = 'ab'.repeat(32);
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Bots' });
+    await lena.joinSpace(await martl.invite('Bots'));
+    // As Weave released them before: a program per platform, no image, no WebAssembly.
+    const manifest = { app: 'old-bot', name: 'Old bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [`${process.platform}-${process.arch}`]: ['./old-bot'] } } };
+    await publishRelease(martl, { project: 'Bots', tag: 'v0.9', repo: 'martl/bot', manifest: { ...manifest, install: { assets: { [`${process.platform}-${process.arch}`]: { file: 'old-bot.tar.gz', sha256: sha, size: 10 } } } } });
+    syncAll([martl, lena]);
+    const [artifact] = await lena.artifacts('Bots');
+    expect(artifact.runs).toBeUndefined();
+    expect(artifact.command).toBeUndefined();
+    await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Bots'], approve: true })).rejects.toThrow(/Old bot v0\.9 has nothing Weave runs: no container image and no WebAssembly/);
+  });
+
   it('installs an applet on an always-on node: approved on the computer, fetched and run by the node, its secret sealed to it', async () => {
-    const file = { name: `Bot-1.0-${platformKey()}.tar.gz`, bytes: buildArchive('v1.0') };
-    const github = new PublicGitHub().add('martl/bot', 'v1.0', file);
-    const port = await github.serve();
-    const manifest = { app: 'echo-bot', name: 'Echo bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [platformKey()]: ['node', 'bot.cjs'] } }, env: [{ name: 'GREETING', label: 'Greeting', secret: true }] };
+    const v10 = botImage('v1.0');
+    const manifest = { app: 'echo-bot', name: 'Echo bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { image: v10.image.ref }, install: { image: v10.image }, env: [{ name: 'GREETING', label: 'Greeting', secret: true }] };
     const martl = person('martl');
     await martl.createProject({ name: 'Bots' });
-    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest, files: { [platformKey()]: file } });
+    await publishRelease(martl, { project: 'Bots', tag: 'v1.0', repo: 'martl/bot', manifest });
     const boxDir = tempDir('weave-applets-box-');
     const linked = await martl.linkNode({ request: WeaveNode.nodeRequest(boxDir, 'nas') });
     const box = await WeaveNode.completeNodeLink(linked.answer, boxDir);
     nodes.push(box);
-    // The node fetches it, with its own fetcher.
-    await fetchesFrom(box, port);
+    // The node runs it in a container, with its own Docker.
+    dockerRunning(box, tempDir('weave-applets-docker-'), v10.script);
     syncAll([martl, box]);
     await box.reconcile();
 
@@ -184,7 +206,6 @@ describe('applets', { timeout: 60_000 }, () => {
       syncAll([martl, box]);
       await box.reconcile();
       await api.close();
-      github.close();
     }
   });
 });

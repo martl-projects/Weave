@@ -19,6 +19,7 @@ const appName = (a: VaultApp) => String(a.info.slug ?? a.info.id ?? a.key);
 export function KeyvaultsBox() {
   const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults'), []);
   const [opened, setOpened] = useState<{ vault: string; app: string }>();
+  const [making, setMaking] = useState<KeyvaultInfo>();
   if (!vaults?.length) return null;
   const open = opened && vaults.find((v) => v.name === opened.vault);
   const openApp = open?.apps.find((a) => a.key === opened!.app);
@@ -63,13 +64,16 @@ export function KeyvaultsBox() {
                     ? {
                         add: {
                           label: `Make ${v.apps.length ? 'another app' : appSetting.label.charAt(0).toLowerCase() + appSetting.label.slice(1)} on ${new URL(appSetting.register!.page).hostname}`,
+                          // For whom: your account, or (where the platform has them) an organization of yours.
                           run: () =>
-                            void attempt(async () => {
-                              const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting: appSetting.name });
-                              window.open(url, '_blank', 'noopener');
-                              await api('finishKeyvaultApp', { id });
-                              bump();
-                            }, `${appSetting.label} is made: install it on your ${what}`),
+                            appSetting.register!.pageFor
+                              ? setMaking(v)
+                              : void attempt(async () => {
+                                  const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting: appSetting.name });
+                                  window.open(url, '_blank', 'noopener');
+                                  await api('finishKeyvaultApp', { id });
+                                  bump();
+                                }, `${appSetting.label} is made: install it on your ${what}`),
                         },
                       }
                     : {})}
@@ -105,7 +109,66 @@ export function KeyvaultsBox() {
         );
       })}
       {open && openApp && <AppSettingsDialog vault={open} app={openApp} onClose={() => setOpened(undefined)} />}
+      {making && <NewAppDialog vault={making} onClose={() => setMaking(undefined)} />}
     </fieldset>
+  );
+}
+
+/**
+ * Making an app: for your own account, or for an organization of yours. An app reaches only what belongs to the
+ * account it's made for, so an organization's resources need one made for it; made later too, beside yours.
+ */
+function NewAppDialog({ vault, onClose }: { vault: KeyvaultInfo; onClose(): void }) {
+  const setting = vault.settings.find((s) => s.register)!;
+  const what = vault.resources ?? 'resources';
+  // Whom for: your account, the organizations it shows you're in, or one you name (a membership you keep private).
+  const { data: whom } = useApi(() => api<{ login?: string; owners: Array<{ value: string; note?: string }> }>('keyvaultOwners', { name: vault.name }).catch(() => ({ owners: [] as Array<{ value: string; note?: string }> }) as { login?: string; owners: Array<{ value: string; note?: string }> }), [vault.name]);
+  const mine = vault.apps.some((a) => whom?.login && String(a.info['owner.login'] ?? '').toLowerCase() === whom.login.toLowerCase());
+  const [pick, setPick] = useState<string>();
+  const [typed, setTyped] = useState('');
+  const chosen = pick ?? (mine ? whom?.owners[0]?.value ?? 'other' : 'me');
+  const owner = chosen === 'me' ? undefined : chosen === 'other' ? typed.trim() : chosen;
+  const [busy, setBusy] = useState(false);
+  const make = async () => {
+    setBusy(true);
+    await attempt(async () => {
+      const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: vault.name, setting: setting.name, ...(owner ? { owner } : {}) });
+      window.open(url, '_blank', 'noopener');
+      await api('finishKeyvaultApp', { id });
+      bump();
+      onClose();
+    }, `${setting.label} is made${owner ? ` for ${owner}` : ''}: install it on ${owner ? 'its' : 'your'} ${what}`);
+    setBusy(false);
+  };
+  const option = (value: string, label: string, note?: string) => (
+    <div className="field-row" key={value}>
+      <input id={`app-for-${value}`} type="radio" checked={chosen === value} onChange={() => setPick(value)} />
+      <label htmlFor={`app-for-${value}`}>
+        {label} {note && <span className="small muted">{note}</span>}
+      </label>
+    </div>
+  );
+  return (
+    <Modal title={`Make ${vault.apps.length ? 'another app' : setting.label.charAt(0).toLowerCase() + setting.label.slice(1)} on ${vault.platform}`} onClose={onClose}>
+      <p className="small">An app reaches only the {what} of the account it's made for: one for yours, one for each organization whose {what} you hand to projects.</p>
+      {!whom && <p className="small muted">Asking {vault.platform} which organizations you're in…</p>}
+      {option('me', whom?.login ? `${whom.login} (your account)` : 'My own account', mine ? 'has one already' : undefined)}
+      {(whom?.owners ?? []).map((o) => option(o.value, o.value, o.note ?? 'organization'))}
+      {option('other', 'Another organization…')}
+      {chosen === 'other' && (
+        <div className="field-row indent">
+          <input autoFocus className="grow" placeholder="its name" value={typed} onChange={(e) => setTyped(e.target.value.trim())} />
+        </div>
+      )}
+      {chosen === 'other' && <p className="small muted">Only organizations you show you're in are listed: on {vault.platform}, a membership you keep private is named here instead.</p>}
+      <p className="small muted">{vault.platform} opens and makes it as you confirm. Then install it on the {what} you want to hand to projects.</p>
+      <div className="buttons">
+        <button className="default" disabled={busy || (chosen === 'other' && !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(typed))} onClick={() => void make()}>
+          {busy ? 'Waiting for it…' : 'Make it'}
+        </button>
+        <button onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -199,6 +262,7 @@ export function HandDialog({ vault, app, project, onClose }: { vault: KeyvaultIn
         only to undo what it did with it (take back access it gave).
       </p>
       {error ? <p className="small error-text">{String(error)}</p> : null}
+      {reachable && <p className="small muted">An organization's {what} aren't here unless this app was made for it: Keys & devices, {vault.title}, make another app for that organization.</p>}
       {!reachable && !error && <p className="small muted">Asking {vault.platform}…</p>}
       {all.length > 8 && <input className="grow" placeholder="Find…" value={filter} onChange={(e) => setFilter(e.target.value)} />}
       <div className="choose-list">

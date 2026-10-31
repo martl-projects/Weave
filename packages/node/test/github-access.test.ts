@@ -74,6 +74,8 @@ class OrgGitHub {
         return json(201, { id, html_url: `https://gist.github.com/martl/${id}` });
       }
     }
+    // The organizations someone shows they're in: public, without signing in.
+    if (method === 'GET' && url.pathname === '/users/martl/orgs') return json(200, [{ login: 'acme' }, { login: 'Other-Org' }]);
     // The App manifest flow: the code GitHub sent back becomes the App (its key only ever in this answer).
     if (method === 'POST' && /^\/app-manifests\/[\w-]+\/conversions$/.test(url.pathname)) {
       const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -284,6 +286,14 @@ describe('GitHub access, shipped with Weave', { timeout: 300_000 }, () => {
       expect(vault.apps).toEqual([{ key: '42', setting: 'GITHUB_APP', info: { id: 42, slug: 'weave-access-t', html_url: 'https://github.com/apps/weave-access-t', 'owner.login': 'martl' }, next: 'https://github.com/apps/weave-access-t/installations/new', handed: [] }]);
       expect(JSON.stringify(await martl.keyvaults())).not.toMatch(/PRIVATE KEY|shh-client/);
       expect(vault.users).toEqual([{ service: 'github-access', rights: { administration: 'write', metadata: 'read' }, projects: [{ id: expect.any(String), name: 'Site' }, { id: expect.any(String), name: 'Docs' }] }]);
+      // Whom another app is for: his account, and the organizations GitHub shows he's in.
+      expect(await martl.keyvaultOwners({ name: 'github-keyvault' })).toEqual({ login: 'martl', owners: [{ value: 'acme' }, { value: 'Other-Org' }] });
+      // An organization's repositories need an app made for it: made on its page, named for it, beside his own.
+      const forOrg = await martl.startKeyvaultApp({ name: 'github-keyvault', setting: 'GITHUB_APP', owner: 'acme' });
+      const orgPage = await (await fetch(forOrg.url)).text();
+      expect(new URL(unescape(orgPage.match(/action="([^"]+)"/)![1])).pathname).toBe('/organizations/acme/settings/apps/new');
+      expect(JSON.parse(unescape(orgPage.match(/name="manifest" value="([^"]+)"/)![1])).name).toBe("acme's Weave connect");
+      await expect(martl.startKeyvaultApp({ name: 'github-keyvault', setting: 'GITHUB_APP', owner: 'acme/../x' })).rejects.toThrow(/an organization is named by its name there/);
       // Not installed anywhere yet; then on all three.
       await expect(martl.keyvaultReachable({ name: 'github-keyvault' })).rejects.toThrow(/isn't installed on any repository yet/);
       github.app!.installed = new Set(['acme/site', 'acme/secret', 'martl/notes']);

@@ -625,6 +625,11 @@ export interface StoredService {
   name: string;
   /** Launched as a website (launchWebsite): it's there for its website, and goes when that's closed. */
   launched?: true;
+  /**
+   * The website service that launched it: then it's no service of its own (no key, no profile, not listed), only what
+   * runs that website, and that website service signs for it. Before 0.22 a launched website had a key of its own.
+   */
+  launchedBy?: string;
   description: string;
   icon?: string;
   contract: ServiceContract;
@@ -9606,7 +9611,10 @@ export class WeaveNode implements Backend {
   async launchWebsite(input: Parameters<Services['launchWebsite']>[0] & { announce?: boolean }): Promise<ServiceInfo> {
     const { announce, ...rest } = input;
     const service = await this.#services.launchWebsite(rest);
-    if (announce !== false) await this.#announce(this.#project(input.project).id, { kind: 'website', id: service.did }, `started ${service.artifact?.name ?? service.name}: come and join`);
+    // Said once its website is there: the announcement names that website, not its website service.
+    const project = this.#project(input.project).id;
+    if (announce !== false)
+      void this.#services.launchedWebsite(service.name).then((room) => (room ? this.#announce(project, { kind: 'website', id: room }, `started ${service.artifact?.name ?? service.name}: come and join`) : undefined)).catch(() => {});
     return service;
   }
 
@@ -9722,11 +9730,27 @@ export class WeaveNode implements Backend {
     this.#clientApps.remove(name);
   }
 
-  async startKeyvaultApp(input: { name: string; setting: string }): Promise<{ id: string; url: string }> {
+  /** Make one of a keyvault's apps: for your own account, or (owner) for an organization of yours. */
+  async startKeyvaultApp(input: { name: string; setting: string; owner?: string }): Promise<{ id: string; url: string }> {
     const k = this.#keyvaults.list().find((x) => x.name === input.name);
     // Named for whose it is: the account you proved there, else your name here.
     const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;
     return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
+  }
+
+  /**
+   * Whom you may make one of a keyvault's apps for: your own account there (the one your apps are made for, else the
+   * one you proved) and the organizations it shows you're in, less those that have an app of yours already.
+   */
+  async keyvaultOwners(input: { name: string }): Promise<{ login?: string; owners: Array<{ value: string; note?: string }> }> {
+    const k = this.#keyvaults.list().find((x) => x.name === input.name);
+    if (!k) throw new Error(`no keyvault ${input.name} here`);
+    const made = new Set(k.apps.map((a) => String(a.info['owner.login'] ?? '').toLowerCase()).filter(Boolean));
+    const proven = (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle;
+    // Your own: the account an app of yours was made for that isn't an organization's, else the one you proved.
+    const login = proven ?? k.apps.map((a) => String(a.info['owner.login'] ?? '')).find(Boolean);
+    const owners = login ? await this.#keyvaults.owners(input.name, login) : [];
+    return { ...(login ? { login } : {}), owners: owners.filter((o) => !made.has(o.value.toLowerCase())) };
   }
 
   async finishKeyvaultApp(input: { id: string }): Promise<KeyvaultInfo> {

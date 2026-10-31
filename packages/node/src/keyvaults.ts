@@ -232,12 +232,12 @@ export class Keyvaults {
   }
 
   /** Make an app for one of its settings (GitHub's App manifest flow): another, if it has some. The page to open, and an id to wait on. */
-  async startApp(input: { name: string; setting: string; account: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
+  async startApp(input: { name: string; setting: string; account: string; owner?: string; fetch: typeof fetch }): Promise<{ id: string; url: string }> {
     const k = this.#stored().find((x) => x.name === input.name);
     if (!k) throw new Error(`no keyvault ${input.name} here: add it first`);
     const asked = this.state(k).settings.find((e) => e.name === input.setting);
     if (!asked?.register) throw new Error(`${input.name} makes no app called ${input.setting}`);
-    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {} })) });
+    const started = await startRegistration({ register: asked.register, label: asked.label, account: input.account, ...(input.owner ? { owner: input.owner } : {}), fetch: input.fetch, keep: (app) => void this.#change(input.name, (k) => void (k.apps[String(app.info.id ?? randomBytes(4).toString('hex'))] = { ...app, setting: input.setting, handed: {} })) });
     const id = randomBytes(16).toString('base64url');
     const done = started.done.then(() => this.state(this.#stored().find((x) => x.name === input.name)!)).finally(() => setTimeout(() => this.#making.delete(id), 60_000).unref());
     done.catch(() => {});
@@ -257,6 +257,19 @@ export class Keyvaults {
     if (!k) throw new Error(`no keyvault ${name} here`);
     const [key, a] = this.#app(k, app);
     return JSON.parse(String(await this.#call(k, a, key, 'reachable', '{}'))) as Array<{ value: string; note?: string }>;
+  }
+
+  /** Other accounts its person may make an app for (organizations of theirs), from their own account's name there. */
+  async owners(name: string, login: string): Promise<Array<{ value: string; note?: string }>> {
+    const k = this.#stored().find((x) => x.name === name);
+    if (!k) throw new Error(`no keyvault ${name} here`);
+    try {
+      const got = JSON.parse(String(await this.#call(k, undefined, 'owners', 'owners', JSON.stringify({ login })))) as unknown;
+      return Array.isArray(got) ? got.filter((o): o is { value: string; note?: string } => typeof o?.value === 'string').slice(0, 100) : [];
+    } catch {
+      // One built before it could tell: nothing to pick from, the name is typed instead.
+      return [];
+    }
   }
 
   /**
@@ -283,7 +296,7 @@ export class Keyvaults {
   }
 
   /** Call one of a keyvault's functions, in a worker of its own for that call. */
-  async #call(k: StoredKeyvault, app: StoredApp, appKey: string, fn: string, input: string): Promise<unknown> {
+  async #call(k: StoredKeyvault, app: StoredApp | undefined, appKey: string, fn: string, input: string): Promise<unknown> {
     const s = this.shipped().find((x) => x.name === k.shipped);
     if (!s) throw new Error(`this Weave ships no keyvault ${k.shipped}`);
     const problem = shippedProblem(s);
@@ -302,8 +315,8 @@ export class Keyvaults {
         net: s.manifest.keyvault?.net ?? [],
         host: (name, args) => {
           // The app it's called for: what's kept of it (never its key), as the setting it was made for, and signing with its key.
-          if (name === 'setting') return String(args[0]) === app.setting ? JSON.stringify(app.info) : undefined;
-          if (name === 'sign') return signWith(String(args[0]) === app.setting ? app.key : undefined, String(args[0]), String(args[1]), args[2] as Uint8Array);
+          if (name === 'setting') return app && String(args[0]) === app.setting ? JSON.stringify(app.info) : undefined;
+          if (name === 'sign') return signWith(app && String(args[0]) === app.setting ? app.key : undefined, String(args[0]), String(args[1]), args[2] as Uint8Array);
           if (name === 'log') return void appendFileSync(join(dir, 'keyvault.log'), `${String(args[0]).slice(0, 2000)}\n`);
           throw new Error(`a keyvault has no ${name}`);
         },

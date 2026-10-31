@@ -8,8 +8,7 @@ import { dirname, extname, isAbsolute, join, resolve as resolvePath, sep } from 
 import type { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
-import { canonicalJson, netAllows, startCommand, type AppImage, type AppManifest, type Json } from '@weave/core';
-import { platformKey } from './appinstall.ts';
+import { canonicalJson, netAllows, type AppImage, type AppManifest, type Json } from '@weave/core';
 import { launchFingerprint } from './applaunch.ts';
 import { listenNear } from './live.ts';
 import { acceptWebSocket, type WebSocketConnection } from './websocket.ts';
@@ -215,35 +214,39 @@ export class Runtime {
     ];
   }
 
-  /** How a release runs here: its container when it has one and Docker runs, else its build for this platform. */
-  runs(app: AppManifest): 'release' | 'container' | 'wasm' | undefined {
+  /**
+   * How a release runs here: in Weave (WebAssembly), or as its container when Docker runs. Never as a program of its
+   * own on this computer: whatever a release carries for a platform, Weave doesn't start it.
+   */
+  runs(app: AppManifest): 'container' | 'wasm' | undefined {
     // A WebAssembly service runs in Weave itself, anywhere: from its image, or its release file for wasm.
     if (app.wasm && (app.install?.image || app.install?.assets?.wasm)) return 'wasm';
     if (this.containerOf(app)) return 'container';
-    return app.install?.assets?.[platformKey()] && startCommand(app, platformKey(), true) ? 'release' : undefined;
+    return undefined;
   }
 
   /** Why a release doesn't run here, in words. */
   whyNot(app: AppManifest): string {
+    const name = [app.name, app.install?.tag].filter(Boolean).join(' ');
     if (app.install?.image?.packaged) return `${app.name} is a Weave service: it runs in a container, and Docker isn't running here`;
-    return `${[app.name, app.install?.tag].filter(Boolean).join(' ')} has no release file for this computer (${platformKey()})${app.install?.image ? ", and Docker isn't running here" : ''}`;
+    if (app.install?.image) return `${name} runs in a container, and Docker isn't running here`;
+    return `${name} has nothing Weave runs: no container image and no WebAssembly (Weave starts no programs from releases)`;
   }
 
-  /** What running a release here runs: its build's command, or its container (by this name). */
+  /** What running a release here runs: its container (by this name), or its component in Weave. */
   command(container: string, app: AppManifest): string[] | undefined {
     const runs = this.runs(app);
     if (runs === 'container') return this.dockerRun(container, app, [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT', 'WEAVE_WEBSITE', 'WEAVE_SERVICE', 'WEAVE_SERVICE_API', 'WEAVE_SERVICE_TOKEN', 'PORT']);
     if (runs === 'wasm') return [`${app.wasm!.component} (WebAssembly, in Weave)`];
-    return runs === 'release' ? startCommand(app, platformKey(), true) : undefined;
+    return undefined;
   }
 
-  /** What a release runs, in words for an approval: here, or on another computer (by platform). */
+  /** What a release runs, in words for an approval: here, or wherever Docker runs. */
   runText(app: AppManifest): string {
     const here = this.command('weave', app);
     if (here) return here.join(' ');
     if (app.wasm) return `${app.wasm.component} (WebAssembly, in Weave)`;
-    const builds = Object.entries(app.start?.release ?? {}).map(([platform, command]) => `${command.join(' ')} (${platform})`);
-    return [...builds, ...(app.install?.image ? [`the container ${app.install.image.ref}@${app.install.image.digest}`] : [])].join(', ') || 'nothing';
+    return app.install?.image ? `the container ${app.install.image.ref}@${app.install.image.digest}` : 'nothing';
   }
 
   running(key: string): boolean {
@@ -452,14 +455,14 @@ export class Runtime {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    child.stdout?.pipe(log);
-    child.stderr?.pipe(log);
+    // The log ends once, after both outputs are drained: not by whichever pipe closes first.
+    child.stdout?.pipe(log, { end: false });
+    child.stderr?.pipe(log, { end: false });
     const entry = { child, stopping: false, ...(run.container ? { container: run.container } : {}) };
     this.#procs.set(key, entry);
-    child.on('error', (error) => log.write(`weave: couldn't start ${run.name}: ${error.message}\n`));
-    child.on('exit', (code) => {
-      log.write(`weave: ${run.name} exited (${code})\n`);
-      log.end();
+    child.on('error', (error) => !log.writableEnded && log.write(`weave: couldn't start ${run.name}: ${error.message}\n`));
+    child.on('close', (code) => {
+      log.end(`weave: ${run.name} exited (${code})\n`);
       if (this.#procs.get(key) === entry) this.#procs.delete(key);
       if (!entry.stopping) this.#again(key, again);
     });

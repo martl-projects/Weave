@@ -1,9 +1,12 @@
 // A stand-in for the docker command line, for tests without Docker: `version` answers (unless FAKE_DOCKER_DOWN),
 // `rm` and `stop` are written down in FAKE_DOCKER_DIR, and `run` serves the published port, answering every request
-// with the variables the container got (by the names passed with -e), until it's stopped.
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+// with the variables the container got (by the names passed with -e), until it's stopped. With FAKE_DOCKER_SCRIPTS
+// (image ref@digest → a script), `run` runs that script instead, as the container would run the app: with only the
+// variables passed with -e, and the host's address (host.docker.internal) as this computer's.
+import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const [command, ...args] = process.argv.slice(2);
 const dir = process.env.FAKE_DOCKER_DIR;
@@ -25,11 +28,20 @@ if (command === 'version') {
   const published = args.find((a) => /^127\.0\.0\.1:\d+:\d+/.test(a));
   const port = published ? Number(published.split(':')[1]) : Number(process.env.FAKE_DOCKER_PORT);
   const env = Object.fromEntries(names.map((n) => [n, process.env[n] ?? null]));
-  const server = createServer((req, res) => res.end(JSON.stringify({ image: args.at(-1), env, person: req.headers['x-weave-person'] ?? null })));
-  server.listen(port, '127.0.0.1', () => process.stdout.write(`container ${name} up on ${port}\n`));
+  const script = JSON.parse(process.env.FAKE_DOCKER_SCRIPTS ?? '{}')[args.at(-1)];
+  // Run again under the same name: stopped no longer.
+  if (dir) rmSync(join(dir, `stopped-${name}`), { force: true });
   setInterval(() => {
     if (dir && existsSync(join(dir, `stopped-${name}`))) process.exit(0);
   }, 100);
+  if (script) {
+    for (const key of Object.keys(process.env)) if (key !== 'PATH' && key !== 'SystemRoot' && !names.includes(key)) delete process.env[key];
+    for (const n of names) if (process.env[n]) process.env[n] = process.env[n].replaceAll('host.docker.internal', '127.0.0.1');
+    await import(pathToFileURL(script).href);
+  } else {
+    const server = createServer((req, res) => res.end(JSON.stringify({ image: args.at(-1), env, person: req.headers['x-weave-person'] ?? null })));
+    server.listen(port, '127.0.0.1', () => process.stdout.write(`container ${name} up on ${port}\n`));
+  }
 } else {
   process.stderr.write(`fake docker: ${command}?\n`);
   process.exit(1);

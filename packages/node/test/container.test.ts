@@ -155,13 +155,13 @@ describe('releases from a container image', { timeout: 60_000 }, () => {
     expect((await lena.websites('Gameshow')).filter((r) => r.open)).toEqual([]);
     await api.close();
 
-    // Without Docker, and without a release file, there's nothing to run.
+    // Without Docker there's nothing to run: Weave starts no program instead.
     process.env.FAKE_DOCKER_DOWN = '1';
     const kofi = person('Kofi', fetchImpl);
     await kofi.joinSpace(await martl.invite('Gameshow'));
     syncAll([martl, kofi]);
     expect((await kofi.artifacts('Gameshow'))[0].runs).toBeUndefined();
-    await expect(kofi.addService({ artifact: { project: 'Gameshow' }, spaces: ['Gameshow'], approve: true })).rejects.toThrow(/no release file for this computer[^]*Docker isn't running here/);
+    await expect(kofi.addService({ artifact: { project: 'Gameshow' }, spaces: ['Gameshow'], approve: true })).rejects.toThrow(/Gameshow v1\.4 runs in a container, and Docker isn't running here/);
     for (const node of [martl, lena, kofi]) await node.close();
     expect(existsSync(dockerDir)).toBe(true);
   });

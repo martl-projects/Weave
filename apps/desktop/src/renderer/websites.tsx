@@ -259,7 +259,7 @@ function PublishApp({ project }: { project: SpaceInfo }) {
 
 /** Maintainers: the project's artifacts (its releases), and releasing the next one. */
 /** What an artifact is, in a word. */
-const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', hints: 'Hint service', app: 'App', file: 'File' };
+const KIND_WORDS: Record<ArtifactInfo['kind'], string> = { service: 'Service', website: 'Website', 'board-view': 'Board view', fetcher: 'Fetcher', keyvault: 'Keyvault', marks: 'Mark service', hints: 'Hint service', file: 'File' };
 const artifactKind = (a: ArtifactInfo): string => (a.kind === 'service' && a.website ? 'Website and service' : KIND_WORDS[a.kind]);
 const artifactIcon = (a: ArtifactInfo): IconName => (a.kind === 'file' ? 'folder' : a.kind === 'board-view' ? 'bulletList' : a.website ? 'globe' : a.kind === 'fetcher' ? 'download' : a.kind === 'keyvault' ? 'lock' : a.packaged ? 'store' : 'plug');
 const sizeText = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`);
@@ -297,7 +297,11 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
           main: (
             <>
               {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
-              {a.mine && a.kind === 'website' && <button onClick={() => setLaunching(a)}>Launch…</button>}
+              {a.mine && a.kind === 'website' && (
+                <button disabled={!a.runs} title={a.runs ? undefined : a.source?.provider === 'oci' || a.packaged ? 'It runs in a container: start Docker on this computer first' : 'It has nothing Weave runs here: no container image, no WebAssembly'} onClick={() => setLaunching(a)}>
+                  Launch…
+                </button>
+              )}
               {a.mine && a.kind === 'marks' && (
                 <AsyncButton
                   onClick={async () =>
@@ -366,7 +370,8 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   const [where, setWhere] = useState<string>();
   const [announce, setAnnounce] = useState(true);
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
-  const runs = artifact.command?.join(' ') ?? 'its program';
+  const runs = artifact.command?.join(' ') ?? artifact.name;
+  const [values, setValues] = useState<Record<string, string>>({});
   return (
     <Modal title={`Launch ${artifact.name} ${artifact.tag}`} onClose={onClose}>
       {services && !projects.length ? (
@@ -385,10 +390,11 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
             </select>
           </div>
           <p className="small">
-            Weave runs <code>{runs}</code> from {artifact.name} {artifact.tag}, released in p/{artifact.project.name}, on this computer. It only shows its page: it reads nothing and
+            Weave runs <code>{runs}</code> from {artifact.name} {artifact.tag}, released in p/{artifact.project.name}, {artifact.runs === 'wasm' ? 'in Weave, as WebAssembly' : 'in a container, sealed off from your files'}. It only shows its page: it reads nothing and
             writes nothing in the project. Your Websites service makes it a running website{project ? ` everyone in p/${project.name} can visit` : ''}, in Live, until you close it.
           </p>
           <p className="small muted">It's other people's code: only launch it if you trust p/{artifact.project.name}.</p>
+          <LaunchSettings artifact={artifact} values={values} onChange={setValues} />
           <div className="field-row">
             <input type="checkbox" id="launch-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
             <label htmlFor="launch-announce">Announce it in the project's chat: people find it there, and come and join</label>
@@ -398,10 +404,10 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
       <div className="buttons">
         <AsyncButton
           className="default"
-          disabled={!project}
+          disabled={!project || !settingsReady(artifact, values)}
           onClick={() =>
             attempt(async () => {
-              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce });
+              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce, settings: givenSettings(values) });
               bump();
               onClose();
               location.hash = `#/p/${project!.id}/live`;
@@ -415,6 +421,20 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
     </Modal>
   );
 }
+
+/** What a website asks for when it's launched (a key for the AI it talks to, say): kept for that website alone. */
+function LaunchSettings({ artifact, values, onChange }: { artifact: ArtifactInfo; values: Record<string, string>; onChange(values: Record<string, string>): void }) {
+  return (
+    <>
+      {artifact.settings.map((s) => (
+        <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => onChange({ ...values, [s.name]: v })} />
+      ))}
+    </>
+  );
+}
+
+const settingsReady = (artifact: ArtifactInfo, values: Record<string, string>) => artifact.settings.every((s) => s.optional || s.oauth || !!values[s.name]?.trim());
+const givenSettings = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
 
 /** Get a file artifact: its project's provider grants it, your fetcher gets it, Weave checks it; then show where it is. */
 function GetFileButton({ artifact }: { artifact: ArtifactInfo }) {
@@ -552,7 +572,6 @@ const KIND_GROUPS: Array<{ kind: ArtifactInfo['kind']; title: string; about: str
   { kind: 'keyvault', title: 'Keyvaults', about: 'Client apps that hold your access to a platform: your services get only what they derive from it.' },
   { kind: 'marks', title: 'Mark services', about: 'Take one in: what it says shows next to names, everywhere you look.' },
   { kind: 'hints', title: 'Hint services', about: 'Take one in: its counts show next to places in your Places.' },
-  { kind: 'app', title: 'Programs', about: 'Programs its people run on their computers, in rooms.' },
 ];
 
 /**
@@ -668,8 +687,25 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const [port, setPort] = useState('');
   const [busy, setBusy] = useState(false);
   const [announce, setAnnounce] = useState(true);
-  const ready = !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  // What it shows: a website released in one of your projects (launched here), or a program of yours on a port.
+  const released = useArtifacts(project);
+  const launchable = away ? [] : (released ?? []).filter((a) => a.kind === 'website' && a.mine && a.runs);
+  const [what, setWhat] = useState<string>();
+  const picked = what === 'port' ? undefined : launchable.find((a) => a.id === what) ?? (what ? undefined : launchable[0]);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const ready = picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const launch = async () => {
+    setBusy(true);
+    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce, settings: givenSettings(values) }), `${picked!.name} is launching in p/${project.name}`);
+    setBusy(false);
+    if (done !== undefined) {
+      bump();
+      onClose();
+      location.hash = `#/p/${project.id}/live`;
+    }
+  };
   const open = async () => {
+    if (picked) return launch();
     setBusy(true);
     // A new show is set up first; if the website then fails, it's picked, not set up twice.
     const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
@@ -690,71 +726,101 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   return (
     <Modal title={`Open a website · p/${project.name}`} onClose={onClose} wide>
       <div className="form">
-        <div className="field-row-stacked">
-          <label htmlFor="room-name">Name</label>
-          <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="field-row-stacked">
-          <label htmlFor="room-port">Port of a program running {away ? `on ${away}` : 'on this computer'}</label>
-          <input id="room-port" inputMode="numeric" placeholder="3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
-          <p className="small muted">
-            Weave starts nothing: the website's visitors reach that port, and nothing else on {away ?? 'your computer'}. An app a project released runs as a service instead (Add a service): it shows up here
-            by itself.
-          </p>
-        </div>
         <fieldset>
-          <legend>Who may visit</legend>
-          {(
-            [
-              ['everyone', `Everyone in p/${project.name}`],
-              ['people', 'Only…'],
-              ['tickets', 'Ticket holders of a show'],
-              ...(groups.length ? [['tiers', 'Members of tiers']] : []),
-            ] as Array<[typeof who, string]>
-          ).map(([value, label]) => (
-            <div key={value}>
-              <div className="field-row">
-                <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
-                <label htmlFor={`who-${value}`}>{label}</label>
-              </div>
-              {who === 'people' &&
-                value === 'people' &&
-                members
-                  .filter((m) => m.did !== meDid)
-                  .map((m) => (
-                    <div className="field-row indent" key={m.did}>
-                      <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
-                      <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
-                    </div>
-                  ))}
-              {who === 'tickets' && value === 'tickets' && (
-                <>
-                  <div className="field-row indent">
-                    <label htmlFor="who-show">Show</label>
-                    <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
-                      {myShows.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                      <option value="new">A new show…</option>
-                    </select>
-                  </div>
-                  {show === 'new' && <div className="indent">{newShow.fields}</div>}
-                </>
-              )}
-              {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
-                groups.map((g) => (
-                  <div className="field-row indent" key={g.id}>
-                    <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
-                    <label htmlFor={`who-tier-${g.id}`}>
-                      {who === 'tickets' ? 'also ' : ''}members of {g.name}
-                    </label>
-                  </div>
-                ))}
+          <legend>What it shows</legend>
+          {!released && !away && <p className="small muted">Looking for released websites…</p>}
+          {launchable.map((a) => (
+            <div className="field-row" key={a.id}>
+              <input id={`what-${a.id}`} type="radio" checked={picked?.id === a.id} onChange={() => setWhat(a.id)} />
+              <label htmlFor={`what-${a.id}`}>
+                <span>
+                  <b>{a.name}</b> {a.tag} <span className="muted small">· released in p/{a.project.name} · {a.runs === 'wasm' ? 'runs in Weave' : 'runs in a container'}</span>
+                </span>
+              </label>
             </div>
           ))}
+          <div className="field-row">
+            <input id="what-port" type="radio" checked={!picked} onChange={() => setWhat('port')} />
+            <label htmlFor="what-port">A program of yours, on a port {away ? `of ${away}` : 'of this computer'}</label>
+          </div>
         </fieldset>
+        {picked ? (
+          <>
+            <p className="small">
+              Weave runs {picked.name} {picked.tag}, released in p/{picked.project.name}, {picked.runs === 'wasm' ? 'in Weave, as WebAssembly' : 'in a container, sealed off from your files'}. It only shows its page: it reads nothing and writes nothing in
+              the project. It's a running website everyone in p/{project.name} can visit, in Live, until you close it.
+            </p>
+            <p className="small muted">It's other people's code: only launch it if you trust p/{picked.project.name}.</p>
+            <LaunchSettings artifact={picked} values={values} onChange={setValues} />
+          </>
+        ) : (
+          <>
+            <div className="field-row-stacked">
+              <label htmlFor="room-name">Name</label>
+              <input id="room-name" autoFocus maxLength={60} placeholder="Saturday race" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="field-row-stacked">
+              <label htmlFor="room-port">Port of a program running {away ? `on ${away}` : 'on this computer'}</label>
+              <input id="room-port" inputMode="numeric" placeholder="3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
+              <p className="small muted">
+                Weave starts nothing: the website's visitors reach that port, and nothing else on {away ?? 'your computer'}.
+              </p>
+            </div>
+            <fieldset>
+              <legend>Who may visit</legend>
+              {(
+                [
+                  ['everyone', `Everyone in p/${project.name}`],
+                  ['people', 'Only…'],
+                  ['tickets', 'Ticket holders of a show'],
+                  ...(groups.length ? [['tiers', 'Members of tiers']] : []),
+                ] as Array<[typeof who, string]>
+              ).map(([value, label]) => (
+                <div key={value}>
+                  <div className="field-row">
+                    <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
+                    <label htmlFor={`who-${value}`}>{label}</label>
+                  </div>
+                  {who === 'people' &&
+                    value === 'people' &&
+                    members
+                      .filter((m) => m.did !== meDid)
+                      .map((m) => (
+                        <div className="field-row indent" key={m.did}>
+                          <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
+                          <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
+                        </div>
+                      ))}
+                  {who === 'tickets' && value === 'tickets' && (
+                    <>
+                      <div className="field-row indent">
+                        <label htmlFor="who-show">Show</label>
+                        <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                          {myShows.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                          <option value="new">A new show…</option>
+                        </select>
+                      </div>
+                      {show === 'new' && <div className="indent">{newShow.fields}</div>}
+                    </>
+                  )}
+                  {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
+                    groups.map((g) => (
+                      <div className="field-row indent" key={g.id}>
+                        <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                        <label htmlFor={`who-tier-${g.id}`}>
+                          {who === 'tickets' ? 'also ' : ''}members of {g.name}
+                        </label>
+                      </div>
+                    ))}
+                </div>
+              ))}
+            </fieldset>
+          </>
+        )}
         <div className="field-row">
           <input type="checkbox" id="open-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
           <label htmlFor="open-announce">Announce it in the project's chat: people find it there, and come and join</label>
@@ -762,7 +828,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
         <div className="buttons">
           <button onClick={onClose}>Cancel</button>
           <button className="default" disabled={!ready || busy} onClick={() => void open()}>
-            {busy ? 'Opening…' : 'Open website'}
+            {busy ? (picked ? 'Launching…' : 'Opening…') : picked ? 'Launch' : 'Open website'}
           </button>
         </div>
       </div>
@@ -839,7 +905,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
       <OriginText origin={service.origin} />
       {own && mine?.update && <ShippedUpdate service={mine} />}
       {/* What it hosts: running website artifacts, listed by Weave (they run in Live). */}
-      {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
+      {hostsSites(service) && <RunningWebsites project={project} service={service} rooms={its} launching={(mine?.launching ?? []).filter((l) => l.project.id === project.id)} shows={shows} maintainer={maintainer} {...(own && mine ? { open: () => setOpening(true) } : {})} />}
       {!!service.contract.offers?.includes('artifact.fetch') && <ServiceReleases project={project} artifacts={artifacts.filter((a) => a.project.id === project.id && providesArtifact(service, a))} maintainer={maintainer} {...(maintainer && publishesReleases(service) ? { publish: () => setPublishing(true) } : {})} />}
       {hostsSites(service) && own && !mine && <p className="small muted">It runs on another of your devices: open websites there.</p>}
       <ActionScopes space={{ id: project.id, name: `p/${project.name}` }} service={service} groups={groups} extras={extras} covered={hostsSites(service) ? ['list', 'close'] : publishesReleases(service) ? ['publish', 'releases'] : undefined} />
@@ -855,7 +921,20 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
  * A website service's running websites, as Weave knows them: each a website artifact running (or a page of a service),
  * who may visit, who opened it; your own you close, and maintainers close any (asking the service that hosts it).
  */
-function RunningWebsites({ project, service, rooms, shows, maintainer, open }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; maintainer: boolean; open?(): void }) {
+function RunningWebsites({ project, service, rooms, launching, shows, maintainer, open }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; launching: NonNullable<ServiceInfo['launching']>; shows: ShowInfo[]; maintainer: boolean; open?(): void }) {
+  // Launched, not serving yet: starting (its release on the way), or why it can't. Stopping it ends the launch.
+  useEffect(() => {
+    if (!launching.some((l) => !l.error)) return;
+    const timer = setInterval(bump, 1000);
+    return () => clearInterval(timer);
+  }, [launching.length, launching.some((l) => !l.error)]);
+  const starting = launching.map((l) => ({
+    key: l.id,
+    title: l.name,
+    badge: l.tag,
+    detail: l.error ?? (l.progress ? `starting: ${l.progress.state} ${l.progress.total ? `${Math.round((l.progress.done / l.progress.total) * 100)}%` : ''}`.trim() : 'starting…'),
+    remove: { label: 'Stop it', run: () => void attempt(() => api('removeService', l.id).then(bump), `${l.name} is stopped`) },
+  }));
   const visitors = (room: WebsiteInfo) => {
     const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
     const who = [...(room.show ? [`ticket holders of ${show?.name ?? 'a show'}`] : []), ...(room.groups ?? []).map((g) => `members of ${g.name ?? 'a tier'}`)];
@@ -870,13 +949,13 @@ function RunningWebsites({ project, service, rooms, shows, maintainer, open }: {
       title="Running websites"
       {...(open ? { add: { label: 'Open a website', run: open } } : {})}
       empty="No running websites yet."
-      rows={rooms.map((room) => ({
+      rows={[...starting, ...rooms.map((room) => ({
         key: room.id,
         title: room.name,
         detail: [room.from ? `${room.from.name ?? 'a release'} ${room.from.tag}${room.from.project.name && room.from.project.id !== project.id ? ` from p/${room.from.project.name}` : ''}` : '', `for ${visitors(room)}`, `opened by ${room.host.name ?? shortDid(room.host.did)}`].filter(Boolean).join(' · '),
         main: <button onClick={() => navigate(`#/p/${project.id}/live`)}>Visit</button>,
         ...(room.mine || maintainer ? { remove: { label: 'Close website', run: () => close(room) } } : {}),
-      }))}
+      }))]}
     />
   );
 }
@@ -892,7 +971,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
   // Its settings kept in the project, for its maintainers to change (rather than only on this computer).
   const [keep, setKeep] = useState(maintainer);
   const [busy, setBusy] = useState(false);
-  const usable = (artifacts ?? []).filter((a) => a.runs && (a.website || a.applet));
+  const usable = (artifacts ?? []).filter((a) => a.runs && a.kind === 'service');
   const chosen = usable.find((a) => a.id === picked);
   useEffect(() => setValues({}), [chosen?.id]);
   const missing = chosen?.settings.filter((s) => !s.optional && !s.oauth && !values[s.name]?.trim()) ?? [];
@@ -940,7 +1019,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
                   ? `Weave will run ${chosen.name} ${chosen.tag} in its sandbox: a container that can't change its own files or reach yours, with limits on memory and CPU, and a folder of its own for what it keeps:`
                   : chosen.runs === 'container'
                   ? `Weave will run ${chosen.name} ${chosen.tag} in a container, sealed off from your files:`
-                  : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it on this computer, as you:`}
+                  : `Weave will fetch ${chosen.name} ${chosen.tag}, check it against the fingerprints p/${chosen.project.name} published, and run it in Weave, as WebAssembly, with only what its contract allows:`}
               </p>
               <pre className="launch-command">{(chosen.command ?? []).join(' ')}</pre>
               <p className="small">

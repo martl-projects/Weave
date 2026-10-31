@@ -44,6 +44,15 @@ const said = (fn) => async (text) => {
   }
 };
 
+/** The organizations someone shows they're in, without signing in: only those they made public on GitHub. */
+export const owners = said(async (text) => {
+  const { login } = JSON.parse(text);
+  if (typeof login !== 'string' || !/^[A-Za-z0-9-]{1,39}$/.test(login)) return '[]';
+  const res = await fetch(`${API}/users/${login}/orgs?per_page=100`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'weave-github-keyvault', 'x-github-api-version': '2022-11-28' } });
+  if (!res.ok) return '[]';
+  return JSON.stringify((await res.json()).map((o) => ({ value: o.login })));
+});
+
 /** The repositories its App is installed on: to hand to projects. */
 export const reachable = said(async () => {
   const a = app();
@@ -67,6 +76,10 @@ export const mint = said(async (text) => {
   try {
     installation = (await github(jwt(a.id), 'GET', `/repos/${resources[0]}/installation`)).id;
   } catch (error) {
+    const owner = resources[0].split('/')[0];
+    // An app reaches only its own account's repositories: an organization's need one made for it.
+    if (/ 404 /.test(error?.message ?? '') && a['owner.login'] && owner.toLowerCase() !== String(a['owner.login']).toLowerCase())
+      throw new Error(`${a.slug} is ${a['owner.login']}'s and reaches only their repositories, not ${resources[0]}: make another app for ${owner} (Keys & devices, GitHub keyvault)`);
     if (/ 404 /.test(error?.message ?? '')) throw new Error(`${a.slug} isn't installed on ${resources[0]}: install it there (${a.html_url}/installations/new)`);
     throw error;
   }

@@ -3,7 +3,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
-import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
+import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, wasmReleaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
 
 export interface WeaveMcpOptions {
   /** Agent name to sign every write with; its delegated permissions apply. Without it, writes are signed as the person. */
@@ -102,7 +102,7 @@ Accounts elsewhere (GitHub, X…): your person says an account is theirs with a 
 GitHub access for a project's members is the GitHub access service's (shipped with Weave), not Weave's: a maintainer adds it to the project. It holds no GitHub access of its own: whoever runs it keeps theirs in their GitHub keyvault (Keys & devices: their own GitHub App, made with one click on GitHub and installed on their repositories) and hands each project the repositories it gets there; only they do (ask them with weave_request_repository: they allow it with one click). Members who proved their GitHub account and shared it with the project (Keys & devices, or weave_link_account with the space) then get access, and lose it when they leave: read access to an organization's repository, write access to a person's. Never ask for or handle a token or key yourself.
 
 A project's artifact, which websites run with one click (prefer this to asking people to install Node.js or build anything):
-1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. For JavaScript or TypeScript apps, weave_release_workflow gives a GitHub Actions workflow that builds a standalone program per platform on every pushed version tag and publishes the GitHub release; add it, and add its start.release to weave.app.json.
+1. The repository holds weave.app.json (app, name, services, start). Writing or changing one, call weave_app_manifest first for the rules and an example, and again with your file to check it (every problem at once) before committing. Weave runs no programs from releases, only containers and WebAssembly: weave_release_workflow gives a GitHub Actions workflow that builds a container image on every pushed version tag, pushes it to ghcr.io and publishes the GitHub release; add it, and add its start.image to weave.app.json.
 2. Commit, push, tag (v0.1.0) and push the tag. Weave installs from a GitHub release with build files attached: a tag alone isn't a release, and GitHub's automatic source archives don't count. The workflow makes that release from the tag in a few minutes; without such a workflow, someone has to create the release and attach the builds on github.com.
 3. weave_app_release with the tag: the project's GitHub releases service (shipped with Weave, with its own GitHub access for a private repository) reads weave.app.json from the repository at that tag, fingerprints each release file and publishes it. A public repository's files are fetched directly; a private one's only through that service, so its code stays closed. Anyone in a project with the website service then opens websites that run it, in the project's Services ("Open a website…"), in any project of theirs. (weave_app_publish publishes a weave.app.json from this computer instead, without release files.)
 Opening a website runs the release on that person's own computer and needs them to approve it; you can't do that for them.
@@ -963,7 +963,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "An artifact's manifest: rules, example, check",
       description:
-        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how to start it (start.command for checkouts, start.release for release builds). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how it runs (start.image, a container, or wasm; start.command only for people starting a checkout by hand). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
       inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
       annotations: { readOnlyHint: true },
     },
@@ -987,11 +987,20 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'A release workflow for a project app',
       description:
-        "A GitHub Actions workflow that, on every pushed version tag, builds a JavaScript or TypeScript app as a standalone program for Windows, macOS and Linux (no Node.js needed by hosts) and publishes the GitHub release. Returns the file to add, the start.release to put in weave.app.json, and notes to check (files must be read relative to process.cwd()). Writes nothing itself.",
-      inputSchema: { app: z.string().describe('The app id from weave.app.json'), entry: z.string().describe('The file the app starts from, like server.js') },
+        "A GitHub Actions workflow that, on every pushed version tag, builds the app and publishes the GitHub release. A WebAssembly app (wasm in weave.app.json: give its component and site) is built with npm run build and attached as one archive: Weave runs it itself, hosts need nothing installed. Otherwise it's built as a container image (with the repository's Dockerfile, or one made for Node.js) and pushed to ghcr.io: hosts with Docker run it, sealed off from their computer. Weave runs no programs from releases. Returns the file to add, notes to check, and for a container the start.image to put in weave.app.json. Writes nothing itself.",
+      inputSchema: {
+        app: z.string().describe('The app id from weave.app.json'),
+        entry: z.string().optional().describe('A container app: the file it starts from, like server.js'),
+        owner: z.string().optional().describe('A container app: the GitHub account or organization the repository belongs to'),
+        wasm: z.object({ component: z.string(), site: z.string().optional() }).optional().describe("A WebAssembly app: weave.app.json's wasm (component, site)"),
+      },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ app, entry }: { app: string; entry: string }) => releaseWorkflow(app, entry)),
+    run(async ({ app, entry, owner, wasm }: { app: string; entry?: string; owner?: string; wasm?: { component: string; site?: string } }) => {
+      if (wasm) return wasmReleaseWorkflow(app, wasm);
+      if (!entry) throw new Error('give entry (the file a container app starts from), or wasm for a WebAssembly app');
+      return releaseWorkflow(app, entry, owner);
+    }),
   );
 
   server.registerTool(
