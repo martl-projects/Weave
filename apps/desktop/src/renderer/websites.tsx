@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HostedWebsiteInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
+import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import type { ActionWho } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
@@ -142,13 +142,16 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
 function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): void }) {
   const { data: lines } = useApi(() => api<ArtifactLine[]>('artifactLines', project.id), [project.id]);
   const [chosen, setChosen] = useState<{ artifact?: string; source?: string; name: string }>();
-  const [source, setSource] = useState('');
   // Only one artifact with a source: straight to its releases.
   const only = lines?.filter((l) => l.source);
   const which = chosen ?? (only?.length === 1 && lines!.length === 1 ? { artifact: only[0].id, name: only[0].name } : undefined);
+  const taken = (lines ?? []).flatMap((l) => (l.source ? [l.source.ref.toLowerCase()] : []));
+  const pick = (source: string) => setChosen({ source, name: source });
   return (
     <Modal title={`Publish a release · p/${project.name}${which ? ` · ${which.name}` : ''}`} onClose={onClose} wide>
-      {!which ? (
+      {!which && lines?.length === 0 ? (
+        <NewSource project={project} taken={taken} first onPick={pick} />
+      ) : !which ? (
         <>
           <ItemList
             title="Which artifact?"
@@ -163,15 +166,7 @@ function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): vo
               ...(l.source ? { main: <button className="default" onClick={() => setChosen({ artifact: l.id, name: l.name })}>Its releases…</button> } : {}),
             })) } : {})}
           />
-          <fieldset>
-            <legend>Or a new one, from its source</legend>
-            <div className="field-row">
-              <input className="grow" placeholder="Where its releases are: a repository's owner/name, say" value={source} onChange={(e) => setSource(e.target.value)} />
-              <button className="default" disabled={!source.trim()} onClick={() => setChosen({ source: source.trim(), name: source.trim() })}>
-                Its releases…
-              </button>
-            </div>
-          </fieldset>
+          <NewSource project={project} taken={taken} onPick={pick} />
         </>
       ) : (
         <Releases project={project} which={which} onDone={onClose} />
@@ -181,6 +176,67 @@ function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): vo
         <button onClick={onClose}>Close</button>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * A new artifact's source: the repositories your GitHub keyvault's apps reach, those handed to the project first, or
+ * any owner/name. Picking a private one not handed yet hands it to the project too (its releases need that).
+ */
+function NewSource({ project, taken, first, onPick }: { project: SpaceInfo; taken: string[]; first?: boolean; onPick(source: string): void }) {
+  const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults').catch(() => []), []);
+  const vault = vaults?.find((k) => k.added && k.platform === 'github');
+  const keys = vault?.apps.map((a) => a.key).join(' ') ?? '';
+  // Asked once per app (it asks GitHub, which takes a moment): not again on every event.
+  const [reach, setReach] = useState<Array<{ value: string; note?: string; app: string }>>();
+  useEffect(() => {
+    if (!vault) return;
+    let alive = true;
+    void Promise.all(vault.apps.map((a) => api<Array<{ value: string; note?: string }>>('keyvaultReachable', { name: vault.name, app: a.key }).then((got) => got.map((r) => ({ ...r, app: a.key })), () => []))).then((all) => alive && setReach(all.flat()));
+    return () => void (alive = false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vault?.name, keys]);
+  const [source, setSource] = useState('');
+  const handedTo = (app: string) => vault?.apps.find((a) => a.key === app)?.handed.find((h) => h.project.id === project.id)?.resources ?? [];
+  const handed = new Set(vault?.apps.flatMap((a) => handedTo(a.key)) ?? []);
+  const rows = [...new Map((reach ?? []).map((r) => [r.value, r])).values()]
+    .filter((r) => !taken.includes(r.value.toLowerCase()))
+    .sort((a, b) => Number(handed.has(b.value)) - Number(handed.has(a.value)) || a.value.localeCompare(b.value));
+  const choose = async (r: { value: string; note?: string; app: string }) => {
+    if (vault && r.note?.includes('private') && !handed.has(r.value)) {
+      await api('handKeyvault', { name: vault.name, app: r.app, project: project.id, resources: [...handedTo(r.app), r.value] });
+      bump();
+      toast(`p/${project.name} has ${r.value} from your ${vault.title}`);
+    }
+    onPick(r.value);
+  };
+  return (
+    <>
+      {vault && (
+        <ItemList
+          title={first ? 'Where are its releases?' : 'Or a new one, from its source'}
+          empty={reach ? `Your ${vault.title} reaches no other repositories: install its App on more of them on GitHub.` : 'Asking GitHub…'}
+          {...(reach ? { rows: rows.map((r) => ({
+            key: r.value,
+            icon: 'folder' as const,
+            title: r.value,
+            search: r.value,
+            detail: [r.note, handed.has(r.value) ? `handed to p/${project.name}` : r.note?.includes('private') ? `picking it hands it to p/${project.name}` : ''].filter(Boolean).join(' · '),
+            main: <AsyncButton className="default" onClick={() => attempt(() => choose(r))}>Its releases…</AsyncButton>,
+          })) } : {})}
+        />
+      )}
+      <fieldset>
+        <legend>{vault ? 'Another repository' : first ? 'Where are its releases?' : 'Or a new one, from its source'}</legend>
+        <div className="field-row">
+          <input className="grow" placeholder="owner/name" value={source} onChange={(e) => setSource(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && source.trim() && onPick(source.trim())} />
+          <button className="default" disabled={!source.trim()} onClick={() => onPick(source.trim())}>
+            Its releases…
+          </button>
+        </div>
+        {!vault && <p className="small muted">A private repository's releases need your GitHub keyvault (Keys &amp; devices), with the repository handed to p/{project.name}.</p>}
+      </fieldset>
+    </>
   );
 }
 
