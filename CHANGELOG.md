@@ -2,6 +2,101 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.24.0 · 2026-10-31
+
+- The Weave icon's source (art/logo.psd)
+- The applets test names what Weave ships itself, so a reserved name is taken without a build
+- An organization's app from one of its repositories' addresses, and a project's GitHub services say when your keyvault gives them nothing there
+- The releases service says why the keyvault gave it no access, when GitHub then shows nothing
+- The releases service's hint for a private repository: no apostrophes in its quotes
+- The releases service says how a private repository's releases come: handed by a keyvault app
+- A release says what it does (about, in weave.app.json), and taking in a hint or marks service asks in plain words
+- Opening a website: no port form flashing by while releases load, and no jump to an empty Live
+- Publishing a release lists only the repositories handed to the project; + hands it more
+- Publishing a release lists the repositories your GitHub App reaches, the project's own first
+- Forgetting a keyvault app ends its access, and says where to delete it
+- weave_request_repository: an agent asks its person to hand a project repositories, allowed with one click
+- Pick the organization an app is for instead of typing it
+- A keyvault app for an organization: made on its page, beside your own, any time
+- weave_create_project: an agent starts a project for its person, with weave.space.create
+- A release workflow for WebAssembly apps: built on GitHub, attached as one archive
+- Services Weave ships show up after a build without restarting the daemon
+- A post opens wherever you click it, and the side panel shows only beside the Claude app
+- A launched website is the website service's: no key, no name, no service of its own
+- The Websites service's + launches a released website; Add a service lists no websites
+- A release you already run joins another project instead of refusing its own name
+- No programs from releases: a release runs as its container or its WebAssembly, never as a program on the host
+- A project's tabs on a narrow window list Catalog and Routines too
+- Desktop: a second start or a link while quitting no longer reaches a destroyed window
+- The daemon-following test reads text only from items that have a body: live signals (marks, hints) have none
+- Spotlight: a board you care about tints its place, someone close to you puts a heart under the number
+- Keep config settings a build doesn't know when it saves: an older daemon once dropped the desk
+- Hint services: the counts next to places come from a service, and follow you to every device
+- Announcements: a website opened or a version offered is said in the project's chat, as a live card
+- Mark services are taken in like keyvaults and fetchers: one yes per release
+- A project has any number of artifacts, each from its own source: no more "its app"
+- Setup packs: "GitHub for this project" in a few clicks, offered when a project is made
+- Add a service shows one card per source, never one mixed catalog
+- Nothing passes for Weave's own: reserved names, origin in every card's title, one keyvault per platform
+- Regression tests from the review sorted by the concern they guard (W3wTw_-7)
+- The helpdesk can't recover admins; a promoted standby fences off the old server (oreXqcSP, nQ9JHlUV)
+- One key can't fill the pending pool, and an accept retries only what waited for it (KtpOfhGu)
+- A carried post is forgotten when it comes due (7I92Kk20)
+- History 'joining'/'30d' holds when a plain member would let someone in (T3a83nLy)
+- Removed means out, until someone who could remove asks you back (_Ak3UUmp, odfs7haI)
+- A company counts someone as a colleague only if it vouches for them (MHV79Ro6)
+- Enrolling with a token from elsewhere says why it can't work (0siqvEzB follow-up)
+- Mutual removals are ordered, never both counted: no taking down who removed you (H7hk7X9S, cpjHYTDQ)
+- A shred keeps what the shredder's node didn't hold (zLqeyEBC)
+- Company halves: only the rekeyer's counts, no gap with the Weave half, kept over a restart (WUCPqIBs, yHsKySEi, AsPMzM8O)
+- Joins prove they hold the link; group rules admit only from the group (99ZpCdH6, xQ0as76W)
+- A key is whose it says it is, not whoever claimed it first (FTIDssuB)
+- A revocation names where it saw the key, per space: no filling unused numbers (KgmsMa_g)
+- Gifted keys for a held space count only if they open something there (8R9bN-yO)
+- A held space's treasury is paid as computed here, never as announced (7iriYk4C)
+- Only rekeys that count stop rotation, by their time clamped to arrival (Gr9S4DLf)
+- Anchor loss of rights causally: removals name each key's heads in the space (H7hk7X9S)
+- SSO sign-ins are bound to the identity that hands them in (0siqvEzB)
+- Escrows open only with the company's own key, not the key service alone (XyMStMvo)
+- Carries restate only what was really written: each item checked against its signature
+- `was` only for a key restating its own v1 event
+- A shred drops only its own space's bodies
+- Tiers and shows belong to their author, whoever reuses their id
+- Tidy a test comment
+- Peer input can't crash the node: unhashable bodies are rejected
+- Sync tags carry the connection's role, so a reflected hello proves nothing
+- A shipped service whose new version asks for more waits for your yes, and says so
+- Keyvaults and fetchers are anyone's: added from a project's release, approved once, pinned
+- Lists are anyone's: a service from any project's release shows its lists as Weave's own do
+- Weave knows less of GitHub: publishing speaks the provider's words, icons come from what services declare
+- A keyvault holds any number of apps, each handing projects what it reaches in its own settings
+- Maintainers withdraw a release; "Ask …" only for services one talks to
+- One list for everything a service hands out: icons, badges, small buttons, search and pages
+- Services' lists: the same list in every card, with + and a trash can for who may
+- Services' cards: settings and taking out as icons in the title; GitHub access leads with getting access
+- The keyvault's repository list asks GitHub once, and shows the answer
+- Open each service request and answer once: the daemon no longer pegs a core
+- A shipped service that asks for no settings any more stops asking for the old ones
+- Lists to pick from follow the skin: readable in dark mode
+- Keyvaults: your access to a platform kept in one place, your services only ask
+- Only whoever runs GitHub access hands out what its App reaches
+- Your GitHub App is named for you: "martldennl's Weave connect"
+- GitHub access acts through your own GitHub App, made in one click with GitHub's manifest flow
+- GitHub access gives the project's own repository by default; its page and picker keep up
+- Sessions have a permanent name: "name · about", chosen once by the session, renamed only by its person
+- Weave lists a project's running websites itself; the websites service has no page
+- GitHub access acts as whoever runs it: their GitHub sign-in, once for every project
+- GitHub access does one thing: a project's members get access to its repositories
+- Link repositories with projects n-to-n; linking gives nobody access
+- Prove an account elsewhere in one click: the verifier makes the proof with a code sign-in
+- GitHub sign-in through Weave's OAuth App (its client ID; device flow, no secret)
+- Sign services in with a code: GitHub releases and GitHub access need no token
+- Badges and From Weave ship with Weave: everyone's own until turned off, checked by digest
+- Marks next to names: mark services you or a space choose, each saying who says so
+- Counts next to chats, places and boards until you open them, by rules for who and where
+- Sessions page: how linking works behind an info icon
+- Sessions page: a section per harness on the left, Claude Code the first
+
 ## v0.23.0 · 2026-10-28
 
 - Release: draft and publish with a Node script, not gh, so it runs on every runner
