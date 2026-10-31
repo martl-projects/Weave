@@ -10,6 +10,7 @@ import { usePayments } from './treasury.tsx';
 import { Page } from './views.tsx';
 import { ActionScopes, askAndWait, contractText, OriginBadge, lowerFirst, onlyAWebsite, OriginText, ServiceCard, KeptSettingsDialog, ShippedUpdate, whoLabel, type ScopedAction } from './services.tsx';
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
+import { HandDialog } from './keyvaults.tsx';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -180,50 +181,34 @@ function ReleasePicker({ project, onClose }: { project: SpaceInfo; onClose(): vo
 }
 
 /**
- * A new artifact's source: the repositories your GitHub keyvault's apps reach, those handed to the project first, or
- * any owner/name. Picking a private one not handed yet hands it to the project too (its releases need that).
+ * A new artifact's source: the repositories handed to the project from your GitHub keyvault, or any owner/name.
+ * Handing it more is the keyvault's own dialog.
  */
 function NewSource({ project, taken, first, onPick }: { project: SpaceInfo; taken: string[]; first?: boolean; onPick(source: string): void }) {
   const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults').catch(() => []), []);
   const vault = vaults?.find((k) => k.added && k.platform === 'github');
-  const keys = vault?.apps.map((a) => a.key).join(' ') ?? '';
-  // Asked once per app (it asks GitHub, which takes a moment): not again on every event.
-  const [reach, setReach] = useState<Array<{ value: string; note?: string; app: string }>>();
-  useEffect(() => {
-    if (!vault) return;
-    let alive = true;
-    void Promise.all(vault.apps.map((a) => api<Array<{ value: string; note?: string }>>('keyvaultReachable', { name: vault.name, app: a.key }).then((got) => got.map((r) => ({ ...r, app: a.key })), () => []))).then((all) => alive && setReach(all.flat()));
-    return () => void (alive = false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault?.name, keys]);
   const [source, setSource] = useState('');
-  const handedTo = (app: string) => vault?.apps.find((a) => a.key === app)?.handed.find((h) => h.project.id === project.id)?.resources ?? [];
-  const handed = new Set(vault?.apps.flatMap((a) => handedTo(a.key)) ?? []);
-  const rows = [...new Map((reach ?? []).map((r) => [r.value, r])).values()]
-    .filter((r) => !taken.includes(r.value.toLowerCase()))
-    .sort((a, b) => Number(handed.has(b.value)) - Number(handed.has(a.value)) || a.value.localeCompare(b.value));
-  const choose = async (r: { value: string; note?: string; app: string }) => {
-    if (vault && r.note?.includes('private') && !handed.has(r.value)) {
-      await api('handKeyvault', { name: vault.name, app: r.app, project: project.id, resources: [...handedTo(r.app), r.value] });
-      bump();
-      toast(`p/${project.name} has ${r.value} from your ${vault.title}`);
-    }
-    onPick(r.value);
-  };
+  const [handing, setHanding] = useState(false);
+  const repos = [...new Set(vault?.apps.flatMap((a) => a.handed.find((h) => h.project.id === project.id)?.resources ?? []) ?? [])].filter((r) => !taken.includes(r.toLowerCase())).sort();
   return (
     <>
       {vault && (
         <ItemList
           title={first ? 'Where are its releases?' : 'Or a new one, from its source'}
-          empty={reach ? `Your ${vault.title} reaches no other repositories: install its App on more of them on GitHub.` : 'Asking GitHub…'}
-          {...(reach ? { rows: rows.map((r) => ({
-            key: r.value,
+          add={{ label: `Hand p/${project.name} more of your repositories`, run: () => setHanding(true) }}
+          empty={`p/${project.name} has no repositories from your ${vault.title} yet: + hands it some.`}
+          rows={repos.map((r) => ({
+            key: r,
             icon: 'folder' as const,
-            title: r.value,
-            search: r.value,
-            detail: [r.note, handed.has(r.value) ? `handed to p/${project.name}` : r.note?.includes('private') ? `picking it hands it to p/${project.name}` : ''].filter(Boolean).join(' · '),
-            main: <AsyncButton className="default" onClick={() => attempt(() => choose(r))}>Its releases…</AsyncButton>,
-          })) } : {})}
+            title: r,
+            search: r,
+            detail: `handed to p/${project.name}`,
+            main: (
+              <button className="default" onClick={() => onPick(r)}>
+                Its releases…
+              </button>
+            ),
+          }))}
         />
       )}
       <fieldset>
@@ -236,6 +221,7 @@ function NewSource({ project, taken, first, onPick }: { project: SpaceInfo; take
         </div>
         {!vault && <p className="small muted">A private repository's releases need your GitHub keyvault (Keys &amp; devices), with the repository handed to p/{project.name}.</p>}
       </fieldset>
+      {handing && vault && <HandDialog vault={vault} project={project} onClose={() => setHanding(false)} />}
     </>
   );
 }
