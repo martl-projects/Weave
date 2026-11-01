@@ -26,7 +26,7 @@ export interface AvatarLib {
   thumb(part: string, a: Figure, size?: number): string;
   partNames(part: string): string[];
   SCENES: Array<{ id: string; label: string }>;
-  groupSnapshot(people: Figure[], width?: number, height?: number, opts?: { banner?: string; color?: string; poses?: string[] }): Promise<string>;
+  groupSnapshot(people: Figure[], width?: number, height?: number, opts?: { banner?: string; color?: string; poses?: string[]; peek?: boolean }): Promise<string>;
   GROUP_PHOTO_MAX: number;
   GROUP_POSES: Array<{ id: string; label: string }>;
 }
@@ -179,11 +179,22 @@ export const sceneLabel = (id: string) => labels[id] ?? id;
  * A group photo: up to twelve of its people (the first ones given), in rows, holding a banner with its name. Who has
  * no avatar stands there as the figure their key makes.
  */
-export function GroupPhoto({ dids, banner, poses, className = '' }: { dids: string[]; banner?: string; poses?: Record<string, string>; className?: string }) {
+export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids: string[]; banner?: string; poses?: Record<string, string>; peek?: boolean; className?: string }) {
   const people = dids.slice(0, 12);
-  // Few people: a taller picture, so they aren't small in a wide one.
-  const [width, height] = people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
+  // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: one row, heads and
+  // shoulders, as wide as there are people.
+  const [width, height] = peek ? [Math.round(256 * Math.max(1, (people.length * 1.75 + 1.4) / 3.1)), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
   const figures = useFigures(people);
-  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
+  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
   return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
+}
+
+/**
+ * A post's scene with everyone who wrote it: alone, its author in the scene; with co-authors (those who confirmed),
+ * all of them together, its author in the scene and the others beside them. Small pictures show heads and shoulders.
+ */
+export function PostScene({ post, scene, size, close = false, className = '' }: { post: { by: { did: string }; coauthors?: Array<{ did: string; state: string }> }; scene: string; size: number; close?: boolean; className?: string }) {
+  const others = [...new Set((post.coauthors ?? []).filter((c) => c.state === 'confirmed' && c.did !== post.by.did).map((c) => c.did))];
+  if (!others.length) return <SceneImage did={post.by.did} scene={scene} size={size} close={close} className={className} />;
+  return <GroupPhoto dids={[post.by.did, ...others]} poses={{ [post.by.did]: scene }} peek={close} className={`post-group ${className}`} />;
 }

@@ -565,7 +565,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
             )}
           </div>
           {/* Its members on the banner, standing together, if those who run it want them there. */}
-          {project.membersOnBanner && members.length > 0 && <GroupPhoto className="hero-group" dids={inPhotoOrder(project, members.map((m) => m.did))} poses={project.photoPoses} />}
+          {project.membersOnBanner && members.length > 0 && <GroupPhoto className="hero-group" dids={inPhotoOrder(project, members.map((m) => m.did))} poses={project.photoPoses} peek />}
           {info?.post && (
             <div className="banner-side">
               <VoteBox post={info.post} />

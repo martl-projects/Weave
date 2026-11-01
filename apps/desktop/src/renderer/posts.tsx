@@ -7,7 +7,7 @@ import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectI
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { Marks } from './marks.tsx';
-import { postScene, SceneImage } from './avatar.tsx';
+import { PostScene, postScene } from './avatar.tsx';
 import { PicturePicker } from './avatar-editor.tsx';
 
 // ---------------------------------------------------------------- names and links
@@ -229,7 +229,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
       <a className={`thumb${post.image || postScene(post) ? ' has-image' : ''}${post.scene === 'none' && !post.image ? ' no-picture' : ''}`} href={href}>
-        {post.scene === 'none' && !post.image ? null : postScene(post) ? <SceneImage did={post.by.did} scene={postScene(post)!} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
+        {post.scene === 'none' && !post.image ? null : postScene(post) ? <PostScene post={post} scene={postScene(post)!} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -477,7 +477,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
       )}
       <div className="post-full-main">
         <VoteBox post={post} />
-        {postScene(post) && <SceneImage did={post.by.did} scene={postScene(post)!} size={320} className="post-scene" />}
+        {postScene(post) && <PostScene post={post} scene={postScene(post)!} size={320} className="post-scene" />}
         <div className="post-body">
           <h2 className="post-title">
             {post.title} <Badges post={post} />
