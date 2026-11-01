@@ -18,10 +18,15 @@ describe('the texts check', () => {
     expect(texts).toEqual(['Open it', 'Access to', 'Hello there', 'Chat about this post…', 'Message #', 'Home', 'removed', 'Taken in']);
   });
 
-  it('collects the names code asks for, template names as prefixes', () => {
-    const used = namesUsed('a.tsx', "t('a.b'); const l = t(`look.${s}`); <T name=\"c.d\" values={{}} />; texts.t('e.f');");
-    expect([...used.names]).toEqual(['a.b', 'c.d', 'e.f']);
+  it('collects the names code asks for, chosen in a conditional too, template names as prefixes, name-shaped strings as candidates', () => {
+    const used = namesUsed('a.tsx', "t('a.b'); const l = t(`look.${s}`); <T name=\"c.d\" values={{}} />; texts.t('e.f'); t(big ? 'g.h' : 'i.j'); const m = { x: 'k.l' }; localStorage.getItem('weave.skin');");
+    expect([...used.names]).toEqual(['a.b', 'c.d', 'e.f', 'g.h', 'i.j']);
     expect([...used.prefixes]).toEqual(['look.']);
+    expect([...used.candidates]).toEqual(['a.b', 'c.d', 'e.f', 'g.h', 'i.j', 'k.l', 'weave.skin']);
+  });
+
+  it("lets the product's name and a toast's kind through", () => {
+    expect(findHardcoded('a.tsx', "toast(t('x.y'), 'error'); const b = <b>Weave</b>;")).toEqual([]);
   });
 
   it('passes on this checkout: nothing hard-coded off the allowlist, packages in step with the code', () => {

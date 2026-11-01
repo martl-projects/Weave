@@ -3,6 +3,7 @@ import type { HomeSource, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bump } from './lib.ts';
 import { PostList, spaceLabel } from './posts.tsx';
+import { useTexts } from './texts.tsx';
 import { attempt, Modal } from './ui.tsx';
 
 /*
@@ -12,30 +13,15 @@ import { attempt, Modal } from './ui.tsx';
  * hiding is sealed to you and follows you to your other devices.
  */
 
-const SOURCES: Array<{ value: HomeSource; label: string }> = [
-  { value: 'all', label: 'Everything' },
-  { value: 'communities', label: 'Communities' },
-  { value: 'projects', label: 'Projects' },
-  { value: 'mine', label: 'My projects' },
-  { value: 'friends', label: "Friends' projects" },
-  { value: 'following', label: 'People I follow' },
-];
-
-const EMPTY: Record<HomeSource, string> = {
-  all: 'Nothing here yet. Start a project or community with “New…”, or join one with an invite link.',
-  communities: 'No community posts here. Join a community, or check Sources: some may be hidden from Home.',
-  projects: 'No projects here. Start one with “New…”, or check Sources: some may be hidden from Home.',
-  mine: 'No projects of yours yet: start one with “New…”.',
-  friends: "None of your friends' projects. Friends are people you follow who follow you back.",
-  following: 'No public posts from people you follow yet.',
-};
+/** The sources to show, in the picker's order; their texts are home.source.<value>, what's empty home.empty.<value>. */
+const SOURCES: HomeSource[] = ['all', 'communities', 'projects', 'mine', 'friends', 'following'];
 
 const KEY = 'weave.home.from';
 
 function readSource(): HomeSource {
   try {
     const saved = localStorage.getItem(KEY);
-    return SOURCES.some((s) => s.value === saved) ? (saved as HomeSource) : 'all';
+    return SOURCES.some((s) => s === saved) ? (saved as HomeSource) : 'all';
   } catch {
     return 'all';
   }
@@ -43,17 +29,18 @@ function readSource(): HomeSource {
 
 /** Which communities and projects show on Home. */
 function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): void }) {
+  const { t } = useTexts();
   const list = spaces.filter((s) => (s.kind === 'community' || s.kind === 'project') && !s.closed);
   const toggle = (s: SpaceInfo, visible: boolean) => attempt(() => api('setHomeVisibility', { space: s.id, visible }).then(bump));
   return (
-    <Modal title="Follow" onClose={onClose}>
-      <p className="small">What you follow feeds your Home and tells you about new posts; in projects, only from the boards you follow. Unfollowed ones stay in the sidebar and work as usual. Only you know what you follow.</p>
+    <Modal title={t('home.follow')} onClose={onClose}>
+      <p className="small">{t('home.follow.text')}</p>
       {(['community', 'project'] as const).map((kind) => {
         const ofKind = list.filter((s) => s.kind === kind);
         return (
           ofKind.length > 0 && (
             <fieldset key={kind}>
-              <legend>{kind === 'community' ? 'Communities' : 'Projects'}</legend>
+              <legend>{t(kind === 'community' ? 'tree.communities' : 'tree.projects')}</legend>
               {ofKind.map((s) => (
                 <div className="field-row" key={s.id}>
                   <input type="checkbox" id={`home-${s.id}`} checked={!s.hiddenFromHome} onChange={(e) => toggle(s, e.target.checked)} />
@@ -64,10 +51,10 @@ function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): vo
           )
         );
       })}
-      {list.length === 0 && <p>You're in no communities or projects yet.</p>}
+      {list.length === 0 && <p>{t('home.follow.none')}</p>}
       <div className="buttons">
         <button className="default" onClick={onClose}>
-          Done
+          {t('button.done')}
         </button>
       </div>
     </Modal>
@@ -75,6 +62,7 @@ function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): vo
 }
 
 export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meDid: string; onSubmit(): void }) {
+  const { t } = useTexts();
   const [from, setFrom] = useState<HomeSource>(readSource);
   const [choosing, setChoosing] = useState(false);
   const hiddenCount = spaces.filter((s) => s.hiddenFromHome && !s.closed).length;
@@ -87,28 +75,28 @@ export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meD
   return (
     <>
       <PostList
-        title={<>Home</>}
+        title={<>{t('nav.home')}</>}
         query={{ from }}
         spaces={spaces}
         meDid={meDid}
         toolbar={
           <>
             <button onClick={onSubmit}>
-              <Icon name="pencil" /> Submit
+              <Icon name="pencil" /> {t('tool.submit')}
             </button>
-            <select value={from} onChange={(e) => choose(e.target.value as HomeSource)} aria-label="Show posts from">
+            <select value={from} onChange={(e) => choose(e.target.value as HomeSource)} aria-label={t('home.from')}>
               {SOURCES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
+                <option key={s} value={s}>
+                  {t(`home.source.${s}`)}
                 </option>
               ))}
             </select>
-            <button onClick={() => setChoosing(true)} title="Which communities and projects show on Home">
-              Sources{hiddenCount ? ` (${hiddenCount} hidden)` : ''}…
+            <button onClick={() => setChoosing(true)} title={t('home.sources.title')}>
+              {hiddenCount ? t('home.sources.hidden', { n: hiddenCount }) : t('home.sources')}
             </button>
           </>
         }
-        empty={<>{EMPTY[from]}</>}
+        empty={<>{t(`home.empty.${from}`)}</>}
       />
       {choosing && <SourcesDialog spaces={spaces} onClose={() => setChoosing(false)} />}
     </>

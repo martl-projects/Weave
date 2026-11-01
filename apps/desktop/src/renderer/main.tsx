@@ -1,7 +1,7 @@
 import { checkForUpdates, UpdatePrompt, UpdateSettings } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
 import { LANGUAGES, type LanguageSetting } from '@weave/core';
-import { TextsProvider, useTexts } from './texts.tsx';
+import { t, TextsProvider, useTexts } from './texts.tsx';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest, ServiceProfileInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
@@ -71,6 +71,7 @@ function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, h
 /** A space in the tree; the open one shows its boards and channels underneath. */
 function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[]; waiting: number }) {
   useTick(); // unread state lives in localStorage; re-check on every live update
+  const { t } = useTexts();
   const base = spaceHref(space);
   const open = route[1] === space.id;
   const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
@@ -104,15 +105,15 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               hint={channelHint(c.name)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={`Live${rooms?.length ? ` (${rooms.length})` : ''}`} on={view === 'live'} unread={!!rooms?.length} />}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/available`} icon="store" label="Available" on={view === 'available'} />}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label="Services" on={view === 'services' && !arg} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live')} on={view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/available`} icon="store" label={t('nav.available')} on={view === 'available'} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={t('nav.services')} on={view === 'services' && !arg} />}
           {space.kind === 'project' && (services ?? []).map((s) => <TreeLink key={s.did} depth={2} href={`${base}/services/${s.did}`} icon={serviceIcon(s)} label={s.name} on={view === 'services' && arg === s.did} />)}
-          <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label="Catalog" on={view === 'catalog'} />
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label="Routines" on={view === 'routines'} />}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} badge={waiting} />}
-          {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label="About" on={view === 'about'} />}
-          {space.kind === 'group' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label="Settings" on={view === 'settings'} />}
+          <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label={t('nav.catalog')} on={view === 'catalog'} />
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label={t('nav.routines')} on={view === 'routines'} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label={t('nav.settings')} on={view === 'settings'} badge={waiting} />}
+          {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label={t('nav.about')} on={view === 'about'} />}
+          {space.kind === 'group' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label={t('nav.settings')} on={view === 'settings'} />}
         </>
       )}
     </>
@@ -121,6 +122,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
 
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useTick(); // unread state lives in localStorage
+  const { t } = useTexts();
   const chatHints = useHints('place', chats.map((c) => ({ space: c.space.id })));
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
     const list = spaces.filter((s) => s.kind === kind && !s.closed);
@@ -132,7 +134,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         {list.map((s) => (
           <TreeSpace key={s.id} space={s} route={route} waiting={waiting.filter((a) => a.project.id === s.id).length} />
         ))}
-        {list.length === 0 && <li className="tree-none">none yet</li>}
+        {list.length === 0 && <li className="tree-none">{t('tree.none')}</li>}
       </>
     );
   };
@@ -140,17 +142,17 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
     <aside className="places">
       <ArcadeWellIfOn />
       <header className="pane-head">
-        <b>Places</b>
+        <b>{t('tree.places')}</b>
       </header>
       <ul className="tree-view">
-        <TreeLink href="#/" icon="home" label="Home" on={route.length === 0} />
-        <TreeLink href="#/saved" icon="bookmark" label="Saved" on={route[0] === 'saved'} />
-        <TreeLink href="#/inbox" icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} on={route[0] === 'inbox'} />
-        <TreeLink href="#/people" icon="users" label="People" on={route[0] === 'people'} />
-        <TreeLink href="#/memberships" icon="star" label="Memberships" on={route[0] === 'memberships'} />
-        {bridge.workOn && <TreeLink href="#/sessions" icon="code" label="Sessions" on={route[0] === 'sessions'} />}
+        <TreeLink href="#/" icon="home" label={t('nav.home')} on={route.length === 0} />
+        <TreeLink href="#/saved" icon="bookmark" label={t('nav.saved')} on={route[0] === 'saved'} />
+        <TreeLink href="#/inbox" icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} on={route[0] === 'inbox'} />
+        <TreeLink href="#/people" icon="users" label={t('nav.people')} on={route[0] === 'people'} />
+        <TreeLink href="#/memberships" icon="star" label={t('nav.memberships')} on={route[0] === 'memberships'} />
+        {bridge.workOn && <TreeLink href="#/sessions" icon="code" label={t('nav.sessions')} on={route[0] === 'sessions'} />}
         <li className="tree-head">
-          <Icon name="message" /> Chats
+          <Icon name="message" /> {t('tree.chats')}
         </li>
         {chats.map((c, i) => (
           <TreeLink
@@ -164,14 +166,14 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
             hint={chatHints[i]}
           />
         ))}
-        {chats.length === 0 && <li className="tree-none">friends show up here</li>}
-        {section('community', 'Communities', 'community')}
-        {section('project', 'Projects', 'zap')}
-        {section('group', 'Groups', 'users')}
+        {chats.length === 0 && <li className="tree-none">{t('tree.chats.none')}</li>}
+        {section('community', t('tree.communities'), 'community')}
+        {section('project', t('tree.projects'), 'zap')}
+        {section('group', t('tree.groups'), 'users')}
         {spaces.some((s) => s.closed) && (
           <>
             <li className="tree-head">
-              <Icon name="lock" /> Closed
+              <Icon name="lock" /> {t('tree.closed')}
             </li>
             {spaces
               .filter((s) => s.closed)
@@ -182,7 +184,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         )}
       </ul>
       <button className="new-btn" onClick={onNew}>
-        <Icon name="plus" /> New…
+        <Icon name="plus" /> {t('tree.new')}
       </button>
     </aside>
   );
@@ -191,29 +193,36 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
 // ---------------------------------------------------------------- member list
 
 function MemberList({ space, members, meDid }: { space: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { t } = useTexts();
   const online = members.filter((m) => m.did === meDid || isActive(m.lastActive));
   const offline = members.filter((m) => !online.includes(m));
   const crown = space.kind === 'project' ? 'maintainer' : space.kind === 'community' ? 'moderator' : 'founder';
   const row = (m: MemberInfo, on: boolean) => {
-    const how = m.via ? `via ${m.via.name}${m.invitedByName ? `, let in by ${m.invitedByName}` : ''}` : m.invitedByName ? `invited by ${m.invitedByName}` : 'founder';
+    const how = m.via
+      ? m.invitedByName
+        ? t('member.how.via.letin', { group: m.via.name, name: m.invitedByName })
+        : t('member.how.via', { group: m.via.name })
+      : m.invitedByName
+        ? t('member.how.invited', { name: m.invitedByName })
+        : t('role.founder');
     const crowned = m.maintainer || (space.kind !== 'project' && m.did === space.founder);
     return (
       <div key={m.did} className={`member${on ? '' : ' away'}`}>
         <a className="member-main" href={`#/space/${encodeURIComponent(m.did)}`} title={how}>
           <Avatar did={m.did} size={24} status={on ? 'online' : 'offline'} />
           <span className="member-name">
-            {m.did === meDid ? `${m.name ?? 'You'} (you)` : (m.name ?? shortDid(m.did))}
+            {m.did === meDid ? t('member.you', { name: m.name ?? t('word.you') }) : (m.name ?? shortDid(m.did))}
             {crowned && (
-              <span className="crown" title={crown}>
+              <span className="crown" title={t(`role.${crown}`)}>
                 ★
               </span>
             )}
           </span>
         </a>
-        {m.via && <div className="member-sub">via g/{m.via.name}</div>}
+        {m.via && <div className="member-sub">{t('member.via.group', { group: m.via.name })}</div>}
         {m.agents.map((agent) => (
-          <div key={agent} className="member-sub agent" title={`${m.name ?? 'Their'}'s agent, signing with its own key`}>
-            ⚙ {agent} <span className="agent-tag">agent</span>
+          <div key={agent} className="member-sub agent" title={m.name ? t('member.agent.title', { name: m.name }) : t('member.agent.title.theirs')}>
+            ⚙ {agent} <span className="agent-tag">{t('word.agent')}</span>
           </div>
         ))}
       </div>
@@ -223,14 +232,12 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
     <aside className="members">
       <ArcadeWellIfOn />
       <header className="pane-head">
-        <b>
-          {space.kind === 'project' ? 'Participants' : 'Members'} — {members.length}
-        </b>
+        <b>{t(space.kind === 'project' ? 'members.participants' : 'members.members', { n: members.length })}</b>
       </header>
       <div className="members-list sunken">
-        {online.length > 0 && <h4>Online — {online.length}</h4>}
+        {online.length > 0 && <h4>{t('members.online', { n: online.length })}</h4>}
         {online.map((m) => row(m, true))}
-        {offline.length > 0 && <h4>Away — {offline.length}</h4>}
+        {offline.length > 0 && <h4>{t('members.away', { n: offline.length })}</h4>}
         {offline.map((m) => row(m, false))}
         <SpaceServices space={space} />
       </div>
@@ -243,6 +250,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 /** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
 function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', space.id), [space.id]);
+  const { t } = useTexts();
   const base = spaceHref(space);
   const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
     <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
@@ -253,13 +261,13 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
   return (
     <nav className="project-sections mobile-only">
       {link(base, 'hash', 'general', !view)}
-      {link(`${base}/live`, 'globe', `Live${rooms?.length ? ` (${rooms.length})` : ''}`, view === 'live', !!rooms?.length)}
-      {link(`${base}/available`, 'store', 'Available', view === 'available')}
-      {link(`${base}/services`, 'zap', 'Services', view === 'services')}
+      {link(`${base}/live`, 'globe', rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live'), view === 'live', !!rooms?.length)}
+      {link(`${base}/available`, 'store', t('nav.available'), view === 'available')}
+      {link(`${base}/services`, 'zap', t('nav.services'), view === 'services')}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
-      {link(`${base}/catalog`, 'bookmark', 'Catalog', view === 'catalog')}
-      {link(`${base}/routines`, 'clock', 'Routines', view === 'routines')}
-      {link(`${base}/settings`, 'gear', 'Settings', view === 'settings')}
+      {link(`${base}/catalog`, 'bookmark', t('nav.catalog'), view === 'catalog')}
+      {link(`${base}/routines`, 'clock', t('nav.routines'), view === 'routines')}
+      {link(`${base}/settings`, 'gear', t('nav.settings'), view === 'settings')}
     </nav>
   );
 }
@@ -275,6 +283,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const [lensOn, chooseLens] = useLensChoice(space, lensBoard);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
   const invite = () => open({ kind: 'invite', space });
+  const { t } = useTexts();
 
   let body: ReactNode;
   if (view === 'catalog') {
@@ -290,7 +299,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           <b># {channel}</b>
           <span className="pane-tools">
             <button onClick={invite}>
-              <Icon name="userPlus" /> Invite
+              <Icon name="userPlus" /> {t('space.invite')}
             </button>
           </span>
         </header>
@@ -319,7 +328,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           canCurate={!!info?.maintainer}
           board={undefined}
           above={<CommunityBanner community={space} onInvite={invite} onSubmit={() => open({ kind: 'submit', space: space.id })} />}
-          empty={<>No posts yet. Be the first: submit something.</>}
+          empty={<>{t('posts.none.first')}</>}
         />
       );
   } else if (view === 'b' && arg) {
@@ -357,12 +366,12 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
             <>
               {board && <LensSwitch board={board} on={lensOn} choose={chooseLens} />}
               <button onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
-                <Icon name="pencil" /> {board?.type === 'issues' ? 'Open issue' : board?.type === 'proposals' ? 'Propose' : 'Post'}
+                <Icon name="pencil" /> {t(board?.type === 'issues' ? 'board.open.issue' : board?.type === 'proposals' ? 'board.propose' : 'board.post')}
               </button>
             </>
           }
           above={board?.type === 'proposals' ? <DelegationBar project={space} members={list} meDid={me.did} /> : undefined}
-          empty={<>Nothing in {board?.title ?? arg} yet.</>}
+          empty={<>{t('board.empty', { board: board?.title ?? arg })}</>}
         />
       );
   } else if (view === 'live') {
@@ -385,7 +394,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
         {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings/people`}>
-            <Icon name="inbox" /> {mine[0].name ?? 'Someone'} from group {mine[0].group.name} is waiting to join{mine.length > 1 ? ` (+${mine.length - 1} more)` : ''}. Open Settings to decide.
+            <Icon name="inbox" /> {t('space.waiting', { name: mine[0].name ?? t('word.someone'), group: mine[0].group.name, more: mine.length - 1 })}
           </a>
         )}
         {body}
@@ -398,12 +407,13 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
 /** A direct chat with a friend: just the chat, Discord-DM style. */
 function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
   const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
+  const { t } = useTexts();
   const name = chat.peer.name ?? shortDid(chat.peer.did);
   return (
     <div className="center">
       {!chat.friend && (
         <div className="notice">
-          <Icon name="lock" /> You and {name} aren't friends any more, so this chat is read-only.
+          <Icon name="lock" /> {t('chat.readonly', { name })}
         </div>
       )}
       <section className="pane-main">
@@ -413,7 +423,7 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
           </b>
           <span className="pane-tools">
             <button onClick={() => navigate(`#/space/${encodeURIComponent(chat.peer.did)}`)}>
-              <Icon name="user" /> Hub
+              <Icon name="user" /> {t('chat.hub')}
             </button>
           </span>
         </header>
@@ -426,16 +436,12 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
 /** A post by its id alone, as a post link opens it: shown where it lives when that's one of your places. */
 function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: SpaceInfo[] }) {
   const { data, error } = useApi(() => api<PostInfo>('post', id), [id]);
+  const { t } = useTexts();
   const home = data && postHref(data);
   useEffect(() => {
     if (home && home !== `#/post/${data.id}`) location.replace(home); // no back step into this redirect
   }, [home]);
-  if (error)
-    return (
-      <Page title="Post">
-        {/no post found/.test(error) ? "This post isn't on this computer. It may be in a community or project you're not in, or it hasn't reached you yet." : error}
-      </Page>
-    );
+  if (error) return <Page title={t('word.post')}>{/no post found/.test(error) ? t('post.not.here') : error}</Page>;
   return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
 
@@ -449,14 +455,14 @@ function openLink(link: string): void {
   if (space) return go(spaceRoute(space[1], space[2]));
   if (link.startsWith('weave:enroll:')) {
     if (document.querySelector('.welcome')) enrollLinkOpened(link);
-    else toast('This is a link to set up a company account. This computer has a Weave account already.');
+    else toast(t('link.enroll.taken'));
     return;
   }
-  if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
+  if (!ref) return toast(t('link.paste'));
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
     (post) => go(postHref(post)),
-    () => toast("This post isn't on this computer. It may be in a project or community you're not in.", 'error'),
+    () => toast(t('link.post.not.here'), 'error'),
   );
 }
 bridge.onLink(openLink);
@@ -485,7 +491,7 @@ document.addEventListener(
     if (!post) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!bridge.workOn) return toast('Ctrl+click opens a work item in the Claude app: that works in the desktop app');
+    if (!bridge.workOn) return toast(t('work.desktop.only'));
     // Your available workers for it, to pick from; without any, it goes where it was last.
     const pick = async () => {
       const [item, workers] = await Promise.all([api<PostInfo>('post', post), api<SessionInfo[]>('workers', { post })]);
@@ -496,8 +502,8 @@ document.addEventListener(
       .then(
       (r) => {
         if (r.how === 'cancelled') return;
-        if (r.delivered === 'clipboard') toast('The message is on your clipboard: paste it in Claude (Ctrl+V)');
-        else toast(r.how === 'new' ? `New Claude session in ${r.where}: the message is in its text box` : `Back in “${r.where}”: the message is in its text box`);
+        if (r.delivered === 'clipboard') toast(t('work.clipboard'));
+        else toast(t(r.how === 'new' ? 'work.new' : 'work.back', { where: r.where }));
       },
       (error: Error) => toast(error.message, 'error'),
     );
@@ -522,13 +528,14 @@ function WindowButtons() {
       document.documentElement.classList.toggle('window-inactive', !state.focused);
     });
   }, []);
+  const { t } = useTexts();
   if (!bridge.windowControl || bridge.platform === 'darwin') return null;
   const control = (action: 'minimize' | 'maximize' | 'close') => () => void bridge.windowControl!(action).then((state) => setMaximized(state.maximized));
   return (
     <div className="title-bar-controls">
-      <button aria-label="Minimize" tabIndex={-1} onClick={control('minimize')} />
-      <button aria-label={maximized ? 'Restore' : 'Maximize'} tabIndex={-1} onClick={control('maximize')} />
-      <button aria-label="Close" tabIndex={-1} onClick={control('close')} />
+      <button aria-label={t('window.minimize')} tabIndex={-1} onClick={control('minimize')} />
+      <button aria-label={t(maximized ? 'window.restore' : 'window.maximize')} tabIndex={-1} onClick={control('maximize')} />
+      <button aria-label={t('window.close')} tabIndex={-1} onClick={control('close')} />
     </div>
   );
 }
@@ -581,7 +588,8 @@ function Shell() {
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : ({ saved: 'Saved', inbox: 'Inbox', people: 'People', memberships: 'Memberships', keys: 'Keys & devices', space: route[1] ? 'Hub' : 'My hub', post: 'Post' } as Record<string, string>)[route[0]] ?? 'Home';
+  const whereName = ({ saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
+  const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : t(whereName);
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
@@ -590,8 +598,8 @@ function Shell() {
   else if (chat) body = <DirectScreen chat={chat} me={me} />;
   else {
     let center: ReactNode;
-    if (route[0] === 'd') center = <Page title="Chat">{chats ? 'This chat is not here.' : null}</Page>;
-    else if (['p', 'g', 'r'].includes(route[0])) center = <Page title="Not here">You're not in this {({ p: 'project', g: 'group', r: 'community' } as Record<string, string>)[route[0]]}.</Page>;
+    if (route[0] === 'd') center = <Page title={t('page.chat')}>{chats ? t('chat.not.here') : null}</Page>;
+    else if (['p', 'g', 'r'].includes(route[0])) center = <Page title={t('page.not.here')}>{t('space.not.in', { kind: { p: 'project', g: 'group', r: 'community' }[route[0]] })}</Page>;
     else if (route[0] === 'space') center = <SpaceView who={route[1]} meDid={me.did} />;
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} knocks={knocks ?? []} />;
@@ -600,12 +608,12 @@ function Shell() {
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
     else if (route[0] === 'saved')
-      center = <PostList title={<>Saved</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty="Save posts to find them here again. Only you can see what you save." />;
+      center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
     else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
     // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
     const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
       <a className="notice alarm" href="#/keys">
-        <Icon name="lock" /> Your keys aren't protected by this computer's keystore. See Keys &amp; devices.
+        <Icon name="lock" /> {t('keys.unprotected')}
       </a>
     );
     body = (
@@ -620,30 +628,30 @@ function Shell() {
     <div className={`window app-window${placesOpen ? ' places-open' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
-          <WeaveMark size={14} /> Weave - [{where}]
+          <WeaveMark size={14} /> {t('window.title', { where })}
         </div>
         <WindowButtons />
       </div>
       <nav className="menubar">
         <Menu
-          label="File"
+          label={t('menu.file')}
           items={[
-            { label: 'New project, community or group…', onClick: () => setDialog({ kind: 'new' }) },
-            { label: 'Join with an invite link…', onClick: () => setDialog({ kind: 'new' }) },
-            { label: 'Your desk…', onClick: () => setDialog({ kind: 'desk' }) },
+            { label: t('menu.file.new'), onClick: () => setDialog({ kind: 'new' }) },
+            { label: t('menu.file.join'), onClick: () => setDialog({ kind: 'new' }) },
+            { label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' }) },
             'sep',
-            { label: 'Close', onClick: () => window.close() },
+            { label: t('menu.file.close'), onClick: () => window.close() },
           ]}
         />
         <Menu
           label={t('menu.view')}
           items={[
-            { label: t('menu.view.home'), onClick: () => navigate('#/') },
-            { label: t('menu.view.saved'), onClick: () => navigate('#/saved') },
-            { label: t('menu.view.inbox'), onClick: () => navigate('#/inbox') },
-            { label: t('menu.view.people'), onClick: () => navigate('#/people') },
-            { label: t('menu.view.hub'), onClick: () => navigate('#/space') },
-            { label: t('menu.view.keys'), onClick: () => navigate('#/keys') },
+            { label: t('nav.home'), onClick: () => navigate('#/') },
+            { label: t('nav.saved'), onClick: () => navigate('#/saved') },
+            { label: t('nav.inbox'), onClick: () => navigate('#/inbox') },
+            { label: t('nav.people'), onClick: () => navigate('#/people') },
+            { label: t('nav.hub'), onClick: () => navigate('#/space') },
+            { label: t('nav.keys'), onClick: () => navigate('#/keys') },
             ...(bridge.mentions ? [{ label: t('menu.view.mentions'), onClick: () => void bridge.mentions!('show') }] : []),
             'sep',
             { label: t('menu.view.refresh'), onClick: bump },
@@ -677,44 +685,44 @@ function Shell() {
           ]}
         />
         <Menu
-          label="Posts"
+          label={t('menu.posts')}
           items={[
-            { label: 'Submit a post…', onClick: () => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined }) },
-            { label: 'Invite someone here…', disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
+            { label: t('menu.posts.submit'), onClick: () => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined }) },
+            { label: t('menu.posts.invite'), disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
           ]}
         />
         <Menu
-          label="Help"
+          label={t('menu.help')}
           items={[
-            { label: 'Check for updates…', onClick: checkForUpdates },
-            { label: 'About Weave', onClick: () => alert(`Weave v${WEAVE_VERSION}\nBuild things together, peer to peer.\nMIT licensed.`) },
+            { label: t('menu.help.updates'), onClick: checkForUpdates },
+            { label: t('menu.help.about'), onClick: () => alert(t('about.text', { version: WEAVE_VERSION })) },
           ]}
         />
       </nav>
       <div className="toolbar">
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
-        <ToolButton icon="notes" label="Places" className="mobile-only" on={placesOpen} onClick={() => setPlacesOpen((open) => !open)} />
-        <ToolButton icon="home" label="Home" href="#/" on={route.length === 0 && !placesOpen} />
-        <ToolButton icon="bookmark" label="Saved" href="#/saved" on={route[0] === 'saved'} className="not-mobile" />
-        <ToolButton icon="inbox" label={`Inbox${inbox ? ` (${inbox})` : ''}`} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
-        <ToolButton icon="users" label="People" href="#/people" on={route[0] === 'people' && !placesOpen} />
-        <ToolButton icon="user" label="My hub" href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
+        <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" on={placesOpen} onClick={() => setPlacesOpen((open) => !open)} />
+        <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0 && !placesOpen} />
+        <ToolButton icon="bookmark" label={t('nav.saved')} href="#/saved" on={route[0] === 'saved'} className="not-mobile" />
+        <ToolButton icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
+        <ToolButton icon="users" label={t('nav.people')} href="#/people" on={route[0] === 'people' && !placesOpen} />
+        <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
         <span className="tool-sep" />
-        <ToolButton icon="pencil" label="Submit" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
-        <ToolButton icon="plus" label="New" onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
-        {space && <ToolButton icon="userPlus" label="Invite" onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
+        <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
+        <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
+        {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
         <div className="brand">
           <WeaveMark size={40} />
           <div>
             <b>Weave</b>
-            <small>for you &amp; your friends</small>
+            <small>{t('brand.tagline')}</small>
           </div>
           <small className="brand-side">
-            Build
+            {t('brand.build')}
             <br />
-            Share
+            {t('brand.share')}
             <br />
-            Belong
+            {t('brand.belong')}
           </small>
         </div>
       </div>
@@ -724,21 +732,21 @@ function Shell() {
       </div>
       <div className="status-bar">
         <p className="status-bar-field">
-          <Avatar did={me.did} size={12} /> {me.name ?? 'You'}
+          <Avatar did={me.did} size={12} /> {me.name ?? t('word.you')}
         </p>
-        <p className="status-bar-field">{status ? (online ? `${status.peers} peer${status.peers === 1 ? '' : 's'} connected` : 'no peers right now') : 'connecting…'}</p>
+        <p className="status-bar-field">{status ? (online ? t('status.peers', { n: status.peers }) : t('status.peers.none')) : t('status.connecting')}</p>
         {status?.olderPeers ? (
-          <p className="status-bar-field" title="Peers on an older Weave can't sync with you. They get a message in each shared group asking them to update, and nothing else.">
-            {status.olderPeers} on an older Weave
+          <p className="status-bar-field" title={t('status.older.title')}>
+            {t('status.older', { n: status.olderPeers })}
           </p>
         ) : null}
         {status?.newerPeers ? (
-          <p className="status-bar-field" title="Peers on a newer Weave can't sync with you until you update.">
-            {status.newerPeers} on a newer Weave: update to sync
+          <p className="status-bar-field" title={t('status.newer.title')}>
+            {t('status.newer', { n: status.newerPeers })}
           </p>
         ) : null}
         <p className="status-bar-field">
-          <Icon name="lock" size={12} /> end-to-end encrypted
+          <Icon name="lock" size={12} /> {t('status.encrypted')}
         </p>
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}

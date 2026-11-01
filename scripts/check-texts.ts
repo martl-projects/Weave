@@ -30,6 +30,8 @@ const TEXT_KEYS: ReadonlySet<string> = new Set(['title', 'placeholder', 'aria-la
 const TEXT_CALLS: ReadonlySet<string> = new Set(['toast', 'ask', 'attempt', 'alert', 'confirm', 'prompt']);
 /** Two letters in a row make a text; `p/`, `·`, `#`, `x` don't. */
 const LETTERS = /\p{L}{2,}/u;
+/** Words that are no text: the product's name, and a toast's kind. */
+const NOT_TEXT: ReadonlySet<string> = new Set(['Weave', 'ok', 'error']);
 const ALLOWLIST = 'scripts/check-texts.allow.json';
 
 export interface Finding {
@@ -75,7 +77,7 @@ export function findHardcoded(file: string, source: string): Finding[] {
   const literalsIn = (node: b.Node | null | undefined): void => {
     if (!node) return;
     if (b.isStringLiteral(node)) {
-      if (LETTERS.test(node.value) && !isName(node.value)) add(node, node.value);
+      if (LETTERS.test(node.value) && !isName(node.value) && !NOT_TEXT.has(node.value)) add(node, node.value);
     } else if (b.isTemplateLiteral(node)) {
       const text = node.quasis.map((q) => q.value.cooked ?? q.value.raw).join(' ');
       if (node.expressions.length === 0) {
@@ -96,7 +98,7 @@ export function findHardcoded(file: string, source: string): Finding[] {
   };
   walk(parseSource(file, source), (node) => {
     if (b.isJSXText(node)) {
-      if (LETTERS.test(node.value)) add(node, node.value);
+      if (LETTERS.test(node.value) && !NOT_TEXT.has(node.value.trim())) add(node, node.value);
     } else if (b.isJSXAttribute(node) && node.value && TEXT_KEYS.has(jsxName(node.name))) {
       literalsIn(node.value);
     } else if (b.isObjectProperty(node) && !node.computed && TEXT_KEYS.has(keyName(node.key) ?? '')) {
@@ -108,10 +110,15 @@ export function findHardcoded(file: string, source: string): Finding[] {
   return findings;
 }
 
-/** The names a file asks for: literal names, and the prefixes of template names like t(`look.${s}`). */
-export function namesUsed(file: string, source: string): { names: Set<string>; prefixes: Set<string> } {
+/**
+ * The names a file asks for: the literal names given to t() and <T>, chosen in a conditional too; the prefixes of template
+ * names like t(`look.${s}`); and candidates: every name-shaped string in the file, for a name picked from a map and passed
+ * on as a variable (a candidate counts as used only when the English package has it).
+ */
+export function namesUsed(file: string, source: string): { names: Set<string>; prefixes: Set<string>; candidates: Set<string> } {
   const names = new Set<string>();
   const prefixes = new Set<string>();
+  const candidates = new Set<string>();
   const take = (arg: b.Node | null | undefined) => {
     if (!arg) return;
     if (b.isStringLiteral(arg)) names.add(arg.value);
@@ -120,6 +127,13 @@ export function namesUsed(file: string, source: string): { names: Set<string>; p
       if (arg.expressions.length === 0) names.add(head);
       else if (head) prefixes.add(head);
     } else if (b.isJSXExpressionContainer(arg)) take(arg.expression);
+    else if (b.isConditionalExpression(arg)) {
+      take(arg.consequent);
+      take(arg.alternate);
+    } else if (b.isLogicalExpression(arg)) {
+      take(arg.left);
+      take(arg.right);
+    } else if (b.isParenthesizedExpression(arg)) take(arg.expression);
   };
   walk(parseSource(file, source), (node) => {
     if (b.isCallExpression(node)) {
@@ -128,9 +142,9 @@ export function namesUsed(file: string, source: string): { names: Set<string>; p
       if (isT) take(node.arguments[0]);
     } else if (b.isJSXOpeningElement(node) && b.isJSXIdentifier(node.name) && node.name.name === 'T') {
       for (const attr of node.attributes) if (b.isJSXAttribute(attr) && jsxName(attr.name) === 'name') take(attr.value);
-    }
+    } else if (b.isStringLiteral(node) && isName(node.value)) candidates.add(node.value);
   });
-  return { names, prefixes };
+  return { names, prefixes, candidates };
 }
 
 function* sourceFiles(dir: string): Generator<string> {
@@ -149,6 +163,7 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
   const found: Record<string, number> = {};
   const names = new Set<string>();
   const prefixes = new Set<string>();
+  const candidates = new Set<string>();
 
   for (const dir of ROOTS) {
     for (const file of sourceFiles(join(root, dir))) {
@@ -159,6 +174,7 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
       const used = namesUsed(rel, source);
       for (const n of used.names) names.add(n);
       for (const p of used.prefixes) prefixes.add(p);
+      for (const c of used.candidates) candidates.add(c);
     }
   }
 
@@ -193,7 +209,7 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
     for (const name of names) if (!(name in en.names)) errors.push(`t('${name}') has no English text: add it to packages/texts/weave.texts.en.json`);
     for (const name of Object.keys(en.names)) {
       if (name.startsWith(GLOSSARY_PREFIX)) continue;
-      if (!names.has(name) && ![...prefixes].some((p) => name.startsWith(p))) errors.push(`${name} is in the English package and used nowhere: take it out`);
+      if (!names.has(name) && !candidates.has(name) && ![...prefixes].some((p) => name.startsWith(p))) errors.push(`${name} is in the English package and used nowhere: take it out`);
     }
     for (const [lang, pkg] of packages) {
       if (lang === 'en') continue;
@@ -208,6 +224,13 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
 const here = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === here) {
   const root = resolve(dirname(here), '..');
+  const list = process.argv.indexOf('--list');
+  if (list > 0) {
+    // node scripts/check-texts.ts --list apps/desktop/src/renderer/home.tsx: every hard-coded text of one file, to name them
+    const file = process.argv[list + 1];
+    for (const f of findHardcoded(file, readFileSync(join(root, file), 'utf8'))) console.log(`${f.line}: ${f.text}`);
+    process.exit(0);
+  }
   const result = checkTexts(root, { writeAllowlist: process.argv.includes('--allow') });
   const files = Object.keys(result.found).length;
   const places = Object.values(result.found).reduce((a, b) => a + b, 0);

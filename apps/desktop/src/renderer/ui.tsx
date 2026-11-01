@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactN
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
 import { FigureHead, useFigure } from './avatar.tsx';
+import { t, useTexts } from './texts.tsx';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -171,6 +172,7 @@ export function BlobImage({ src, alt = '', className }: { src: string; alt?: str
 
 /** A Win95 dialog window over a dimmed screen. */
 export function Modal({ title, onClose, children, wide }: { title: string; onClose(): void; children: ReactNode; wide?: boolean }) {
+  const { t } = useTexts();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -183,7 +185,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         <div className="title-bar">
           <div className="title-bar-text">{title}</div>
           <div className="title-bar-controls">
-            <button aria-label="Close" onClick={onClose} />
+            <button aria-label={t('window.close')} onClick={onClose} />
           </div>
         </div>
         <div className="window-body">{children}</div>
@@ -293,8 +295,8 @@ let showQuestion: ((q: Question) => void) | undefined;
  * Ask the person to confirm, in a Win95 message box. Used instead of the
  * browser's confirm(), which some windows (like a preview pane) never show.
  */
-export function ask(text: string, yes = 'OK'): Promise<boolean> {
-  return new Promise((answer) => (showQuestion ? showQuestion({ text, yes, answer }) : answer(window.confirm(text))));
+export function ask(text: string, yes?: string): Promise<boolean> {
+  return new Promise((answer) => (showQuestion ? showQuestion({ text, yes: yes ?? t('button.ok'), answer }) : answer(window.confirm(text))));
 }
 
 /** Where ask() shows its box; mounted once, with the toasts. */
@@ -315,7 +317,7 @@ function Questions() {
     <Modal title="Weave" onClose={() => done(false)}>
       <p className="question-text">{question.text}</p>
       <div className="buttons">
-        <button onClick={() => done(false)}>Cancel</button>
+        <button onClick={() => done(false)}>{t('button.cancel')}</button>
         <button className="default" autoFocus onClick={() => done(true)}>
           {question.yes}
         </button>
