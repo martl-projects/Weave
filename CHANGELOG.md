@@ -2,6 +2,29 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.25.0 · 2026-11-01
+
+- Pinned services unpack side by side: each process into a part of its own, the first one done stays
+- At the start, an agent app whose Weave entry points to a Weave that's gone starts this one
+- Home: a project moves up by its chat, not by its posts (they move up themselves); posts show their project's icon
+- The service catalog lists what Weave ships under From Weave, also where you run it elsewhere: adding it takes that one in
+- The CLI closes the node it opened without a daemon: weave marks and hints end instead of hanging on their folds
+- A release whose tag is released again keeps what runs or was launched from it, and says it was replaced
+- Installers by hand for a release: the tag whose draft gets them
+- Installers go up to a release as a stream, three tries each: fetch gave up on a big one from a slow runner
+- The GitHub services live in repositories of their own: Weave ships their pinned releases
+- A service Weave ships in another version says outdated, not another Weave's: the Weave that runs it updates it when it restarts
+- The releases service reads weave.app.json as UTF-8: große, not groÃe
+- The Weave icon rendered from its source (art/logo.png)
+- An app asked for an organization that GitHub made for its person instead: Weave says so, and its delete page is the person's own
+- Handing a project repositories: paste one's address, and an app of another account says so and offers one for that account
+- The applets test knows Weave's reserved names from a built shipped fetcher, not the checkout's build output
+- Pinned services come through GitHub's API with GH_TOKEN (CI: the WEAVE_SERVICES_TOKEN secret), or the gh login
+- Spotlight and Unread live in repositories of their own: Weave ships their pinned releases
+- Auto-update: new versions install over the current one, like VS Code
+- The invite round-trip test carries the link's key, and checks that a keyless link is refused
+- Protocol 3: a node says its version, older peers get a farewell, old invite links close (-ZhUAOGC)
+
 ## v0.24.0 · 2026-10-31
 
 - The Weave icon's source (art/logo.psd)
