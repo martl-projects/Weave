@@ -1970,8 +1970,15 @@ export class WeaveNode implements Backend {
    * in through one never learns what came before, not even who founded the space, so its founder's messages don't
    * show (Julian, 1.11.2026). The founder restates it all once more, in today's shape, under the current key, so
    * everyone who read an old one reads the new one.
+   *
+   * Known limit: for an envelope from before protocol 3 the founder vouches for what it sealed, so they could claim
+   * any content for another author's old envelope (a control or carried-state kind, from before 30.10.2026). Who wrote
+   * it, with which key, as which number and when still holds (its signature); and a founder can do nearly anything in
+   * their space anyway.
    */
   #recarry(space: StoredSpace, state: SpaceState): number {
+    // Once settled for a space, settled for this run: our node writes only carries of today's shape from then on.
+    if (this.#recarried.has(space.id)) return 0;
     if (space.kind === 'direct' || space.founder !== this.identity.author || (state.history?.value ?? 'all') === 'all') return 0;
     const epochOf = (d: Decoded) => Number((d.event.body as { epoch?: unknown } | null)?.epoch);
     // Our carries as written (the decoded views have them only as the events they restate).
@@ -1983,11 +1990,18 @@ export class WeaveNode implements Backend {
         return d && d.inner.kind === KIND_CARRY ? [d] : [];
       });
     const old = carries.filter((d) => (d.inner.body as { v?: unknown } | null)?.v !== 3).map(epochOf).filter(Number.isSafeInteger);
-    if (!old.length) return 0;
-    const newest = Math.max(...old);
-    if (carries.some((d) => (d.inner.body as { v?: unknown } | null)?.v === 3 && epochOf(d) >= newest)) return 0;
-    return this.#carry(space, new Set([String(currentEpoch(space))])) ? 1 : 0;
+    const newest = old.length ? Math.max(...old) : -1;
+    if (!old.length || carries.some((d) => (d.inner.body as { v?: unknown } | null)?.v === 3 && epochOf(d) >= newest)) {
+      this.#recarried.add(space.id);
+      return 0;
+    }
+    const wrote = this.#carry(space, new Set([String(currentEpoch(space))]));
+    if (wrote) this.#recarried.add(space.id);
+    return wrote ? 1 : 0;
   }
+
+  /** Spaces whose carries are of today's shape (see #recarry). */
+  #recarried = new Set<string>();
 
   /**
    * A carry becomes the events it restates, each checked against its original
