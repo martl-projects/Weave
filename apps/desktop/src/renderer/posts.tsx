@@ -475,30 +475,34 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
       )}
       <div className="post-full-main">
         <VoteBox post={post} />
-        {postScene(post) && <PostScene post={post} scene={postScene(post)!} size={320} className="post-scene" />}
         <div className="post-body">
-          <h2 className="post-title">
-            {post.title} <Badges post={post} />
-          </h2>
-          <div className="post-meta">
-            {post.space && (
-              <>
-                <Where space={post.space} spaces={spaces} />
-                {' · '}
-              </>
-            )}
-            <AuthorAvatar by={post.by} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
-            {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
-            {post.by.agent && <span className="agent-tag" title={post.by.session ? t('agent.tag.session.title', { session: post.by.session.name }) : undefined}>{t('agent.tag', { agent: post.by.agent })}{post.by.session ? t('agent.tag.in.session', { session: post.by.session.name }) : ''}</span>}
-            <Coauthors post={post} /> · {ago(post.time)}
-            {post.edited && <span title={t('post.edited.title', { time: post.edited })}>{t('post.edited.ago', { time: post.edited })}</span>}
-          </div>
-          {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
-            <div className="small muted lifetime">
-              <Icon name="clock" /> {lifetimeText(post.lifetime)}
+          <div className="post-head">
+            {postScene(post) && <PostScene post={post} scene={postScene(post)!} size={320} className="post-scene" />}
+            <div className="post-head-text">
+              <h2 className="post-title">
+                {post.title} <Badges post={post} />
+              </h2>
+              <div className="post-meta">
+                {post.space && (
+                  <>
+                    <Where space={post.space} spaces={spaces} />
+                    {' · '}
+                  </>
+                )}
+                <AuthorAvatar by={post.by} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+                {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
+                {post.by.agent && <span className="agent-tag" title={post.by.session ? t('agent.tag.session.title', { session: post.by.session.name }) : undefined}>{t('agent.tag', { agent: post.by.agent })}{post.by.session ? t('agent.tag.in.session', { session: post.by.session.name }) : ''}</span>}
+                <Coauthors post={post} /> · {ago(post.time)}
+                {post.edited && <span title={t('post.edited.title', { time: post.edited })}>{t('post.edited.ago', { time: post.edited })}</span>}
+              </div>
+              {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
+                <div className="small muted lifetime">
+                  <Icon name="clock" /> {lifetimeText(post.lifetime)}
+                </div>
+              )}
+              {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
             </div>
-          )}
-          {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
+          </div>
           {post.link && (
             <a className="post-link big" href={post.link}>
               <Icon name="externalLink" /> {post.link}

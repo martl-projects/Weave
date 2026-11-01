@@ -171,7 +171,7 @@ button .icon { vertical-align: -3px; }
 .thumb.has-image img, .thumb.has-image .blob-loading { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: cover; }
 .post-image { display: block; max-width: 100%; max-height: min(240px, 24vh); margin: 6px 0; border: 1px solid #808080; }
 .post-image.blob-loading { width: 320px; height: 180px; max-width: 100%; }
-.post-body { min-width: 0; }
+.post-body { min-width: 0; flex: 1; }
 .post-title { font: bold 14px var(--content-font); color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
 a.post-title:hover { text-decoration: underline; }
 a.post-title:visited { color: #551a8b; }
@@ -465,7 +465,10 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .post-group img { width: 100%; height: 100%; object-fit: contain; }
 .thumb.has-image .scene-image img { object-fit: contain; }
 .thumb:has(.scene-image) { background: transparent; box-shadow: none; border: 0; }
-.post-scene { flex: none; width: 160px; height: 160px; align-self: flex-start; }
+.post-scene { flex: none; width: 112px; height: 112px; align-self: flex-start; }
+/* A post's head: its picture beside the title and who wrote it; the text below runs the post's whole width */
+.post-head { display: flex; gap: 10px; align-items: center; }
+.post-head-text { min-width: 0; flex: 1; }
 .scene-picker { display: flex; flex-wrap: wrap; gap: 4px; }
 .field-row-stacked .scene-picker button { display: flex; flex-direction: column; align-items: center; width: 76px; min-width: 0; height: 88px; padding: 2px; }
 .scene-picker .scene-image { width: 64px; height: 64px; }
