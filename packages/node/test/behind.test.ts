@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { duplexPair, PeerSession2 } from '@weave/net';
+import { spaceTopics } from '@weave/core';
 import { WeaveNode } from '../src/index.ts';
 import { people, stored, sync } from './helpers/people.ts';
 
@@ -52,6 +53,37 @@ describe('a member who missed more than one rotation', () => {
     } finally {
       close();
     }
+  });
+});
+
+/*
+ * Julian (1.11.2026): a project whose newcomers read only from when they come gets a new key with everyone who
+ * joins. A member offline over a few of them waits at an old key's meeting point, and since v0.27 a node isn't found
+ * at its DID any more. So a node is found at every key of a space that only those still in it hold.
+ */
+describe('meeting points of older keys', () => {
+  const epochs = (node: WeaveNode, space: string) => {
+    const keys = stored(node, space);
+    return Object.keys(keys.keys).filter((epoch) => node.topics.includes(spaceTopics({ ...keys, keys: { [epoch]: keys.keys[epoch] } }, 0)[0]));
+  };
+
+  it('announces every key while nobody has left, and none from before someone left', async () => {
+    const [martin, julian, nic, phil] = [person('Martin'), person('Julian'), person('Nic'), person('Phil')];
+    await martin.createProject({ name: 'Race' });
+    await martin.setHistory({ space: 'Race', history: 'joining' });
+    for (const n of [julian, nic, phil]) {
+      await n.joinSpace(await martin.invite('Race'));
+      sync(n, martin);
+    }
+    expect(Object.keys(stored(martin, 'Race').keys).length).toBeGreaterThanOrEqual(4);
+    // Julian's key from when he came is still one Martin's node is found at.
+    expect(epochs(martin, 'Race')).toEqual(Object.keys(stored(martin, 'Race').keys));
+    // Nic leaves: the keys he held are no meeting point any more, past the current one and the one before.
+    const before = Object.keys(stored(martin, 'Race').keys).map(Number);
+    await martin.removeMember('Race', 'Nic');
+    const after = epochs(martin, 'Race').map(Number);
+    expect(after).toHaveLength(2);
+    expect(after.filter((e) => before.includes(e))).toEqual([Math.max(...before)]);
   });
 });
 

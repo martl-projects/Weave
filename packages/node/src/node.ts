@@ -1432,11 +1432,41 @@ export class WeaveNode implements Backend {
   get topics(): string[] {
     const topics = new Set([meetTopic(this.#meetSecret()), ...this.config.topics]);
     for (const space of this.#spaces.values()) {
-      for (const topic of spaceTopics(space)) topics.add(topic);
+      for (const topic of this.#meetingTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
     }
-    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend))) topics.add(topic);
+    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend), 0)) topics.add(topic);
     return [...topics];
+  }
+
+  /**
+   * A space's meeting points this node is found at: those of every key only people still in it were given (made after
+   * everyone who left or was removed had gone, and not boxed to them), and always its current key and the one before.
+   * So a member who missed several new keys (offline for a while, an older Weave) still finds the others, and nobody
+   * who left finds them past the key that followed.
+   */
+  #meetingTopics(space: StoredSpace): string[] {
+    const state = this.#state(space);
+    const gone = [...state.removed];
+    if (space.kind === 'direct' || !gone.length) return spaceTopics(space, 0);
+    const scope = spaceScope(space);
+    const safe = new Map<number, boolean>();
+    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+      const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
+      const epoch = body?.epoch;
+      if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) continue;
+      const seen = this.#seenAt(e);
+      const time = e.time < seen ? e.time : seen;
+      const ok = gone.every(([did, at]) => time > at && !body?.boxes?.[did]);
+      safe.set(epoch as number, (safe.get(epoch as number) ?? true) && ok);
+    }
+    // From the newest key down, as long as each is one only those still here hold.
+    let since = Infinity;
+    for (const epoch of Object.keys(space.keys).map(Number).sort((a, b) => b - a)) {
+      if (!safe.get(epoch)) break;
+      since = epoch;
+    }
+    return spaceTopics(space, since);
   }
 
   /**
@@ -2292,7 +2322,7 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
     removeSpace(this.home, space.id);
     this.#announceNow();
-    for (const topic of spaceTopics(space)) await this.#swarm?.leave(topic).catch(() => {});
+    for (const topic of spaceTopics(space, 0)) await this.#swarm?.leave(topic).catch(() => {});
   }
 
   async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
@@ -6024,7 +6054,7 @@ export class WeaveNode implements Backend {
     if (peer === this.identity.author) throw new Error('that is you');
     if (!this.#friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
     const space = this.#direct(peer);
-    await Promise.all(spaceTopics(space).map((topic) => this.#swarm?.join(topic)));
+    await Promise.all(spaceTopics(space, 0).map((topic) => this.#swarm?.join(topic)));
     return this.#spaceInfo(space);
   }
 
@@ -6469,7 +6499,7 @@ export class WeaveNode implements Backend {
 
   async #addSpace(space: StoredSpace): Promise<void> {
     this.#saveSpace(space);
-    if (this.#swarm) await Promise.all([...spaceTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t, { announce: !this.#looksOnly(t) })));
+    if (this.#swarm) await Promise.all([...this.#meetingTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t, { announce: !this.#looksOnly(t) })));
   }
 
   #saveSpace(space: StoredSpace): void {

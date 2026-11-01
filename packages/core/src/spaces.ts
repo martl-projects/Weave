@@ -233,12 +233,15 @@ export function parseScope(scope: string): { kind: SpaceKind; id: string } | und
 /** A space's meeting point in the DHT for one of its keys: it moves with every new key, so removed members can't find the rest. */
 const topicOfKey = (key: string): string => `space/${b64u.encode(sha256(new Uint8Array([...utf8('weave/rendezvous/v2'), ...b64u.decode(key)])))}`;
 
-/** A space's meeting points: for its current key and the one before, so a member who hasn't got the new key yet still meets the others. */
-export const spaceTopics = (space: SpaceKeys): string[] =>
+/**
+ * A space's meeting points: for its current key and the one before, so a member who hasn't got the new key yet still
+ * meets the others, and for every key from epoch `since` on (a member who missed several).
+ */
+export const spaceTopics = (space: SpaceKeys, since = Infinity): string[] =>
   Object.keys(space.keys)
     .map(Number)
     .sort((a, b) => b - a)
-    .slice(0, 2)
+    .filter((epoch, i) => i < 2 || epoch >= since)
     .map((epoch) => topicOfKey(space.keys[String(epoch)]));
 
 /** A space's meeting point for its current key. */
