@@ -387,7 +387,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         link: z.string().url().optional(),
         board: z.string().optional(),
         prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it (its starting prompt)'),
-        scene: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing"),
+        scene: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing, coding, late-night, bookworm, cozy, good-dog, bird-friend, gaming, level-up"),
       },
     },
     run(async ({ space, title, text, link, board, prompt, scene }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string; scene?: string }) =>
@@ -407,7 +407,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         text: z.string().optional(),
         link: z.union([z.string().url(), z.literal('')]).optional(),
         prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it'),
-        scene: z.union([z.string().regex(/^[a-z][a-z0-9-]{0,23}$/), z.literal('')]).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing; empty removes it"),
+        scene: z.union([z.string().regex(/^[a-z][a-z0-9-]{0,23}$/), z.literal('')]).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing, coding, late-night, bookworm, cozy, good-dog, bird-friend, gaming, level-up; empty removes it"),
       },
     },
     run(async ({ post, title, text, link, prompt, scene }: { post: string; title?: string; text?: string; link?: string; prompt?: string; scene?: string }) =>
