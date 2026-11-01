@@ -317,23 +317,32 @@ export const sceneLabel = (id: string) => labels[id] ?? id;
  */
 export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids: string[]; banner?: string; poses?: Record<string, string>; peek?: boolean; className?: string }) {
   const people = dids.slice(0, peek ? 36 : 12);
+  // An agent (did·agent) without a figure of its own: its person's body with a screen for a head (their figure is asked for too).
+  const persons = [...new Set(people.map((d) => d.split('·')[0]))];
   // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: from the navel up, shoulder
   // to shoulder, as wide as there are people (up to a banner's width; then rows behind).
   const [width, height] = peek ? [Math.round(256 * Math.min(5.5, Math.max(1, ((people.length - 1) * 1.3 + 1.5) / 3.6))), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
   const [ref, seen] = useSeen<HTMLDivElement>();
-  const figures = useFigures(people);
-  const url = usePicture(figures && seen ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `group:${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
+  const figures = useFigures([...people, ...persons]);
+  const figureOf = (l: AvatarLib, i: number) => {
+    const f = figures![i], [did, agent] = people[i].split('·');
+    return f ?? (agent ? agentDefault(l, figures![people.length + persons.indexOf(did)] ?? null, did, people[i]) : l.Avatar.fromSeed(did));
+  };
+  const url = usePicture(figures && seen ? (l) => l.groupSnapshot(people.map((_, i) => figureOf(l, i)), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `group:${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
   return <div ref={ref} className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? t('photo.group.alt', { banner }) : t('photo.group.alt.plain')} draggable={false} />}</div>;
 }
 
 /**
  * A post's scene with everyone who wrote it: alone, its author in the scene; with co-authors (those who confirmed),
- * all of them together, its author in the scene and the others beside them. Small pictures show heads and shoulders.
+ * all of them together, its author in the scene and the others beside them. Written by an agent, as it's credited
+ * ("person · agent"): the person and their agent's robot, the robot in the scene. Small pictures show heads and shoulders.
  */
 export function PostScene({ post, scene, size, close = false, className = '' }: { post: { by: { did: string; agent?: string }; coauthors?: Array<{ did: string; state: string }> }; scene: string; size: number; close?: boolean; className?: string }) {
   const others = [...new Set((post.coauthors ?? []).filter((c) => c.state === 'confirmed' && c.did !== post.by.did).map((c) => c.did))];
-  if (!others.length) return <SceneImage did={post.by.did} agent={post.by.agent} scene={scene} size={size} close={close} className={className} />;
-  return <GroupPhoto dids={[post.by.did, ...others]} poses={{ [post.by.did]: scene }} peek={close} className={`post-group ${className}`} />;
+  const writer = post.by.agent ? `${post.by.did}·${post.by.agent}` : post.by.did;
+  const all = post.by.agent ? [post.by.did, writer, ...others] : [writer, ...others];
+  if (all.length === 1) return <SceneImage did={post.by.did} scene={scene} size={size} close={close} className={className} />;
+  return <GroupPhoto dids={all} poses={{ [writer]: scene }} peek={close} className={`post-group ${className}`} />;
 }
 
 /** A person's face: their avatar, or the one their key makes (pixel sprite until it's drawn). */
