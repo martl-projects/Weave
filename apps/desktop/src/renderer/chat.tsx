@@ -13,6 +13,7 @@ import { Marks } from './marks.tsx';
 import { HintSigns, useHints } from './notify.tsx';
 import { AnnounceCard } from './announce.tsx';
 import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, uploadFile } from './attachments.tsx';
+import { t, useTexts } from './texts.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -54,7 +55,7 @@ function toRows(messages: MessageInfo[]): Row[] {
   return rows;
 }
 
-const nameOf = (by: MessageInfo['by'], meDid: string) => (by.did === meDid && !by.agent ? 'You' : (by.name ?? shortDid(by.did)));
+const nameOf = (by: MessageInfo['by'], meDid: string) => (by.did === meDid && !by.agent ? t('word.you') : (by.name ?? shortDid(by.did)));
 
 function Message({
   row,
@@ -74,6 +75,7 @@ function Message({
   moderating: boolean;
 }) {
   const { m, compact } = row;
+  const { t } = useTexts();
   const [picking, setPicking] = useState(false);
   const html = useMemo(() => renderMarkdown(m.text), [m.text]);
   const textRef = useRef<HTMLDivElement>(null);
@@ -88,8 +90,8 @@ function Message({
   const react = (emoji: string, on = true) => attempt(() => api('react', { target: m.id, emoji, on }));
   const mayDelete = m.by.did === meDid || moderating;
   const remove = async () => {
-    if (await ask(m.by.did === meDid ? 'Delete your message? It disappears for everyone but stays in the logs.' : `Delete ${m.by.name ? `${m.by.name}'s` : 'this'} message? It disappears for everyone but stays in the logs.`, 'Delete'))
-      await attempt(() => api('deleteMessage', { message: m.id }), 'Deleted');
+    const question = m.by.did === meDid ? t('msg.delete.own') : m.by.name ? t('msg.delete.other', { name: m.by.name }) : t('msg.delete.this');
+    if (await ask(question, t('button.delete'))) await attempt(() => api('deleteMessage', { message: m.id }), t('msg.deleted'));
   };
   const author = (
     <span className={`author${m.by.agent ? ' is-agent' : ''}`}>
@@ -97,8 +99,8 @@ function Message({
       {!m.by.agent && <Marks did={m.by.did} slot="author" space={space.id} />}
       <HintSigns signs={hint.signs} />
       {m.by.agent && (
-        <span className="agent-tag" title={`${m.by.name ?? 'Someone'}'s agent, signing with its own key`}>
-          {m.by.agent} · AGENT
+        <span className="agent-tag" title={t('member.agent.title', { name: m.by.name ?? t('word.someone') })}>
+          {t('agent.tag.caps', { agent: m.by.agent })}
         </span>
       )}
     </span>
@@ -120,7 +122,7 @@ function Message({
           {!compact && (
             <div className="msg-head">
               {author}
-              <time>{`${dayLabel(m.time)} at ${clock(m.time)}`}</time>
+              <time>{t('msg.time', { day: dayLabel(m.time), clock: clock(m.time) })}</time>
             </div>
           )}
           {m.text && <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />}
@@ -133,7 +135,7 @@ function Message({
                   <span>{r.emoji}</span> {r.count}
                 </button>
               ))}
-              <button className="reaction add" title="Add reaction" onClick={() => setPicking(true)}>
+              <button className="reaction add" title={t('msg.react.add')} onClick={() => setPicking(true)}>
                 ☺+
               </button>
             </div>
@@ -142,18 +144,18 @@ function Message({
       </div>
       <div className="msg-tools">
         {QUICK_REACTIONS.map((emoji) => (
-          <button key={emoji} title={`React ${emoji}`} onClick={() => react(emoji)}>
+          <button key={emoji} title={t('msg.react', { emoji })} onClick={() => react(emoji)}>
             {emoji}
           </button>
         ))}
-        <button title="More reactions" onClick={() => setPicking(true)}>
+        <button title={t('msg.react.more')} onClick={() => setPicking(true)}>
           ☺
         </button>
-        <button title="Reply" onClick={() => onReply(m)}>
+        <button title={t('msg.reply')} onClick={() => onReply(m)}>
           ↩
         </button>
         {mayDelete && (
-          <button title="Delete" onClick={() => void remove()}>
+          <button title={t('button.delete')} onClick={() => void remove()}>
             🗑
           </button>
         )}
@@ -186,6 +188,7 @@ function Composer({
   onCancelReply(): void;
   members: MemberInfo[];
 }) {
+  const { t } = useTexts();
   const [text, setText] = useState('');
   const [picking, setPicking] = useState(false);
   const [suggestIndex, setSuggestIndex] = useState(0);
@@ -199,7 +202,7 @@ function Composer({
     e.target.value = '';
     if (!picked) return;
     // Pictures shrink before the check; anything else is sent as it is.
-    if (!picked.type.startsWith('image/') && picked.size > MAX_FILE) return void toast(`${picked.name} is too big: files are at most 2 MB`, 'error');
+    if (!picked.type.startsWith('image/') && picked.size > MAX_FILE) return void toast(t('file.too.big', { name: picked.name }), 'error');
     setFile(picked);
     area.current?.focus();
   };
@@ -273,9 +276,9 @@ function Composer({
     <div className="composer-wrap">
       {replyTo && (
         <div className="replying">
-          Replying to <b>{replyTo.by.name ?? 'someone'}</b>
+          {t('msg.replying')} <b>{replyTo.by.name ?? t('word.someone.lc')}</b>
           <span className="reply-text">{plain(replyTo.text) || fileLine(replyTo.file)}</span>
-          <button onClick={onCancelReply} title="Cancel reply">
+          <button onClick={onCancelReply} title={t('msg.reply.cancel')}>
             ✕
           </button>
         </div>
@@ -292,18 +295,18 @@ function Composer({
       {file && <AttachedChip file={file} uploading={uploading} onRemove={() => setFile(undefined)} />}
       <div className={`composer${replyTo || file ? ' with-reply' : ''}`}>
         <input ref={fileInput} type="file" hidden onChange={pick} />
-        <button className="emoji-btn attach-btn" title="Attach a file or image (at most 2 MB)" disabled={uploading} onClick={() => fileInput.current?.click()}>
+        <button className="emoji-btn attach-btn" title={t('msg.attach')} disabled={uploading} onClick={() => fileInput.current?.click()}>
           <Icon name="attachment" />
         </button>
         <textarea
           ref={area}
           rows={1}
           value={text}
-          placeholder={file ? `Say something about ${file.name}, or just send it` : post ? 'Chat about this post…' : space.kind === 'direct' ? `Message @${space.name}` : `Message #${channel}`}
+          placeholder={file ? t('msg.placeholder.file', { name: file.name }) : post ? t('msg.placeholder.post') : space.kind === 'direct' ? t('msg.placeholder.direct', { name: space.name }) : t('msg.placeholder.channel', { channel })}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <button className="emoji-btn" title="Emoji" onClick={() => setPicking((p) => !p)}>
+        <button className="emoji-btn" title={t('msg.emoji')} onClick={() => setPicking((p) => !p)}>
           <Icon name="emoji" />
         </button>
       </div>
@@ -332,6 +335,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
     [space.id, channel, post],
   );
   const seenKey = post ? `post/${post}` : `${space.id}/${channel}`;
+  const { t } = useTexts();
   const [replyTo, setReplyTo] = useState<MessageInfo>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const stuck = useStickToBottom(scroller);
@@ -380,16 +384,14 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
             {space.kind === 'direct' ? (
               <>
                 <h2>{space.name}</h2>
-                <p className="muted">This is the start of your chat with {space.name}. It's end-to-end encrypted: only the two of you can read it.</p>
+                <p className="muted">{t('chat.intro.direct', { name: space.name })}</p>
               </>
             ) : post ? (
-              <p className="muted">No messages yet. Start the conversation: only {space.kind === 'project' ? 'participants' : 'members'} of {space.name} can read it.</p>
+              <p className="muted">{t('chat.intro.post', { who: space.kind, name: space.name })}</p>
             ) : (
               <>
-                <h2>Welcome to #{channel}</h2>
-                <p className="muted">
-                  This is the start of #{channel} in {space.name}. Only {space.kind === 'project' ? 'participants' : 'members'} can read it.
-                </p>
+                <h2>{t('chat.intro.welcome', { channel })}</h2>
+                <p className="muted">{t('chat.intro.channel', { channel, name: space.name, who: space.kind })}</p>
               </>
             )}
           </div>

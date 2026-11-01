@@ -27,11 +27,11 @@ import { checkPackage, GLOSSARY_PREFIX, LANGUAGES, missingNames, TEXT_NAME, type
 
 const ROOTS = ['apps/desktop/src', 'apps/console/src'];
 const TEXT_KEYS: ReadonlySet<string> = new Set(['title', 'placeholder', 'aria-label', 'label', 'alt']);
-const TEXT_CALLS: ReadonlySet<string> = new Set(['toast', 'ask', 'attempt', 'alert', 'confirm', 'prompt']);
+const TEXT_CALLS: ReadonlySet<string> = new Set(['toast', 'ask', 'attempt', 'alert', 'confirm', 'prompt', 'copy']);
 /** Two letters in a row make a text; `p/`, `·`, `#`, `x` don't. */
 const LETTERS = /\p{L}{2,}/u;
 /** Words that are no text: the product's name, and a toast's kind. */
-const NOT_TEXT: ReadonlySet<string> = new Set(['Weave', 'ok', 'error']);
+const NOT_TEXT: ReadonlySet<string> = new Set(['Weave', 'ok', 'error', 'https://']);
 const ALLOWLIST = 'scripts/check-texts.allow.json';
 
 export interface Finding {
