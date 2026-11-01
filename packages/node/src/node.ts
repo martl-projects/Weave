@@ -2380,6 +2380,44 @@ export class WeaveNode implements Backend {
     return 1;
   }
 
+  /**
+   * Keys someone missed because their join came in after them: made after their invite, while their join was still
+   * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
+   * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite.
+   */
+  #handMissedKeys(space: StoredSpace, state: SpaceState): number {
+    if (space.kind === 'direct' || !canManage(state, this.identity.author)) return 0;
+    const scope = spaceScope(space);
+    // Who each epoch's key was boxed to, by rekeys that count.
+    const boxed = new Map<number, Set<Did>>();
+    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+      const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
+      if (!Number.isSafeInteger(body?.epoch) || !rekeyCounts(state, e)) continue;
+      const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
+      for (const did of Object.keys(body?.boxes ?? {})) to.add(did as Did);
+      boxed.set(body!.epoch as number, to);
+    }
+    // The epoch each invite was sealed with: what came after it is the newcomer's to read.
+    const invitedAt = new Map<string, number>();
+    for (const d of this.#decodedIn(space.id)) {
+      const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
+      const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
+      if (canonicalKind(d.inner.kind) === KIND_INVITE && typeof invite === 'string' && Number.isSafeInteger(epoch)) invitedAt.set(invite, epoch as number);
+    }
+    let handed = 0;
+    for (const [epoch, to] of boxed) {
+      const key = space.keys[String(epoch)];
+      if (!key) continue;
+      const missing = [...state.members.values()].filter((m) => !to.has(m.did) && m.invite !== undefined && invitedAt.has(m.invite) && epoch > invitedAt.get(m.invite)!).map((m) => m.did);
+      if (!missing.length) continue;
+      const boxes: Record<string, Json> = {};
+      for (const did of missing) boxes[did] = boxTo(this.#encryptionKeyOf(did), { space: space.id, epoch, key }) as unknown as Json;
+      this.replica.write(this.identity, { kind: KIND_REKEY, scope, body: { epoch, boxes } });
+      handed++;
+    }
+    return handed;
+  }
+
   async removeMember(ref: string, who: string): Promise<void> {
     const space = this.#space(ref);
     const state = this.#state(space);
@@ -3637,6 +3675,7 @@ export class WeaveNode implements Backend {
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#handMissedKeys(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
     changed += this.#forget();

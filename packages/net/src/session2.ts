@@ -376,7 +376,8 @@ export class PeerSession2 {
       case 'items':
         if (v2 && Array.isArray(message.items)) {
           for (const item of message.items) {
-            if (!isWireItemV2(item) || !this.#shared.has(item.e.space)) continue;
+            // From a peer behind in a space, only its control events (a join that came in before our newer key was made).
+            if (!isWireItemV2(item) || !(this.#shared.has(item.e.space) || (this.#behind.has(item.e.space) && item.e.class === 'control'))) continue;
             // Marked as held by the peer before taking it, so accepting it doesn't echo it back.
             this.#notePeerHas(item);
             this.replica.ingest(item);
@@ -498,7 +499,11 @@ export class PeerSession2 {
       this.#welcome();
     }
     this.#shared = shared;
-    for (const space of behind) if (!this.#behind.has(space)) this.#sendKeys(space);
+    for (const space of behind) {
+      if (this.#behind.has(space)) continue;
+      this.#sendKeys(space);
+      this.#askChains(space);
+    }
     this.#behind = behind;
     for (const space of shared) {
       const key = startedWith.get(space) ?? '';
@@ -527,13 +532,9 @@ export class PeerSession2 {
   }
 
   #startSpace(space: string): void {
-    const heads: Record<string, number> = {};
     let newest = '';
-    for (const { event } of this.replica.store.inSpace2(space)) {
-      if (event.class === 'control') heads[event.signer] = Math.max(heads[event.signer] ?? 0, event.seq);
-      else if (event.time > newest) newest = event.time;
-    }
-    this.#send({ t: 'chains', space, heads });
+    for (const { event } of this.replica.store.inSpace2(space)) if (event.class === 'content' && event.time > newest) newest = event.time;
+    this.#askChains(space);
     const pulled = this.#access.spaces().find((h) => h.space === space)?.pulled;
     if (pulled) {
       // Bodies for the recent window; envelopes of the rest (with the bodies this node keeps).
@@ -544,6 +545,16 @@ export class PeerSession2 {
     // By ranges, everything costs only its differences; by id lists, the last week (or all, for a newcomer).
     const since = this.#peerNeg || !newest ? '' : new Date(Date.parse(newest) - RECENT_MS).toISOString();
     this.#syncRange(space, since, undefined, false);
+  }
+
+  /**
+   * Ask the peer for a space's control events we lack. Also of a peer behind in it: someone who joined just before we
+   * made a newer key holds only the older one, and their join must reach us before they can get the newer one.
+   */
+  #askChains(space: string): void {
+    const heads: Record<string, number> = {};
+    for (const { event } of this.replica.store.inSpace2(space)) if (event.class === 'control') heads[event.signer] = Math.max(heads[event.signer] ?? 0, event.seq);
+    this.#send({ t: 'chains', space, heads });
   }
 
   /** Ask the peer for a space's content between two times, bodies included ("load older"). */
