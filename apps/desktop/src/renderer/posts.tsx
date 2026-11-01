@@ -7,7 +7,7 @@ import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectI
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { Marks } from './marks.tsx';
-import { PostScene, postScene } from './avatar.tsx';
+import { AuthorAvatar, PostScene, postScene } from './avatar.tsx';
 import { PicturePicker } from './avatar-editor.tsx';
 
 // ---------------------------------------------------------------- names and links
@@ -251,7 +251,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
           )}
           <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
           {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
-          {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
+          {post.by.agent && <span className="agent-tag" title={post.by.session ? `Written in its session ${post.by.session.name}` : undefined}>{post.by.agent} · agent{post.by.session ? ` · in ${post.by.session.name}` : ''}</span>}
           <Coauthors post={post} />
           {' · '}
           {ago(post.time)}
@@ -489,9 +489,9 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
                 {' · '}
               </>
             )}
-            <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+            <AuthorAvatar by={post.by} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
             {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
-            {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
+            {post.by.agent && <span className="agent-tag" title={post.by.session ? `Written in its session ${post.by.session.name}` : undefined}>{post.by.agent} · agent{post.by.session ? ` · in ${post.by.session.name}` : ''}</span>}
             <Coauthors post={post} /> · {ago(post.time)}
             {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
           </div>

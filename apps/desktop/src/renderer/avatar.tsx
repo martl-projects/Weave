@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { api, onItem } from './lib.ts';
+import { Sprite } from './ui.tsx';
 
 export type Figure = Record<string, number>;
 
@@ -17,6 +18,7 @@ export interface AvatarLib {
     clean(a: unknown): Figure;
     random(): Figure;
     fromSeed(text: string): Figure;
+    screenFromSeed(text: string): Figure;
     offset(a: Figure, key: string): number;
   };
   snapshot(a: Figure, kind?: 'head' | 'face' | 'bust'): Promise<string>;
@@ -192,6 +194,60 @@ function usePicture(draw: ((l: AvatarLib) => Promise<string>) | undefined, key: 
   return url?.key === key ? url.url : undefined;
 }
 
+/**
+ * An agent's (or a session's) figure when its person set none: their body, with a screen for a head; the screen, its
+ * colours and its face made from the agent's (or session's) own seed, so each looks different.
+ */
+export function agentDefault(l: AvatarLib, person: Figure | null, personDid: string, seed: string): Figure {
+  const own = l.Avatar.screenFromSeed(seed);
+  const pick = (keys: string[]) => Object.fromEntries(keys.map((k) => [k, own[k]]));
+  // A friendly face to start with: smiling mouths, open brows.
+  const SMILES = [1, 2, 3, 5, 6, 7, 25], OPEN = [0, 4, 5, 6, 7, 22];
+  return { ...(person ?? l.Avatar.fromSeed(personDid)), ...pick(['screen', 'screenColor', 'frameColor', 'eyes', 'eyeColor']), mouth: SMILES[own.mouth % SMILES.length], brows: OPEN[own.brows % OPEN.length], head: 1 };
+}
+/** What a session's default figure is made from: its name if it has one (so it stays when it moves), else its id. */
+export const sessionSeed = (s: { name?: string; provider: string; id: string }) => `session:${s.name ?? `${s.provider}:${s.id}`}`;
+
+/** A face drawn from a figure that depends on what's known (an agent's person, a session's): pixel sprite until then. */
+export function MadeFace({ seed, size, make, ready }: { seed: string; size: number; make(l: AvatarLib): Figure; ready: boolean }) {
+  const [ref, seen] = useSeen<HTMLSpanElement>();
+  const sprite = <Sprite seed={seed} size={size} face />;
+  const [figure, setFigure] = useState<Figure>();
+  useEffect(() => {
+    if (!ready || !seen) return;
+    let live = true;
+    void avatarLib().then((l) => live && setFigure(make(l)));
+    return () => {
+      live = false;
+    };
+  }, [ready, seen, seed]);
+  return (
+    <span ref={ref} className="avatar" style={{ width: size, height: size }}>
+      {figure ? <FigureHead figure={figure} seed={seed} fallback={sprite} /> : sprite}
+    </span>
+  );
+}
+
+/** An agent's face: its own avatar, or its person's body with a screen for a head. */
+export function AgentAvatar({ person, agent, size = 24 }: { person: string; agent: string; size?: number }) {
+  const mine = useFigure(`${person}·${agent}`);
+  const theirs = useFigure(person);
+  return <MadeFace seed={`${person}·${agent}`} size={size} ready={mine !== undefined && theirs !== undefined} make={(l) => mine ?? agentDefault(l, theirs ?? null, person, `${person}·${agent}`)} />;
+}
+
+/** Whoever wrote something, by their face: the agent if one did (agents are who others see), else the person. */
+export function AuthorAvatar({ by, size = 24 }: { by: { did: string; agent?: string }; size?: number }) {
+  if (by.agent) return <AgentAvatar person={by.did} agent={by.agent} size={size} />;
+  return <PersonAvatar did={by.did} size={size} />;
+}
+
+/** A session's face, so you know it again: its own avatar, or its person's body with a screen for a head. */
+export function SessionAvatar({ session, person, size = 28 }: { session: { name?: string; provider: string; id: string; avatar?: Figure }; person: string; size?: number }) {
+  const theirs = useFigure(person);
+  const seed = sessionSeed(session);
+  return <MadeFace seed={`${seed}:${JSON.stringify(session.avatar ?? null)}`} size={size} ready={theirs !== undefined} make={(l) => session.avatar ?? agentDefault(l, theirs ?? null, person, seed)} />;
+}
+
 /** Someone's head, as their avatar shows it; fallback while it's drawn (or when it can't be). */
 export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; seed: string; fallback: ReactNode }) {
   const url = usePicture((l) => l.snapshot(figure ?? l.Avatar.fromSeed(seed), 'face'), `face:${JSON.stringify(figure ?? seed)}`);
@@ -202,11 +258,16 @@ export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; 
  * Someone's avatar in a scene ("idea": pointing up, a light bulb above): their figure, or the one their key makes.
  * Small pictures come close (head and shoulders, with what's around them); big ones show all of it.
  */
-export function SceneImage({ did, scene, size = 256, close = false, className = '' }: { did: string; scene: string; size?: number; close?: boolean; className?: string }) {
+export function SceneImage({ did, agent, scene, size = 256, close = false, className = '' }: { did: string; agent?: string; scene: string; size?: number; close?: boolean; className?: string }) {
   const [ref, seen] = useSeen<HTMLSpanElement>();
-  const figure = useFigure(did);
+  // Written by an agent: the agent in the scene (its own avatar, or its person's body with a screen for a head).
+  const person = useFigure(did);
+  const own = useFigure(agent ? `${did}·${agent}` : did);
+  const known = person !== undefined && own !== undefined;
+  const make = (l: AvatarLib) => (agent ? (own ?? agentDefault(l, person ?? null, did, `${did}·${agent}`)) : (person ?? l.Avatar.fromSeed(did)));
+  const who = agent ? `${did}·${agent}:${JSON.stringify(own ?? null)}` : '';
   const frame = close ? 'close' : 'full';
-  const url = usePicture(figure === undefined || !seen ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `scene:${scene}:${size}:${frame}:${figure === undefined ? 'asking' : JSON.stringify(figure ?? did)}`);
+  const url = usePicture(!known || !seen ? undefined : (l) => l.sceneSnapshot(make(l), scene, size, frame), `scene:${scene}:${size}:${frame}:${who}:${!known ? 'asking' : JSON.stringify(person ?? did)}`);
   return <span ref={ref} className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
 }
 
@@ -268,8 +329,14 @@ export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids
  * A post's scene with everyone who wrote it: alone, its author in the scene; with co-authors (those who confirmed),
  * all of them together, its author in the scene and the others beside them. Small pictures show heads and shoulders.
  */
-export function PostScene({ post, scene, size, close = false, className = '' }: { post: { by: { did: string }; coauthors?: Array<{ did: string; state: string }> }; scene: string; size: number; close?: boolean; className?: string }) {
+export function PostScene({ post, scene, size, close = false, className = '' }: { post: { by: { did: string; agent?: string }; coauthors?: Array<{ did: string; state: string }> }; scene: string; size: number; close?: boolean; className?: string }) {
   const others = [...new Set((post.coauthors ?? []).filter((c) => c.state === 'confirmed' && c.did !== post.by.did).map((c) => c.did))];
-  if (!others.length) return <SceneImage did={post.by.did} scene={scene} size={size} close={close} className={className} />;
+  if (!others.length) return <SceneImage did={post.by.did} agent={post.by.agent} scene={scene} size={size} close={close} className={className} />;
   return <GroupPhoto dids={[post.by.did, ...others]} poses={{ [post.by.did]: scene }} peek={close} className={`post-group ${className}`} />;
+}
+
+/** A person's face: their avatar, or the one their key makes (pixel sprite until it's drawn). */
+function PersonAvatar({ did, size }: { did: string; size: number }) {
+  const figure = useFigure(did);
+  return <MadeFace seed={did} size={size} ready={figure !== undefined} make={(l) => figure ?? l.Avatar.fromSeed(did)} />;
 }

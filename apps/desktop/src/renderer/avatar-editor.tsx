@@ -1,9 +1,9 @@
 // Making your avatar (a turnable figure above, tabs of parts and colors below), and picking a scene for a post.
 
 import { useEffect, useRef, useState } from 'react';
-import type { MemberInfo, Profile, SpaceInfo } from '@weave/node/client';
+import type { MemberInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { api, bump, shortDid, useApi, useBlobUrl } from './lib.ts';
-import { avatarLib, forgetFigure, GroupPhoto, pickedScene, SceneImage, useGroupPoses, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
+import { agentDefault, avatarLib, forgetFigure, GroupPhoto, pickedScene, SceneImage, sessionSeed, useGroupPoses, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
 import { ImagePicker } from './editor.tsx';
 import { attempt, AsyncButton, Avatar, BlobImage, Modal, Sprite } from './ui.tsx';
 
@@ -20,7 +20,8 @@ interface Section {
 }
 
 // zoom: how close the 3D figure comes for a tab (1: the face, 0: all of it); the wheel zooms too.
-const TABS: Array<{ label: string; zoom: number; sections: Section[] }> = [
+type Tab = { label: string; zoom: number; sections: Section[] };
+const PERSON_TABS: Tab[] = [
   { label: 'Head', zoom: 0.85, sections: [{ part: 'face', title: 'Shape', color: 'skin', colorTitle: 'Skin' }, { part: 'blush', title: 'Cheeks', names: ['plain', 'rosy'] }] },
   { label: 'Hair', zoom: 0.6, sections: [{ part: 'hair', title: 'Hair', color: 'hairColor', colorTitle: 'Color' }] },
   { label: 'Eyes', zoom: 1, sections: [{ part: 'eyes', title: 'Eyes', color: 'eyeColor', colorTitle: 'Color', kind: 'flat', adjust: 'eye' }, { part: 'brows', title: 'Brows', kind: 'flat', adjust: 'brow' }] },
@@ -35,6 +36,14 @@ const STEPS = [
   { k: 'Gap', label: 'Spacing', less: '▸◂', more: '◂▸' },
   { k: 'Size', label: 'Size', less: '−', more: '+' },
   { k: 'Rot', label: 'Turn', less: '↺', more: '↻' },
+];
+
+// A screen for a head (agents, sessions): its shape and colours, then the same eyes and mouths as people's.
+const SCREEN_TABS: Tab[] = [
+  { label: 'Screen', zoom: 0.7, sections: [{ part: 'screen', title: 'Shape', color: 'screenColor', colorTitle: 'Screen' }, { part: '', title: '', color: 'frameColor', colorTitle: 'Frame' }] },
+  PERSON_TABS[2],
+  { label: 'Mouth', zoom: 1, sections: [{ part: 'mouth', title: 'Mouth', kind: 'flat', adjust: 'mouth' }] },
+  { label: 'Outfit', zoom: 0, sections: [{ part: 'shirt', title: 'Top', color: 'shirtColor', colorTitle: 'Color', kind: 'bust' }, { part: '', title: '', color: 'skin', colorTitle: 'Hands' }] },
 ];
 
 /** A variant's picture: flat from the sprites, or the figure drawn with it. */
@@ -55,6 +64,57 @@ function Variant({ lib, figure, section, sprites }: { lib: AvatarLib; figure: Fi
 
 /** Your avatar: everyone sees it wherever you show up, and in the scenes on your posts. */
 export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) {
+  return (
+    <FigureEditor
+      title="Your avatar"
+      initial={(l) => me.avatar ?? l.Avatar.fromSeed(me.did)}
+      reset={me.avatar ? 'Use my default figure' : undefined}
+      onSave={async (avatar) => {
+        const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as the figure your key makes again');
+        if (saved) forgetFigure(me.did);
+        return !!saved;
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
+/** One of your agents' avatars: a screen for a head on your body, so everyone sees at once that it's an agent. */
+export function AgentAvatarEditor({ me, agent, onClose }: { me: Profile; agent: string; onClose(): void }) {
+  const own = me.agentAvatars?.[agent];
+  return (
+    <FigureEditor
+      title={`${agent}'s avatar`}
+      screen
+      initial={(l) => own ?? agentDefault(l, me.avatar ?? null, me.did, `${me.did}·${agent}`)}
+      reset={own ? 'Use its default' : undefined}
+      onSave={async (avatar) => {
+        const saved = await attempt(() => api<Profile>('setProfile', { agentAvatars: { [agent]: avatar } }), avatar ? `${agent}'s avatar is saved` : `${agent} shows as its default again`);
+        if (saved) forgetFigure(`${me.did}·${agent}`);
+        return !!saved;
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
+/** A session's avatar, so you know it again (here and in the overlay); only you see it. */
+export function SessionAvatarEditor({ session, me, onClose }: { session: SessionInfo; me: Profile; onClose(): void }) {
+  return (
+    <FigureEditor
+      title={`${session.name ?? session.title ?? 'This session'}'s avatar`}
+      screen
+      initial={(l) => session.avatar ?? agentDefault(l, me.avatar ?? null, me.did, sessionSeed(session))}
+      reset={session.avatar ? 'Use its default' : undefined}
+      onSave={async (avatar) => !!(await attempt(() => api('setSessionAvatar', { session: { provider: session.provider, id: session.id }, avatar }).then(bump), avatar ? 'Its avatar is saved' : 'It shows as its default again'))}
+      onClose={onClose}
+    />
+  );
+}
+
+/** Making a figure: a person's (head and hair) or a screen-headed one's (agents, sessions). */
+function FigureEditor({ title, screen = false, initial, reset, onSave, onClose }: { title: string; screen?: boolean; initial(l: AvatarLib): Figure; reset?: string; onSave(avatar: Figure | null): Promise<boolean>; onClose(): void }) {
+  const TABS = screen ? SCREEN_TABS : PERSON_TABS;
   const [lib, setLib] = useState<AvatarLib>();
   const [failed, setFailed] = useState<string>();
   const [figure, setFigure] = useState<Figure>();
@@ -66,7 +126,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
     avatarLib().then(
       (l) => {
         setLib(l);
-        setFigure(l.Avatar.clean(me.avatar ?? l.Avatar.fromSeed(me.did)));
+        setFigure(l.Avatar.clean(initial(l)));
         void l.loadFaceSprites().then(() => setSprites(true), () => {});
       },
       (e: Error) => setFailed(e.message),
@@ -94,16 +154,14 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
     viewer.current?.zoom(TABS[tab].zoom);
   }, [lib, !!figure]);
   const save = async (avatar: Figure | null) => {
-    const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as the figure your key makes again');
-    if (saved) {
-      forgetFigure(me.did);
+    if (await onSave(avatar)) {
       bump();
       onClose();
     }
   };
   const A = lib?.Avatar;
   return (
-    <Modal title="Your avatar" onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} wide>
       {failed ? (
         <p className="error-text">The avatar can't be drawn here: {failed}</p>
       ) : (
@@ -111,7 +169,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
           <div className="avatar-stage">
             {/* The renderer's own: it fills and empties it. */}
             <div className="avatar-canvas" ref={stage} />
-            <button type="button" className="avatar-dice" title="Roll a new one" onClick={() => A && change(A.random())}>
+            <button type="button" className="avatar-dice" title="Roll a new one" onClick={() => A && change(screen ? { ...A.random(), head: 1 } : A.random())}>
               🎲
             </button>
           </div>
@@ -146,7 +204,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                           </div>
                         </>
                       )}
-                      <h4>{s.title}</h4>
+                      {s.part && <h4>{s.title}</h4>}
                       {s.adjust && (
                         <div className="avatar-adjust">
                           {STEPS.filter((st) => `${s.adjust}${st.k}` in A.ADJUST).map((st) => {
@@ -165,7 +223,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                           })}
                         </div>
                       )}
-                      <div className="avatar-grid">
+                      {s.part && <div className="avatar-grid">
                         {Array.from({ length: A.PARTS[s.part] }, (_, v) => {
                           const name = s.kind === 'flat' && sprites ? lib.partNames(s.part)[v] : undefined;
                           const none = s.names?.[v] ?? (v === 0 && ['beard', 'glasses', 'hat'].includes(s.part) ? 'none' : undefined);
@@ -175,7 +233,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                             </button>
                           );
                         })}
-                      </div>
+                      </div>}
                     </section>
                   ))
                 : 'Loading…'}
@@ -184,7 +242,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
         </div>
       )}
       <div className="buttons">
-        {me.avatar && <AsyncButton onClick={() => save(null)}>Use my default figure</AsyncButton>}
+        {reset && <AsyncButton onClick={() => save(null)}>{reset}</AsyncButton>}
         <span className="grow" />
         <button onClick={onClose}>Cancel</button>
         <AsyncButton className="default" disabled={!figure} onClick={() => save(figure!)}>

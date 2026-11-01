@@ -393,7 +393,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
       },
     },
     run(async ({ space, title, text, link, board, prompt, scene }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string; scene?: string }) =>
-      backend.submit({ space, board, title, text, link, prompt, scene, as }),
+      backend.submit({ space, board, title, text, link, prompt, scene, as, ...(options.session ? { session: options.session } : {}) }),
     ),
   );
 
@@ -523,7 +523,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     },
     run(async ({ who, text, reply_to }: { who: string; text: string; reply_to?: string }) => {
       const chat = await backend.openChat(who);
-      return backend.say({ space: chat.id, text, replyTo: reply_to, as });
+      return backend.say({ space: chat.id, text, replyTo: reply_to, as, ...(options.session ? { session: options.session } : {}) });
     }),
   );
 
@@ -597,7 +597,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         if (size > 2 * 1024 * 1024) throw new Error(`${file} is ${(size / 1024 / 1024).toFixed(1)} MB; files are at most 2 MB`);
         attachment = await backend.putFile({ data: readFileSync(file).toString('base64'), name: basename(file), type: FILE_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream' });
       }
-      return backend.say({ space, post, text: text ?? '', channel, replyTo: reply_to, as, ...(attachment ? { file: attachment } : {}) });
+      return backend.say({ space, post, text: text ?? '', channel, replyTo: reply_to, as, ...(attachment ? { file: attachment } : {}), ...(options.session ? { session: options.session } : {}) });
     }),
   );
 

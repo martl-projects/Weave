@@ -45,6 +45,62 @@ describe('avatars', () => {
   });
 });
 
+describe('agents and sessions', () => {
+  it("a person sets their agents' avatars by name; others ask for them as did·agent", async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    await martin.addAgent('claude', ['weave.post']);
+    await martin.setProfile({ avatar: { hair: 2 }, agentAvatars: { claude: { head: 1, screen: 2, screenColor: 3 } } });
+    expect((await martin.profile()).agentAvatars).toEqual({ claude: { head: 1, screen: 2, screenColor: 3 } });
+    await expect(martin.setProfile({ agentAvatars: { nobody: { head: 1 } } })).rejects.toThrow(/no agent named nobody/);
+
+    // Changing your own keeps your agents', and the other way round.
+    await martin.setProfile({ avatar: { hair: 5 } });
+    sync(martin, lena);
+    const me = martin.identity.author;
+    expect(await lena.avatars([me, `${me}·claude`, `${me}·codex`])).toEqual({ [me]: { hair: 5 }, [`${me}·claude`]: { head: 1, screen: 2, screenColor: 3 } });
+    await martin.setProfile({ agentAvatars: { claude: null } });
+    expect((await martin.profile()).agentAvatars).toBeUndefined();
+    expect((await martin.profile()).avatar).toEqual({ hair: 5 });
+  });
+
+  it("what an agent writes in a named session says which session, by name only", async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    await martin.addAgent('claude', ['weave.post', 'weave.msg']);
+    await martin.createProject({ name: 'Studio' });
+    await lena.joinSpace(await martin.invite('Studio'));
+    sync(martin, lena);
+    sync(lena, martin);
+    const first = await martin.submit({ space: 'Studio', title: 'Setting up' });
+    await martin.workOn({ session: { id: 's-1' }, post: first.id });
+    await martin.nameSession({ session: { id: 's-1' }, name: 'Skala', about: 'Reviews' });
+    await martin.setSessionAvatar({ session: { id: 's-1' }, avatar: { head: 1, screen: 2 } });
+
+    const post = await martin.submit({ space: 'Studio', title: 'Found something', as: 'claude', session: { id: 's-1' } });
+    const said = await martin.say({ space: 'Studio', text: 'On it', as: 'claude', session: { id: 's-1' } });
+    sync(martin, lena);
+    // Its name, never its avatar: that's for its person's harness views.
+    expect((await lena.post(post.id)).by).toMatchObject({ agent: 'claude', session: { name: 'Skala' } });
+    expect((await lena.messages('Studio')).find((m) => m.id === said.id)?.by.session).toEqual({ name: 'Skala' });
+    // A person writing for themself, or an agent outside a session, carries none.
+    expect((await martin.submit({ space: 'Studio', title: 'Mine', session: { id: 's-1' } })).by.session).toBeUndefined();
+    expect((await martin.submit({ space: 'Studio', title: 'Its own', as: 'claude' })).by.session).toBeUndefined();
+  });
+
+  it('a session keeps its own avatar, privately, until it is taken back', async () => {
+    const martin = person('Martin');
+    await martin.createProject({ name: 'Desk' });
+    const post = await martin.submit({ space: 'Desk', title: 'Something to do' });
+    await martin.workOn({ session: { id: 'session-1' }, post: post.id });
+    const set = await martin.setSessionAvatar({ session: { id: 'session-1' }, avatar: { head: 1, screen: 1 } });
+    expect(set.avatar).toEqual({ head: 1, screen: 1 });
+    expect((await martin.session({ id: 'session-1' })).avatar).toEqual({ head: 1, screen: 1 });
+    await expect(martin.setSessionAvatar({ session: { id: 'session-1' }, avatar: {} })).rejects.toThrow(/whole numbers/);
+    expect((await martin.setSessionAvatar({ session: { id: 'session-1' }, avatar: null })).avatar).toBeUndefined();
+  });
+});
+
 describe('a space photo', () => {
   it('its founder sets a picture of its own and the banner, members see it, and an empty one goes back to the group photo', async () => {
     const martin = person('Martin');

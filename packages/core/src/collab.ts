@@ -3,6 +3,7 @@ import type { Json } from './bytes.ts';
 import type { EventView } from './records.ts';
 import type { Did } from './keys.ts';
 import { attachmentOf, type Attachment } from './blobs.ts';
+import { sessionStampOf, type SessionStamp } from './sessions.ts';
 
 /*
  * Working together inside a group (or in public). All of these are ordinary
@@ -117,6 +118,8 @@ export interface Message {
   announce?: Announce;
   /** A file or image attached: its blob and what the message says about it. */
   file?: Attachment;
+  /** The agent session that wrote it (its name and figure), when an agent did. */
+  session?: SessionStamp;
 }
 
 /** What a message announces: a website (its id, or the service hosting it) or a released version (its artifact id). */
@@ -250,9 +253,11 @@ export function messagesOf(entries: Entry[], where: { channel?: string; post?: s
       const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);
       const announce = e.kind === KIND_MSG ? announceOf(e.body) : undefined;
       const file = e.kind === KIND_MSG ? attachmentOf(e.body) : undefined;
+      const session = e.event.signer !== e.event.author ? sessionStampOf(e.body) : undefined;
       return {
         ...(announce ? { announce } : {}),
         ...(file ? { file } : {}),
+        ...(session ? { session } : {}),
         id: e.id,
         author: e.event.author,
         signer: e.event.signer,

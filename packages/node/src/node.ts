@@ -225,6 +225,7 @@ import {
   sessionsOf,
   takeOff,
   type SessionRecord,
+  type SessionStamp,
   type StackItem,
   postTargetOf,
   postUrl,
@@ -2401,7 +2402,14 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
+  /** What an agent writes in a session says which one (by its name, once it has one); the session itself stays yours. */
+  #sessionStamp(session: SessionRef | undefined, as: string | undefined): Json | undefined {
+    if (!session || !as) return undefined;
+    const record = this.#sessionRecord(session);
+    return record.name ? { name: record.name } : undefined;
+  }
+
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -2417,6 +2425,8 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (image) body.image = image;
     if (scene) body.scene = scene;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
     const prompt = input.prompt?.trim();
     if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
@@ -2790,6 +2800,15 @@ export class WeaveNode implements Backend {
     return this.#saveSession({ ...record, name: name === '' ? undefined : (name ?? record.name), about, description });
   }
 
+  /** A session's avatar (Weave avatar), so you know it again; null: the one its name makes. Only you set it. */
+  async setSessionAvatar(input: { session: SessionRef; avatar: Record<string, number> | null }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const avatar = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+    if (input.avatar !== null && !avatar) throw new Error('an avatar is parts with whole numbers, like { "head": 1, "screen": 2 }');
+    const { avatar: _old, ...rest } = record;
+    return this.#saveSession({ ...rest, ...(avatar ? { avatar } : {}) });
+  }
+
   /** Names a session can't take (except `own`'s): your other sessions', people's around you, your agents' and yours. */
   #takenNames(own: SessionRecord): Array<string | undefined> {
     const names: Array<string | undefined> = [this.nameOf(this.identity.author), ...this.#agents.map((a) => a.name)];
@@ -3034,6 +3053,7 @@ export class WeaveNode implements Backend {
       ...(known?.role ? { role: known.role } : {}),
       ...(known?.projects ? { projects: known.projects } : {}),
       ...(known?.available ? { available: true } : {}),
+      ...(known?.avatar ? { avatar: known.avatar } : {}),
       ...(known?.last ? { last: known.last } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
@@ -3054,6 +3074,7 @@ export class WeaveNode implements Backend {
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length ? { projects: record.projects } : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar as unknown as Json } : {}),
       ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
     };
     const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
@@ -3086,6 +3107,7 @@ export class WeaveNode implements Backend {
         ? { projects: record.projects.map((id) => this.#spaces.get(id)).filter((s): s is StoredSpace => !!s).map((s) => ({ id: s.id, kind: s.kind, name: s.name })) }
         : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar } : {}),
       ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
       time: record.time,
     };
@@ -3751,6 +3773,7 @@ export class WeaveNode implements Backend {
       url: personUrl(name, did),
       theme: this.themeOf(did),
       ...((figure) => (figure ? { avatar: figure } : {}))(this.avatarOf(did)),
+      ...((agents) => (Object.keys(agents).length ? { agentAvatars: agents } : {}))(this.#agentAvatars(did)),
       me: did === me,
       following: mine?.following.has(did) ?? false,
       followsMe: graph.get(did)?.following.has(me) ?? false,
@@ -3774,10 +3797,19 @@ export class WeaveNode implements Backend {
       const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
       this.replica.write(this.identity, { kind: KIND_THEME, body: { ...theme } });
     }
-    if (input.avatar !== undefined) {
-      const figure = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
-      if (input.avatar !== null && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
-      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null } });
+    if (input.avatar !== undefined || input.agentAvatars !== undefined) {
+      const figure = input.avatar === undefined ? this.avatarOf(this.identity.author) : input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+      if (input.avatar && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
+      // Your agents' figures: by their name, null takes one back (it shows as its default again).
+      const agents = { ...this.#agentAvatars(this.identity.author) };
+      for (const [name, f] of Object.entries(input.agentAvatars ?? {})) {
+        if (!this.#agents.some((a) => a.name === name)) throw new Error(`you have no agent named ${name}`);
+        const clean = f === null ? undefined : sanitizeFigure(f);
+        if (f !== null && !clean) throw new Error(`${name}'s avatar is parts with whole numbers, like { "head": 1 }`);
+        if (clean) agents[name] = clean;
+        else delete agents[name];
+      }
+      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null, ...(Object.keys(agents).length ? { agents: agents as unknown as Json } : {}) } });
     }
     return this.profile();
   }
@@ -3853,12 +3885,30 @@ export class WeaveNode implements Backend {
     return sanitizeFigure((body as { figure?: unknown } | undefined)?.figure);
   }
 
-  /** The avatars of these people, those who have one: what the app draws for them. */
-  async avatars(people: Did[]): Promise<Record<Did, AvatarFigure>> {
-    const out: Record<Did, AvatarFigure> = {};
-    for (const did of new Set(people.slice(0, 500))) {
-      const figure = this.avatarOf(did);
-      if (figure) out[did] = figure;
+  /** Someone's agents' avatars, by the agent's name, as they set them. */
+  #agentAvatars(author: Did): Record<string, AvatarFigure> {
+    let body: unknown;
+    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
+    const agents = (body as { agents?: unknown } | undefined)?.agents;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return {};
+    const out: Record<string, AvatarFigure> = {};
+    for (const [name, f] of Object.entries(agents).slice(0, 50)) {
+      const figure = sanitizeFigure(f);
+      if (figure && name.length <= 40) out[name] = figure;
+    }
+    return out;
+  }
+
+  /**
+   * The avatars of these people (and of their agents, asked for as "did·agent"), those who have one: what the app
+   * draws for them.
+   */
+  async avatars(people: string[]): Promise<Record<string, AvatarFigure>> {
+    const out: Record<string, AvatarFigure> = {};
+    for (const ref of new Set(people.slice(0, 500))) {
+      const at = ref.indexOf('·');
+      const figure = at < 0 ? this.avatarOf(ref as Did) : this.#agentAvatars(ref.slice(0, at) as Did)[ref.slice(at + 1)];
+      if (figure) out[ref] = figure;
     }
     return out;
   }
@@ -5865,7 +5915,7 @@ export class WeaveNode implements Backend {
       .map((m) => this.#messageInfo(m, byId));
   }
 
-  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo> {
+  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo> {
     const text = input.text?.trim() ?? '';
     const file = input.file ? attachmentOf({ file: input.file }) : undefined;
     if (input.file && !file) throw new Error('a file goes with its wblob: reference, a name, its size in bytes and a media type (use putFile)');
@@ -5885,6 +5935,8 @@ export class WeaveNode implements Backend {
       if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
     }
     if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
     return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
   }
@@ -9012,7 +9064,7 @@ export class WeaveNode implements Backend {
       url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
-      by: this.#actor(p.author, p.signer),
+      by: this.#actor(p.author, p.signer, p.session),
       title: p.title,
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
@@ -9573,12 +9625,13 @@ export class WeaveNode implements Backend {
     return (await this.issues(issue.space.id)).find((i) => i.id === issue.id)!;
   }
 
-  #actor(author: Did, signer: Did): Actor {
+  #actor(author: Did, signer: Did, session?: SessionStamp): Actor {
     const actor: Actor = { did: author };
     const name = this.nameOf(author);
     if (name) actor.name = name;
     const agent = this.#agentName(signer, author);
     if (agent) actor.agent = agent;
+    if (agent && session) actor.session = session;
     return actor;
   }
 
@@ -9597,7 +9650,7 @@ export class WeaveNode implements Backend {
     return {
       id: m.id,
       short: m.id.slice(0, 8),
-      by: this.#actor(m.author, m.signer),
+      by: this.#actor(m.author, m.signer, m.session),
       text: m.text,
       time: m.time,
       channel: m.channel,

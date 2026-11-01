@@ -25,6 +25,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
+import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
@@ -214,7 +215,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         {m.via && <div className="member-sub">via g/{m.via.name}</div>}
         {m.agents.map((agent) => (
           <div key={agent} className="member-sub agent" title={`${m.name ?? 'Their'}'s agent, signing with its own key`}>
-            ⚙ {agent} <span className="agent-tag">agent</span>
+            <AgentAvatar person={m.did} agent={agent} size={14} /> {agent} <span className="agent-tag">agent</span>
           </div>
         ))}
       </div>
