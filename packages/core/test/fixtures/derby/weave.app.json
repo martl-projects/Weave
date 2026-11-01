@@ -1,0 +1,21 @@
+{
+  "app": "derby",
+  "name": "Derby",
+  "about": "Horse racing with bets, for up to eight players",
+  "version": 1,
+  "services": [{ "id": "derby", "port": 3000, "open": { "host": { "path": "/host", "label": "Run the race" }, "joiner": { "path": "/", "label": "Play" } } }],
+  "start": { "image": "ghcr.io/martldennl/derby", "hint": "npm start in the checkout" },
+  "env": [{ "name": "DEEPSEEK_API_KEY", "label": "DeepSeek API key", "secret": true, "hint": "A key with read access, for the commentary" }],
+  "service": {
+    "reads": "addressed",
+    "writes": [],
+    "version": "1.0",
+    "actions": [
+      { "name": "bet", "label": "Bet", "who": "members", "input": [{ "name": "horse", "label": "Horse" }, { "name": "amount", "label": "Stake" }] },
+      { "name": "horses", "label": "Horses", "who": "members" },
+      { "name": "enter", "label": "Enter a horse", "who": "maintainers", "input": [{ "name": "name", "label": "Name" }] },
+      { "name": "scratch", "label": "Scratch", "who": "maintainers" }
+    ]
+  },
+  "lists": [{ "name": "horses", "title": "Horses", "item": "horse", "list": "horses", "add": { "action": "enter", "label": "Enter a horse" }, "remove": { "action": "scratch", "label": "Scratch" }, "use": { "action": "bet", "label": "Bet" } }]
+}

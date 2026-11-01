@@ -409,6 +409,7 @@ import {
   LANGUAGES,
   type LanguageSetting,
 } from '@weave/core';
+import { checkServicePackage, KIND_APP_TEXTS } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
@@ -3857,7 +3858,7 @@ export class WeaveNode implements Backend {
     return this.publishApp(input);
   }
 
-  async publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest> {
+  async publishApp(input: { project: string; manifest: unknown; texts?: unknown; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     this.#maintainerState(project);
@@ -3865,8 +3866,31 @@ export class WeaveNode implements Backend {
     // A description usually doesn't list the release files (releasing adds them): keep those of this artifact's line.
     const before = this.#lines(project).get(manifest.app)?.install;
     if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    // Its texts, checked before anything is published: a broken package publishes nothing.
+    const texts = this.#checkedTexts(manifest, input.texts, input.as);
+    const item = await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    await this.#publishTexts(project, item.id, texts, input.as);
     return manifest;
+  }
+
+  /**
+   * A release's packages (weave.texts.<lang>.json next to its manifest, docs/localization.md): each checked against the
+   * manifest, then published as one event by the maintainer, pointing at the release. Nothing is added to the manifest.
+   */
+  #checkedTexts(manifest: AppManifest, texts: unknown, as?: string): unknown[] | undefined {
+    if (texts === undefined) return undefined;
+    if (!Array.isArray(texts)) throw new Error('texts: the packages next to the manifest, as a list');
+    for (const pkg of texts) {
+      const problems = checkServicePackage(pkg, manifest);
+      const lang = (pkg as { lang?: unknown } | null)?.lang;
+      if (problems.length) throw new Error(`weave.texts.${typeof lang === 'string' ? lang : '?'}.json: ${problems.map((p) => (p.name ? `${p.name}: ${p.problem}` : p.problem)).join('; ')}`);
+    }
+    if (texts.length && as) this.#agentMay(as, KIND_APP_TEXTS);
+    return texts;
+  }
+
+  async #publishTexts(project: StoredSpace, release: string, texts: unknown[] | undefined, as?: string): Promise<void> {
+    if (texts?.length) await this.publish({ kind: KIND_APP_TEXTS, body: { release, packages: texts as Json }, space: project.id, as });
   }
 
   // ---------------------------------------------------------------- releases
@@ -4017,13 +4041,16 @@ export class WeaveNode implements Backend {
    * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
    * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
    */
-  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; announce?: boolean; as?: string }): Promise<AppManifest> {
+  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; announce?: boolean; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const from = this.#releaseLine(project, input);
+    // Its texts are checked against the manifest once the provider has read it; that an agent may publish them, now.
+    if (Array.isArray(input.texts) && input.texts.length && input.as) this.#agentMay(input.as, KIND_APP_TEXTS);
     const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(from.previous ? { previous: from.previous as unknown as Json } : {}) }, input.as, from.provider)) as { id?: string; manifest?: unknown };
     const manifest = parseManifest(data.manifest);
+    if (data.id) await this.#publishTexts(project, data.id, this.#checkedTexts(manifest, input.texts, input.as), input.as);
     // Offered: said in the project's chat, as a card to get it from (unless announce is false).
     if (input.announce !== false && data.id) await this.#announce(project.id, { kind: 'release', id: data.id }, `${manifest.name} ${manifest.install?.tag ?? input.tag} is available`);
     return manifest;

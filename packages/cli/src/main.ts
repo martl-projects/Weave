@@ -2696,7 +2696,9 @@ ${postLine(p)}`);
       if (sub === 'publish') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
-        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
+        // The texts next to it (weave.texts.<lang>.json) go with it.
+        const texts = readdirSync(dirname(file)).filter((n) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)*\.json$/.test(n)).sort().map((n) => JSON.parse(readFileSync(join(dirname(file), n), 'utf8')) as unknown);
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')), ...(texts.length ? { texts } : {}) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
       }
       if (sub === 'list') {

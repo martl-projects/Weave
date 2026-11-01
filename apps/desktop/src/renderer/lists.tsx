@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { KeyvaultInfo, ServiceActionInfo, ServiceListInfo, SpaceInfo } from '@weave/node/client';
+import type { TextPackage, TextRecord } from '@weave/core';
+import { useServiceTexts } from './servicetexts.ts';
 import { AccountProofDialog } from './accounts.tsx';
 import { Icon, isIconName, type IconName } from './icons.tsx';
 import { HandDialog } from './keyvaults.tsx';
@@ -106,28 +108,37 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
   );
 }
 
+/** A text as a service answers it: a string, or {name, values} resolved from its own package in the reader's language (docs/localization.md). */
+type ServiceText = string | TextRecord;
+
 /** An item as a service's list action answers it. */
 interface ServiceItem {
   id: string;
   /** One of Weave's icons, by name. */
   icon?: string;
-  title: string;
-  badge?: string;
-  detail?: string;
+  title: ServiceText;
+  badge?: ServiceText;
+  detail?: ServiceText;
   url?: string;
-  done?: string;
+  done?: ServiceText;
   use?: false;
   remove?: false;
   /** Its other buttons: a small one with an icon, or one in words. */
-  more?: Array<{ action: string; label: string; icon?: string; confirm?: true }>;
+  more?: Array<{ action: string; label: ServiceText; icon?: string; confirm?: true }>;
 }
 
 /** What a list action answers: all its items, or a page of them and where the next starts (it pages itself). */
 type ServicePage = ServiceItem[] | { items: ServiceItem[]; next?: string };
 
 /** A service's list (its manifest's lists): its items asked of it, its buttons as yours to use. */
-export function ServiceList({ space, service, list, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; list: ServiceListInfo; actions: ServiceActionInfo[] }) {
+export function ServiceList({ space, service, list, actions }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; list: ServiceListInfo; actions: ServiceActionInfo[] }) {
   const { t } = useTexts();
+  const { ts, tr } = useServiceTexts(service.texts);
+  // Its words, as its package says them: the title, what one is, and its buttons.
+  const title = ts(`lists.${list.name}.title`, list.title);
+  const item = list.item ? ts(`lists.${list.name}.item`, list.item) : undefined;
+  const useLabel = list.use ? ts(`lists.${list.name}.use.label`, list.use.label) : undefined;
+  const text = (value: ServiceText | undefined): string => tr(value) ?? '';
   const [items, setItems] = useState<ServiceItem[]>();
   const [error, setError] = useState<string>();
   // A list its service pages itself: where its next page starts, and what's searched for.
@@ -167,10 +178,10 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
   }, [service.did]);
   const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
   const act = (action: string, id: string, label: string) => attempt(() => askAndWait(space.id, service, action, { id }, label).then((r) => (again(), bump(), r.text ?? '')));
-  const removeLabel = list.remove?.label ?? t('button.remove');
+  const removeLabel = list.remove?.label ? ts(`lists.${list.name}.remove.label`, list.remove.label) : t('button.remove');
   const add = list.add?.mine
     ? {
-        label: list.add.label ?? t('list.add.item', { item: list.item ?? t('list.one') }),
+        label: list.add.label ? ts(`lists.${list.name}.add.label`, list.add.label) : t('list.add.item', { item: item ?? t('list.one') }),
         run: () =>
           void (async () => {
             if (list.add!.hand) {
@@ -185,50 +196,55 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
           })(),
       }
     : undefined;
-  const rows = items?.map(
-    (it): ItemRow => ({
+  const rows = items?.map((it): ItemRow => {
+    const title = text(it.title);
+    const detail = text(it.detail);
+    return {
       key: it.id,
       title: it.url ? (
         <a href={it.url} target="_blank" rel="noopener noreferrer">
-          {it.title}
+          {title}
         </a>
       ) : (
-        it.title
+        title
       ),
       ...(isIconName(it.icon) ? { icon: it.icon } : {}),
-      ...(it.badge ? { badge: it.badge } : {}),
-      search: `${it.title} ${it.detail ?? ''}`,
-      ...(it.detail ? { detail: it.detail } : {}),
+      ...(it.badge ? { badge: text(it.badge) } : {}),
+      search: `${title} ${detail}`,
+      ...(detail ? { detail } : {}),
       tools: (it.more ?? [])
         .filter((m) => isIconName(m.icon) && mine(m.action))
-        .map((m) => ({ icon: m.icon as IconName, label: m.label, run: () => void (async () => (!m.confirm || (await ask(`${m.label}: ${it.title}?`, m.label))) && act(m.action, it.id, `${m.label}: ${it.title}`))() })),
+        .map((m) => {
+          const label = text(m.label);
+          return { icon: m.icon as IconName, label, run: () => void (async () => (!m.confirm || (await ask(`${label}: ${title}?`, label))) && act(m.action, it.id, `${label}: ${title}`))() };
+        }),
       main: (
         <>
           {(it.more ?? [])
             .filter((m) => !isIconName(m.icon) && mine(m.action))
             .map((m) => (
-              <AsyncButton key={m.action} onClick={() => act(m.action, it.id, `${m.label}: ${it.title}`)}>
-                {m.label}
+              <AsyncButton key={m.action} onClick={() => act(m.action, it.id, `${text(m.label)}: ${title}`)}>
+                {text(m.label)}
               </AsyncButton>
             ))}
           {it.done ? (
-            <span className="small muted">{it.done}</span>
+            <span className="small muted">{text(it.done)}</span>
           ) : (
             list.use?.mine &&
             it.use !== false && (
-              <AsyncButton className="default" onClick={async () => void (list.use!.account ? setProving(list.use!.account) : await act(list.use!.action!, it.id, `${list.use!.label}: ${it.title}`))}>
-                {list.use.label}
+              <AsyncButton className="default" onClick={async () => void (list.use!.account ? setProving(list.use!.account) : await act(list.use!.action!, it.id, `${useLabel}: ${title}`))}>
+                {useLabel}
               </AsyncButton>
             )
           )}
         </>
       ),
-      ...(list.remove?.mine && it.remove !== false ? { remove: { label: removeLabel, run: () => void (async () => (await ask(`${removeLabel}: ${it.title}?`, removeLabel)) && act(list.remove!.action, it.id, `${removeLabel}: ${it.title}`))() } } : {}),
-    }),
-  );
+      ...(list.remove?.mine && it.remove !== false ? { remove: { label: removeLabel, run: () => void (async () => (await ask(`${removeLabel}: ${title}?`, removeLabel)) && act(list.remove!.action, it.id, `${removeLabel}: ${title}`))() } } : {}),
+    };
+  });
   return (
     <>
-      <ItemList title={list.title} add={add} rows={rows} error={error} empty={t('list.none.yet', { item: list.item ?? t('list.item') })} {...(more ? { more } : {})} {...(query ? { query } : {})} />
+      <ItemList title={title} add={add} rows={rows} error={error} empty={t('list.none.yet', { item: item ?? t('list.item') })} {...(more ? { more } : {})} {...(query ? { query } : {})} />
       {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => (setProving(undefined), again())} />}
       {handing && <HandDialog vault={handing} project={{ id: space.id, name: space.name.replace(/^p\//, '') }} onClose={() => (setHanding(undefined), again())} />}
       {using && <ActionDialog space={space} service={service} action={using} onClose={() => (setUsing(undefined), again())} />}

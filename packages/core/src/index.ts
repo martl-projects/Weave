@@ -427,7 +427,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { attachmentOf, BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, FILE_NAME_LIMIT, fileName, formatBlobRef, isImageType, isMediaType, MAX_BLOB, parseBlobRef, type Attachment, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -507,6 +507,13 @@ export {
   TEXT_NAME,
   texts,
   TextSyntaxError,
+  checkServicePackage,
+  fieldName,
+  FIELD_PREFIXES,
+  isTextRecord,
+  manifestTextFields,
+  RECORD_LIMIT,
+  type TextRecord,
   type Language,
   type LanguageSetting,
   type TextNode,

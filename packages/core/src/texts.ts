@@ -20,6 +20,8 @@
  *   {@weave:word.project}                   Weave's glossary word, the one thing a service's text may take from Weave
  *   '{' '}' '#' '<'                         quoted literals, as in ICU: an apostrophe quotes only before one of these; '' is one apostrophe
  */
+import type { AppManifest } from './rooms.ts';
+
 
 export interface TextPackage {
   /** Whose names these are: `weave`, or an app's id. */
@@ -575,4 +577,109 @@ export function pickLanguage(setting: LanguageSetting | undefined, systemLanguag
 /** The locale for Intl: the system's tag when it is of the chosen language (de-AT stays Austrian), else the language itself. */
 export function pickLocale(lang: Language, systemLanguages: readonly string[]): string {
   return systemLanguages.find((tag) => tag.toLowerCase().split('-')[0] === lang) ?? lang;
+}
+
+// ---------------------------------------------------------------- a service's own texts (docs/localization.md, Services)
+
+/**
+ * A text a service answers by name instead of as a sentence, where a string is shown today (a list item's title, a
+ * choice's note): resolved from the service's own package in the reader's language, with the same grammar.
+ */
+export interface TextRecord {
+  name: string;
+  values?: Record<string, string | number>;
+}
+
+export function isTextRecord(value: unknown): value is TextRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const r = value as TextRecord;
+  if (typeof r.name !== 'string' || !TEXT_NAME.test(r.name)) return false;
+  if (r.values === undefined) return true;
+  return typeof r.values === 'object' && r.values !== null && !Array.isArray(r.values) && Object.values(r.values).every((v) => typeof v === 'string' || typeof v === 'number');
+}
+
+/** A manifest's field as a segment of a name: a setting in capitals (DEEPSEEK_API_KEY) becomes deepseek-api-key. */
+export const fieldName = (name: string): string => name.toLowerCase().replace(/_/g, '-');
+
+/** The first segments a service's package translates manifest fields under; any other first segment names a run-time record. */
+export const FIELD_PREFIXES: ReadonlySet<string> = new Set(['name', 'about', 'start', 'install', 'settings', 'actions', 'lists', 'panels', 'services']);
+/** How long a run-time record's text may be. */
+export const RECORD_LIMIT = 200;
+
+/**
+ * The text fields of a manifest, by path, each with its length limit: what a package next to it may translate. The
+ * paths follow the manifest (actions.bet.label, settings.deepseek-api-key.hint, lists.horses.item,
+ * services.derby.open.joiner.label); nothing is added to the manifest for it.
+ */
+export function manifestTextFields(m: AppManifest): Map<string, number> {
+  const fields = new Map<string, number>();
+  fields.set('name', 40);
+  if (m.about) fields.set('about', 300);
+  if (m.start?.hint) fields.set('start.hint', 200);
+  (m.install?.steps ?? []).forEach((_, i) => fields.set(`install.steps.${i}`, 200));
+  for (const s of m.env ?? []) {
+    fields.set(`settings.${fieldName(s.name)}.label`, 60);
+    if (s.hint) fields.set(`settings.${fieldName(s.name)}.hint`, 200);
+  }
+  for (const a of m.service?.actions ?? []) {
+    fields.set(`actions.${a.name}.label`, 60);
+    for (const f of a.input ?? []) fields.set(`actions.${a.name}.input.${fieldName(f.name)}.label`, 60);
+  }
+  for (const l of m.lists ?? []) {
+    fields.set(`lists.${l.name}.title`, 60);
+    if (l.item) fields.set(`lists.${l.name}.item`, 40);
+    if (l.add?.label) fields.set(`lists.${l.name}.add.label`, 40);
+    if (l.remove?.label) fields.set(`lists.${l.name}.remove.label`, 40);
+    if (l.use?.label) fields.set(`lists.${l.name}.use.label`, 40);
+  }
+  for (const p of m.wasm?.panels ?? []) fields.set(`panels.${p.name}.title`, 60);
+  for (const s of m.services ?? []) {
+    if (s.open?.host) fields.set(`services.${fieldName(s.id)}.open.host.label`, 30);
+    if (s.open?.joiner) fields.set(`services.${fieldName(s.id)}.open.joiner.label`, 30);
+  }
+  return fields;
+}
+
+/** The signs that mean "from Weave" (the marks' check), refused in a service's text. */
+const FROM_WEAVE_SIGNS = /[✓✔☑✅√]/u;
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/;
+
+function hasTags(nodes: TextNode[]): boolean {
+  for (const n of nodes) {
+    if (n.kind === 'tag') return true;
+    if ((n.kind === 'plural' || n.kind === 'select') && Object.values(n.options).some(hasTags)) return true;
+  }
+  return false;
+}
+
+/**
+ * A service's package against its manifest: a package (checkPackage), of this app, every name under a field prefix a
+ * text field of the manifest (within its length), any other a run-time record's; plain text only: no markup, no
+ * control characters, none of the signs that mean "from Weave".
+ */
+export function checkServicePackage(input: unknown, manifest: AppManifest): TextProblem[] {
+  const problems = checkPackage(input);
+  const pkg = input as Partial<TextPackage> | null;
+  if (!pkg?.names || typeof pkg.names !== 'object') return problems;
+  if (typeof pkg.texts === 'string' && TEXTS_OWNER.test(pkg.texts) && pkg.texts !== manifest.app) problems.push({ problem: `texts: "${pkg.texts}", not this manifest's app "${manifest.app}"` });
+  const fields = manifestTextFields(manifest);
+  for (const [name, text] of Object.entries(pkg.names)) {
+    if (!TEXT_NAME.test(name) || typeof text !== 'string') continue; // said already
+    const limit = FIELD_PREFIXES.has(name.split('.')[0]) ? fields.get(name) : RECORD_LIMIT;
+    if (limit === undefined) {
+      problems.push({ name, problem: 'not a text field of this manifest' });
+      continue;
+    }
+    if (text.length > limit) problems.push({ name, problem: `longer than ${limit} characters` });
+    if (CONTROL.test(text)) problems.push({ name, problem: 'control characters' });
+    if (FROM_WEAVE_SIGNS.test(text)) problems.push({ name, problem: 'a check sign means "from Weave": not in a service\'s text' });
+    let nodes: TextNode[];
+    try {
+      nodes = parseText(text);
+    } catch {
+      continue; // said already
+    }
+    if (hasTags(nodes)) problems.push({ name, problem: "no markup in a service's text" });
+  }
+  return problems;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HintServiceInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
-import type { ActionWho } from '@weave/core';
+import { fieldName, type ActionWho, type TextPackage } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
 import { ItemList } from './lists.tsx';
@@ -12,6 +12,7 @@ import { ActionScopes, askAndWait, contractText, OriginBadge, lowerFirst, onlyAW
 import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 import { HandDialog, platformName } from './keyvaults.tsx';
 import { t, useTexts } from './texts.tsx';
+import { useServiceTexts } from './servicetexts.ts';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -496,7 +497,7 @@ function LaunchSettings({ artifact, values, onChange }: { artifact: ArtifactInfo
   return (
     <>
       {artifact.settings.map((s) => (
-        <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => onChange({ ...values, [s.name]: v })} />
+        <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => onChange({ ...values, [s.name]: v })} texts={artifact.texts} />
       ))}
     </>
   );
@@ -693,13 +694,16 @@ export function useArtifacts(project: SpaceInfo): ArtifactInfo[] | undefined {
 }
 
 /** One setting typed in the start dialog. */
-export function SettingInput({ setting, value, onChange }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void }) {
+export function SettingInput({ setting, value, onChange, texts }: { setting: ArtifactInfo['settings'][number]; value: string; onChange(value: string): void; texts?: TextPackage[] }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(texts);
+  const label = ts(`settings.${fieldName(setting.name)}.label`, setting.label);
+  const hint = setting.hint ? ts(`settings.${fieldName(setting.name)}.hint`, setting.hint) : undefined;
   // A sign-in: nothing to type; its provider's page opens from its settings once it's installed.
   if (setting.oauth)
     return (
       <div className="app-setting">
-        <label>{setting.label}</label>
+        <label>{label}</label>
         <div className="small muted">{t('setting.sign.in.with', { site: new URL(setting.oauth.authorize ?? setting.oauth.device ?? setting.oauth.token).hostname })}</div>
       </div>
     );
@@ -707,7 +711,7 @@ export function SettingInput({ setting, value, onChange }: { setting: ArtifactIn
   if (setting.register)
     return (
       <div className="app-setting">
-        <label>{setting.label}</label>
+        <label>{label}</label>
         <div className="small muted">{t('setting.made.on', { site: new URL(setting.register.page).hostname })}</div>
       </div>
     );
@@ -715,19 +719,19 @@ export function SettingInput({ setting, value, onChange }: { setting: ArtifactIn
   if (setting.choose)
     return (
       <div className="app-setting">
-        <label>{setting.label}</label>
-        <div className="small muted">{t(setting.choose.many ? 'setting.pick.them' : 'setting.pick.it', { from: setting.hint ?? t('setting.picked.from.list') })}</div>
+        <label>{label}</label>
+        <div className="small muted">{t(setting.choose.many ? 'setting.pick.them' : 'setting.pick.it', { from: hint ?? t('setting.picked.from.list') })}</div>
       </div>
     );
   return (
     <div className="app-setting">
       <label htmlFor={`setting-${setting.name}`}>
-        {setting.label}
+        {label}
         {setting.optional ? <span className="muted"> {t('setting.optional')}</span> : null}
 
       </label>
       <input id={`setting-${setting.name}`} className="wide" type={setting.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} value={value} placeholder={setting.name} onChange={(e) => onChange(e.target.value)} />
-      {setting.hint && <div className="small muted">{setting.hint}</div>}
+      {hint && <div className="small muted">{hint}</div>}
     </div>
   );
 }
@@ -957,11 +961,12 @@ function KeyvaultNote({ project, service }: { project: SpaceInfo; service: Servi
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says so (the shipped Websites). */
 const hostsSites = (s: ServiceProfileInfo): boolean => s.builtin === 'website' || s.contract.websites === 'host';
 
-const purpose = (s: ServiceProfileInfo): string => (s.builtin === 'website' ? t('psvc.website.purpose') : s.description);
+const purpose = (s: ServiceProfileInfo, ts: (path: string, literal: string) => string): string => (s.builtin === 'website' ? t('psvc.website.purpose') : ts('about', s.description));
 
 /** One service in the project: what it's for, and what it offers here (a website service: its websites). */
 function ServiceSection({ project, service, rooms, shows, mine, meDid, members, groups, maintainer, artifacts, boards }: { project: SpaceInfo; service: ServiceProfileInfo; rooms: WebsiteInfo[]; shows: ShowInfo[]; mine?: ServiceInfo; meDid: string; members: MemberInfo[]; groups: ProjectInfo['groups']; maintainer: boolean; artifacts: ArtifactInfo[]; boards: string[] }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const [opening, setOpening] = useState(false);
   const [asking, setAsking] = useState(false);
   const [setting, setSetting] = useState(false);
@@ -997,7 +1002,7 @@ function ServiceSection({ project, service, rooms, shows, mine, meDid, members, 
           </button>
         )}
       </legend>
-      {purpose(service) && <p className="small">{purpose(service)}</p>}
+      {purpose(service, ts) && <p className="small">{purpose(service, ts)}</p>}
       <OriginText origin={service.origin} />
       {own && mine?.update && <ShippedUpdate service={mine} />}
       {own && mine && <KeyvaultNote project={project} service={mine} />}
@@ -1106,7 +1111,7 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
       ))}
       {chosen && (
         <>
-          {chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />)}
+          {chosen.settings.map((s) => <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} texts={chosen.texts} />)}
           {maintainer && chosen.settings.length > 0 && (
             <div className="field-row small">
               <input id={`keep-${project.id}`} type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />

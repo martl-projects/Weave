@@ -116,6 +116,25 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it("checks the texts next to a manifest with it, and publishes them with the app (the Pferderennen's German)", async () => {
+    const { node, call, close } = await setup(['weave.app', 'weave.app.texts']);
+    const derby = join(import.meta.dirname, '..', '..', 'core', 'test', 'fixtures', 'derby');
+    const checked = (await call('weave_app_manifest', { file: join(derby, 'weave.app.json') })).data;
+    expect(checked).toMatchObject({ ok: true, problems: [], texts: [{ file: 'weave.texts.de.json', problems: [] }] });
+    // A broken package next to a manifest: said by file and name, and the check fails.
+    const dir = node.home.dir;
+    const manifest = JSON.parse(readFileSync(join(derby, 'weave.app.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(join(dir, 'weave.app.json'), JSON.stringify({ ...manifest, install: { tag: 'v1.4.0', source: { provider: 'github', ref: 'martl/derby' }, assets: { 'linux-x64': { file: 'derby.tar.gz', sha256: 'a'.repeat(64), size: 10 } }, access: 'direct', fetcher: 'github-checkout' } }));
+    writeFileSync(join(dir, 'weave.texts.de.json'), JSON.stringify({ texts: 'derby', lang: 'de', names: { 'actions.gallop.label': 'Galopp' } }));
+    expect((await call('weave_app_manifest', { file: join(dir, 'weave.app.json') })).data).toMatchObject({ ok: false, problems: [], texts: [{ file: 'weave.texts.de.json', problems: ['actions.gallop.label: not a text field of this manifest'] }] });
+    expect((await call('weave_app_publish', { project: 'Weave', file: join(dir, 'weave.app.json') })).error).toMatch(/weave\.texts\.de\.json: actions\.gallop\.label/);
+    // The right one: published with the app, and there with the artifact.
+    writeFileSync(join(dir, 'weave.texts.de.json'), readFileSync(join(derby, 'weave.texts.de.json')));
+    expect((await call('weave_app_publish', { project: 'Weave', file: join(dir, 'weave.app.json') })).data).toMatchObject({ app: 'derby' });
+    expect((await node.artifacts('Weave'))[0].texts?.map((p) => p.lang)).toEqual(['de']);
+    close();
+  });
+
   it('lets an agent ask for a permission, which its person allows from the Inbox', async () => {
     const { node, call, close } = await setup();
     // Refused, and told how to ask.

@@ -5,6 +5,7 @@ import { isNetHost, lowerHost, parseContract, type ServiceContract } from './ser
 import { parseAppMarks, type AppMarks } from './marks.ts';
 import { parseAppHints, type AppHints } from './hints.ts';
 import { parseWho, type ActionWho } from './serviceactions.ts';
+import { checkServicePackage, type TextPackage } from './texts.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -901,6 +902,24 @@ export const KIND_ARTIFACT = 'weave.artifact';
  * Signed events stay (who got it keeps what they have); a new release of the same tag counts again.
  */
 export const KIND_ARTIFACT_WITHDRAWN = 'weave.artifact.withdrawn';
+
+/**
+ * The packages that translate a release's texts (docs/localization.md): {release: its event, packages: [weave.texts.<lang>.json…]},
+ * published by a maintainer with the release, or later. Nothing is added to the manifest for it.
+ */
+export const KIND_APP_TEXTS = 'weave.app.texts';
+
+/** A release's packages, the latest per language published by a maintainer, only those that pass the check against its manifest. */
+export function releaseTextsOf(entries: ReleaseEntry[], maintainers: Set<Did>, release: string, manifest: AppManifest): TextPackage[] {
+  const byLang = new Map<string, TextPackage>();
+  for (const e of [...entries].filter((x) => x.kind === KIND_APP_TEXTS).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+    if (!maintainers.has(e.event.author)) continue;
+    const b = (e.body && typeof e.body === 'object' ? e.body : {}) as { release?: unknown; packages?: unknown };
+    if (b.release !== release || !Array.isArray(b.packages)) continue;
+    for (const p of b.packages) if (checkServicePackage(p, manifest).length === 0) byLang.set((p as TextPackage).lang, p as TextPackage);
+  }
+  return [...byLang.values()];
+}
 
 /** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get, never one withdrawn. */
 export function artifactsOf(entries: ReleaseEntry[], maintainers: Set<Did>): Artifact[] {

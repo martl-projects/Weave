@@ -1,5 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
+import type { TextPackage } from '@weave/core';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, Language, LanguageSetting, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, Attachment, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
@@ -348,6 +349,8 @@ export interface ArtifactInfo {
   /** A file's name, size and media type. */
   file?: { name: string; size?: number };
   type?: string;
+  /** Its own texts in other languages, published by a maintainer with the release (docs/localization.md). */
+  texts?: TextPackage[];
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -363,6 +366,8 @@ export interface ServiceProfileInfo {
   origin: ServiceOriginInfo;
   /** The settings it asks for (its manifest's env): what its spaces' maintainers can fill in. */
   settings?: AppSetting[];
+  /** Its own texts in other languages (weave.texts.<lang>.json with its release), from a verified release only: the renderer resolves them (docs/localization.md). */
+  texts?: TextPackage[];
   time: string;
 }
 
@@ -2288,7 +2293,7 @@ export interface Backend {
   /** The project's artifact description (its weave.app.json as last published), if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
   /** Maintainers: publish (or replace) the project's artifact description (the contents of weave.app.json). */
-  publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
+  publishApp(input: { project: string; manifest: unknown; texts?: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: release an artifact from a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** Release a Weave service (maintainers): an image, ref:tag, with its manifest in its "dev.weave.service" label; pinned to its digest. */
@@ -2300,7 +2305,7 @@ export interface Backend {
   /** The releases one of a project's artifacts could publish (or a new source's), as its provider sees them. */
   artifactReleases(input: { project: string; artifact?: string; source?: string }): Promise<AppReleases>;
   /** Maintainers: release one of a project's artifacts (or a new one, from a new source), by tag: fingerprinted by its provider. */
-  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: describe one of a project's artifacts (its weave.app.json): a new one, or the next description of one. */
   publishArtifact(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
   /**

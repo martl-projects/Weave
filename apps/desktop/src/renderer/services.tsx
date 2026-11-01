@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceListInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
-import type { ActionWho, ServiceContract } from '@weave/core';
+import { fieldName, type ActionWho, type ServiceContract, type TextPackage } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
 import { AccountProofDialog } from './accounts.tsx';
@@ -8,6 +8,7 @@ import { ago, api, bump, onItem, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 import { ServiceList } from './lists.tsx';
 import { t, T, useTexts } from './texts.tsx';
+import { useServiceTexts } from './servicetexts.ts';
 
 /*
  * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
@@ -457,12 +458,13 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
 /** A service in a space: what it is, what it may do, asking it, and what it answered. */
 export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; service: ServiceProfileInfo; onClose(): void }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: requests, reload } = useApi(() => api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }), [space.id, service.did]);
   const [text, setText] = useState('');
   const by = service.person.name ?? shortDid(service.person.did);
   return (
     <Modal title={`${by} · ${service.name}`} onClose={onClose} wide>
-      {service.description && <p>{service.description}</p>}
+      {service.description && <p>{ts('about', service.description)}</p>}
       <p className="small muted">{t('svc.card.about', { by, contract: contractText(service.contract), name: service.name })}</p>
       <div className="field-row">
         <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('svc.ask.placeholder', { name: service.name })} />
@@ -609,8 +611,10 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
 export const SERVICE_CHANGED = 'weave-service-changed';
 const serviceChanged = (did: string) => dispatchEvent(new CustomEvent(SERVICE_CHANGED, { detail: did }));
 
-export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
+export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; onClose(): void }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
+  const label = (a: { name: string; label: string } | undefined, name: string) => (a ? ts(`settings.${fieldName(a.name)}.label`, a.label) : name);
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState({ name: '', value: '', secret: true });
@@ -640,7 +644,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
           />
         </div>
       )}
-      {data.missing.length > 0 && <p className="note">{t('kept.needs', { what: data.missing.map((n) => data.asks.find((a) => a.name === n)?.label ?? n).join(', ') })}</p>}
+      {data.missing.length > 0 && <p className="note">{t('kept.needs', { what: data.missing.map((n) => label(data.asks.find((a) => a.name === n), n)).join(', ') })}</p>}
       {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
@@ -656,13 +660,13 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         return (
           <fieldset key={name} className="service-setting">
             <legend>
-              {asked?.label ?? name}{' '}
+              {label(asked, name)}{' '}
               <span className="muted small">
                 {name}
                 {asked?.optional ? t('kept.optional') : ''}
               </span>
             </legend>
-            {asked?.hint && <p className="small muted">{asked.hint}</p>}
+            {asked?.hint && <p className="small muted">{ts(`settings.${fieldName(asked.name)}.hint`, asked.hint)}</p>}
             <p className="small">
               {yours && !data.runsHere ? (
                 t('kept.runners', { runner })
@@ -721,11 +725,11 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
                           reload();
                           serviceChanged(service.did);
                         }
-                      }, asked.register ? t('kept.app.is.made', { app: asked.label }) : t('kept.service.signed.in', { service: service.name }))
+                      }, asked.register ? t('kept.app.is.made', { app: label(asked, name) }) : t('kept.service.signed.in', { service: service.name }))
                     }
                   >
                     {asked.register
-                      ? t(set ? 'kept.make.another.on' : 'kept.make.on', { app: lowerFirst(asked.label), site: new URL(asked.register.page).hostname })
+                      ? t(set ? 'kept.make.another.on' : 'kept.make.on', { app: lowerFirst(label(asked, name)), site: new URL(asked.register.page).hostname })
                       : set
                         ? t('kept.sign.in.again')
                         : t('kept.sign.in.with', { site: new URL(asked.oauth!.authorize ?? asked.oauth!.device ?? asked.oauth!.token).hostname.replace(/^(www|api|accounts)\./, '') })}
@@ -803,8 +807,9 @@ export interface ScopedAction {
  * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
  * which is changed in its settings (maintainers).
  */
-export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
+export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract; texts?: TextPackage[] }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const { data: lists } = useApi(() => api<ServiceListInfo[]>('serviceLists', { space: space.id, service: service.did }).catch(() => [] as ServiceListInfo[]), [space.id, service.did]);
@@ -817,7 +822,7 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
   const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? []), ...listed]);
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
-  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${ts(`actions.${a.name}.label`, a.label)}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
   if (!all.length && !shown.length && !lists?.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
@@ -832,7 +837,7 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
       {shown.map((p) => (
         <div className="service-panel-box" key={p.name}>
           {p.who !== 'members' && <div className="small muted">{t('who.see.this', { who: title(p.who) })}</div>}
-          <ServicePanel space={space} service={service} panel={p} actions={actions ?? []} />
+          <ServicePanel space={space} service={service} panel={{ ...p, title: ts(`panels.${p.name}.title`, p.title) }} actions={actions ?? []} />
         </div>
       ))}
       {options.map((who) => (
@@ -855,8 +860,9 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
 }
 
 /** Who may use each of a service's actions here (in its settings): maintainers make one narrower than its contract, never wider. */
-function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string } }) {
+function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string; texts?: TextPackage[] } }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: info } = useApi(() => api<{ groups: Array<{ id: string; name: string }> }>('project', space.id).catch(() => ({ groups: [] })), [space.id]);
   const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
@@ -871,7 +877,7 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
         return (
           <div className="field-row" key={a.name}>
             <span className="grow">
-              {a.label}
+              {ts(`actions.${a.name}.label`, a.label)}
               {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted"> {t('who.its.contract', { who: lowerFirst(whoLabel(a.declared, space.name, groups)) })}</span>}
             </span>
             {options.length > 1 ? (
@@ -893,8 +899,10 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
   );
 }
 
-export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; action: ServiceActionInfo; onClose(): void }) {
   const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
+  const label = ts(`actions.${action.name}.label`, action.label);
   const [values, setValues] = useState<Record<string, string>>({});
   const [asked, setAsked] = useState<string>();
   const { data: answer } = useApi(
@@ -903,13 +911,13 @@ export function ActionDialog({ space, service, action, onClose }: { space: { id:
   );
   const missing = (action.input ?? []).some((f) => !f.optional && !values[f.name]?.trim());
   return (
-    <Modal title={`${action.label} · ${service.name}`} onClose={onClose}>
+    <Modal title={`${label} · ${service.name}`} onClose={onClose}>
       {!asked ? (
         <>
           {(action.input ?? []).map((f) => (
             <div className="app-setting" key={f.name}>
               <label htmlFor={`action-${f.name}`}>
-                {f.label}
+                {ts(`actions.${action.name}.input.${fieldName(f.name)}.label`, f.label)}
                 {f.optional ? <span className="muted"> {t('setting.optional')}</span> : null}
               </label>
               <input id={`action-${f.name}`} className="wide" type={f.secret ? 'password' : 'text'} value={values[f.name] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))} />
@@ -927,7 +935,7 @@ export function ActionDialog({ space, service, action, onClose }: { space: { id:
                 })
               }
             >
-              {action.label}
+              {label}
             </AsyncButton>
           </div>
         </>

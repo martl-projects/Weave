@@ -153,6 +153,17 @@ Tests: the grammar (`packages/core/test/texts.test.ts`: placeholders, plurals in
 
 Not in this item: the CLI's messages, posts and release notes in several languages, store listing and onboarding texts (a list of what else blocks the release is still open in the idea post), packages as artifacts.
 
+## As built (1.11.2026)
+
+What landed on the `worktree-texts` branch, where it differs from or adds to the plan above:
+
+- **Every screen is on names**: the desktop renderer, the main process (`apps/desktop/src/texts.ts`: tray, window titles, dialogs, the `weave` command, following the setting through `weave:language` from the window) and the admin console (`apps/console/src/texts.ts`, the browser's language). The check's allowlist is empty; code shown as code (`<code>`, `<pre>`, `<kbd>`) is no text to it.
+- **A service's packages travel as an event of their own**, `weave.app.texts` `{release, packages}`, published by a maintainer with the release (`publishApp` and `releaseArtifact` take `texts`; `weave_app_publish`, `weave app publish` and `weave_app_release` with `file` read the `weave.texts.<lang>.json` next to the manifest), or later. The manifest and the release event stay what they are; the GitHub releases service, pinned from its own repository, publishes releases as before. Readers take the latest package per language by a maintainer that passes the check against the release's manifest (`releaseTextsOf`); a broken one is dropped and the one before stands. Agents need `weave.app.texts` to sign them, like any kind.
+- **The check** (`checkServicePackage`): a name under `name`, `about`, `start`, `install`, `settings`, `actions`, `lists`, `panels` or `services` must be a text field of the manifest, within that field's limit (`manifestTextFields`); a name under any other first segment is a run-time record's (200 characters). Settings in capitals are named lowercase with dashes: `settings.deepseek-api-key.hint`. Plain text only: no markup, no control characters, none of the check signs that mean "from Weave". `weave_app_manifest` with `file` checks the packages next to it and says which file and name is wrong.
+- **In the UI** the packages come with a verified release's profile (`ServiceProfileInfo.texts`) and with an artifact (`ArtifactInfo.texts`); `useServiceTexts` resolves field paths (`ts`) and `{name, values}` records (`tr`) in the reader's language, with Weave's glossary and nothing else from Weave. Action labels and their fields, kept settings' labels and hints, a release's setting labels in the start dialogs, panel titles, a list's title, item word and button labels, and list items (title, badge, detail, done, more) are resolved so; a record's name no package has shows as the name.
+- **The Pferderennen** is the fixture `packages/core/test/fixtures/derby` (its manifest and `weave.texts.de.json`), tried in the core, node and MCP tests. The app's own repository gets the same file next to its manifest.
+- **Still English**: what the daemon writes (notices, the errors screens show in toasts) and what services make up at run time without a record; `lang` as a service input waits for the contract decision.
+
 ## Decided (1.11.2026)
 
 - **Field-path packages next to the manifest**, `weave.texts.<lang>.json`; nothing is added to `weave.app.json`.

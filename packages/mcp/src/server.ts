@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { checkServicePackage } from '@weave/core';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
 import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, wasmReleaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
@@ -981,15 +982,36 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     ),
   );
 
+  /** The packages next to a manifest (weave.texts.<lang>.json, docs/localization.md): each as read, by file name. */
+  const textsNextTo = (file: string): Array<{ file: string; package: unknown }> => {
+    const dir = dirname(file);
+    let names: string[];
+    try {
+      names = readdirSync(dir).filter((n) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)*\.json$/.test(n)).sort();
+    } catch {
+      return [];
+    }
+    return names.map((n) => {
+      try {
+        return { file: n, package: JSON.parse(readFileSync(join(dir, n), 'utf8')) as unknown };
+      } catch (error) {
+        return { file: n, package: { error: `not readable JSON: ${(error as Error).message}` } };
+      }
+    });
+  };
+
   server.registerTool(
     'weave_app_publish',
     {
       title: "Describe one of a project's artifacts",
       description:
-        "Maintainers: describe one of a project's artifacts from its weave.app.json on this computer (a new one, or the next description of one, by its id): a project has any number, each released from its own source. Release files set by weave_app_release are kept. Needs the weave.app permission.",
+        "Maintainers: describe one of a project's artifacts from its weave.app.json on this computer (a new one, or the next description of one, by its id): a project has any number, each released from its own source. Release files set by weave_app_release are kept. The artifact's texts in other languages (weave.texts.<lang>.json next to the manifest, see weave_app_manifest) are published with it. Needs the weave.app permission, and weave.app.texts when texts are next to the manifest.",
       inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
     },
-    run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
+    run(async ({ project, file }: { project: string; file: string }) => {
+      const texts = textsNextTo(file).map((t) => t.package);
+      return backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), ...(texts.length ? { texts } : {}), as });
+    }),
   );
 
   server.registerTool(
@@ -997,7 +1019,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "An artifact's manifest: rules, example, check",
       description:
-        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how it runs (start.image, a container, or wasm; start.command only for people starting a checkout by hand). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how it runs (start.image, a container, or wasm; start.command only for people starting a checkout by hand). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it; with file, the texts next to it too (weave.texts.<lang>.json: the manifest's labels and hints in another language by field path, like actions.bet.label or settings.deepseek-api-key.hint, plus the names the service answers at run time; plain text, Weave's glossary as {@weave:word.project}). Writes nothing.",
       inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
       annotations: { readOnlyHint: true },
     },
@@ -1012,7 +1034,10 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         }
       }
       const checked = checkManifest(input);
-      return { ok: checked.problems.length === 0, ...checked, ...(checked.problems.length ? { rules: MANIFEST_RULES } : {}) };
+      // The packages next to the file: each against the manifest as read.
+      const texts = file !== undefined && checked.manifest ? textsNextTo(file).map((t) => ({ file: t.file, problems: checkServicePackage(t.package, checked.manifest!).map((p) => (p.name ? `${p.name}: ${p.problem}` : p.problem)) })) : [];
+      const ok = checked.problems.length === 0 && texts.every((t) => t.problems.length === 0);
+      return { ok, ...checked, ...(texts.length ? { texts } : {}), ...(checked.problems.length ? { rules: MANIFEST_RULES } : {}) };
     }),
   );
 
@@ -1084,10 +1109,12 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         repo: z.string().optional().describe('Where its releases are, owner/name: a new source starts a new artifact'),
         assets: z.record(z.string(), z.string()).optional(),
         wait: z.number().min(0).max(20).optional().describe('Minutes to wait for the release and its files, while a workflow builds it'),
+        file: z.string().optional().describe("Path to the checkout's weave.app.json: the texts next to it (weave.texts.<lang>.json) are published with the release"),
       },
     },
-    run(async ({ project, tag, artifact, repo, assets, wait }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
-      const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}) };
+    run(async ({ project, tag, artifact, repo, assets, wait, file }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number; file?: string }) => {
+      const texts = file ? textsNextTo(file).map((t) => t.package) : [];
+      const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}), ...(texts.length ? { texts } : {}) };
       // A pushed tag becomes a release with files a few minutes later, if a workflow makes it: look every 30 seconds.
       const until = Date.now() + (wait ?? 0) * 60_000;
       if (wait) {
