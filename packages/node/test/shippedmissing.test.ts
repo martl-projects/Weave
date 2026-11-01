@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { people } from './helpers/people.ts';
@@ -14,7 +15,11 @@ describe('a daemon without the services Weave ships', () => {
     const node = person('Martin');
     node.wasmSetup.shippedDir = join(home(), 'nowhere');
     expect((await node.status()).shippedMissing).toBe(true);
-    node.wasmSetup.shippedDir = join(import.meta.dirname, '..', '..', 'shipped', 'dist');
+    // A folder with the list of what's shipped (CI never builds packages/shipped/dist).
+    const shipped = join(home(), 'shipped');
+    mkdirSync(shipped, { recursive: true });
+    writeFileSync(join(shipped, 'shipped.json'), '[]');
+    node.wasmSetup.shippedDir = shipped;
     expect((await node.status()).shippedMissing).toBeUndefined();
   });
 });
