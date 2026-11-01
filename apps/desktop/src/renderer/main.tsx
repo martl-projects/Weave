@@ -55,7 +55,8 @@ function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, h
   return (
     <li style={{ paddingLeft: depth * 14 }}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
-        {sprite ? image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
+        {/* People (face): their avatar; spaces: their icon or sprite. */}
+        {sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
