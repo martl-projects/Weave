@@ -2375,8 +2375,7 @@
 
     "avatar.tab.screen": "Screen",
     "avatar.color.screen": "Screen",
-    "avatar.color.frame": "Frame",
-    "avatar.color.hands": "Hands",
+    "avatar.color.frame": "Robot",
     "avatar.use.default": "Use my default figure",
     "avatar.default.again": "You show as the figure your key makes again",
     "avatar.agent.title": "{agent}'s avatar",

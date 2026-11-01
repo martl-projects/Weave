@@ -41,12 +41,11 @@ const STEPS = [
   { k: 'Rot', id: 'turn', less: '↺', more: '↻' },
 ];
 
-// A screen for a head (agents, sessions): its shape and colours, then the same eyes and mouths as people's.
+// A robot with a screen for a face (agents, sessions): its screen and body colours, then the same eyes and mouths as people's.
 const SCREEN_TABS: Tab[] = [
-  { id: 'screen', zoom: 0.7, sections: [{ part: 'screen', heading: 'shape', color: 'screenColor', colorHeading: 'screen' }, { part: '', heading: '', color: 'frameColor', colorHeading: 'frame' }] },
+  { id: 'screen', zoom: 0.7, sections: [{ part: '', heading: '', color: 'screenColor', colorHeading: 'screen' }, { part: '', heading: '', color: 'frameColor', colorHeading: 'frame' }] },
   PERSON_TABS[2],
   { id: 'mouth', zoom: 1, sections: [{ part: 'mouth', heading: 'mouth', kind: 'flat', adjust: 'mouth' }] },
-  { id: 'outfit', zoom: 0, sections: [{ part: 'shirt', heading: 'top', color: 'shirtColor', colorHeading: 'color', kind: 'bust' }, { part: '', heading: '', color: 'skin', colorHeading: 'hands' }] },
 ];
 
 /** A variant's picture: flat from the sprites, or the figure drawn with it. */
@@ -118,7 +117,7 @@ export function SessionAvatarEditor({ session, me, onClose }: { session: Session
   );
 }
 
-/** Making a figure: a person's (head and hair) or a screen-headed one's (agents, sessions). */
+/** Making a figure: a person's (head and hair) or a robot's (agents, sessions). */
 function FigureEditor({ title, screen = false, initial, reset, onSave, onClose }: { title: string; screen?: boolean; initial(l: AvatarLib): Figure; reset?: string; onSave(avatar: Figure | null): Promise<boolean>; onClose(): void }) {
   const { t } = useTexts();
   const TABS = screen ? SCREEN_TABS : PERSON_TABS;

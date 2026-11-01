@@ -2375,8 +2375,7 @@
 
     "avatar.tab.screen": "Bildschirm",
     "avatar.color.screen": "Bildschirm",
-    "avatar.color.frame": "Rahmen",
-    "avatar.color.hands": "Hände",
+    "avatar.color.frame": "Roboter",
     "avatar.use.default": "Meine Standardfigur nehmen",
     "avatar.default.again": "Du erscheinst wieder als die Figur, die dein Schlüssel macht",
     "avatar.agent.title": "Avatar von {agent}",
