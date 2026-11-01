@@ -35,11 +35,13 @@ export interface Config {
   spaceFolders?: Record<string, string[]>;
   /** Your desk: its project, and the folder here where your daily driver works. */
   desk?: { space: string; folder?: string; driver?: { provider: string; id: string; host?: string; folder?: string } };
+  /** false: peers that share nothing with this node and hold none of its links get in all the same (as before 0.27). */
+  firewall?: false;
 }
 
 /** What this build reads of the config; anything else in the file is kept as it is (see loadConfig). */
 const KNOWN: ReadonlySet<string> = new Set<keyof Config>([
-  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language',
+  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language', 'firewall',
 ]);
 
 export function loadConfig(home: Home): Config {
@@ -77,6 +79,7 @@ export function loadConfig(home: Home): Config {
     ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
     ...(stored.desk ? { desk: stored.desk } : {}),
     ...(isLanguage(stored.language) ? { language: stored.language } : {}),
+    ...(stored.firewall === false ? { firewall: false as const } : {}),
   };
 }
 

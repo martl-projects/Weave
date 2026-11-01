@@ -3,7 +3,7 @@ import { boxTo, openBox, type Box } from './crypto.ts';
 import type { EventFields } from './events.ts';
 import type { EventView } from './records.ts';
 import { isDid, type Did } from './keys.ts';
-import type { Recipient, SpaceKind } from './spaces.ts';
+import type { Invite, Recipient, SpaceKind } from './spaces.ts';
 
 /*
  * Invite links that need the inviter's OK. Unlike an ordinary invite link,
@@ -29,7 +29,7 @@ export interface KnockLink {
   /** The inviter's encryption key, so the knock can be boxed before their identity has synced. */
   enc: Did;
   expires: string;
-  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  entry: Invite['entry'];
 }
 
 const PREFIX = 'weave:knock:';

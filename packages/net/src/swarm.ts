@@ -41,23 +41,32 @@ export class SwarmNode {
   }
 
   #refreshAll(): void {
-    for (const discovery of this.#discoveries.values()) discovery.refresh({ client: true, server: true }).catch(() => {});
+    for (const [name, discovery] of this.#discoveries) discovery.refresh({ client: true, server: !this.#lookOnly.has(name) }).catch(() => {});
   }
 
-  /** Announce on and look up a topic; resolves once the announcement is in the DHT. */
-  async join(name: string): Promise<void> {
+  /** Topics only looked up, never announced on. */
+  #lookOnly = new Set<string>();
+
+  /**
+   * Announce on and look up a topic; resolves once the announcement is in the DHT. `announce: false` only looks:
+   * for someone else's meeting point, where announcing would tell whoever looks there where we are.
+   */
+  async join(name: string, options: { announce?: boolean } = {}): Promise<void> {
     if (this.#discoveries.has(name)) return;
-    const discovery = this.swarm.join(topicFor(name), { server: true, client: true });
+    const server = options.announce !== false;
+    if (!server) this.#lookOnly.add(name);
+    const discovery = this.swarm.join(topicFor(name), { server, client: true });
     this.#discoveries.set(name, discovery);
     await discovery.flushed();
     // Two nodes joining at the same moment each look before the other has announced;
     // a second look a moment later finds them.
-    this.#timers.push(setTimeout(() => discovery.refresh({ client: true, server: true }).catch(() => {}), 1500).unref());
+    this.#timers.push(setTimeout(() => discovery.refresh({ client: true, server }).catch(() => {}), 1500).unref());
   }
 
   /** Stop announcing on and looking up a topic. */
   async leave(name: string): Promise<void> {
     if (!this.#discoveries.delete(name)) return;
+    this.#lookOnly.delete(name);
     await this.swarm.leave(topicFor(name));
   }
 

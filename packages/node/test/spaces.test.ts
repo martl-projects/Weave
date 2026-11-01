@@ -149,7 +149,8 @@ describe('projects, groups and the social graph between daemons', () => {
     const malloryDir = person('Mallory', true);
     for (const dir of [aliceDir, bobDir, malloryDir]) {
       const home = resolveHome(dir);
-      saveConfig(home, { ...loadConfig(home), topics: ['town-square'] });
+      // Strangers who meet on an open topic: no link between them, so without the firewall (it would turn them away).
+      saveConfig(home, { ...loadConfig(home), topics: ['town-square'], firewall: false });
     }
     const alice = await startDaemon(aliceDir);
     const bob = await startDaemon(bobDir);

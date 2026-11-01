@@ -43,7 +43,11 @@ import type { BlobSource } from './session.ts';
  *   wrapped, padded items of our small spaces under ids only we can make;
  *   the node decides who keeps what (`access.keep`).
  *
- * `public` is shared with everyone. A peer whose first message is `heads` is
+ * `public` is shared with everyone, unless the node has a firewall
+ * (`access.firewall`: trust starts before the first packet): then
+ * a peer gets nothing, public included, until its hello shows a space that
+ * admits or a proof (the secret behind a contact link's meeting point), and a
+ * hello that shows none closes the connection. A peer whose first message is `heads` is
  * v0.3: it gets the v1 logs (ending in a farewell, where this node wrote one)
  * and nothing is taken from it.
  *
@@ -80,6 +84,10 @@ export interface HeldSpace {
   keys: Uint8Array[];
   /** A pulled space (stage 4): bodies come for this recent window (ms) and what the node wants; envelopes for everything. */
   pulled?: { windowMs: number };
+  /** Not a space: a secret that only proves the peer was given a link (a contact link's meeting point). Never synced. */
+  proof?: true;
+  /** Behind the firewall, sharing this lets a peer in. False for what anyone could hold with us (a stranger's direct chat). */
+  admits?: boolean;
 }
 
 /** What a session needs to know of the node: which spaces it holds, and where rekey events offered by peers go. */
@@ -93,6 +101,11 @@ export interface SpaceAccess {
   keep?: KeepAccess;
   /** For a peer on an older protocol: this node's farewell in each group and project, signed in the shape that protocol reads. The only thing such a peer gets. */
   farewells?(): WireItemV2[];
+  /**
+   * Strangers are turned away: until its hello shows a space (or a proof) that admits, a peer gets nothing, not even
+   * public, and nothing it sends is read; a hello that shows none closes the connection.
+   */
+  firewall?: boolean;
 }
 
 export interface KeepAccess {
@@ -148,6 +161,8 @@ export class PeerSession2 {
   readonly #peerRole: Role;
   /** Spaces both ends hold (public always), and those whose sync has started on this connection. */
   #shared = new Set<string>(['public']);
+  /** The peer may have what we share (always, without a firewall); behind one, once its hello showed something that admits. */
+  #admitted: boolean;
   /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
   #behind = new Set<string>();
   /** Per space whose sync has started, the tag of the key it started with: a new key starts it again. */
@@ -179,6 +194,8 @@ export class PeerSession2 {
     this.stream = stream;
     this.blobs = options.blobs;
     this.#access = options.access;
+    this.#admitted = !options.access.firewall;
+    if (!this.#admitted) this.#shared = new Set();
     const hash = options.handshakeHash ?? (stream as { handshakeHash?: Uint8Array | null }).handshakeHash;
     if (!hash) throw new Error('a v2 session needs the connection’s handshake hash');
     this.#handshakeHash = hash;
@@ -187,6 +204,7 @@ export class PeerSession2 {
     this.#role = initiator ? 'initiator' : 'responder';
     this.#peerRole = initiator ? 'responder' : 'initiator';
     this.#unsubscribe = replica.onAppend((record) => {
+      if (!this.#admitted) return;
       if (isWireItemV2(record.wire)) this.#offer([record.wire]);
       else this.#offerV1(record.wire);
       if (record.scope !== 'public') this.#askKeepingSoon();
@@ -195,8 +213,13 @@ export class PeerSession2 {
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());
     this.announce();
+    if (this.#admitted) this.#welcome();
+  }
+
+  /** What a peer we let in gets first: our v1 heads (v0.3 peers start from them) and the blobs we're after. */
+  #welcome(): void {
     this.#send({ t: 'heads', heads: this.#v1Heads() });
-    const wanted = options.blobs?.wanted() ?? [];
+    const wanted = this.blobs?.wanted() ?? [];
     if (wanted.length) this.want(wanted);
   }
 
@@ -231,7 +254,7 @@ export class PeerSession2 {
   }
 
   want(hashes: string[]): void {
-    if (hashes.length) this.#send({ t: 'want', hashes: hashes.slice(0, 256) });
+    if (hashes.length && this.#admitted) this.#send({ t: 'want', hashes: hashes.slice(0, 256) });
   }
 
   close(): void {
@@ -275,6 +298,8 @@ export class PeerSession2 {
     // What a peer on an older protocol sends never counts; v0.3 peers still get v1 logs and blobs, as they did.
     const v2 = this.#speaks();
     const serves = v2 || this.#peerVersion === 1;
+    // Behind the firewall, a peer not let in is heard only saying hello; a v0.3 peer (heads first) proves nothing, ever.
+    if (!this.#admitted && message.t !== 'hello') return this.#peerVersion === 1 ? this.close() : undefined;
     switch (message.t) {
       case 'hello': {
         if (this.#peerVersion === 1) break;
@@ -287,7 +312,7 @@ export class PeerSession2 {
         if (v > WIRE_VERSION) this.#peerNewer = true;
         if (v2 && Array.isArray(message.tags)) {
           this.#peerNeg = this.neg && Array.isArray(message.features) && message.features.includes('neg');
-          this.#hello(message.tags);
+          this.#hello(message.tags, v === WIRE_VERSION);
         }
         break;
       }
@@ -439,20 +464,38 @@ export class PeerSession2 {
     for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'items', items: items.slice(i, i + BATCH) });
   }
 
-  /** The peer's spaces: start syncing those newly shared. */
-  #hello(tags: unknown[]): void {
+  /**
+   * The peer's spaces: start syncing those newly shared. Behind the firewall, the first hello (in our protocol) that
+   * shows something admitting lets the peer in; one that shows nothing closes the connection (`final`: not for a
+   * newer peer's first hello, in its own protocol, nor for our own spaces changing).
+   */
+  #hello(tags: unknown[], final = false): void {
     this.#peerTags = tags;
     const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
     const shared = new Set(['public']);
     const behind = new Set<string>();
     const startedWith = new Map<string, string>([['public', '']]);
-    for (const { space, keys } of this.#access.spaces()) {
+    let admits = false;
+    for (const { space, keys, proof, admits: lets } of this.#access.spaces()) {
       // The peer's tags are made as the other end: our own tags, echoed back, match nothing here.
       const theirTag = (key: Uint8Array) => spaceTag(key, this.#handshakeHash, this.#peerRole);
-      if (keys[0]) startedWith.set(space, theirTag(keys[0]));
       const [current, ...earlier] = keys;
-      if (current && theirs.has(theirTag(current))) shared.add(space);
-      else if (earlier.some((key) => theirs.has(theirTag(key)))) behind.add(space);
+      const now = !!current && theirs.has(theirTag(current));
+      const before = !now && earlier.some((key) => theirs.has(theirTag(key)));
+      if ((now || before) && lets !== false) admits = true;
+      // A proof is only that: nothing of it is synced.
+      if (proof) continue;
+      if (keys[0]) startedWith.set(space, theirTag(keys[0]));
+      if (now) shared.add(space);
+      else if (before) behind.add(space);
+    }
+    if (!this.#admitted) {
+      if (!admits) {
+        if (final) this.close();
+        return;
+      }
+      this.#admitted = true;
+      this.#welcome();
     }
     this.#shared = shared;
     for (const space of behind) if (!this.#behind.has(space)) this.#sendKeys(space);

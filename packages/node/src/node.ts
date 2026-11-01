@@ -817,6 +817,23 @@ const KIND_GENERATION = 'weave.org.generation';
 const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
 
 /**
+ * A person's meeting point: the DHT topic their node is found on, from a secret that only their links carry (so a
+ * DID, which is public, never tells where a computer is). The topic is a hash, so it never shows the secret.
+ */
+const meetTopic = (secret: Uint8Array): string => `meet:${b64u.encode(new Uint8Array(createHash('sha256').update('weave/meet-topic/v1').update(secret).digest()))}`;
+
+/** A meeting point's secret from a link (base64url, 32 bytes), if it carries a valid one. */
+function meetSecretOf(entry: { meet?: unknown } | undefined): Uint8Array | undefined {
+  if (typeof entry?.meet !== 'string') return undefined;
+  try {
+    const secret = b64u.decode(entry.meet);
+    return secret.length === 32 ? secret : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * An event as a carry restates it: what it said, with its original signed
  * envelope (`e`) and the salt sealed with it, so that anyone can check the
  * restatement against its author's signature (the envelope signs the salted
@@ -1408,9 +1425,12 @@ export class WeaveNode implements Backend {
     return this.#swarm !== undefined;
   }
 
-  /** Every DHT topic this node listens on: its identity, configured topics, its spaces and their entry points. */
+  /**
+   * Every DHT topic this node listens on: its meeting point, configured topics, its spaces and their entry points.
+   * Never its DID: that's public, and would tell anyone where this computer is.
+   */
   get topics(): string[] {
-    const topics = new Set([this.identity.author, ...this.config.topics]);
+    const topics = new Set([meetTopic(this.#meetSecret()), ...this.config.topics]);
     for (const space of this.#spaces.values()) {
       for (const topic of spaceTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
@@ -1419,11 +1439,19 @@ export class WeaveNode implements Backend {
     return [...topics];
   }
 
+  /**
+   * A topic only looked up, never announced on: someone else's meeting point (or, from a link made before meeting
+   * points, their DID). Announcing there would tell whoever looks where we are, and that we know them.
+   */
+  #looksOnly(topic: string): boolean {
+    return (topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret());
+  }
+
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
-    await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
+    await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic, { announce: !this.#looksOnly(topic) })));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#website.allRooms()) if (room.open && this.#website.hostedHere(room)) await this.#live.host(room).catch(() => {});
     await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
@@ -1603,7 +1631,7 @@ export class WeaveNode implements Backend {
       this.config = { ...this.config, topics: [...this.config.topics, topic] };
       saveConfig(this.home, this.config);
     }
-    await this.#swarm?.join(topic);
+    await this.#swarm?.join(topic, { announce: !this.#looksOnly(topic) });
   }
 
   async status(): Promise<Status> {
@@ -1792,8 +1820,9 @@ export class WeaveNode implements Backend {
     if (this.#spaces.has(link.space.id)) throw new Error(`you are already in ${link.space.name}`);
     if (link.inviter === this.identity.author) throw new Error("that's your own link");
     this.#adoptBootstrap(link.entry);
-    for (const topic of new Set([link.inviter, ...link.entry.topics])) await this.join(topic);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter } }));
+    // The meeting point the link holds (links from before meeting points hold the inviter's DID instead).
+    for (const topic of new Set(link.entry.topics)) await this.join(topic);
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter, ...(link.entry.meet ? { meet: link.entry.meet } : {}) } }));
     this.replica.write(this.identity, knockFor(link, note.trim(), this.#entryPoint()));
     return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, history: 'all', waiting: true };
   }
@@ -3566,7 +3595,7 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + this.#tellContacts();
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
@@ -3744,6 +3773,40 @@ export class WeaveNode implements Backend {
     const inner: Inner = { kind: EDGE_KIND[input.edge], body: edgeBody(subject, input.on) };
     const isPrivate = input.private ?? input.edge !== 'follow';
     this.replica.write(this.identity, isPrivate ? this.#sealForSelf(inner) : inner);
+    // A follow they were told of in our direct chat ends there too, or they'd still count us as a friend.
+    if (input.edge === 'follow' && !input.on && this.#toldFollow(subject)) this.#tellFollow(subject, false);
+  }
+
+  /** Whether we told someone in our direct chat that we follow them (or since, that we don't). */
+  #toldFollow(peer: Did): boolean {
+    if (!this.#keysHere(peer)) return false;
+    const direct = this.#direct(peer);
+    return this.#decodedIn(direct.id).some((d) => d.event.author === this.identity.author && d.inner.kind === KIND_FOLLOW && (d.inner.body as { subject?: unknown } | null)?.subject === peer);
+  }
+
+  /** Their log is here, with their encryption keys: before it, our direct chat's key would be made from their DID alone. */
+  #keysHere(peer: Did): boolean {
+    return this.#eventsOf(peer).length > 0;
+  }
+
+  /** Follow someone where only the two of us read it: sealed in our direct chat. Friends without a public follow. */
+  #tellFollow(peer: Did, on: boolean): void {
+    this.replica.write(this.identity, sealFor(this.#cipher(this.#direct(peer)), { kind: KIND_FOLLOW, body: edgeBody(peer, on) }));
+  }
+
+  /**
+   * Contacts we follow, told so in our direct chat once their keys are here (adding a contact may come before
+   * their log does). Returns how many were told.
+   */
+  #tellContacts(): number {
+    const following = this.#graph().get(this.identity.author)?.following;
+    let told = 0;
+    for (const did of this.#contacts().keys()) {
+      if (!following?.has(did) || !this.#keysHere(did) || this.#toldFollow(did)) continue;
+      this.#tellFollow(did, true);
+      told++;
+    }
+    return told;
   }
 
   async social(): Promise<Social> {
@@ -3874,11 +3937,17 @@ export class WeaveNode implements Backend {
     const contact = decodeContact(link);
     if (contact.did === this.identity.author) throw new Error("that's your own contact link");
     this.#adoptBootstrap(contact.entry);
-    for (const topic of new Set([contact.did, ...contact.entry.topics])) await this.join(topic);
-    if (!this.#contacts().has(contact.did)) {
-      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null } }));
+    // Their meeting point, looked up only (a link from before meeting points names their DID there instead).
+    for (const topic of new Set(contact.entry.topics)) await this.join(topic);
+    const meet = meetSecretOf(contact.entry) && contact.entry.meet;
+    // Kept with the contact: holding it is how their node lets us in. A newer link of someone we have brings it.
+    if (!this.#contacts().has(contact.did) || (meet && !this.#selfBodies(KIND_CONTACT).some((b) => b.did === contact.did && b.meet === meet))) {
+      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null, ...(meet ? { meet } : {}) } }));
     }
-    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true });
+    // Not a public follow: whom you know stays between the two of you (sealed to yourself, and in your direct chat
+    // once their keys are here).
+    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true, private: true });
+    this.#tellContacts();
     return this.profile(contact.did);
   }
 
@@ -4495,6 +4564,25 @@ export class WeaveNode implements Backend {
   /** The secret behind my private (self-sealed) data: my first encryption key, so it survives rotations. */
   #selfSecret(): Uint8Array {
     return this.#encryption[0].keys.secretKey;
+  }
+
+  /** My meeting point's secret, carried by my links: from my self secret, so the same on all my devices and for good. */
+  #meetSecret(): Uint8Array {
+    return new Uint8Array(createHash('sha256').update('weave/meet/v1').update(this.#selfSecret()).digest());
+  }
+
+  /** The meeting points of others we were given links to: our contacts', the spaces' we were invited to, and those we knocked at. */
+  #theirMeets(): Uint8Array[] {
+    const secrets = new Map<string, Uint8Array>();
+    const add = (entry: { meet?: unknown } | undefined) => {
+      const secret = meetSecretOf(entry);
+      if (secret) secrets.set(b64u.encode(secret), secret);
+    };
+    for (const body of this.#selfBodies(KIND_CONTACT)) add(body);
+    for (const body of this.#selfBodies(KIND_KNOCK_PENDING)) add(body);
+    for (const space of this.#spaces.values()) add(space.entry);
+    secrets.delete(b64u.encode(this.#meetSecret()));
+    return [...secrets.values()];
   }
 
   /**
@@ -6374,7 +6462,7 @@ export class WeaveNode implements Backend {
 
   async #addSpace(space: StoredSpace): Promise<void> {
     this.#saveSpace(space);
-    if (this.#swarm) await Promise.all([...spaceTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t)));
+    if (this.#swarm) await Promise.all([...spaceTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t, { announce: !this.#looksOnly(t) })));
   }
 
   #saveSpace(space: StoredSpace): void {
@@ -6408,10 +6496,14 @@ export class WeaveNode implements Backend {
       keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).map((epoch) => b64u.decode(space.keys[String(epoch)])),
       ...(this.#spaces.has(space.id) && this.#pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
+    // Anyone whose log we hold can make our direct chat's key: only with those we chose to know does it let them in.
+    const chosen = new Set<Did>([...this.#contacts().keys(), ...(this.#graph().get(this.identity.author)?.following ?? [])]);
     return [
       ...[...this.#spaces.values()].map(held),
-      ...[...this.#directs.values()].map(({ space }) => held(space)),
+      ...[...this.#directs.values()].map(({ space, peer }) => ({ ...held(space), admits: chosen.has(peer) })),
       { space: SELF_SCOPE, keys: [selfKey(this.#selfSecret())] },
+      // Meeting points: ours, which whoever we gave a link holds, and theirs, from the links we were given.
+      ...[this.#meetSecret(), ...this.#theirMeets()].map((secret) => ({ space: meetTopic(secret), keys: [secret], proof: true as const })),
     ];
   }
 
@@ -6429,7 +6521,15 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
-    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess, farewells: () => this.#farewells() };
+    return {
+      spaces: () => this.#heldSpaces(),
+      offerKeys: (items) => this.#offeredKeys(items),
+      wantsBody: (space, id) => this.#wantsBody(space, id),
+      keep: this.#keepAccess,
+      farewells: () => this.#farewells(),
+      // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
+      firewall: this.config.firewall !== false,
+    };
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)
@@ -8433,12 +8533,14 @@ export class WeaveNode implements Backend {
     const swarm = this.#swarm;
     if (!swarm) return;
     const wanted = new Set(this.topics);
-    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic).catch(() => {});
+    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic, { announce: !this.#looksOnly(topic) }).catch(() => {});
     for (const topic of swarm.joined) if (!wanted.has(topic)) swarm.leave(topic).catch(() => {});
   }
 
+  /** Where our links say we're found: our meeting point, with its secret (holding it lets whoever has the link in). */
   #entryPoint(): Invite['entry'] {
-    return { topics: [this.identity.author], bootstrap: this.config.bootstrap };
+    const secret = this.#meetSecret();
+    return { topics: [meetTopic(secret)], bootstrap: this.config.bootstrap, meet: b64u.encode(secret) };
   }
 
   /** Someone on a private network (e.g. a local testnet) brings us onto it. */
@@ -9503,6 +9605,14 @@ export class WeaveNode implements Backend {
     return this.#memo('graph', () => {
       const edges: EdgeEvent[] = this.#decodeAll()
         .filter((d) => (EDGE_KINDS as readonly string[]).includes(d.inner.kind))
+        // In a direct chat, only a follow of the other one of the two counts: it says nothing about anyone else.
+        .filter((d) => {
+          const direct = d.space && this.#directs.get(d.space.id);
+          if (!direct) return true;
+          const subject = (d.inner.body as { subject?: unknown } | null)?.subject;
+          const pair = [this.identity.author, direct.peer];
+          return pair.includes(d.event.author) && pair.includes(subject as Did);
+        })
         .map((d) => ({ author: d.event.author, kind: d.inner.kind, body: d.inner.body, time: d.event.time, signer: d.event.signer, seq: d.event.seq }));
       return socialGraph(edges);
     });

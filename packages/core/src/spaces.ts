@@ -396,7 +396,11 @@ export interface Invite {
   invite: string;
   inviter: Did;
   expires: string;
-  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  /**
+   * `meet`: the secret behind the inviter's meeting point (its topic is `topics[0]`), base64url. Holding it is how a
+   * node behind a firewall lets you in: only those given a link can reach it. Links from before it have none.
+   */
+  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }>; meet?: string };
   /** Keys of read-limited boards the link gives access to: board → epoch → key. */
   boards?: Record<string, Record<string, string>>;
   /** The link's own key (see inviteKeys): `invite` is its public half, which everyone in the space reads. */
