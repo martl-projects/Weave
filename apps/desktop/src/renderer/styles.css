@@ -772,7 +772,14 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
 .mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
-.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; position: relative; z-index: 1; }
+/* Behind the overlay's content, faded and pinned to its bottom: the session's figure left, its work item's picture right. */
+.panel-decor { position: absolute; left: 0; right: 0; bottom: 0; height: 42%; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; z-index: 0; opacity: .3; filter: saturate(.6); }
+.panel-decor > * { height: 100%; max-width: 48%; line-height: 0; }
+.panel-decor img { height: 100%; width: auto; max-width: 100%; object-fit: contain; object-position: bottom; }
+.panel-decor-post { display: flex; justify-content: flex-end; align-items: flex-end; }
+/* The work item's own scene is the backdrop now, not beside its title. */
+.panel-current .post-scene { display: none; }
 .mentions-scroll > .empty, .mentions-scroll > .panel-toggles, .mentions-scroll > .panel-lines, .mentions-scroll > .panel-sessions { margin-left: 8px; margin-right: 8px; }
 .mentions-scroll > .panel-sessions { margin-top: 8px; }
 .mentions-scroll > * { flex-shrink: 0; }

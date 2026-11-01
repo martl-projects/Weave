@@ -341,3 +341,11 @@ function PersonAvatar({ did, size }: { did: string; size: number }) {
   const figure = useFigure(did);
   return <MadeFace seed={did} size={size} ready={figure !== undefined} make={(l) => figure ?? l.Avatar.fromSeed(did)} />;
 }
+
+/** A session's whole figure in a scene (waving, unless told otherwise): its own avatar, or its person's body with a screen for a head. */
+export function SessionFigure({ session, person, scene = 'hello', size = 320, className = '' }: { session: { name?: string; provider: string; id: string; avatar?: Figure }; person: string; scene?: string; size?: number; className?: string }) {
+  const theirs = useFigure(person);
+  const seed = sessionSeed(session);
+  const url = usePicture(theirs === undefined ? undefined : (l) => l.sceneSnapshot(session.avatar ?? agentDefault(l, theirs ?? null, person, seed), scene, size), `scene:${scene}:${size}:full:${seed}:${JSON.stringify(session.avatar ?? null)}:${theirs === undefined ? 'asking' : JSON.stringify(theirs ?? person)}`);
+  return <span className={`scene-image ${className}`}>{url && <img src={url} alt="" draggable={false} />}</span>;
+}
