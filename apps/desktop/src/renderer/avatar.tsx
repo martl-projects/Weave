@@ -3,7 +3,7 @@
 // Someone without one shows as the figure their key makes (the same everywhere); their pixel sprite only while the
 // renderer loads.
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { api, onItem } from './lib.ts';
 
 export type Figure = Record<string, number>;
@@ -102,26 +102,99 @@ export function useFigure(did: string): Figure | null | undefined {
   return figures.get(did);
 }
 
-/** A picture from the renderer, once it's drawn. */
+// ---------------------------------------------------------------- pictures: drawn when seen, kept on disk
+
+/*
+ * Drawing a picture takes the renderer 20–35 ms, so only what's (nearly) on screen is drawn, and what's drawn is kept
+ * on disk (this app's IndexedDB) under the renderer's release: the next start shows it at once. A new release draws
+ * anew. The oldest go once there are more than KEEP.
+ */
+const KEEP = 1500;
+const RELEASE = typeof AVATAR_RELEASE === 'string' ? AVATAR_RELEASE : 'dev';
+let store: Promise<IDBDatabase | undefined> | undefined;
+function pictureStore(): Promise<IDBDatabase | undefined> {
+  store ??= new Promise((resolve) => {
+    try {
+      const open = indexedDB.open('weave-avatar-pictures', 1);
+      open.onupgradeneeded = () => open.result.createObjectStore('pictures').createIndex('used', 'used');
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => resolve(undefined);
+    } catch {
+      resolve(undefined);
+    }
+  });
+  return store;
+}
+const done = <T,>(r: IDBRequest<T>) => new Promise<T | undefined>((resolve) => ((r.onsuccess = () => resolve(r.result)), (r.onerror = () => resolve(undefined))));
+async function keptPicture(key: string): Promise<string | undefined> {
+  const db = await pictureStore();
+  if (!db) return undefined;
+  const row = await done<{ url: string; used: number } | undefined>(db.transaction('pictures').objectStore('pictures').get(`${RELEASE}:${key}`));
+  if (row) db.transaction('pictures', 'readwrite').objectStore('pictures').put({ ...row, used: Date.now() }, `${RELEASE}:${key}`);
+  return row?.url;
+}
+let kept = 0;
+async function keepPicture(key: string, url: string): Promise<void> {
+  const db = await pictureStore();
+  if (!db) return;
+  db.transaction('pictures', 'readwrite').objectStore('pictures').put({ url, used: Date.now() }, `${RELEASE}:${key}`);
+  // Now and then: the least recently used go, past KEEP (older releases' first, as they're never used again).
+  if (++kept % 50 !== 1) return;
+  const pictures = db.transaction('pictures', 'readwrite').objectStore('pictures');
+  const count = (await done(pictures.count())) ?? 0;
+  if (count <= KEEP) return;
+  let extra = count - KEEP;
+  const cursor = pictures.index('used').openCursor();
+  cursor.onsuccess = () => {
+    const c = cursor.result;
+    if (!c || extra-- <= 0) return;
+    c.delete();
+    c.continue();
+  };
+}
+
+/** A picture by its key: kept on disk, or drawn (then kept). For pictures drawn outside React too (post cards). */
+export async function picture(key: string, draw: (l: AvatarLib) => Promise<string>): Promise<string> {
+  const known = await keptPicture(key);
+  if (known) return known;
+  const url = await draw(await avatarLib());
+  void keepPicture(key, url);
+  return url;
+}
+
+/** Whether an element has come (near) on screen: once it has, it stays seen. */
+export function useSeen<T extends Element>(): [RefObject<T | null>, boolean] {
+  const ref = useRef<T | null>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (seen || !el) return;
+    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setSeen(true), { rootMargin: '300px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  return [ref, seen];
+}
+
+/** A picture, once it's drawn (or found on disk); nothing is drawn before draw is given (seen, and known what to draw). */
 function usePicture(draw: ((l: AvatarLib) => Promise<string>) | undefined, key: string): string | undefined {
   const [url, setUrl] = useState<{ key: string; url: string }>();
   useEffect(() => {
     if (!draw) return;
     let live = true;
-    avatarLib()
-      .then(draw)
+    picture(key, draw)
       .then((u) => live && setUrl({ key, url: u }))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [key]);
+  }, [key, !!draw]);
   return url?.key === key ? url.url : undefined;
 }
 
 /** Someone's head, as their avatar shows it; fallback while it's drawn (or when it can't be). */
 export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; seed: string; fallback: ReactNode }) {
-  const url = usePicture((l) => l.snapshot(figure ?? l.Avatar.fromSeed(seed), 'face'), JSON.stringify(figure ?? seed));
+  const url = usePicture((l) => l.snapshot(figure ?? l.Avatar.fromSeed(seed), 'face'), `face:${JSON.stringify(figure ?? seed)}`);
   return url ? <img className="figure-head" src={url} alt="" draggable={false} /> : <>{fallback}</>;
 }
 
@@ -130,10 +203,11 @@ export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; 
  * Small pictures come close (head and shoulders, with what's around them); big ones show all of it.
  */
 export function SceneImage({ did, scene, size = 256, close = false, className = '' }: { did: string; scene: string; size?: number; close?: boolean; className?: string }) {
+  const [ref, seen] = useSeen<HTMLSpanElement>();
   const figure = useFigure(did);
   const frame = close ? 'close' : 'full';
-  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `${scene}:${size}:${frame}:${figure === undefined ? 'asking' : JSON.stringify(figure ?? did)}`);
-  return <span className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
+  const url = usePicture(figure === undefined || !seen ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `scene:${scene}:${size}:${frame}:${figure === undefined ? 'asking' : JSON.stringify(figure ?? did)}`);
+  return <span ref={ref} className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
 }
 
 /** What someone can do on a group photo: its own poses, then the scenes (with their things), once the renderer is here. */
@@ -184,9 +258,10 @@ export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids
   // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: from the navel up, shoulder
   // to shoulder, as wide as there are people (up to a banner's width; then rows behind).
   const [width, height] = peek ? [Math.round(256 * Math.min(5.5, Math.max(1, ((people.length - 1) * 1.3 + 1.5) / 3.6))), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
+  const [ref, seen] = useSeen<HTMLDivElement>();
   const figures = useFigures(people);
-  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
-  return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
+  const url = usePicture(figures && seen ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `group:${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
+  return <div ref={ref} className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
 }
 
 /**

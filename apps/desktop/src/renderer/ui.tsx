@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
-import { avatarLib, FigureHead, postScene, useFigure, type Figure } from './avatar.tsx';
+import { FigureHead, picture, postScene, useFigure, useSeen, type Figure } from './avatar.tsx';
 import { loadInviteEmbeds } from './invites.tsx';
 
 // ---------------------------------------------------------------- pixel art
@@ -61,11 +61,12 @@ export function ProjectIcon({ id, icon, size = 40, className = '' }: { id: strin
 
 /** Someone's picture: their avatar (Weave avatar), or the one their key makes; their pixel sprite until it's drawn. */
 export function Avatar({ did, size = 32, status }: { did: string; name?: string; size?: number; status?: 'online' | 'offline' }) {
+  const [ref, seen] = useSeen<HTMLSpanElement>();
   const figure = useFigure(did);
   const sprite = <Sprite seed={did} size={size} face />;
   return (
-    <span className="avatar" style={{ width: size, height: size }}>
-      {figure === undefined ? sprite : <FigureHead figure={figure} seed={did} fallback={sprite} />}
+    <span ref={ref} className="avatar" style={{ width: size, height: size }}>
+      {figure === undefined || !seen ? sprite : <FigureHead figure={figure} seed={did} fallback={sprite} />}
       {status && <i className={`presence ${status}`} />}
     </span>
   );
@@ -136,8 +137,9 @@ function embedCard(p: PostInfo): HTMLElement {
     const img = document.createElement('img');
     img.alt = '';
     thumb.innerHTML = sprite(p.id, 10, false);
-    void Promise.all([avatarLib(), api<Record<string, Figure>>('avatars', [p.by.did]).catch(() => ({}) as Record<string, Figure>)])
-      .then(([l, found]) => l.sceneSnapshot(found[p.by.did] ?? l.Avatar.fromSeed(p.by.did), scene, 128, 'close'))
+    void api<Record<string, Figure>>('avatars', [p.by.did])
+      .catch(() => ({}) as Record<string, Figure>)
+      .then((found) => picture(`scene:${scene}:128:close:${JSON.stringify(found[p.by.did] ?? p.by.did)}`, (l) => l.sceneSnapshot(found[p.by.did] ?? l.Avatar.fromSeed(p.by.did), scene, 128, 'close')))
       .then((url) => {
         img.src = url;
         thumb.replaceChildren(img);
