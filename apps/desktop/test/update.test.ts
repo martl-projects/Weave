@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canSelfUpdate, whyNotText, type UpdateFacts } from '../src/updatestate.ts';
+import { canSelfUpdate, type UpdateFacts, type WhyNot } from '../src/updatestate.ts';
+import { PACKAGES } from '@weave/texts';
 
 /** A per-user Windows installation, signed or not: the build that updates itself. */
 const nsis: UpdateFacts = { packaged: true, platform: 'win32', windowsStore: false, perUserInstaller: true, appImage: false, signed: false, managedOff: false };
@@ -28,8 +29,8 @@ describe('which builds install new versions over themselves', () => {
     expect(canSelfUpdate({ ...nsis, platform: 'linux', appImage: true, managedOff: true })).toEqual({ ok: false, why: 'managed' });
   });
 
-  it('says why in words the window shows', () => {
-    for (const why of ['development', 'managed', 'store', 'per-machine', 'unsigned', 'not-installed'] as const) expect(whyNotText(why).length).toBeGreaterThan(20);
-    expect(whyNotText('per-machine')).toMatch(/IT installs new versions/);
+  it('has words for every reason, in every language the window shows (update.why.*)', () => {
+    const reasons: WhyNot[] = ['development', 'managed', 'store', 'per-machine', 'unsigned', 'not-installed'];
+    for (const pkg of Object.values(PACKAGES)) for (const why of reasons) expect(pkg.names[`update.why.${why}`]?.length ?? 0, `${pkg.lang} ${why}`).toBeGreaterThan(20);
   });
 });

@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('weave', {
     ipcRenderer.on('weave:window-state', (_event, state) => listener(state));
   },
   attention: () => ipcRenderer.invoke('weave:attention'),
+  language: (setting: string) => ipcRenderer.invoke('weave:language', setting),
   // New versions (src/update.ts): where one stands, what to do about it, and the setting.
   update: {
     state: () => ipcRenderer.invoke('weave:update'),

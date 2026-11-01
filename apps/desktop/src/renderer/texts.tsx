@@ -76,6 +76,7 @@ export function TextsProvider({ children }: { children: ReactNode }) {
         storeLanguageSetting(next);
         setSetting(next);
         if (!bridge.phone) api('setPreferences', { language: next }).catch(() => {});
+        bridge.language?.(next).catch(() => {});
       },
     };
   }, [setting]);

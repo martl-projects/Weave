@@ -3,6 +3,7 @@ import { existsSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { dialog, type MenuItemConstructorOptions } from 'electron';
+import { t } from './texts.ts';
 
 /*
  * The `weave` command on macOS, like VS Code's "Install 'code' command": the
@@ -48,36 +49,36 @@ async function shell(command: string): Promise<boolean> {
 
 async function install(): Promise<void> {
   if (linked() === SHIM) {
-    await dialog.showMessageBox({ message: "The 'weave' command is already installed.", detail: `${LINK} runs this copy of Weave.` });
+    await dialog.showMessageBox({ message: t('command.installed.already'), detail: t('command.runs.this.copy', { link: LINK }) });
     return;
   }
   const replacing = existsSync(LINK) || linked() !== undefined;
   const { response } = await dialog.showMessageBox({
     type: 'question',
-    buttons: ['Install', 'Cancel'],
+    buttons: [t('command.install'), t('button.cancel')],
     defaultId: 0,
     cancelId: 1,
-    message: "Install the 'weave' command?",
-    detail: `This links ${LINK} to Weave, so terminals and AI agents can run weave.${replacing ? ` It replaces the ${LINK} that is there now.` : ''} macOS may ask for your password.`,
+    message: t('command.install.ask'),
+    detail: t(replacing ? 'command.install.detail.replacing' : 'command.install.detail', { link: LINK }),
   });
   if (response !== 0) return;
   try {
     if (!(await shell(`mkdir -p /usr/local/bin && ln -sfn ${quote(SHIM)} ${LINK}`))) return;
-    await dialog.showMessageBox({ message: "The 'weave' command is installed.", detail: 'Open a new terminal and try: weave --help' });
+    await dialog.showMessageBox({ message: t('command.installed'), detail: t('command.installed.detail') });
   } catch (error) {
-    dialog.showErrorBox("Couldn't install the 'weave' command", (error as Error).message);
+    dialog.showErrorBox(t('command.install.failed'), (error as Error).message);
   }
 }
 
 async function uninstall(): Promise<void> {
   if (linked() !== SHIM) {
-    await dialog.showMessageBox({ message: "The 'weave' command isn't installed from this copy of Weave.", detail: `${LINK} is left as it is.` });
+    await dialog.showMessageBox({ message: t('command.not.from.this.copy'), detail: t('command.left.as.is', { link: LINK }) });
     return;
   }
   try {
-    if (await shell(`rm -f ${LINK}`)) await dialog.showMessageBox({ message: "The 'weave' command is uninstalled." });
+    if (await shell(`rm -f ${LINK}`)) await dialog.showMessageBox({ message: t('command.uninstalled') });
   } catch (error) {
-    dialog.showErrorBox("Couldn't uninstall the 'weave' command", (error as Error).message);
+    dialog.showErrorBox(t('command.uninstall.failed'), (error as Error).message);
   }
 }
 
@@ -88,8 +89,8 @@ export const macMenu = (): MenuItemConstructorOptions[] => [
     submenu: [
       { role: 'about' },
       { type: 'separator' },
-      { label: "Install 'weave' Command…", click: () => void install() },
-      { label: "Uninstall 'weave' Command", click: () => void uninstall() },
+      { label: t('command.menu.install'), click: () => void install() },
+      { label: t('command.menu.uninstall'), click: () => void uninstall() },
       { type: 'separator' },
       { role: 'services' },
       { type: 'separator' },

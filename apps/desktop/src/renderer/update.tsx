@@ -5,7 +5,7 @@ import { ago, api, bridge, navigate } from './lib.ts';
 import { Markdown, Modal, toast } from './ui.tsx';
 import { t, T, useTexts } from './texts.tsx';
 
-/** How the window says why a build doesn't update itself (the main process says it with whyNotText). */
+/** How the window says why a build doesn't update itself. */
 const whyNot = (why: WhyNot) => t(`update.why.${why}`);
 
 /*

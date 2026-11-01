@@ -1,6 +1,7 @@
 import type { FeedItem } from '@weave/node/client';
 import type { RendererMethod } from '../methods.ts';
 import type { UpdateAction, UpdateView } from '../updatestate.ts';
+import { t } from './texts.tsx';
 
 export interface AppState {
   home: string;
@@ -65,6 +66,8 @@ interface Bridge {
   lensBase(release: string): Promise<string> | string;
   /** Flash the taskbar button until the person looks. */
   attention(): Promise<void>;
+  /** The language setting changed: the desktop's menus and titles follow (src/texts.ts). Missing in a browser and on the phone. */
+  language?(setting: string): Promise<void>;
   call(method: RendererMethod, ...args: unknown[]): Promise<unknown>;
   onEvent(listener: (item: FeedItem) => void): void;
   /** A weave: link the app was opened with (clicked somewhere outside it). */
@@ -110,7 +113,7 @@ const webBridge: Bridge = {
   // The web preview serves it from its own origin (dev-web.ts).
   lensBase: (release) => `/lens/${encodeURIComponent(release)}/`,
   // A browser can't hand out folder paths: type it.
-  pickFolder: async (title) => prompt(`${title}\n\nThe full path of the folder:`)?.trim() || undefined,
+  pickFolder: async (title) => prompt(`${title}\n\n${t('bridge.full.path')}`)?.trim() || undefined,
   restore: async () => {
     throw new Error('restore with "weave restore" when using the web preview');
   },

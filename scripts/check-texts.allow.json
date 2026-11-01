@@ -1,7 +1,4 @@
 [
   "apps/console/src/main.tsx",
-  "apps/console/src/ui.tsx",
-  "apps/desktop/src/command.ts",
-  "apps/desktop/src/main.ts",
-  "apps/desktop/src/renderer/bridge.ts"
+  "apps/console/src/ui.tsx"
 ]

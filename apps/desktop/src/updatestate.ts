@@ -47,24 +47,6 @@ export function canSelfUpdate(f: UpdateFacts): { ok: true } | { ok: false; why: 
   return { ok: false, why: 'not-installed' };
 }
 
-/** How the window says why a build doesn't update itself. */
-export function whyNotText(why: WhyNot): string {
-  switch (why) {
-    case 'development':
-      return 'This Weave runs from its source: start the new version yourself.';
-    case 'managed':
-      return 'This computer gets new versions from its IT.';
-    case 'store':
-      return 'This Weave comes from the Microsoft Store, which updates it.';
-    case 'per-machine':
-      return 'This Weave was installed for everyone on this computer: your IT installs new versions.';
-    case 'unsigned':
-      return "This Weave isn't signed with a Developer ID yet, so macOS won't let it replace itself: download the new one.";
-    case 'not-installed':
-      return "This Weave isn't installed in a way it can replace: download the new one.";
-  }
-}
-
 /**
  * Where a new version stands, for the window. idle: nothing newer (or not checked yet); checking; available: a newer
  * one this build doesn't install itself (why), or doesn't download by itself (self: the setting is off, one click gets
