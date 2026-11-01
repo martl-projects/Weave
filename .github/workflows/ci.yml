@@ -35,7 +35,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
       - run: npm ci
       - run: npm run typecheck
       # The phone worker's test talks over a local DHT: alone, so the other files' load doesn't starve its connections.

@@ -71,7 +71,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
       - run: npm ci
       - run: node apps/server/build.ts
       - run: tar -czf "weave-server-$GITHUB_REF_NAME.tgz" -C apps/server/dist .
