@@ -45,6 +45,36 @@ describe('avatars', () => {
   });
 });
 
+describe('a space photo', () => {
+  it('its founder sets a picture of its own and the banner, members see it, and an empty one goes back to the group photo', async () => {
+    const martin = person('Martin');
+    const lena = person('Lena');
+    await martin.createGroup('Crew');
+    await lena.joinSpace(await martin.invite('Crew'));
+    sync(martin, lena);
+    sync(lena, martin);
+    const photo = await martin.putBlob({ data: Buffer.from('a picture').toString('base64'), type: 'image/png' });
+
+    const set = await martin.setSpacePhoto({ space: 'Crew', photo, banner: '  The crew  ' });
+    expect(set).toMatchObject({ photo, bannerText: 'The crew' });
+    sync(martin, lena);
+    expect((await lena.spaces()).find((s) => s.name === 'Crew')).toMatchObject({ photo, bannerText: 'The crew' });
+
+    // Only those who run it; and a photo is an uploaded image.
+    await expect(lena.setSpacePhoto({ space: 'Crew', banner: 'Lena was here' })).rejects.toThrow(/only those who run/);
+    await expect(martin.setSpacePhoto({ space: 'Crew', photo: 'https://example.com/a.png' })).rejects.toThrow(/uploaded image/);
+    await expect(martin.setSpacePhoto({ space: 'Crew', background: 'https://example.com/b.png' })).rejects.toThrow(/uploaded image/);
+    expect(await martin.setSpacePhoto({ space: 'Crew', background: photo })).toMatchObject({ photo, bannerText: 'The crew', background: photo });
+
+    // Left out stays; empty removes.
+    expect(await martin.setSpacePhoto({ space: 'Crew', photo: '' })).toMatchObject({ bannerText: 'The crew' });
+    const back = await martin.setSpacePhoto({ space: 'Crew', banner: '', background: '' });
+    expect(back.photo).toBeUndefined();
+    expect(back.background).toBeUndefined();
+    expect(back.bannerText).toBeUndefined();
+  });
+});
+
 describe('scenes on posts', () => {
   it('a post carries a scene by its id; an edit changes or removes it', async () => {
     const martin = person('Martin');

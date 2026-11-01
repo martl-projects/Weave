@@ -598,6 +598,12 @@ interface Sso {
 export const KIND_PROFILE = 'weave.profile';
 /** A project's page, sealed inside the project; the latest one by a maintainer counts. */
 export const KIND_PAGE = 'weave.project.page';
+/**
+ * A space's photo, as those who run it set it: a picture of their own (a wblob: reference), or none (everyone's
+ * avatars as a group photo), the text on the banner in it (its name when empty), and a background behind the group
+ * photo (a wblob: reference; a project's banner too, unless its page has one). The latest one counts.
+ */
+export const KIND_SPACE_PHOTO = 'weave.space.photo';
 /** A public copy of a project's page, published by a maintainer when the project is public. */
 export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
@@ -820,7 +826,7 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
 });
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
-const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
+const CARRIED_STATE = new Set(['weave.project.page', 'weave.space.photo', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -8527,6 +8533,7 @@ export class WeaveNode implements Backend {
       members: state.members.size,
       epoch: currentEpoch(space),
       ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
+      ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
@@ -8534,6 +8541,40 @@ export class WeaveNode implements Backend {
       ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
+  }
+
+  /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
+  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string } {
+    if (space.kind === 'direct') return {};
+    const managers = this.#managers(state);
+    let out: { photo?: string; bannerText?: string; background?: string } = {};
+    for (const e of this.#entries(space)) {
+      if (e.kind !== KIND_SPACE_PHOTO || !managers.has(e.event.author)) continue;
+      const body = (e.body ?? {}) as Record<string, unknown>;
+      const banner = typeof body.banner === 'string' ? body.banner.trim().slice(0, 40) : '';
+      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}) };
+    }
+    return out;
+  }
+
+  /**
+   * A space's photo: a picture of its own, or none for everyone's avatars together; the banner's text; and the
+   * background behind the group photo. Its founder, maintainers or moderators set it. Empty removes; left out stays.
+   */
+  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; as?: string }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('a direct chat has no photo');
+    const state = this.#state(space);
+    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only those who run ${space.name} set its photo`);
+    if (input.as) this.#agentMay(input.as, KIND_SPACE_PHOTO);
+    for (const image of [input.photo, input.background]) if (image && !parseBlobRef(image)) throw new Error('a photo or background is an uploaded image (a wblob: reference)');
+    if (input.banner !== undefined && input.banner.trim().length > 40) throw tooLong('The banner', input.banner.trim().length, 40);
+    const before = this.#spacePhoto(space, state);
+    const photo = input.photo === undefined ? before.photo : input.photo || undefined;
+    const banner = input.banner === undefined ? before.bannerText : input.banner.trim() || undefined;
+    const background = input.background === undefined ? before.background : input.background || undefined;
+    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '' }, space: space.id, as: input.as });
+    return this.#spaceInfo(space);
   }
 
   /** A space's name; a direct chat is named after the other person. */

@@ -1,10 +1,11 @@
 // Making your avatar (a turnable figure above, tabs of parts and colors below), and picking a scene for a post.
 
 import { useEffect, useRef, useState } from 'react';
-import type { Profile } from '@weave/node/client';
-import { api, bump, useApi } from './lib.ts';
-import { avatarLib, forgetFigure, SceneImage, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
-import { attempt, AsyncButton, Modal } from './ui.tsx';
+import type { Profile, SpaceInfo } from '@weave/node/client';
+import { api, bump, useApi, useBlobUrl } from './lib.ts';
+import { avatarLib, forgetFigure, GroupPhoto, SceneImage, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
+import { ImagePicker } from './editor.tsx';
+import { attempt, AsyncButton, BlobImage, Modal } from './ui.tsx';
 
 interface Section {
   part: string;
@@ -214,5 +215,77 @@ export function ScenePicker({ value, onChange }: { value: string; onChange(scene
         ))}
       </div>
     </div>
+  );
+}
+
+/** A space's photo: its own picture with its banner's text over it, or everyone's avatars holding the banner (in front of its background). */
+export function SpacePhoto({ space, dids }: { space: SpaceInfo; dids: string[] }) {
+  const banner = space.bannerText ?? space.name;
+  const background = useBlobUrl(space.background);
+  if (!space.photo)
+    return dids.length ? (
+      <div className={`space-photo-group${background ? ' has-background' : ''}`} style={background ? { backgroundImage: `url("${background}")` } : undefined}>
+        <GroupPhoto dids={dids} banner={banner} />
+      </div>
+    ) : null;
+  return (
+    <figure className="space-photo">
+      <BlobImage src={space.photo} alt={`${space.name}: their photo`} />
+      <figcaption>{banner}</figcaption>
+    </figure>
+  );
+}
+
+/** Settings: the space's photo (everyone's avatars, or a picture of its own) and the text on its banner. */
+export function SpacePhotoSettings({ space, dids, canSet }: { space: SpaceInfo; dids: string[]; canSet: boolean }) {
+  const [own, setOwn] = useState(!!space.photo);
+  const [photo, setPhoto] = useState(space.photo ?? '');
+  const [banner, setBanner] = useState(space.bannerText ?? '');
+  const [background, setBackground] = useState(space.background ?? '');
+  const changed = (own ? photo : '') !== (space.photo ?? '') || banner.trim() !== (space.bannerText ?? '') || background !== (space.background ?? '');
+  const preview: SpaceInfo = { ...space, photo: own && photo ? photo : undefined, bannerText: banner.trim() || undefined, background: background || undefined };
+  return (
+    <fieldset>
+      <legend>Photo</legend>
+      <div className="space-photo-settings">
+        <div className="space-photo-preview">
+          <SpacePhoto space={preview} dids={dids} />
+        </div>
+        <div className="grow">
+          <div className="field-row">
+            <input id={`photo-group-${space.id}`} type="radio" name={`photo-${space.id}`} checked={!own} disabled={!canSet} onChange={() => setOwn(false)} />
+            <label htmlFor={`photo-group-${space.id}`}>Everyone's avatars, as a group photo</label>
+          </div>
+          <div className="field-row">
+            <input id={`photo-own-${space.id}`} type="radio" name={`photo-${space.id}`} checked={own} disabled={!canSet} onChange={() => setOwn(true)} />
+            <label htmlFor={`photo-own-${space.id}`}>A picture of your own</label>
+          </div>
+          {own && canSet && <ImagePicker value={photo} onChange={setPhoto} label="Photo" wide />}
+          {!own && canSet && (
+            <div className="field-row-stacked">
+              <label>Background (optional){space.kind === 'project' ? ": the project's banner too, unless its page has one" : ''}</label>
+              <ImagePicker value={background} onChange={setBackground} label="Background" wide />
+            </div>
+          )}
+          <div className="field-row-stacked">
+            <label htmlFor={`photo-banner-${space.id}`}>On the banner</label>
+            <input id={`photo-banner-${space.id}`} value={banner} maxLength={40} placeholder={space.name} disabled={!canSet} onChange={(e) => setBanner(e.target.value)} />
+          </div>
+          {canSet ? (
+            <div className="buttons">
+              <AsyncButton
+                className="default"
+                disabled={!changed || (own && !photo)}
+                onClick={() => attempt(() => api('setSpacePhoto', { space: space.id, photo: own ? photo : '', banner: banner.trim(), background }).then(bump), 'Photo saved')}
+              >
+                Save photo
+              </AsyncButton>
+            </div>
+          ) : (
+            <p className="small muted">Those who run {space.name} choose its photo.</p>
+          )}
+        </div>
+      </div>
+    </fieldset>
   );
 }

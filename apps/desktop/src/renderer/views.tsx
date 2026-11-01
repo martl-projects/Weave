@@ -16,7 +16,7 @@ import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
 import { SetupPackDialog } from './packs.tsx';
-import { AvatarEditor } from './avatar-editor.tsx';
+import { AvatarEditor, SpacePhotoSettings } from './avatar-editor.tsx';
 import type { Pack } from '@weave/core';
 
 const textOf = (item: FeedItem): string => {
@@ -547,8 +547,9 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
         </span>
       </header>
       <div className="project-split">
-        <div className={`hero${page?.banner ? ' has-banner' : ''}`}>
-          {page?.banner && <BlobImage src={page.banner} className="hero-bg" />}
+        {/* Its page's banner, or else the background of its group photo. */}
+        <div className={`hero${page?.banner || project.background ? ' has-banner' : ''}`}>
+          {(page?.banner || project.background) && <BlobImage src={(page?.banner || project.background)!} className="hero-bg" />}
           <div className="hero-art">{page?.icon ? <BlobImage src={page.icon} alt="" /> : <Sprite seed={project.id} size={88} />}</div>
           <div className="hero-text">
             <h1>{page?.title || project.name}</h1>
@@ -957,6 +958,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
       {tab === 'people' && (
         <>
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
+          <SpacePhotoSettings space={project} dids={members.map((m) => m.did)} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
@@ -1167,6 +1169,7 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   return (
     <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
+      <SpacePhotoSettings space={group} dids={members.map((m) => m.did)} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
@@ -1259,6 +1262,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
         })}
       </fieldset>
       <CommunityRule community={community} canSet={info.moderator} />
+      <SpacePhotoSettings space={community} dids={members.map((m) => m.did)} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
       <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />

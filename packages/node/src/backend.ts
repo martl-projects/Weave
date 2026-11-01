@@ -171,6 +171,12 @@ export interface FeedQuery {
 export interface SpaceInfo extends SpaceRef {
   /** Projects: the icon from the project's page (wblob: reference), if it has one. */
   icon?: string;
+  /** A photo of its own (wblob: reference) instead of everyone's avatars as a group photo. */
+  photo?: string;
+  /** The text on its group photo's banner (its name when not set). */
+  bannerText?: string;
+  /** A picture behind its group photo (wblob: reference); a project's banner too, unless its page has one. */
+  background?: string;
   founder: Did;
   founderName?: string;
   members: number;
@@ -2282,6 +2288,8 @@ export interface Backend {
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
+  /** A space's photo (a picture of its own, or '' for everyone's avatars), its banner's text ('' for its name) and the background behind it. */
+  setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; as?: string }): Promise<SpaceInfo>;
   /** The avatars of these people, by their did: those who have one. */
   avatars(people: Did[]): Promise<Record<Did, Record<string, number>>>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
@@ -2504,7 +2512,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'directory', 'find', 'contactLink', 'addContact',
+  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'setSpacePhoto', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
