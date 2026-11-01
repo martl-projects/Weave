@@ -602,7 +602,8 @@ export const KIND_PAGE = 'weave.project.page';
  * A space's photo, as those who run it set it: a picture of their own (a wblob: reference), or none (everyone's
  * avatars as a group photo), the text on the banner in it (its name when empty), and a background behind the group
  * photo (a wblob: reference; a project's banner too, unless its page has one), and whether a project's members stand
- * on its banner (members: true), who stands where in the group photo (order: dids, front row first), and whether the
+ * on its banner (members: true), who stands where in the group photo (order: dids, front row first) and how (poses:
+ * did → a pose's or a scene's id, as Weave avatar names them), and whether the
  * photo stands above its member list (list; by default for groups and communities, not for projects, which have a
  * banner). The latest one counts.
  */
@@ -831,6 +832,16 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
 /** Who stands where on a space's group photo: people's keys, each once, front row first (at most 100). */
 const photoOrderOf = (value: unknown): Did[] =>
   Array.isArray(value) ? [...new Set(value.filter((d): d is Did => typeof d === 'string' && /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(d)))].slice(0, 100) : [];
+
+/** How each one poses on a space's group photo: their key → a pose's or a scene's id (what they mean is Weave avatar's). */
+const photoPosesOf = (value: unknown): Record<Did, string> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.entries(value)
+          .filter((e): e is [Did, string] => /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(e[0]) && typeof e[1] === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(e[1]))
+          .slice(0, 100),
+      )
+    : {};
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
 const CARRIED_STATE = new Set(['weave.project.page', 'weave.space.photo', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
@@ -8551,15 +8562,15 @@ export class WeaveNode implements Backend {
   }
 
   /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
-  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoInList?: boolean } {
+  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } {
     if (space.kind === 'direct') return {};
     const managers = this.#managers(state);
-    let out: { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoInList?: boolean } = { photoInList: space.kind !== 'project' };
+    let out: { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } = { photoInList: space.kind !== 'project' };
     for (const e of this.#entries(space)) {
       if (e.kind !== KIND_SPACE_PHOTO || !managers.has(e.event.author)) continue;
       const body = (e.body ?? {}) as Record<string, unknown>;
       const banner = typeof body.banner === 'string' ? body.banner.trim().slice(0, 40) : '';
-      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}), ...(space.kind === 'project' && body.members === true ? { membersOnBanner: true as const } : {}), ...((order) => (order.length ? { photoOrder: order } : {}))(photoOrderOf(body.order)), photoInList: typeof body.list === 'boolean' ? body.list : space.kind !== 'project' };
+      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}), ...(space.kind === 'project' && body.members === true ? { membersOnBanner: true as const } : {}), ...((order) => (order.length ? { photoOrder: order } : {}))(photoOrderOf(body.order)), ...((poses) => (Object.keys(poses).length ? { photoPoses: poses } : {}))(photoPosesOf(body.poses)), photoInList: typeof body.list === 'boolean' ? body.list : space.kind !== 'project' };
     }
     return out;
   }
@@ -8568,7 +8579,7 @@ export class WeaveNode implements Backend {
    * A space's photo: a picture of its own, or none for everyone's avatars together; the banner's text; and the
    * background behind the group photo. Its founder, maintainers or moderators set it. Empty removes; left out stays.
    */
-  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; list?: boolean; as?: string }): Promise<SpaceInfo> {
+  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('a direct chat has no photo');
     const state = this.#state(space);
@@ -8584,8 +8595,10 @@ export class WeaveNode implements Backend {
     const members = input.members ?? !!before.membersOnBanner;
     if (input.order && input.order.length !== photoOrderOf(input.order).length) throw new Error("the photo's order lists people by their keys (did:key:…), each once, at most 100");
     const order = input.order ?? before.photoOrder ?? [];
+    if (input.poses && Object.keys(input.poses).length !== Object.keys(photoPosesOf(input.poses)).length) throw new Error("the photo's poses go by people's keys (did:key:…), each a pose's id like wave or idea, at most 100");
+    const poses = input.poses ? photoPosesOf(input.poses) : (before.photoPoses ?? {});
     const list = input.list ?? before.photoInList ?? space.kind !== 'project';
-    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '', members, order, list }, space: space.id, as: input.as });
+    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '', members, order, poses, list }, space: space.id, as: input.as });
     return this.#spaceInfo(space);
   }
 

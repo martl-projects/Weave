@@ -25,8 +25,9 @@ export interface AvatarLib {
   thumb(part: string, a: Figure, size?: number): string;
   partNames(part: string): string[];
   SCENES: Array<{ id: string; label: string }>;
-  groupSnapshot(people: Figure[], width?: number, height?: number, opts?: { banner?: string; color?: string }): Promise<string>;
+  groupSnapshot(people: Figure[], width?: number, height?: number, opts?: { banner?: string; color?: string; poses?: string[] }): Promise<string>;
   GROUP_PHOTO_MAX: number;
+  GROUP_POSES: Array<{ id: string; label: string }>;
 }
 
 let lib: Promise<AvatarLib> | undefined;
@@ -134,6 +135,15 @@ export function SceneImage({ did, scene, size = 256, close = false, className = 
   return <span className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
 }
 
+/** What someone can do on a group photo: its own poses, then the scenes (with their things), once the renderer is here. */
+export function useGroupPoses(): Array<{ id: string; label: string; scene?: true }> | undefined {
+  const [poses, setPoses] = useState<Array<{ id: string; label: string; scene?: true }>>();
+  useEffect(() => {
+    void avatarLib().then((l) => setPoses([...l.GROUP_POSES.map(({ id, label }) => ({ id, label })), ...l.SCENES.map(({ id, label }) => ({ id, label, scene: true as const }))]));
+  }, []);
+  return poses;
+}
+
 // The scenes' names, once the renderer is here (they come with it).
 let labels: Record<string, string> = {};
 export function useScenes(): Array<{ id: string; label: string }> | undefined {
@@ -152,11 +162,11 @@ export const sceneLabel = (id: string) => labels[id] ?? id;
  * A group photo: up to twelve of its people (the first ones given), in rows, holding a banner with its name. Who has
  * no avatar stands there as the figure their key makes.
  */
-export function GroupPhoto({ dids, banner, className = '' }: { dids: string[]; banner?: string; className?: string }) {
+export function GroupPhoto({ dids, banner, poses, className = '' }: { dids: string[]; banner?: string; poses?: Record<string, string>; className?: string }) {
   const people = dids.slice(0, 12);
   // Few people: a taller picture, so they aren't small in a wide one.
   const [width, height] = people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
   const figures = useFigures(people);
-  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner }) : undefined, `${width}x${height}:${banner ?? ''}:${JSON.stringify(figures ?? people)}`);
+  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
   return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
 }

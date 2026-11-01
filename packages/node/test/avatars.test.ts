@@ -76,6 +76,12 @@ describe('a space photo', () => {
     expect((await martin.setSpacePhoto({ space: 'Crew', order })).photoOrder).toEqual(order);
     expect((await martin.setSpacePhoto({ space: 'Crew', background: '' })).photoOrder).toEqual(order);
     await expect(martin.setSpacePhoto({ space: 'Crew', order: ['Lena'] })).rejects.toThrow(/by their keys/);
+    // How each one poses: a pose's or a scene's id, by their key; kept when other things change.
+    const poses = { [lena.identity.author]: 'idea', [martin.identity.author]: 'crossed' };
+    expect((await martin.setSpacePhoto({ space: 'Crew', poses })).photoPoses).toEqual(poses);
+    expect((await martin.setSpacePhoto({ space: 'Crew', background: '' })).photoPoses).toEqual(poses);
+    await expect(martin.setSpacePhoto({ space: 'Crew', poses: { Lena: 'wave' } })).rejects.toThrow(/people's keys/);
+    await expect(martin.setSpacePhoto({ space: 'Crew', poses: { [lena.identity.author]: 'Not A Pose' } })).rejects.toThrow(/pose's id/);
     // Above the member list: groups by default, projects not (they have their banner); either way by choice.
     expect((await martin.spaces()).find((s) => s.name === 'Stage')?.photoInList).toBe(false);
     expect((await martin.setSpacePhoto({ space: 'Stage', list: true })).photoInList).toBe(true);
