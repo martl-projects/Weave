@@ -6,5 +6,5 @@
   "github-keyvault": { "repo": "martl-projects/weave-github-keyvault", "tag": "v1.0", "asset": "weave-github-keyvault.tar.gz", "sha256": "efe6a437025b4ce37e6094c3f9100d0c941ae1417765d81623b366c4b5951239" },
   "github-releases": { "repo": "martl-projects/weave-github-releases", "tag": "v1.0", "asset": "weave-github-releases.tar.gz", "sha256": "2cf71b865153718b1024307a3febea5ba9f310ba98321a085ddcedfd5f7cdb53" },
   "github-verify": { "repo": "martl-projects/weave-github-verify", "tag": "v1.0", "asset": "weave-github-verify.tar.gz", "sha256": "eb12d47eabc54b57044d250d72978c5dc5053bb8a8c3992a0b4203319a1f6ae4" },
-  "avatar": { "repo": "martl-projects/weave-avatar", "tag": "v1.14", "asset": "weave-avatar.tar.gz", "sha256": "6341cfd74faa4e84650790895f026c5fe25221a731ebbe4e20e3d707946914c2", "library": true }
+  "avatar": { "repo": "martl-projects/weave-avatar", "tag": "v1.15", "asset": "weave-avatar.tar.gz", "sha256": "3433f6dd5ab3b8943e5e1a8e6106edbf85e5c5ee94cc1f031fca9413bcb27586", "library": true }
 }
