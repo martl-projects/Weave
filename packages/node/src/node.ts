@@ -2,6 +2,7 @@ import {
   accessOf,
   canManage as mayManageSpace,
   b64u,
+  attachmentOf,
   BLOB_TYPES,
   boardKeyFor,
   boardOfEvents,
@@ -86,8 +87,12 @@ import {
   createSubKey,
   decryptBlob,
   encryptBlob,
+  formatBlobRef,
   parseBlobRef,
+  type Attachment,
   type BlobType,
+  fileName,
+  isMediaType,
   boardName,
   boardsOf,
   canManage,
@@ -3351,9 +3356,20 @@ export class WeaveNode implements Backend {
     return `wblob:${ref.hash}.${ref.key}`;
   }
 
+  /** A file of any type, to attach to a chat message: encrypted and stored here, where the others fetch it from. */
+  async putFile(input: { data: string; name: string; type: string }): Promise<Attachment> {
+    const name = fileName(input.name);
+    if (!name) throw new Error('a file needs a name (no path, at most 200 characters)');
+    if (!isMediaType(input.type)) throw new Error('a file needs a media type, like image/png or application/pdf');
+    const bytes = new Uint8Array(Buffer.from(input.data, 'base64'));
+    const { data, ref } = encryptBlob(bytes, input.type);
+    this.blobs.put(data);
+    return { ref: formatBlobRef(ref), name, size: bytes.length, type: input.type };
+  }
+
   async blob(text: string): Promise<{ data: string; type: string }> {
     const ref = parseBlobRef(text);
-    if (!ref) throw new Error('not an image reference');
+    if (!ref) throw new Error('not a file reference (wblob:…)');
     const stored = await this.blobs.fetch(ref.hash, (hashes) => this.#swarm?.want(hashes));
     const { bytes, type } = decryptBlob(stored, ref.key);
     return { data: Buffer.from(bytes).toString('base64'), type };
@@ -5747,7 +5763,7 @@ export class WeaveNode implements Backend {
         space: this.#spaceInfo(space),
         peer: { did: peer, name: this.nameOf(peer) },
         friend,
-        ...(last ? { last: { text: last.text.slice(0, 140), time: last.time, mine: last.author === this.identity.author } } : {}),
+        ...(last ? { last: { text: (last.text || (last.file ? `📎 ${last.file.name}` : '')).slice(0, 140), time: last.time, mine: last.author === this.identity.author } } : {}),
       });
     }
     return chats.sort((a, b) => (b.last?.time ?? '').localeCompare(a.last?.time ?? '') || (a.peer.name ?? a.peer.did).localeCompare(b.peer.name ?? b.peer.did));
@@ -5788,10 +5804,15 @@ export class WeaveNode implements Backend {
       .map((m) => this.#messageInfo(m, byId));
   }
 
-  async say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo> {
-    const text = input.text?.trim();
-    if (!text) throw new Error('a message needs text');
+  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo> {
+    const text = input.text?.trim() ?? '';
+    const file = input.file ? attachmentOf({ file: input.file }) : undefined;
+    if (input.file && !file) throw new Error('a file goes with its wblob: reference, a name, its size in bytes and a media type (use putFile)');
+    if (!text && !file) throw new Error('a message needs text or a file');
+    // The sender holds the blob: that's where the others fetch it from.
+    if (file && !this.blobs.has(parseBlobRef(file.ref)!.hash)) throw new Error("that file isn't stored here: upload it first (putFile)");
     const body: Record<string, Json> = { text };
+    if (file) body.file = { ...file };
     const chat = input.post ? await this.#chatOf(input.post) : undefined;
     const space = chat?.space ?? this.#space(input.space ?? '');
     const peer = this.#directs.get(space.id)?.peer;
@@ -6024,6 +6045,8 @@ export class WeaveNode implements Backend {
     if (item.author === me || item.private || (!anyAge && Date.now() - Date.parse(item.time) > 86_400_000)) return undefined;
     const body = (item.body && typeof item.body === 'object' && !Array.isArray(item.body) ? item.body : {}) as Record<string, Json>;
     const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
+    // What a message says: its text, or the file it brings.
+    const said = () => text('text') || (attachmentOf(body) ? `📎 ${attachmentOf(body)!.name}` : '');
     const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
     const who = item.authorName ?? this.nameOf(item.author) ?? 'Someone';
     const space = item.space;
@@ -6041,18 +6064,18 @@ export class WeaveNode implements Backend {
     };
 
     if (item.kind === KIND_MSG && space) {
-      if (space.kind === 'direct') return { type: 'dm', category: 'messages', title: who, text: snippet(text('text')), open: { space } };
+      if (space.kind === 'direct') return { type: 'dm', category: 'messages', title: who, text: snippet(said()), open: { space } };
       const post = lookup(body.post, POSTS);
       const channel = text('channel') || 'general';
       const open = post ? { space, post: post.id } : { space, channel };
       const place = post ? `“${post.title}”` : `${where} #${channel}`;
       // Something live announced (a website opened, a version offered): news for everyone following the project.
-      if (body.announce && space.kind === 'project' && !this.#homeHidden().has(space.id)) return { type: 'live', category: 'activity', title: `${who} ${snippet(text('text'))}`, text: where, open };
+      if (body.announce && space.kind === 'project' && !this.#homeHidden().has(space.id)) return { type: 'live', category: 'activity', title: `${who} ${snippet(said())}`, text: where, open };
       const name = this.nameOf(me)?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (name && new RegExp(`@${name}(?![\\w-])`, 'i').test(text('text')))
-        return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(text('text')), open };
-      if (lookup(body.replyTo, [KIND_MSG, KIND_REPLY])?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to you in ${place}`, text: snippet(text('text')), open };
-      if (post?.author === me) return { type: 'reply', category: 'messages', title: `${who} in your post ${place}`, text: snippet(text('text')), open };
+        return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(said()), open };
+      if (lookup(body.replyTo, [KIND_MSG, KIND_REPLY])?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to you in ${place}`, text: snippet(said()), open };
+      if (post?.author === me) return { type: 'reply', category: 'messages', title: `${who} in your post ${place}`, text: snippet(said()), open };
       return undefined;
     }
     if (item.kind === KIND_REPLY && space) {
@@ -8623,6 +8646,9 @@ export class WeaveNode implements Backend {
   #forget(): number {
     const me = this.identity.author;
     let dropped = 0;
+    /** Blobs the forgotten bodies pointed at (images in text, files attached): dropped too, unless something kept points at them. */
+    const blobs = new Set<string>();
+    const bodyOf = new Map<string, Json>();
     for (const space of [...this.#spaces.values()]) {
       if (space.kind !== 'project' && space.kind !== 'community') continue;
       const state = this.#state(space);
@@ -8635,6 +8661,8 @@ export class WeaveNode implements Backend {
           if (author === me) continue;
           const record = this.replica.record2(id);
           if (record && record.class === 'content' && !record.missing && isWireItemV2(record.wire)) {
+            if (!bodyOf.size) for (const d of this.#decodeAll()) bodyOf.set(d.id, d.inner.body ?? null);
+            for (const ref of blobRefsIn(JSON.stringify(bodyOf.get(id) ?? ''))) blobs.add(ref.hash);
             this.replica.store.dropBody(record.wire.e.body as string);
             dropped++;
           } else if (!this.#forgottenCarried().has(id) && this.#carriedIds(space).has(id)) {
@@ -8646,7 +8674,19 @@ export class WeaveNode implements Backend {
       }
     }
     if (dropped) this.#decoded = undefined;
+    if (blobs.size) this.#dropBlobs(blobs);
     return dropped;
+  }
+
+  /** Drop these blobs from disk, except those something still readable points at (a kept post, a page, a badge). */
+  #dropBlobs(hashes: Set<string>): void {
+    const kept = new Set<string>();
+    for (const d of this.#decodeAll()) for (const ref of blobRefsIn(JSON.stringify(d.inner.body ?? ''))) kept.add(ref.hash);
+    for (const series of this.#allBadges().series) {
+      const ref = parseBlobRef(series.image);
+      if (ref) kept.add(ref.hash);
+    }
+    for (const hash of hashes) if (!kept.has(hash)) this.blobs.drop(hash);
   }
 
   /** Items of carries this node forgot by rule: kept in the carry (it can't be dropped), never shown. */
@@ -9458,9 +9498,10 @@ export class WeaveNode implements Backend {
       text: m.text,
       time: m.time,
       channel: m.channel,
-      ...(parent ? { replyTo: { id: parent.id, by: this.#actor(parent.author, parent.signer), text: parent.text.slice(0, 140) } } : {}),
+      ...(parent ? { replyTo: { id: parent.id, by: this.#actor(parent.author, parent.signer), text: (parent.text || (parent.file ? `📎 ${parent.file.name}` : '')).slice(0, 140) } } : {}),
       reactions: m.reactions.map(this.#reactionInfo),
       ...(m.announce ? { announce: m.announce } : {}),
+      ...(m.file ? { file: m.file } : {}),
     };
   }
 

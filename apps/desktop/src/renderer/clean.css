@@ -453,3 +453,11 @@
 :root[data-skin='clean'] .image-picker-frame { background: var(--cl-subtle); border-radius: 8px; }
 :root[data-skin='clean'] .blob-loading { background: var(--cl-hover); border: none; border-radius: 6px; }
 :root[data-skin='clean'] .app-panel .status-dot { border-radius: 50%; border: none; }
+
+/* files and images in chat */
+:root[data-skin='clean'] :is(.file-card, .attached) { background: var(--cl-subtle); border-color: var(--cl-line); border-radius: 8px; color: var(--cl-text); }
+:root[data-skin='clean'] .attached { border-radius: 8px 8px 0 0; }
+:root[data-skin='clean'] :is(.file-meta, .file-state) { color: var(--cl-muted); }
+:root[data-skin='clean'] .file-state.missing { color: var(--cl-danger-text); }
+:root[data-skin='clean'] .msg-image { border-color: var(--cl-line); border-radius: 8px; overflow: hidden; }
+:root[data-skin='clean'] .lightbox-bar { background: var(--cl-panel); color: var(--cl-text); border: 1px solid var(--cl-line); border-radius: 8px; box-shadow: var(--cl-shadow); }

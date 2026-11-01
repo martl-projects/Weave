@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
-import type { AppImage, AppManifest, AppSetting, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
+import type { AppImage, AppManifest, AppSetting, Attachment, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
 import type { Theme } from './theme.ts';
@@ -1728,6 +1728,8 @@ export interface MessageInfo {
   reactions: ReactionInfo[];
   /** It announces something live: a website opened (its id, or the service hosting it) or a version offered (its artifact id). */
   announce?: { kind: 'website' | 'release'; id: string };
+  /** A file or image attached: its blob (wblob: reference, read with blob) and its name, size and media type. The text may be empty then. */
+  file?: Attachment;
 }
 
 export interface IssueInfo {
@@ -2229,7 +2231,9 @@ export interface Backend {
   setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo>;
   /** Store an image (base64) encrypted; returns its wblob: reference to put in a post or page. */
   putBlob(input: { data: string; type: string }): Promise<string>;
-  /** An image by its wblob: reference, from disk or fetched from peers; base64. */
+  /** Store a file of any type (base64, at most 2 MB) encrypted, to attach to a chat message (say's file): its reference, name, size and type. */
+  putFile(input: { data: string; name: string; type: string }): Promise<Attachment>;
+  /** An image or file by its wblob: reference, from disk or fetched from peers (fails after a while when nobody online has it); base64. */
   blob(ref: string): Promise<{ data: string; type: string }>;
   setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void>;
   /** Invite a whole group into a project; its current members take part right away. */
@@ -2436,7 +2440,8 @@ export interface Backend {
   createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
   /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
   messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
-  say(input: { space?: string; as?: string; text: string; channel?: string; post?: string; replyTo?: string }): Promise<MessageInfo>;
+  /** Say something, with a file or image attached (from putFile, or an image from putBlob): text may be empty then. */
+  say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
   /** Take a chat message down: yours, or any in a space you maintain or moderate. */
   deleteMessage(input: { message: string; as?: string }): Promise<void>;
@@ -2471,7 +2476,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
-  'project', 'setProjectPage', 'putBlob', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
+  'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',

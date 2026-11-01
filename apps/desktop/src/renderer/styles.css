@@ -387,6 +387,30 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .composer { display: flex; gap: 4px; align-items: stretch; }
 .composer textarea { flex: 1; resize: none; min-height: 34px; max-height: 140px; padding: 8px; font-size: 13px; }
 .emoji-btn { min-width: 36px; padding: 0; font-size: 16px; }
+.attach-btn .icon { width: 16px; height: 16px; }
+
+/* ---------- files and images in chat */
+.attached { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: #ffffe1; border: 1px solid #808080; border-bottom: none; color: #000; font-family: var(--content-font); font-size: 11px; }
+.attached.uploading { opacity: 0.7; }
+.attached button { margin-left: auto; min-width: 0; min-height: 0; padding: 0 6px; }
+.file-name { font-weight: bold; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 320px; }
+.file-meta { color: #666; white-space: nowrap; }
+.file-state { color: #666; font-style: italic; }
+.file-state.missing { color: #a00; font-style: normal; }
+.link-btn { min-width: 0; min-height: 0; margin-left: 6px; padding: 0 4px; background: none; box-shadow: none; text-shadow: none; color: #2323d0; text-decoration: underline; }
+.file-card { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: min(100%, 480px); margin: 6px 0; padding: 6px 8px; background: #f4f4f4; border: 1px solid #808080; color: #000; font-size: 12px; }
+.file-card .icon { flex: none; width: 20px; height: 20px; }
+.file-card.fetching { opacity: 0.8; }
+.file-save { min-height: 22px; padding: 0 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.file-save .icon { width: 12px; height: 12px; }
+.msg-image { display: block; min-width: 0; min-height: 0; margin: 6px 0; padding: 0; background: none; border: 1px solid #808080; box-shadow: none; cursor: zoom-in; line-height: 0; }
+.msg-image img { display: block; max-width: min(100%, 420px); max-height: 320px; width: auto; height: auto; }
+.lightbox { position: fixed; inset: 0; z-index: 120; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; background: #000c; cursor: zoom-out; font-family: var(--content-font); }
+.lightbox img { max-width: 100%; max-height: calc(100vh - 80px); cursor: default; border: 1px solid #808080; background: #fff; }
+.lightbox-bar { display: flex; align-items: center; gap: 10px; padding: 4px 8px; background: var(--face); color: #000; font-size: 12px; cursor: default; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+.lightbox-bar .file-name { max-width: 50vw; }
+.lightbox-bar button { min-height: 22px; padding: 0 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.lightbox-bar .icon { width: 12px; height: 12px; }
 
 /* ---------- members */
 .members { width: 190px; flex: none; display: flex; flex-direction: column; min-height: 0; }

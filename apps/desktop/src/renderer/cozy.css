@@ -377,3 +377,11 @@
 :root[data-skin='cozy'] .app-log { border-radius: 8px; background: #161b3d; color: #cfe0ff; }
 :root[data-skin='cozy'] .launch-command, :root[data-skin='cozy'] .words { border: 2px solid var(--cz-soft); border-radius: 8px; }
 :root[data-skin='cozy'] .app-panel .status-dot { border-radius: 50%; }
+
+/* files and images in chat */
+:root[data-skin='cozy'] :is(.file-card, .attached) { background: var(--cz-cream); border: 2px solid var(--cz-soft); border-radius: 10px; color: var(--cz-ink); }
+:root[data-skin='cozy'] .attached { border-bottom: none; border-radius: 10px 10px 0 0; }
+:root[data-skin='cozy'] :is(.file-meta, .file-state) { color: var(--cz-muted); }
+:root[data-skin='cozy'] .file-state.missing { color: var(--cz-red); }
+:root[data-skin='cozy'] .msg-image { border: 2px solid var(--cz-soft); border-radius: 8px; overflow: hidden; }
+:root[data-skin='cozy'] .lightbox-bar { background: var(--cz-paper); color: var(--cz-ink); border: 2px solid var(--cz-soft); border-radius: 10px; box-shadow: none; }
