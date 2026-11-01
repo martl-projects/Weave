@@ -4,7 +4,6 @@
   "apps/desktop/src/command.ts",
   "apps/desktop/src/main.ts",
   "apps/desktop/src/renderer/bridge.ts",
-  "apps/desktop/src/renderer/services.tsx",
   "apps/desktop/src/renderer/views.tsx",
   "apps/desktop/src/renderer/websites.tsx"
 ]
