@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.27.2 · 2026-11-01
+
+- A join that reaches the maintainer only after the next new key still gets in: its join is taken in, and the keys it missed are handed over
+
 ## v0.27.1 · 2026-11-01
 
 - A node is found at every key of a space that only those still in it hold, so a member who missed several new keys (offline a while, an older Weave) finds the others again
