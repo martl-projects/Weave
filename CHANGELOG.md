@@ -2,6 +2,13 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.27.1 · 2026-11-01
+
+- A node is found at every key of a space that only those still in it hold, so a member who missed several new keys (offline a while, an older Weave) finds the others again
+- A chat message you send shows at once, also when the daemon's event stream is down (it was saved but not shown, so it got sent twice)
+- Weave lives at martl-projects/Weave: downloads, the server image, the runners' scripts and the console's link point there
+- A daemon without the services Weave ships says so: in its status, as a banner in the app, and in its log at start
+
 ## v0.27.0 · 2026-11-01
 
 - Trust starts before the first packet: a node is found at a meeting point only its links carry (never at its DID), turns away peers that share nothing with it and hold none of its links, and adding a contact tells only the two of them instead of following publicly; the app connects newcomers to no one
