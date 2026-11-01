@@ -491,3 +491,29 @@ export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type
 export { KIND_SERVICE_POLICY, KIND_ARTIFACT_ACCESS, artifactAccessOf, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';
 export { KIND_ACCOUNT, accountProofText, accountClaimsOf, isPlatform, type AccountClaim } from './accounts.ts';
 export { parsePack, type Pack, type PackStep } from './packs.ts';
+export {
+  checkPackage,
+  formatParts,
+  GLOSSARY_PREFIX,
+  isLanguage,
+  isLanguageSetting,
+  LANGUAGES,
+  missingNames,
+  parseText,
+  partsToString,
+  pickLanguage,
+  pickLocale,
+  placeholdersOf,
+  TEXT_NAME,
+  texts,
+  TextSyntaxError,
+  type Language,
+  type LanguageSetting,
+  type TextNode,
+  type TextPackage,
+  type TextPart,
+  type TextProblem,
+  type Texts,
+  type TextsOptions,
+  type TextValues,
+} from './texts.ts';

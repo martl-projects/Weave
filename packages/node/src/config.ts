@@ -1,6 +1,9 @@
+import { isLanguage, type Language } from '@weave/core';
 import { readJson, writeJson, type Home } from './home.ts';
 
 export interface Config {
+  /** The UI's language on this computer (docs/localization.md): a shipped language, or absent for the system's. */
+  language?: Language;
   /** Topics this node joins on the DHT. */
   topics: string[];
   /** DHT bootstrap nodes; empty means Hyperswarm's public defaults. */
@@ -36,7 +39,7 @@ export interface Config {
 
 /** What this build reads of the config; anything else in the file is kept as it is (see loadConfig). */
 const KNOWN: ReadonlySet<string> = new Set<keyof Config>([
-  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk',
+  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language',
 ]);
 
 export function loadConfig(home: Home): Config {
@@ -73,6 +76,7 @@ export function loadConfig(home: Home): Config {
     ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
     ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
     ...(stored.desk ? { desk: stored.desk } : {}),
+    ...(isLanguage(stored.language) ? { language: stored.language } : {}),
   };
 }
 

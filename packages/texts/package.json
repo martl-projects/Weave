@@ -1,0 +1,16 @@
+{
+  "name": "@weave/texts",
+  "version": "0.25.0",
+  "description": "Weave's UI texts by name, a package per language (docs/localization.md)",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./en": "./weave.texts.en.json",
+    "./de": "./weave.texts.de.json"
+  },
+  "dependencies": {
+    "@weave/core": "*"
+  }
+}

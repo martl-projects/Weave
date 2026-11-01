@@ -405,6 +405,9 @@ import {
   type Builtin,
   type Pack,
   artifactKindOf,
+  isLanguageSetting,
+  LANGUAGES,
+  type LanguageSetting,
 } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
@@ -510,6 +513,7 @@ import {
   type KeyvaultInfo,
   type ArtifactLine,
   type AppReleases,
+  type Preferences,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -3959,6 +3963,19 @@ export class WeaveNode implements Backend {
     this.config = { ...this.config, updates: { ...rest, ...(input.auto === false ? { auto: false } : {}) } };
     saveConfig(this.home, this.config);
     return { auto: input.auto !== false };
+  }
+
+  async preferences(): Promise<Preferences> {
+    return this.config.language ? { language: this.config.language } : {};
+  }
+
+  /** The UI's language on this computer: a shipped one, or "system" to follow the computer's. */
+  async setPreferences(input: { language?: LanguageSetting }): Promise<Preferences> {
+    if (input.language !== undefined && !isLanguageSetting(input.language)) throw new Error(`not a language Weave has: ${String(input.language)} (${LANGUAGES.join(', ')}, or system)`);
+    const { language: _language, ...rest } = this.config;
+    this.config = { ...rest, ...(input.language && input.language !== 'system' ? { language: input.language } : {}) };
+    saveConfig(this.home, this.config);
+    return this.preferences();
   }
 
   /**

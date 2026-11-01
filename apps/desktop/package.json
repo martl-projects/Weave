@@ -26,6 +26,7 @@
     "@tiptap/react": "3.31.4",
     "@tiptap/starter-kit": "3.31.4",
     "@weave/node": "*",
+    "@weave/texts": "*",
     "98.css": "^0.1.21",
     "dompurify": "^3.4.17",
     "electron-updater": "^6.8.11",

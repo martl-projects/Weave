@@ -1,5 +1,7 @@
 import { checkForUpdates, UpdatePrompt, UpdateSettings } from './update.tsx';
 import { useEffect, useState, type ReactNode } from 'react';
+import { LANGUAGES, type LanguageSetting } from '@weave/core';
+import { TextsProvider, useTexts } from './texts.tsx';
 import { createRoot } from 'react-dom/client';
 import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionRequest, ServiceProfileInfo } from '@weave/node/client';
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
@@ -570,6 +572,7 @@ function Shell() {
   const [dialog, setDialog] = useState<Dialog>();
   const [skin, setSkin] = useState<Skin>(loadSkin);
   const [mode, setMode] = useState<Mode>(loadMode);
+  const { t, setting: language, setLanguage } = useTexts();
   // On a phone the places tree is a screen of its own; picking something closes it.
   const [placesOpen, setPlacesOpen] = useState(false);
   const routeKey = route.join('/');
@@ -633,23 +636,23 @@ function Shell() {
           ]}
         />
         <Menu
-          label="View"
+          label={t('menu.view')}
           items={[
-            { label: 'Home', onClick: () => navigate('#/') },
-            { label: 'Saved', onClick: () => navigate('#/saved') },
-            { label: 'Inbox', onClick: () => navigate('#/inbox') },
-            { label: 'People', onClick: () => navigate('#/people') },
-            { label: 'My hub', onClick: () => navigate('#/space') },
-            { label: 'Keys & devices', onClick: () => navigate('#/keys') },
-            ...(bridge.mentions ? [{ label: 'Mentions panel', onClick: () => void bridge.mentions!('show') }] : []),
+            { label: t('menu.view.home'), onClick: () => navigate('#/') },
+            { label: t('menu.view.saved'), onClick: () => navigate('#/saved') },
+            { label: t('menu.view.inbox'), onClick: () => navigate('#/inbox') },
+            { label: t('menu.view.people'), onClick: () => navigate('#/people') },
+            { label: t('menu.view.hub'), onClick: () => navigate('#/space') },
+            { label: t('menu.view.keys'), onClick: () => navigate('#/keys') },
+            ...(bridge.mentions ? [{ label: t('menu.view.mentions'), onClick: () => void bridge.mentions!('show') }] : []),
             'sep',
-            { label: 'Refresh', onClick: bump },
-            { label: 'Notifications…', onClick: () => setDialog({ kind: 'notify' }) },
-            { label: 'Marks…', onClick: () => setDialog({ kind: 'marks' }) },
-            ...(bridge.update ? [{ label: 'Updates…', onClick: () => setDialog({ kind: 'updates' as const }) }] : []),
+            { label: t('menu.view.refresh'), onClick: bump },
+            { label: t('menu.view.notifications'), onClick: () => setDialog({ kind: 'notify' }) },
+            { label: t('menu.view.marks'), onClick: () => setDialog({ kind: 'marks' }) },
+            ...(bridge.update ? [{ label: t('menu.view.updates'), onClick: () => setDialog({ kind: 'updates' as const }) }] : []),
             'sep',
             ...(Object.keys(SKINS) as Skin[]).map((s) => ({
-              label: `${s === skin ? '● ' : ''}${SKINS[s]} look`,
+              label: `${s === skin ? '● ' : ''}${t(`look.${s}`)}`,
               onClick: () => {
                 applySkin(s);
                 setSkin(s);
@@ -658,12 +661,18 @@ function Shell() {
             'sep',
             // Light or dark: the Clean look has both; Arcade is always dark, Windows 95 and Cozy always light.
             ...(Object.keys(MODES) as Mode[]).map((m) => ({
-              label: `${m === mode ? '● ' : ''}${MODES[m]}`,
+              label: `${m === mode ? '● ' : ''}${t(`mode.${m}`)}`,
               disabled: skin !== 'clean',
               onClick: () => {
                 applyMode(m);
                 setMode(m);
               },
+            })),
+            'sep',
+            // The language of this device: the system's, or one Weave ships. Names of languages stay in their own language.
+            ...(['system', ...LANGUAGES] as LanguageSetting[]).map((l) => ({
+              label: `${l === language ? '● ' : ''}${t(`language.${l}`)}`,
+              onClick: () => setLanguage(l),
             })),
           ]}
         />
@@ -789,4 +798,8 @@ applySkin(loadSkin());
 applyMode(loadMode());
 startNotifications();
 startAppOpens();
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <TextsProvider>
+    <App />
+  </TextsProvider>,
+);
