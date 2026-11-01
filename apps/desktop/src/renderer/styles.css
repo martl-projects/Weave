@@ -246,9 +246,9 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 /* A flat dark wash over the banner, so white text stays readable on any picture. */
 .hero.has-banner::before { content: ''; position: absolute; inset: 0; background: #00104099; z-index: 1; }
 .hero > :not(.hero-bg) { position: relative; z-index: 2; }
-/* Its members on the banner: one row in the middle, heads and shoulders peeking over its bottom edge, as tall as
-   about half the banner; behind its text (over its background's wash). */
-.hero > .hero-group { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); height: 58%; max-width: 70%; margin: 0; pointer-events: none; z-index: 1; }
+/* Its members on the banner: one row in the middle, from the navel up over its bottom edge, the same size however
+   many (more of them make it wider); behind its text (over its background's wash). */
+.hero > .hero-group { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); height: 72%; max-width: 76%; margin: 0; pointer-events: none; z-index: 1; }
 .hero-group img { height: 100%; width: 100%; object-fit: contain; object-position: bottom; }
 .hero-art { flex: none; width: 88px; height: 88px; border: 2px solid #fff; box-shadow: 2px 2px 0 #0006; background: #fff; }
 .hero-art img, .hero-art canvas { display: block; width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }

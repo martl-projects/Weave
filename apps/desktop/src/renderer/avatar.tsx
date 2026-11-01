@@ -183,7 +183,7 @@ export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids
   const people = dids.slice(0, 12);
   // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: one row, heads and
   // shoulders, as wide as there are people.
-  const [width, height] = peek ? [Math.round(256 * Math.max(1, (people.length * 1.75 + 1.4) / 3.1)), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
+  const [width, height] = peek ? [Math.round(256 * Math.min(4, Math.max(1, ((people.length - 1) * 1.75 + 1.7) / 3.5))), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
   const figures = useFigures(people);
   const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
   return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
