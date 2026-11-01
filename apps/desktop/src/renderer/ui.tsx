@@ -59,13 +59,13 @@ export function ProjectIcon({ id, icon, size = 40, className = '' }: { id: strin
   );
 }
 
-/** Someone's picture: their avatar (Weave avatar), or else their pixel sprite. */
+/** Someone's picture: their avatar (Weave avatar), or the one their key makes; their pixel sprite until it's drawn. */
 export function Avatar({ did, size = 32, status }: { did: string; name?: string; size?: number; status?: 'online' | 'offline' }) {
   const figure = useFigure(did);
   const sprite = <Sprite seed={did} size={size} face />;
   return (
     <span className="avatar" style={{ width: size, height: size }}>
-      {figure ? <FigureHead figure={figure} fallback={sprite} /> : sprite}
+      {figure === undefined ? sprite : <FigureHead figure={figure} seed={did} fallback={sprite} />}
       {status && <i className={`presence ${status}`} />}
     </span>
   );

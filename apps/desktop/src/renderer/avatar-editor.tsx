@@ -94,7 +94,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
     viewer.current?.zoom(TABS[tab].zoom);
   }, [lib, !!figure]);
   const save = async (avatar: Figure | null) => {
-    const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as your sprite again');
+    const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as the figure your key makes again');
     if (saved) {
       forgetFigure(me.did);
       bump();
@@ -184,7 +184,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
         </div>
       )}
       <div className="buttons">
-        {me.avatar && <AsyncButton onClick={() => save(null)}>Use my sprite</AsyncButton>}
+        {me.avatar && <AsyncButton onClick={() => save(null)}>Use my default figure</AsyncButton>}
         <span className="grow" />
         <button onClick={onClose}>Cancel</button>
         <AsyncButton className="default" disabled={!figure} onClick={() => save(figure!)}>

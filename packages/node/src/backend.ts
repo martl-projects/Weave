@@ -1506,7 +1506,7 @@ export interface Profile {
    */
   url: string;
   theme: Theme;
-  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as their sprite. */
+  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as the figure their key makes. */
   avatar?: Record<string, number>;
   me: boolean;
   /** I follow them. */
@@ -1710,7 +1710,7 @@ export type { PlatformInfo };
 export interface ProfileInput {
   name?: string;
   theme?: Partial<Theme>;
-  /** Your avatar's figure (Weave avatar), or null to show your sprite again. */
+  /** Your avatar's figure (Weave avatar), or null for the one your key makes. */
   avatar?: Record<string, number> | null;
 }
 

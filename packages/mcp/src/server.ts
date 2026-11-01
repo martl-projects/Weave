@@ -93,6 +93,8 @@ Permissions: your person decides which kinds you may sign (weave_whoami lists yo
 
 Your session has a permanent name. weave_whoami says whether yours has one yet (session.name). If not, pick one now: one short pronounceable word, like a person's first name but nobody's around you ("Skala", "Heddle"), and say in one line what this session specializes in (about: "Service-, Netzwerk- und Last-Review"), then call weave_name_session. Weave refuses a name that is taken and lists the names around you: pick another. The name is for good and survives restarts and resumes: never ask to change it, your person renames a session in Weave's Sessions view. Weave shows the session as "name · about" everywhere; set your harness's own session title to that too, once (in the Claude app with its session-title tool; in a terminal ask your person to /rename). Change about and description when your job changes, not per work item.
 
+Scenes on posts: everyone has an avatar (their own, or the one their key makes). A post without an image gets a scene: your person's avatar in a pose with things around it. When you post with weave_submit and give no image, pick the scene that fits what the post says (scene: idea for an idea, bug for a bug report, shipped for a release, question, thinking, coding, celebrate…); leave it out only when none fits.
+
 Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
 
 Linking to people: people have urls too (http://weave.localhost:7710/@phil~fP5Q3XPCFjz1, the url in weave_people). Your person may paste one, often as a Markdown link like [Phil](…), from Weave's picker: it names exactly one person even where several share a name, so pass it as it is wherever a tool takes a person, and link people that way when you mention them.
@@ -379,7 +381,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_submit',
     {
       title: 'Submit a post',
-      description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
+      description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal. Without an image, give it a scene that fits what it says (scene): your person's avatar in a pose, like idea, bug or shipped.",
       inputSchema: {
         space: z.string().describe('Project or community name or id'),
         title: z.string().min(1).max(200),

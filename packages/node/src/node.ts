@@ -3846,7 +3846,7 @@ export class WeaveNode implements Backend {
   }
 
   /** A space's theme: the latest theme event its author published. */
-  /** Someone's avatar: their figure, or none (they show as their sprite). */
+  /** Someone's avatar: their figure, or none (they show as the figure their key makes). */
   avatarOf(author: Did): AvatarFigure | undefined {
     let body: unknown;
     for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;

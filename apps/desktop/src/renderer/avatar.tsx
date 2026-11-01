@@ -1,6 +1,7 @@
 // Weave avatars: everyone's figure (a public weave.avatar event, a few numbers), drawn by Weave avatar's renderer
 // (martl-projects/weave-avatar, pinned; it ships as dist/renderer/avatar3d/weave-avatar.js and loads when first needed).
-// Someone without one shows as their pixel sprite; in a scene, as the figure their key makes.
+// Someone without one shows as the figure their key makes (the same everywhere); their pixel sprite only while the
+// renderer loads.
 
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { api, onItem } from './lib.ts';
@@ -119,8 +120,8 @@ function usePicture(draw: ((l: AvatarLib) => Promise<string>) | undefined, key: 
 }
 
 /** Someone's head, as their avatar shows it; fallback while it's drawn (or when it can't be). */
-export function FigureHead({ figure, fallback }: { figure: Figure; fallback: ReactNode }) {
-  const url = usePicture((l) => l.snapshot(figure, 'face'), JSON.stringify(figure));
+export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; seed: string; fallback: ReactNode }) {
+  const url = usePicture((l) => l.snapshot(figure ?? l.Avatar.fromSeed(seed), 'face'), JSON.stringify(figure ?? seed));
   return url ? <img className="figure-head" src={url} alt="" draggable={false} /> : <>{fallback}</>;
 }
 
