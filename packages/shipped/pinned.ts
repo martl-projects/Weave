@@ -6,12 +6,27 @@
 // CLI's login.
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 const here = import.meta.dirname;
+// Test files run side by side, each may fetch and unpack the same release: each writes its own parts, the first done wins.
+const mine = `${process.pid}-${randomBytes(4).toString('hex')}`;
+
+/** Put a finished part in place, unless another process already did (then its rename fails, and that one stays). */
+function settle(part: string, to: string, done: () => boolean): void {
+  if (!done()) {
+    try {
+      renameSync(part, to);
+      return;
+    } catch (error) {
+      if (!done()) throw error;
+    }
+  }
+  rmSync(part, { recursive: true, force: true });
+}
 
 export interface Pin {
   /** owner/name on GitHub. */
@@ -41,13 +56,14 @@ export async function pinnedRelease(name: string): Promise<string> {
     rmSync(archive);
     throw new Error(`${pin.repo} ${pin.tag}'s ${pin.asset} isn't the pinned one (sha256 ${got}, pinned ${pin.sha256})`);
   }
-  const unpacking = `${dir}.part`;
-  rmSync(unpacking, { recursive: true, force: true });
+  const unpacking = `${dir}.${mine}.part`;
   mkdirSync(unpacking, { recursive: true });
   for (const [path, content] of untar(gunzipSync(bytes))) writeFileSync(join(unpacking, path), content);
-  if (!existsSync(join(unpacking, 'weave.app.json'))) throw new Error(`${pin.asset} holds no weave.app.json`);
-  rmSync(dir, { recursive: true, force: true });
-  renameSync(unpacking, dir);
+  if (!existsSync(join(unpacking, 'weave.app.json'))) {
+    rmSync(unpacking, { recursive: true, force: true });
+    throw new Error(`${pin.asset} holds no weave.app.json`);
+  }
+  settle(unpacking, dir, () => existsSync(join(dir, 'weave.app.json')));
   return dir;
 }
 
@@ -74,8 +90,8 @@ async function download(pin: Pin, to: string): Promise<void> {
   const file = await fetch(asset.url, { headers: { ...headers, accept: 'application/octet-stream' } });
   if (!file.ok) throw failed(`GitHub said ${file.status} for the file`);
   mkdirSync(join(here, '.cache'), { recursive: true });
-  writeFileSync(`${to}.part`, Buffer.from(await file.arrayBuffer()));
-  renameSync(`${to}.part`, to);
+  writeFileSync(`${to}.${mine}.part`, Buffer.from(await file.arrayBuffer()));
+  settle(`${to}.${mine}.part`, to, () => existsSync(to));
 }
 
 /** A tar archive's plain files at its top level, by name: all a release's archive holds. */
