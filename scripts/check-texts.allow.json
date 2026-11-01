@@ -23,7 +23,6 @@
   "apps/desktop/src/renderer/phones.tsx",
   "apps/desktop/src/renderer/routines.tsx",
   "apps/desktop/src/renderer/services.tsx",
-  "apps/desktop/src/renderer/sessions.tsx",
   "apps/desktop/src/renderer/shows.tsx",
   "apps/desktop/src/renderer/treasury.tsx",
   "apps/desktop/src/renderer/views.tsx",
