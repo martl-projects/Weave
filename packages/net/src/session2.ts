@@ -74,7 +74,7 @@ export type Message2 =
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
-/** A space this node holds, with the keys that prove it: the current epoch's first, then the one before. */
+/** A space this node holds, with the keys that prove it: the current epoch's first, then the earlier ones, newest first (a peer proving only an earlier one is behind: it gets the rekeys). */
 export interface HeldSpace {
   space: string;
   keys: Uint8Array[];

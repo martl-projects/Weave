@@ -6389,9 +6389,11 @@ export class WeaveNode implements Backend {
 
   /**
    * The spaces this node holds, with the keys that prove it to peers (the
-   * current epoch's and the one before, so a member who hasn't got a new key
-   * yet still meets the others): its spaces, its direct chats, and its own
-   * private space, which only its other devices hold.
+   * current epoch's first, then every one before: a member who hasn't got a
+   * new key yet still meets the others and is handed the rekeys, however many
+   * rotations they missed; see docs/v2-stage2.md, "Closing the grace key"):
+   * its spaces, its direct chats, and its own private space, which only its
+   * other devices hold.
    */
   #heldSpaces(): HeldSpace[] {
     // Listing may derive new direct chats, which would announce again: not from inside.
@@ -6403,7 +6405,7 @@ export class WeaveNode implements Backend {
     }
     const held = (space: SpaceKeys): HeldSpace => ({
       space: spaceScope(space),
-      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
+      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).map((epoch) => b64u.decode(space.keys[String(epoch)])),
       ...(this.#spaces.has(space.id) && this.#pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
     return [
