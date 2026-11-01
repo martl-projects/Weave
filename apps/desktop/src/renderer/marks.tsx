@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import type { BadgeInfo, MarkInfo, MarksAnswer, MarkServiceInfo, SpaceInfo } from '@weave/node/client';
 import { BadgeCard } from './badges.tsx';
 import { api, onItem, useApi, useBlobUrl } from './lib.ts';
-import { ask as askYes, AsyncButton, attempt, Modal } from './ui.tsx';
+import { ask as askYes, AsyncButton, attempt, Modal, ServiceOrigin } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /*
  * Marks next to names (stage 19): what the mark services you and the space chose say, each with who says so on
@@ -141,11 +142,12 @@ function MarkedBadge({ id, did, onClose }: { id: string; did: string; onClose():
       () => setBadge(null),
     );
   }, [id, did]);
+  const { t } = useTexts();
   if (badge === undefined) return null;
   if (!badge)
     return (
-      <Modal title="Not found" onClose={onClose}>
-        <p className="small muted">This node doesn't know that badge (or it moved on to someone else).</p>
+      <Modal title={t('marks.badge.notfound')} onClose={onClose}>
+        <p className="small muted">{t('marks.badge.unknown')}</p>
       </Modal>
     );
   return <BadgeCard badge={badge} onClose={onClose} />;
@@ -172,57 +174,54 @@ export function Marks({ did, slot, space, size = 16 }: { did: string; slot: Slot
 
 /** Where a mark service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
 function MarksOrigin({ service: s }: { service: MarkServiceInfo }) {
-  if (s.shipped) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
-  return <span className="tag" title={`A release of ${s.project?.name ? `p/${s.project.name}` : "a project you aren't in"}, version ${s.tag}`}>{s.project?.name ? `p/${s.project.name}` : 'another project'}</span>;
+  return <ServiceOrigin shipped={s.shipped} project={s.project?.name} tag={s.tag} />;
 }
 
 /** View → Marks…: your own mark services (shown everywhere you look), and taking one in from a project you're in. */
 export function MarksSettings({ onClose }: { onClose(): void }) {
+  const { t } = useTexts();
   const mine = useApi(() => api<MarkServiceInfo[]>('markServices', { off: true }), []);
   const spaces = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const [project, setProject] = useState('');
   const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
-  const remove = (s: MarkServiceInfo) => attempt(() => api('removeMarks', { service: s.service }), `${s.name} removed`).then(mine.reload);
-  const turnOn = (s: MarkServiceInfo) => attempt(() => api('addMarks', { shipped: s.service }), `${s.name} is back`).then(mine.reload);
+  const remove = (s: MarkServiceInfo) => attempt(() => api('removeMarks', { service: s.service }), t('service.removed', { name: s.name })).then(mine.reload);
+  const turnOn = (s: MarkServiceInfo) => attempt(() => api('addMarks', { shipped: s.service }), t('service.is.back', { name: s.name })).then(mine.reload);
   // Your yes to exactly that release, as for a keyvault or fetcher: a newer one asks again.
-  const yes = (what: string) => askYes(`Take in ${what}? Weave runs exactly that release over what your Weave holds, with no key and no network, and shows what it says next to names everywhere you look.`, 'Take it in');
+  const yes = (what: string) => askYes(t('marks.take.in', { what }), t('service.take.it.in'));
   const add = async () => {
-    const name = projects.find((p) => p.id === project)?.name ?? 'the project';
-    if (!(await yes(`the newest mark service p/${name} released`))) return;
-    await attempt(() => api('addMarks', { project, approve: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
+    const name = projects.find((p) => p.id === project)?.name ?? t('project.the');
+    if (!(await yes(t('marks.newest', { project: name })))) return;
+    await attempt(() => api('addMarks', { project, approve: true }), t('service.taken.in')).then(() => (setProject(''), mine.reload()));
   };
   const update = async (s: MarkServiceInfo) => {
-    if (!s.project || !s.newer || !(await yes(`${s.name} ${s.newer}, released in p/${s.project.name ?? s.project.id}`))) return;
-    await attempt(() => api('addMarks', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), `${s.name} ${s.newer} is yours now`).then(mine.reload);
+    if (!s.project || !s.newer || !(await yes(t('service.released.in', { name: s.name, tag: s.newer, project: s.project.name ?? s.project.id })))) return;
+    await attempt(() => api('addMarks', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), t('service.yours.now', { name: s.name, tag: s.newer })).then(mine.reload);
   };
   return (
-    <Modal title="Marks" onClose={onClose}>
-      <p className="small muted">
-        Mark services show what they say next to names, everywhere you look; hover a mark to see who says so. Projects and communities can pin their own, shown only in
-        them.
-      </p>
+    <Modal title={t('marks.title')} onClose={onClose}>
+      <p className="small muted">{t('marks.about')}</p>
       {mine.error && <p className="error">{mine.error}</p>}
       {(mine.data ?? []).map((s) => (
         <div className="marks-row" key={s.service}>
           <div>
-            <b>{s.name}</b> <MarksOrigin service={s} /> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : s.tag}</span>
+            <b>{s.name}</b> <MarksOrigin service={s} /> <span className="small muted">{s.shipped ? t(s.off ? 'service.weave.ships.off' : 'service.weave.ships') : s.tag}</span>
             {s.newer && (
               <div className="small">
-                {s.newer} is out: it runs only with your yes. <AsyncButton onClick={() => update(s)}>Update…</AsyncButton>
+                {t('service.newer.out', { tag: s.newer })} <AsyncButton onClick={() => update(s)}>{t('service.update')}</AsyncButton>
               </div>
             )}
-            {s.problem && <div className="small error">Shows nothing: {s.problem}</div>}
-            {s.shipped && s.service === 'from-weave' && <div className="small muted">Without it, a look-alike of Weave can’t be told apart at a glance.</div>}
+            {s.problem && <div className="small error">{t('marks.shows.nothing', { problem: s.problem })}</div>}
+            {s.shipped && s.service === 'from-weave' && <div className="small muted">{t('marks.fromweave.note')}</div>}
           </div>
-          {s.off ? <AsyncButton onClick={() => turnOn(s)}>Turn on</AsyncButton> : <AsyncButton onClick={() => remove(s)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>}
+          {s.off ? <AsyncButton onClick={() => turnOn(s)}>{t('service.turn.on')}</AsyncButton> : <AsyncButton onClick={() => remove(s)}>{t(s.shipped ? 'service.turn.off' : 'button.remove')}</AsyncButton>}
         </div>
       ))}
-      {mine.data && !mine.data.length && <p className="small muted">None yet.</p>}
+      {mine.data && !mine.data.length && <p className="small muted">{t('marks.none')}</p>}
       <fieldset>
-        <legend>Take one in</legend>
+        <legend>{t('marks.take.one')}</legend>
         <div className="marks-row">
           <select value={project} onChange={(e) => setProject(e.target.value)}>
-            <option value="">A project that released one…</option>
+            <option value="">{t('marks.take.from')}</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -230,7 +229,7 @@ export function MarksSettings({ onClose }: { onClose(): void }) {
             ))}
           </select>
           <AsyncButton onClick={add} disabled={!project}>
-            Add
+            {t('button.add')}
           </AsyncButton>
         </div>
       </fieldset>

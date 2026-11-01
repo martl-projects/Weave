@@ -2,7 +2,8 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { BoardInfo, ChatInfo, HintServiceInfo, HintsAnswer, MemberInfo, Notice, NoticeCategory, PostInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
-import { ask, AsyncButton, attempt, Modal } from './ui.tsx';
+import { ask, AsyncButton, attempt, Modal, ServiceOrigin } from './ui.tsx';
+import { t, useTexts } from './texts.tsx';
 
 /*
  * System notifications for live events the node marked as a notice (see
@@ -18,11 +19,8 @@ import { ask, AsyncButton, attempt, Modal } from './ui.tsx';
  * counts and notifies: Unread's settings, kept the same way.
  */
 
-export const NOTICE_CATEGORIES: Record<NoticeCategory, { label: string; hint: string }> = {
-  messages: { label: 'Messages to you', hint: 'Direct messages, @mentions, replies to you and chat in your posts' },
-  requests: { label: 'Requests for you', hint: 'Co-author requests, people asking to join or for a tier' },
-  activity: { label: 'New posts', hint: 'In communities you follow, and in the boards you follow in your projects' },
-};
+/** The kinds of notices, in the settings' order; their texts are notice.cat.<kind> and notice.cat.<kind>.hint. */
+export const NOTICE_CATEGORIES: NoticeCategory[] = ['messages', 'requests', 'activity'];
 
 type Settings = Record<NoticeCategory, boolean>;
 const KEY = 'weave.notify';
@@ -86,7 +84,7 @@ function flush(): void {
   void bridge.attention();
   if (notices.length === 1) return show(notices[0].title, notices[0].text, notices[0].open);
   const requests = notices.every((n) => n.category === 'requests');
-  show(`${notices.length} new in Weave`, notices.slice(0, 3).map((n) => n.title).join('\n') + (notices.length > 3 ? '\n…' : ''), requests ? { inbox: true } : {});
+  show(t('notify.summary', { n: notices.length }), notices.slice(0, 3).map((n) => n.title).join('\n') + (notices.length > 3 ? '\n…' : ''), requests ? { inbox: true } : {});
 }
 
 let started = false;
@@ -320,8 +318,9 @@ function clearSeen([kind, id, view, arg, post]: string[], force = false): void {
 
 const clear = (force = false) => clearSeen(route(), force);
 
-const DOES = { both: 'Count and notify', count: 'Count only', notify: 'Notify only', none: 'Nothing' } as const;
-type Does = keyof typeof DOES;
+/** What a rule does, in the picker's order; the texts are rule.does.<key>. */
+const DOES = ['both', 'count', 'notify', 'none'] as const;
+type Does = (typeof DOES)[number];
 const doesOf = (r: NoticeRule): Does => (r.count ? (r.notify ? 'both' : 'count') : r.notify ? 'notify' : 'none');
 
 /** One rule: from whom, where, and what it does. */
@@ -329,43 +328,44 @@ function RuleRow({ rule, spaces, people, onChange, onRemove }: { rule: NoticeRul
   const space = spaces.find((s) => s.id === rule.space);
   const { data: boards } = useApi(() => (space && (space.kind === 'project' || space.kind === 'community') ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space?.id]);
   const { data: members } = useApi(() => (space ? api<MemberInfo[]>('members', space.id) : Promise.resolve([])), [space?.id]);
+  const { t } = useTexts();
   const who = new Map(people);
   for (const m of members ?? []) if (!who.has(m.did)) who.set(m.did, m.name ?? shortDid(m.did));
   if (rule.who && !who.has(rule.who)) who.set(rule.who, shortDid(rule.who));
   return (
     <div className="field-row notice-rule">
-      <select aria-label="From" value={rule.who ?? ''} onChange={(e) => onChange({ ...rule, who: e.target.value || undefined })}>
-        <option value="">Anyone</option>
+      <select aria-label={t('rule.from')} value={rule.who ?? ''} onChange={(e) => onChange({ ...rule, who: e.target.value || undefined })}>
+        <option value="">{t('rule.anyone')}</option>
         {[...who].map(([did, name]) => (
           <option key={did} value={did}>
             {name}
           </option>
         ))}
       </select>
-      <select aria-label="In" value={rule.space ?? ''} onChange={(e) => onChange({ ...rule, space: e.target.value || undefined, board: undefined })}>
-        <option value="">Anywhere</option>
+      <select aria-label={t('rule.in')} value={rule.space ?? ''} onChange={(e) => onChange({ ...rule, space: e.target.value || undefined, board: undefined })}>
+        <option value="">{t('rule.anywhere')}</option>
         {spaces.map((s) => (
           <option key={s.id} value={s.id}>
             {s.name}
           </option>
         ))}
       </select>
-      <select aria-label="Board" value={rule.board ?? ''} disabled={!boards?.length} onChange={(e) => onChange({ ...rule, board: e.target.value || undefined })}>
-        <option value="">Any board</option>
+      <select aria-label={t('word.board')} value={rule.board ?? ''} disabled={!boards?.length} onChange={(e) => onChange({ ...rule, board: e.target.value || undefined })}>
+        <option value="">{t('rule.any.board')}</option>
         {(boards ?? []).map((b) => (
           <option key={b.name} value={b.name}>
             {b.title}
           </option>
         ))}
       </select>
-      <select aria-label="Does" value={doesOf(rule)} onChange={(e) => onChange({ ...rule, count: ['both', 'count'].includes(e.target.value), notify: ['both', 'notify'].includes(e.target.value) })}>
-        {(Object.keys(DOES) as Does[]).map((k) => (
+      <select aria-label={t('rule.does')} value={doesOf(rule)} onChange={(e) => onChange({ ...rule, count: ['both', 'count'].includes(e.target.value), notify: ['both', 'notify'].includes(e.target.value) })}>
+        {DOES.map((k) => (
           <option key={k} value={k}>
-            {DOES[k]}
+            {t(`rule.does.${k}`)}
           </option>
         ))}
       </select>
-      <button type="button" title="Remove this rule" onClick={onRemove}>
+      <button type="button" title={t('rule.remove')} onClick={onRemove}>
         ✕
       </button>
     </div>
@@ -379,6 +379,7 @@ function NoticeRules() {
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const people = new Map((chats ?? []).map((c) => [c.peer.did, c.peer.name ?? shortDid(c.peer.did)]));
+  const { t } = useTexts();
   const change = (next: NoticeRule[]) => {
     setRules(next);
     void saveRules(next).catch(() => setRules(loadRules()));
@@ -386,7 +387,7 @@ function NoticeRules() {
   return (
     <>
       <p>
-        Rules <span className="small muted">· the most specific one wins: a person over a place, a board over its project; kept with Unread, so all your devices count alike</span>
+        {t('rules.title')} <span className="small muted">{t('rules.hint')}</span>
       </p>
       {rules.map((rule, i) => (
         <RuleRow
@@ -399,9 +400,9 @@ function NoticeRules() {
         />
       ))}
       <div className="field-row">
-        <span className="small grow">Without a rule, messages to you count (a number next to the chat or place, until you open it) and the kinds above notify.</span>
+        <span className="small grow">{t('rules.default')}</span>
         <button type="button" onClick={() => change([...rules, { count: true, notify: true }])}>
-          Add rule
+          {t('rules.add')}
         </button>
       </div>
     </>
@@ -410,12 +411,12 @@ function NoticeRules() {
 
 /** Where a hint service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
 function HintOrigin({ service: s }: { service: HintServiceInfo }) {
-  if (s.shipped) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
-  return <span className="tag" title={`A release of ${s.project?.name ? `p/${s.project.name}` : "a project you aren't in"}, version ${s.tag}`}>{s.project?.name ? `p/${s.project.name}` : 'another project'}</span>;
+  return <ServiceOrigin shipped={s.shipped} project={s.project?.name} tag={s.tag} />;
 }
 
 /** A hint service's settings as JSON (Unread's are the rules above): sealed to you, so every device of yours shows alike. */
 function HintSettings({ service, onSaved }: { service: HintServiceInfo; onSaved(): void }) {
+  const { t } = useTexts();
   const [text, setText] = useState(() => JSON.stringify(service.settings ?? {}, null, 2));
   const [problem, setProblem] = useState('');
   const save = async () => {
@@ -423,16 +424,16 @@ function HintSettings({ service, onSaved }: { service: HintServiceInfo; onSaved(
     try {
       settings = JSON.parse(text);
     } catch {
-      return setProblem('That is not JSON.');
+      return setProblem(t('hints.not.json'));
     }
     setProblem('');
-    await attempt(() => api('setHints', { service: service.service, settings }), `${service.name}: saved`).then(onSaved);
+    await attempt(() => api('setHints', { service: service.service, settings }), t('hints.saved', { name: service.name })).then(onSaved);
   };
   return (
     <div className="hint-settings">
       <textarea rows={8} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} />
       {problem && <div className="small error">{problem}</div>}
-      <AsyncButton onClick={save}>Save</AsyncButton>
+      <AsyncButton onClick={save}>{t('button.save')}</AsyncButton>
     </div>
   );
 }
@@ -443,39 +444,40 @@ function HintServices() {
   const mine = useApi(() => api<HintServiceInfo[]>('hintServices', { off: true }), []);
   const spaces = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const [project, setProject] = useState('');
+  const { t } = useTexts();
   const projects = (spaces.data ?? []).filter((s) => s.kind === 'project');
   // Your yes to exactly that release, as for a keyvault or fetcher: a newer one asks again.
-  const yes = (what: string) => ask(`Take in ${what}? It shows counts, colors and signs next to your places and messages, and runs inside Weave with no key and no network.`, 'Take it in');
+  const yes = (what: string) => ask(t('hints.take.in', { what }), t('service.take.it.in'));
   const add = async () => {
-    if (!(await yes(`the newest hint service p/${projects.find((p) => p.id === project)?.name ?? 'the project'} released`))) return;
-    await attempt(() => api('addHints', { project, approve: true }), 'Taken in').then(() => (setProject(''), mine.reload()));
+    if (!(await yes(t('hints.newest', { project: projects.find((p) => p.id === project)?.name ?? t('project.the') })))) return;
+    await attempt(() => api('addHints', { project, approve: true }), t('service.taken.in')).then(() => (setProject(''), mine.reload()));
   };
   const update = async (s: HintServiceInfo) => {
-    if (!s.project || !s.newer || !(await yes(`${s.name} ${s.newer}, released in p/${s.project.name ?? s.project.id}`))) return;
-    await attempt(() => api('addHints', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), `${s.name} ${s.newer} is yours now`).then(mine.reload);
+    if (!s.project || !s.newer || !(await yes(t('service.released.in', { name: s.name, tag: s.newer, project: s.project.name ?? s.project.id })))) return;
+    await attempt(() => api('addHints', { project: s.project!.id, app: s.service, tag: s.newer, approve: true }), t('service.yours.now', { name: s.name, tag: s.newer })).then(mine.reload);
   };
   return (
     <fieldset>
-      <legend>Counts and highlights</legend>
-      <p className="small muted">Numbers, tints and signs next to places and on messages come from these, worked out on your Weave; what you open counts no more on all your devices.</p>
+      <legend>{t('hints.legend')}</legend>
+      <p className="small muted">{t('hints.about')}</p>
       {mine.error && <p className="error">{mine.error}</p>}
       {(mine.data ?? []).map((s) => (
         <div className="marks-row" key={s.service}>
           <div>
-            <b>{s.name}</b> <HintOrigin service={s} /> <span className="small muted">{s.shipped ? `Weave ships it${s.off ? ' · off' : ''}` : s.tag}</span>
-            {s.problem && <div className="small error">Counts nothing: {s.problem}</div>}
+            <b>{s.name}</b> <HintOrigin service={s} /> <span className="small muted">{s.shipped ? t(s.off ? 'service.weave.ships.off' : 'service.weave.ships') : s.tag}</span>
+            {s.problem && <div className="small error">{t('hints.counts.nothing', { problem: s.problem })}</div>}
             {s.newer && (
               <div className="small">
-                {s.newer} is out: it runs only with your yes. <AsyncButton onClick={() => update(s)}>Update…</AsyncButton>
+                {t('service.newer.out', { tag: s.newer })} <AsyncButton onClick={() => update(s)}>{t('service.update')}</AsyncButton>
               </div>
             )}
           </div>
           {s.off ? (
-            <AsyncButton onClick={() => attempt(() => api('addHints', { shipped: s.service }), `${s.name} is back`).then(mine.reload)}>Turn on</AsyncButton>
+            <AsyncButton onClick={() => attempt(() => api('addHints', { shipped: s.service }), t('service.is.back', { name: s.name })).then(mine.reload)}>{t('service.turn.on')}</AsyncButton>
           ) : (
             <span>
-              {s.service !== UNREAD && <button onClick={() => setEditing(editing === s.service ? '' : s.service)}>Settings…</button>}{' '}
-              <AsyncButton onClick={() => attempt(() => api('removeHints', { service: s.service }), `${s.name} removed`).then(mine.reload)}>{s.shipped ? 'Turn off' : 'Remove'}</AsyncButton>
+              {s.service !== UNREAD && <button onClick={() => setEditing(editing === s.service ? '' : s.service)}>{t('service.settings')}</button>}{' '}
+              <AsyncButton onClick={() => attempt(() => api('removeHints', { service: s.service }), t('service.removed', { name: s.name })).then(mine.reload)}>{t(s.shipped ? 'service.turn.off' : 'button.remove')}</AsyncButton>
             </span>
           )}
           {editing === s.service && !s.off && <HintSettings service={s} onSaved={() => (setEditing(''), mine.reload())} />}
@@ -483,7 +485,7 @@ function HintServices() {
       ))}
       <div className="marks-row">
         <select value={project} onChange={(e) => setProject(e.target.value)}>
-          <option value="">Take one in from a project…</option>
+          <option value="">{t('hints.take.from')}</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -491,7 +493,7 @@ function HintServices() {
           ))}
         </select>
         <AsyncButton onClick={add} disabled={!project}>
-          Add
+          {t('button.add')}
         </AsyncButton>
       </div>
     </fieldset>
@@ -500,6 +502,7 @@ function HintServices() {
 
 /** View → Notifications…: which kinds of notices show on this computer. */
 export function NotificationSettings({ onClose }: { onClose(): void }) {
+  const { t } = useTexts();
   const [settings, setSettings] = useState(loadSettings);
   const allowed = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
   const toggle = (category: NoticeCategory) => {
@@ -508,32 +511,30 @@ export function NotificationSettings({ onClose }: { onClose(): void }) {
     saveSettings(next);
   };
   return (
-    <Modal title="Notifications" onClose={onClose}>
-      <p>Show a notification on this computer for:</p>
-      {(Object.keys(NOTICE_CATEGORIES) as NoticeCategory[]).map((category) => (
+    <Modal title={t('notify.title')} onClose={onClose}>
+      <p>{t('notify.show.for')}</p>
+      {NOTICE_CATEGORIES.map((category) => (
         <div className="field-row notify-row" key={category}>
           <input type="checkbox" id={`notify-${category}`} checked={settings[category]} onChange={() => toggle(category)} />
           <label htmlFor={`notify-${category}`}>
-            {NOTICE_CATEGORIES[category].label}
-            <span className="small muted"> · {NOTICE_CATEGORIES[category].hint}</span>
+            {t(`notice.cat.${category}`)}
+            <span className="small muted"> · {t(`notice.cat.${category}.hint`)}</span>
           </label>
         </div>
       ))}
       <NoticeRules />
       <HintServices />
-      <p className="small">
-        Nothing shows for the chat or post you're looking at. Closing the window keeps Weave running in the tray, so notifications keep coming; quit from the tray icon.
-      </p>
-      {allowed === 'denied' && <p className="small">Notifications are blocked for Weave in your system or browser settings.</p>}
-      {allowed === 'unsupported' && <p className="small">This browser can't show notifications.</p>}
+      <p className="small">{t('notify.nothing.looking')}</p>
+      {allowed === 'denied' && <p className="small">{t('notify.blocked')}</p>}
+      {allowed === 'unsupported' && <p className="small">{t('notify.unsupported')}</p>}
       <div className="buttons">
         {allowed === 'granted' && (
-          <button type="button" onClick={() => show('Weave notifications work', 'This is how messages, requests and project activity will show.', {})}>
-            Test
+          <button type="button" onClick={() => show(t('notify.test.title'), t('notify.test.text'), {})}>
+            {t('notify.test')}
           </button>
         )}
         <button className="default" onClick={onClose}>
-          Done
+          {t('button.done')}
         </button>
       </div>
     </Modal>

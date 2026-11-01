@@ -168,6 +168,22 @@ export function BlobImage({ src, alt = '', className }: { src: string; alt?: str
   return url ? <img src={url} alt={alt} className={className} /> : <span className={`${className ?? ''} blob-loading`} aria-label={alt} />;
 }
 
+/** Where a mark or hint service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
+export function ServiceOrigin({ shipped, project, tag }: { shipped?: boolean; project?: string; tag?: string }) {
+  const { t } = useTexts();
+  if (shipped)
+    return (
+      <span className="tag origin-weave" title={t('origin.weave.title')}>
+        {t('origin.weave')}
+      </span>
+    );
+  return (
+    <span className="tag" title={t('origin.release.title', { project: project ? `p/${project}` : t('origin.project.unknown'), tag })}>
+      {project ? `p/${project}` : t('origin.other.project')}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------- windows
 
 /** A Win95 dialog window over a dimmed screen. */
