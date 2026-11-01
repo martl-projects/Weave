@@ -5,7 +5,7 @@ import type { MemberInfo, Profile, SpaceInfo } from '@weave/node/client';
 import { api, bump, shortDid, useApi, useBlobUrl } from './lib.ts';
 import { avatarLib, forgetFigure, GroupPhoto, pickedScene, SceneImage, useGroupPoses, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
 import { ImagePicker } from './editor.tsx';
-import { attempt, AsyncButton, Avatar, BlobImage, Modal } from './ui.tsx';
+import { attempt, AsyncButton, Avatar, BlobImage, Modal, Sprite } from './ui.tsx';
 
 interface Section {
   part: string;
@@ -375,5 +375,29 @@ export function SpacePhotoSettings({ space, members, canSet }: { space: SpaceInf
         </div>
       </div>
     </fieldset>
+  );
+}
+
+/**
+ * A group's little icon: its own photo, or its people's faces (two of them overlapping; one alone), as its members
+ * list them; until they're known, its sprite.
+ */
+export function GroupIcon({ space, size = 16 }: { space: SpaceInfo; size?: number }) {
+  const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id).catch(() => [] as MemberInfo[]), [space.id]);
+  if (space.photo)
+    return (
+      <span className="group-icon" style={{ width: size, height: size }}>
+        <BlobImage src={space.photo} alt="" />
+      </span>
+    );
+  const faces = (members ?? []).map((m) => m.did).slice(0, 2);
+  if (!faces.length) return <Sprite seed={space.id} size={size} />;
+  if (faces.length === 1) return <Avatar did={faces[0]} size={size} />;
+  const small = Math.round(size * 0.75);
+  return (
+    <span className="group-icon faces" style={{ width: size, height: size }}>
+      <Avatar did={faces[1]} size={small} />
+      <Avatar did={faces[0]} size={small} />
+    </span>
   );
 }

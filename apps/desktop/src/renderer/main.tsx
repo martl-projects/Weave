@@ -24,7 +24,7 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
-import { SpacePhoto } from './avatar-editor.tsx';
+import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
@@ -49,14 +49,14 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind:
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   return (
     <li style={{ paddingLeft: depth * 14 }}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
-        {/* People (face): their avatar; spaces: their icon or sprite. */}
-        {sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
+        {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
+        {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
@@ -88,7 +88,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
       {open && (
         <>
           {space.kind === 'project' &&
