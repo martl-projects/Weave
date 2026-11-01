@@ -987,6 +987,7 @@
     "avatar.tab.outfit": "Outfit",
     "avatar.part.shape": "Shape",
     "avatar.part.cheeks": "Cheeks",
+    "avatar.part.glow": "Screen",
     "avatar.part.hair": "Hair",
     "avatar.part.eyes": "Eyes",
     "avatar.part.brows": "Brows",
@@ -1005,6 +1006,8 @@
     "avatar.variant.none": "none",
     "avatar.variant.plain": "plain",
     "avatar.variant.rosy": "rosy",
+    "avatar.variant.light": "light",
+    "avatar.variant.glowing": "dark, glowing",
 
     "button.next": "Next",
     "word.session.cap": "Session",
@@ -2373,7 +2376,6 @@
     "word.avatar": "Avatar",
 
     "avatar.tab.screen": "Screen",
-    "avatar.color.screen": "Screen",
     "avatar.color.frame": "Robot",
     "avatar.use.default": "Use my default figure",
     "avatar.default.again": "You show as the figure your key makes again",

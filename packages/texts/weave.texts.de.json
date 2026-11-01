@@ -987,6 +987,7 @@
     "avatar.tab.outfit": "Outfit",
     "avatar.part.shape": "Form",
     "avatar.part.cheeks": "Wangen",
+    "avatar.part.glow": "Bildschirm",
     "avatar.part.hair": "Haare",
     "avatar.part.eyes": "Augen",
     "avatar.part.brows": "Brauen",
@@ -1005,6 +1006,8 @@
     "avatar.variant.none": "keine",
     "avatar.variant.plain": "schlicht",
     "avatar.variant.rosy": "rosig",
+    "avatar.variant.light": "hell",
+    "avatar.variant.glowing": "dunkel, leuchtend",
 
     "button.next": "Weiter",
     "word.session.cap": "Session",
@@ -2373,7 +2376,6 @@
     "word.avatar": "Avatar",
 
     "avatar.tab.screen": "Bildschirm",
-    "avatar.color.screen": "Bildschirm",
     "avatar.color.frame": "Roboter",
     "avatar.use.default": "Meine Standardfigur nehmen",
     "avatar.default.again": "Du erscheinst wieder als die Figur, die dein Schlüssel macht",

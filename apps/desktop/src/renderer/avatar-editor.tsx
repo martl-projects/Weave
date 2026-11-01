@@ -41,9 +41,10 @@ const STEPS = [
   { k: 'Rot', id: 'turn', less: '↺', more: '↻' },
 ];
 
-// A robot with a screen for a face (agents, sessions): its screen and body colours, then the same eyes and mouths as people's.
+// A robot with a screen for a face (agents, sessions): its screen (light, or dark with the face glowing in its colour) and
+// body colours, then the same eyes and mouths as people's.
 const SCREEN_TABS: Tab[] = [
-  { id: 'screen', zoom: 0.7, sections: [{ part: '', heading: '', color: 'screenColor', colorHeading: 'screen' }, { part: '', heading: '', color: 'frameColor', colorHeading: 'frame' }] },
+  { id: 'screen', zoom: 0.7, sections: [{ part: 'glow', heading: 'glow', names: ['light', 'glowing'] }, { part: '', heading: '', color: 'screenColor', colorHeading: 'color' }, { part: '', heading: '', color: 'frameColor', colorHeading: 'frame' }] },
   PERSON_TABS[2],
   { id: 'mouth', zoom: 1, sections: [{ part: 'mouth', heading: 'mouth', kind: 'flat', adjust: 'mouth' }] },
 ];
@@ -237,7 +238,7 @@ function FigureEditor({ title, screen = false, initial, reset, onSave, onClose }
                             const none = noneKey ? t(`avatar.variant.${noneKey}`) : undefined;
                             return (
                               <button type="button" key={v} className={figure[s.part] === v ? 'sel' : ''} title={name ?? none} onClick={() => figure[s.part] !== v && change({ ...figure, [s.part]: v })}>
-                                {none && s.part !== 'blush' ? none : <Variant lib={lib} figure={{ ...figure, [s.part]: v }} section={s} sprites={sprites} />}
+                                {none && s.part !== 'blush' && s.part !== 'glow' ? none : <Variant lib={lib} figure={{ ...figure, [s.part]: v }} section={s} sprites={sprites} />}
                               </button>
                             );
                           })}
