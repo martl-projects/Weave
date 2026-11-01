@@ -630,9 +630,16 @@ function Shell() {
         <Icon name="lock" /> {t('keys.unprotected')}
       </a>
     );
+    // A daemon without the services Weave ships (a checkout that didn't build them): no counts, no websites, no releases.
+    const shippedMissing = status?.shippedMissing && (
+      <div className="notice alarm">
+        <Icon name="plug" /> {t('status.shipped.missing')}
+      </div>
+    );
     body = (
       <div className="center">
         {unprotected}
+        {shippedMissing}
         {center}
       </div>
     );

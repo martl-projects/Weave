@@ -1654,7 +1654,14 @@ export class WeaveNode implements Backend {
       heldBack: this.#heldBack,
       keystore: vaultOf(this.home).keystore,
       ...(vaultOf(this.home).warning ? { keystoreWarning: vaultOf(this.home).warning } : {}),
+      ...(this.shippedMissing ? { shippedMissing: true as const } : {}),
     };
+  }
+
+  /** No services Weave ships next to this daemon: a checkout whose packages/shipped/dist isn't built. Everything from Unread to Websites is missing then. */
+  get shippedMissing(): boolean {
+    const dir = this.wasmSetup.shippedDir ?? SHIPPED_DIR;
+    return !dir || !existsSync(joinPath(dir, 'shipped.json'));
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
@@ -10409,7 +10416,7 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 const FREE_TIER_MONTHS = 1200;
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
-const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave', artifact: 'weave-desktop' };
+const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martl-projects/Weave', artifact: 'weave-desktop' };
 /** Where the farewell to v0.3 peers sends them. */
 const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 

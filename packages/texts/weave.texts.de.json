@@ -2487,6 +2487,7 @@
     "ppeople.made.maintainer": "{name} ist jetzt Maintainer",
     "ppeople.dropped.maintainer": "{name} ist kein Maintainer mehr",
 
+    "status.shipped.missing": "Dieses Weave läuft ohne die mitgelieferten Dienste (Unread, Websites, GitHub-Releases …): der Daemon hat keinen gebauten Dienste-Ordner neben sich gefunden. Zähler und Websites bleiben aus, bis ein Daemon mit ihnen dieses Zuhause hält.",
     "time.ago": "{time, ago}",
     "day.today": "Heute",
     "day.yesterday": "Gestern",

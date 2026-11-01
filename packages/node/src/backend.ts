@@ -148,6 +148,8 @@ export interface Status {
   keystore: KeystoreKind;
   /** Said when the keys aren't protected by the operating system. */
   keystoreWarning?: string;
+  /** No folder of the services Weave ships next to this daemon (a checkout whose packages/shipped isn't built): no Unread counts, no Websites, no GitHub releases. */
+  shippedMissing?: true;
 }
 
 /** Where a home's key is kept (stage 2, 14, 17). */
