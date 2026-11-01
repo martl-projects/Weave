@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { FeedItem, Theme } from '@weave/node/client';
 import { api, bridge } from './bridge.ts';
+import { currentTexts, t } from './texts.tsx';
 
 export { api, bridge, type AppState } from './bridge.ts';
 
@@ -176,23 +177,18 @@ export function hue(seed: string): number {
   return h;
 }
 
-export function ago(time: string): string {
-  const s = Math.max(0, (Date.now() - Date.parse(time)) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
-  return new Date(time).toLocaleDateString();
-}
+/** "3 minutes ago", in the reader's language (the texts layer's `ago` format: now, minutes, hours, then the date). */
+export const ago = (time: string): string => t('time.ago', { time });
 
-export const clock = (time: string) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export const clock = (time: string) => new Date(time).toLocaleTimeString(currentTexts().locale, { hour: '2-digit', minute: '2-digit' });
 
 export function dayLabel(time: string): string {
   const d = new Date(time);
   const today = new Date();
   const yesterday = new Date(Date.now() - 86_400_000);
-  if (d.toDateString() === today.toDateString()) return 'Today';
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+  if (d.toDateString() === today.toDateString()) return t('day.today');
+  if (d.toDateString() === yesterday.toDateString()) return t('day.yesterday');
+  return d.toLocaleDateString(currentTexts().locale, { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
 export const isActive = (lastActive?: string) => !!lastActive && Date.now() - Date.parse(lastActive) < 5 * 60_000;

@@ -326,6 +326,10 @@
     "chat.intro.welcome": "Welcome to #{channel}",
     "chat.intro.channel": "This is the start of #{channel} in {name}. Only {who, select, project {participants} other {members}} can read it.",
 
+    "time.ago": "{time, ago}",
+    "day.today": "Today",
+    "day.yesterday": "Yesterday",
+
     "status.peers": "{n, plural, one {# peer connected} other {# peers connected}}",
     "status.peers.none": "no peers right now",
     "status.connecting": "connecting…",
