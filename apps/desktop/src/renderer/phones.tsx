@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
+import { T, useTexts } from './texts.tsx';
 
 /*
  * Phones that use this computer's Weave remotely: the companion app scans a
@@ -19,6 +20,7 @@ interface Phone {
 }
 
 function PairDialog({ onClose }: { onClose(): void }) {
+  const { t } = useTexts();
   const [offer, setOffer] = useState<{ link: string; expires: string; svg: string }>();
   const [error, setError] = useState<string>();
   const [before] = useState(() => api<Phone[]>('phones').then((list) => list.length));
@@ -52,32 +54,30 @@ function PairDialog({ onClose }: { onClose(): void }) {
 
   const left = offer ? Math.max(0, Math.round((Date.parse(offer.expires) - now) / 60_000)) : 0;
   return (
-    <Modal title="Add a phone" onClose={onClose}>
+    <Modal title={t('phone.add.title')} onClose={onClose}>
       {error ? (
         <p>{error}</p>
       ) : paired ? (
         <p>
-          <Icon name="info" /> <b>{paired}</b> is paired. It uses Weave through this computer whenever both are online.
+          <Icon name="info" /> <T name="phone.paired" values={{ name: <b>{paired}</b> }} />
         </p>
       ) : !offer ? (
-        <p className="small">Making a pairing code…</p>
+        <p className="small">{t('phone.making.code')}</p>
       ) : (
         <div className="pair-phone">
           <div className="qr" dangerouslySetInnerHTML={{ __html: offer.svg }} />
           <div>
             <ol className="steps">
-              <li>Open Weave on your phone.</li>
-              <li>Choose “Pair with my computer” and scan this code.</li>
+              <li>{t('phone.step.open')}</li>
+              <li>{t('phone.step.scan')}</li>
             </ol>
-            <p className="small">
-              The code works once, for {left} more minute{left === 1 ? '' : 's'}. Whoever scans it can use your Weave as you, so show it only to your own phone.
-            </p>
+            <p className="small">{t('phone.code.works', { n: left })}</p>
           </div>
         </div>
       )}
       <div className="buttons">
         <button className="default" onClick={onClose}>
-          {paired ? 'Done' : 'Close'}
+          {t(paired ? 'button.done' : 'button.close')}
         </button>
       </div>
     </Modal>
@@ -86,26 +86,27 @@ function PairDialog({ onClose }: { onClose(): void }) {
 
 /** In Keys & devices: phones paired with this computer. */
 export function PhonesBox() {
+  const { t } = useTexts();
   const { data: phones } = useApi(() => api<Phone[]>('phones'), []);
   const [pairing, setPairing] = useState(false);
   return (
     <fieldset>
-      <legend>Phones</legend>
+      <legend>{t('phones.legend')}</legend>
       {(phones ?? []).map((p) => (
         <div className="field-row" key={p.key}>
           <Icon name="user" />
           <span className="grow">
-            <b>{p.name}</b> <span className="small muted">paired {ago(p.paired)}</span> {p.lastSeen && <span className="tag friend">connected</span>}
+            <b>{p.name}</b> <span className="small muted">{t('phone.paired.ago', { time: p.paired })}</span> {p.lastSeen && <span className="tag friend">{t('phone.connected')}</span>}
           </span>
-          <AsyncButton onClick={async () => (await ask(`Unpair ${p.name}? It's cut off at once and needs a new code to come back.`, 'Unpair')) && attempt(() => api('unpairPhone', p.key).then(bump), `${p.name} is unpaired`)}>
-            Unpair
+          <AsyncButton onClick={async () => (await ask(t('phone.unpair.ask', { name: p.name }), t('phone.unpair'))) && attempt(() => api('unpairPhone', p.key).then(bump), t('phone.unpaired', { name: p.name }))}>
+            {t('phone.unpair')}
           </AsyncButton>
         </div>
       ))}
-      {phones?.length === 0 && <p className="small">No phone paired yet.</p>}
-      <p className="small">A paired phone uses Weave through this computer, end-to-end encrypted, with no server in between. It works while this computer runs Weave.</p>
+      {phones?.length === 0 && <p className="small">{t('phones.none')}</p>}
+      <p className="small">{t('phones.about')}</p>
       <div className="buttons">
-        <button onClick={() => setPairing(true)}>Add a phone…</button>
+        <button onClick={() => setPairing(true)}>{t('phone.add')}</button>
       </div>
       {pairing && (
         <PairDialog
@@ -135,12 +136,13 @@ function PhoneWindow({ title, children }: { title: string; children: ReactNode }
 
 /** First start on the phone: pair with your computer by scanning its code (or pasting it). */
 export function PhonePairing({ onDone }: { onDone(): void }) {
+  const { t } = useTexts();
   const phone = bridge.phone!;
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const pair = async (link: string) => {
     setBusy(true);
-    const ok = await attempt(() => phone.pair(link).then(() => true), 'Paired with your computer');
+    const ok = await attempt(() => phone.pair(link).then(() => true), t('phone.paired.computer'));
     setBusy(false);
     if (ok) onDone();
   };
@@ -149,24 +151,24 @@ export function PhonePairing({ onDone }: { onDone(): void }) {
     if (link) await pair(link);
   };
   return (
-    <PhoneWindow title="Pair with your computer">
+    <PhoneWindow title={t('phone.pair.title')}>
       <div className="welcome-head">
         <WeaveMark size={48} />
-        <p>This app uses Weave on your computer: your hub, your keys and your friends stay there. The two talk end-to-end encrypted, with no server in between.</p>
+        <p>{t('phone.pair.intro')}</p>
       </div>
       <ol className="steps">
         <li>
-          On your computer, open Weave, then <b>Keys &amp; devices</b> and <b>Add a phone…</b>
+          <T name="phone.pair.step.computer" />
         </li>
-        <li>Scan the code it shows.</li>
+        <li>{t('phone.pair.step.scan')}</li>
       </ol>
       {busy ? (
-        <p className="small">Connecting to your computer…</p>
+        <p className="small">{t('phone.connecting')}</p>
       ) : (
         <>
           <div className="buttons">
             <button className="default" onClick={scan}>
-              Scan the code
+              {t('phone.scan')}
             </button>
           </div>
           <form
@@ -176,11 +178,11 @@ export function PhonePairing({ onDone }: { onDone(): void }) {
             }}
           >
             <div className="field-row-stacked">
-              <label htmlFor="pair-code">Or paste the code (weave:phone:…)</label>
+              <label htmlFor="pair-code">{t('phone.paste.code')}</label>
               <input id="pair-code" required spellCheck={false} autoCapitalize="off" autoCorrect="off" value={code} onChange={(e) => setCode(e.target.value)} />
             </div>
             <div className="buttons">
-              <button disabled={!code.trim()}>Pair</button>
+              <button disabled={!code.trim()}>{t('phone.pair')}</button>
             </div>
           </form>
         </>
@@ -191,28 +193,30 @@ export function PhonePairing({ onDone }: { onDone(): void }) {
 
 /** While the phone looks for its computer at start (up to some seconds over the DHT). */
 export function PhoneConnecting() {
+  const { t } = useTexts();
   return (
     <PhoneWindow title="Weave">
-      <p className="small">Connecting to your computer…</p>
+      <p className="small">{t('phone.connecting')}</p>
     </PhoneWindow>
   );
 }
 
 /** The phone can't reach its computer right now. */
 export function PhoneNotConnected({ name, onRetry }: { name?: string; onRetry(): void }) {
+  const { t } = useTexts();
   const forget = async () => {
-    if (!(await ask("Forget your computer on this phone? You'll need a new code from it to pair again. Unpair this phone on the computer too, under Keys & devices.", 'Forget'))) return;
+    if (!(await ask(t('phone.forget.ask'), t('phone.forget')))) return;
     if (await attempt(() => bridge.phone!.forget().then(() => true))) onRetry();
   };
   return (
     <PhoneWindow title="Weave">
       <p>
-        <Icon name="info" /> Can't reach {name ? `${name}'s computer` : 'your computer'}. This app works through Weave on it, so Weave has to be running there, and both need to be online.
+        <Icon name="info" /> {t('phone.cant.reach', { computer: name ? t('phone.their.computer', { name }) : t('phone.your.computer') })}
       </p>
       <div className="buttons">
-        <button onClick={forget}>Pair again…</button>
+        <button onClick={forget}>{t('phone.pair.again')}</button>
         <button className="default" onClick={onRetry}>
-          Try again
+          {t('button.try.again')}
         </button>
       </div>
     </PhoneWindow>

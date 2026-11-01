@@ -3,6 +3,7 @@ import type { HarnessInfo, PermissionRequest } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
+import { t, T, useTexts } from './texts.tsx';
 
 /*
  * Telling the agent apps on this computer (Claude Code, Codex…) about Weave:
@@ -12,10 +13,11 @@ import { attempt, AsyncButton, Modal } from './ui.tsx';
 
 type Harnesses = { offered: boolean; harnesses: HarnessInfo[] };
 
-const stateNote = (h: HarnessInfo) => (h.state === 'ours' ? 'connected' : h.state === 'other' ? 'has an older Weave entry, which this replaces' : '');
+const stateNote = (h: HarnessInfo) => (h.state === 'ours' ? t('harness.connected') : h.state === 'other' ? t('harness.older.replaces') : '');
 
 /** Asked once: which agent apps should know about Weave. */
 export function AgentsOffer() {
+  const { t } = useTexts();
   const { data } = useApi(() => api<Harnesses>('harnesses').catch(() => undefined), []);
   const [chosen, setChosen] = useState<string[]>();
   const [done, setDone] = useState<HarnessInfo[]>();
@@ -28,17 +30,17 @@ export function AgentsOffer() {
   };
   if (!closed && repaired.length && !done)
     return (
-      <Modal title="Your agents find Weave again" onClose={seen}>
+      <Modal title={t('harness.repaired.title')} onClose={seen}>
         <ul>
           {repaired.map((h) => (
             <li key={h.id}>
-              <b>{h.name}</b> started a Weave that's no longer on this computer; it starts this one now. {h.restart}
+              <T name="harness.repaired" values={{ name: <b>{h.name}</b> }} /> {h.restart}
             </li>
           ))}
         </ul>
         <div className="buttons">
           <button className="default" onClick={seen}>
-            OK
+            {t('button.ok')}
           </button>
         </div>
       </Modal>
@@ -48,18 +50,18 @@ export function AgentsOffer() {
 
   if (done)
     return (
-      <Modal title="Your agents know Weave" onClose={() => setClosed(true)}>
+      <Modal title={t('harness.done.title')} onClose={() => setClosed(true)}>
         <ul>
           {done.map((h) => (
             <li key={h.id}>
-              <b>{h.name}</b> acts as your agent <b>{h.agent}</b>. {h.restart}
+              <T name="harness.acts.as" values={{ name: <b>{h.name}</b>, agent: <b>{h.agent}</b> }} /> {h.restart}
             </li>
           ))}
         </ul>
-        <p className="small">Everything an agent does is signed with its own key and shows as “you · {done[0]?.agent}”. Change what each may do, or revoke it, in Keys &amp; devices.</p>
+        <p className="small">{t('harness.done.note', { agent: done[0]?.agent })}</p>
         <div className="buttons">
           <button className="default" onClick={() => setClosed(true)}>
-            Done
+            {t('button.done')}
           </button>
         </div>
       </Modal>
@@ -81,29 +83,23 @@ export function AgentsOffer() {
     setClosed(true);
   };
   return (
-    <Modal title="Bring your agents along?" onClose={notNow}>
-      <p>
-        These AI agent apps are on this computer. Weave can tell them about itself, so your agents can read and post in Weave, each with its own key, showing as
-        “you · agent”.
-      </p>
+    <Modal title={t('harness.offer.title')} onClose={notNow}>
+      <p>{t('harness.offer.intro')}</p>
       {open.map((h) => (
         <div className="field-row" key={h.id}>
           <input id={`harness-${h.id}`} type="checkbox" checked={picked.includes(h.id)} onChange={(e) => setChosen(e.target.checked ? [...picked, h.id] : picked.filter((x) => x !== h.id))} />
           <label htmlFor={`harness-${h.id}`}>
             <span>
-              Add Weave to <b>{h.name}</b> <span className="small muted">as your agent “{h.agent}”{stateNote(h) ? `; ${stateNote(h)}` : ''}</span>
+              <T name="harness.add.to" values={{ name: <b>{h.name}</b> }} /> <span className="small muted">{t('harness.as.agent', { agent: h.agent, note: stateNote(h) ? `; ${stateNote(h)}` : '' })}</span>
             </span>
           </label>
         </div>
       ))}
-      <p className="small">
-        Weave adds one entry, “weave”, to each app's settings and keeps a backup of the file. New agents may post, reply, chat and react; you can change that later. Nothing
-        else on your computer changes.
-      </p>
+      <p className="small">{t('harness.offer.note')}</p>
       <div className="buttons">
-        <button onClick={notNow}>Not now</button>
+        <button onClick={notNow}>{t('button.not.now')}</button>
         <AsyncButton className="default" onClick={connect}>
-          {picked.length ? 'Add Weave' : 'Skip'}
+          {t(picked.length ? 'harness.add.weave' : 'button.skip')}
         </AsyncButton>
       </div>
     </Modal>
@@ -112,69 +108,50 @@ export function AgentsOffer() {
 
 /** In Keys & devices: agent apps on this computer, and whether they know Weave. */
 export function AgentAppsBox() {
+  const { t } = useTexts();
   const { data } = useApi(() => api<Harnesses>('harnesses').catch(() => undefined), []);
   if (!data) return null;
-  const set = (h: HarnessInfo, on: boolean) => attempt(() => api('connectHarness', { harness: h.id, on }).then(bump), on ? `${h.name} knows Weave. ${h.restart}` : `Weave is out of ${h.name}`);
+  const set = (h: HarnessInfo, on: boolean) => attempt(() => api('connectHarness', { harness: h.id, on }).then(bump), on ? `${t('harness.knows', { name: h.name })} ${h.restart}` : t('harness.removed', { name: h.name }));
   return (
     <fieldset>
-      <legend>Agent apps</legend>
+      <legend>{t('harness.legend')}</legend>
       {data.harnesses.map((h) => (
         <div className="field-row" key={h.id}>
           <Icon name="user" />
           <span className="grow">
             <b>{h.name}</b>{' '}
-            <span className="small muted">{h.state === 'ours' ? `knows Weave, as your agent “${h.agent}”` : h.state === 'other' ? 'has an older Weave entry' : "doesn't know Weave"}</span>
+            <span className="small muted">{h.state === 'ours' ? t('harness.knows.as', { agent: h.agent }) : h.state === 'other' ? t('harness.older') : t('harness.unknown')}</span>
           </span>
-          {h.state === 'ours' ? <AsyncButton onClick={() => set(h, false)}>Remove</AsyncButton> : <AsyncButton onClick={() => set(h, true)}>{h.state === 'other' ? 'Update' : 'Add Weave'}</AsyncButton>}
+          {h.state === 'ours' ? <AsyncButton onClick={() => set(h, false)}>{t('button.remove')}</AsyncButton> : <AsyncButton onClick={() => set(h, true)}>{t(h.state === 'other' ? 'button.update' : 'harness.add.weave')}</AsyncButton>}
         </div>
       ))}
-      {data.harnesses.length === 0 && <p className="small">No agent apps found (Claude Code, Claude Desktop, Codex, Cursor).</p>}
-      <p className="small">Each app's agent signs with its own key; revoke it in the table above. Weave keeps a backup of each settings file it changes.</p>
+      {data.harnesses.length === 0 && <p className="small">{t('harness.none')}</p>}
+      <p className="small">{t('harness.about')}</p>
     </fieldset>
   );
 }
 
-/** What each kind lets an agent do, in plain words. */
-const KIND_WORDS: Record<string, string> = {
-  'weave.post': 'post',
-  'weave.reply': 'reply',
-  'weave.msg': 'chat',
-  'weave.react': 'react',
-  'weave.issue.*': 'open and work on issues',
-  'weave.vote': 'vote on proposals',
-  'weave.post.coauthor': 'confirm co-authorships',
-  'weave.post.edit': 'edit its posts',
-  'weave.app': "publish projects' apps and point them at releases",
-  'weave.project.page': "change your projects' pages",
-  'weave.project.public': 'show projects on your public hub',
-  'weave.space.create': 'start projects for you',
-};
-const kindWords = (kinds: string[]) => kinds.map((k) => KIND_WORDS[k] ?? k).join(', ');
+/** What each kind lets an agent do, in plain words (agent.kind.<kind>). */
+const KINDS = ['weave.post', 'weave.reply', 'weave.msg', 'weave.react', 'weave.issue.*', 'weave.vote', 'weave.post.coauthor', 'weave.post.edit', 'weave.app', 'weave.project.page', 'weave.project.public', 'weave.space.create'];
+const kindWord = (k: string) => (KINDS.includes(k) ? t(`agent.kind.${k.replace(/\.\*$/, '').replace(/\./g, '-')}`) : k);
+const kindWords = (kinds: string[]) => kinds.map(kindWord).join(', ');
 
 /** What a request asks, in words: kinds to sign, or repositories for a project. */
 function asked(r: PermissionRequest): { title: string; what: ReactNode; detail: string; done: string } {
   if (r.hand) {
     const many = r.hand.resources.length > 1;
     return {
-      title: `${r.agent} asks for ${many ? 'repositories' : 'a repository'}`,
-      what: (
-        <>
-          to give <b>{r.hand.project.name}</b> {many ? 'the repositories' : 'the repository'} <b>{r.hand.resources.join(', ')}</b> from your {r.hand.title}
-        </>
-      ),
-      detail: `Its services there (like GitHub releases) then reach ${many ? 'them' : 'it'} with your App's access; take ${many ? 'them' : 'it'} back in Keys & devices.`,
-      done: `${r.hand.project.name} has ${r.hand.resources.join(', ')}`,
+      title: t(many ? 'ask.repos.title' : 'ask.repo.title', { agent: r.agent }),
+      what: <T name={many ? 'ask.repos.what' : 'ask.repo.what'} values={{ project: <b>{r.hand.project.name}</b>, resources: <b>{r.hand.resources.join(', ')}</b>, app: r.hand.title }} />,
+      detail: t(many ? 'ask.repos.detail' : 'ask.repo.detail'),
+      done: t('ask.repo.done', { project: r.hand.project.name, resources: r.hand.resources.join(', ') }),
     };
   }
   return {
-    title: `${r.agent} asks for a permission`,
-    what: (
-      <>
-        to <b>{kindWords(r.kinds)}</b>
-      </>
-    ),
-    detail: `${r.kinds.join(', ')}. Allowing lets it do this from now on, signed with its own key; take it back in Keys & devices.`,
-    done: `${r.agent} may now ${kindWords(r.kinds)}`,
+    title: t('ask.permission.title', { agent: r.agent }),
+    what: <T name="ask.permission.what" values={{ what: <b>{kindWords(r.kinds)}</b> }} />,
+    detail: t('ask.permission.detail', { kinds: r.kinds.join(', ') }),
+    done: t('ask.permission.done', { agent: r.agent, what: kindWords(r.kinds) }),
   };
 }
 
@@ -183,29 +160,30 @@ function asked(r: PermissionRequest): { title: string; what: ReactNode; detail: 
  * until Weave starts again; the request stays in the Inbox.
  */
 export function AgentAsks() {
+  const { t } = useTexts();
   const { data } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
   const [later, setLater] = useState<string[]>([]);
   const r = data?.find((x) => !later.includes(x.id));
   if (!r) return null;
   const a = asked(r);
-  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : 'Declined');
+  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : t('ask.declined'));
   return (
     <Modal title={a.title} onClose={() => setLater([...later, r.id])}>
       <div className="approve-launch">
         <Icon name="user" size={32} />
         <div>
           <p>
-            Your agent <b>{r.agent}</b> asks {a.what}.
+            <T name="ask.your.agent.asks" values={{ agent: <b>{r.agent}</b>, what: a.what }} />
           </p>
           {r.reason && <p>“{r.reason}”</p>}
           <p className="small">{a.detail}</p>
         </div>
       </div>
       <div className="buttons">
-        <button onClick={() => setLater([...later, r.id])}>Later</button>
-        <AsyncButton onClick={() => answer(false)}>Decline</AsyncButton>
+        <button onClick={() => setLater([...later, r.id])}>{t('update.later')}</button>
+        <AsyncButton onClick={() => answer(false)}>{t('request.decline')}</AsyncButton>
         <AsyncButton className="default" onClick={() => answer(true)}>
-          Allow
+          {t('ask.allow')}
         </AsyncButton>
       </div>
     </Modal>
@@ -214,22 +192,23 @@ export function AgentAsks() {
 
 /** In the Inbox: one of your agents asks to do more. */
 export function PermissionCard({ request: r }: { request: PermissionRequest }) {
+  const { t } = useTexts();
   const a = asked(r);
-  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : 'Declined');
+  const answer = (allow: boolean) => attempt(() => api('answerPermission', { id: r.id, allow }).then(bump), allow ? a.done : t('ask.declined'));
   return (
     <div className="admission window">
       <div className="window-body">
         <Icon name="user" size={32} />
         <div className="grow">
-          Your agent <b>{r.agent}</b> asks {a.what}
+          <T name="ask.your.agent.asks.inbox" values={{ agent: <b>{r.agent}</b>, what: a.what }} />
           {r.reason && <>: “{r.reason}”</>}
           <div className="small muted">
             {ago(r.time)} · {a.detail}
           </div>
         </div>
-        <AsyncButton onClick={() => answer(false)}>Decline</AsyncButton>
+        <AsyncButton onClick={() => answer(false)}>{t('request.decline')}</AsyncButton>
         <AsyncButton className="default" onClick={() => answer(true)}>
-          Allow
+          {t('ask.allow')}
         </AsyncButton>
       </div>
     </div>
