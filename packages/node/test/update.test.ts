@@ -52,21 +52,21 @@ describe('update check', () => {
     const project = await martl.createProject({ name: 'Weave' });
     await lena.joinSpace(await martl.invite('Weave'));
     for (const node of [martl, lena]) {
-      node.config = { ...node.config, updates: { project: project.id, repo: 'martldennl/Weave' } };
+      node.config = { ...node.config, updates: { project: project.id, repo: 'martl-projects/Weave' } };
       node.githubSetup = { ...node.githubSetup, fetch: githubWith('down') };
     }
 
     // Nothing announced yet.
     expect(await lena.updateCheck({ current: '0.3.0' })).toEqual({ current: '0.3.0', newer: false, auto: true });
 
-    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.3.0', text: 'GitHub and apps', link: 'https://github.com/martldennl/Weave/releases/tag/v0.3.0' });
-    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.4.0', text: '**v2** wire format', link: 'https://github.com/martldennl/Weave/releases/tag/v0.4.0' });
+    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.3.0', text: 'GitHub and apps', link: 'https://github.com/martl-projects/Weave/releases/tag/v0.3.0' });
+    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.4.0', text: '**v2** wire format', link: 'https://github.com/martl-projects/Weave/releases/tag/v0.4.0' });
     // Not a maintainer: doesn't count, however high the number.
     await lena.submit({ space: 'Weave', board: 'releases', title: 'Weave v9.9.9', text: 'trust me' });
     syncAll([martl, lena]);
 
     const found = await lena.updateCheck({ current: '0.3.0' });
-    expect(found).toMatchObject({ current: '0.3.0', newer: true, latest: { version: '0.4.0', source: 'weave', url: 'https://github.com/martldennl/Weave/releases/tag/v0.4.0', notes: '**v2** wire format' } });
+    expect(found).toMatchObject({ current: '0.3.0', newer: true, latest: { version: '0.4.0', source: 'weave', url: 'https://github.com/martl-projects/Weave/releases/tag/v0.4.0', notes: '**v2** wire format' } });
     expect(found.latest?.post).toMatch(/^weave:post:/);
     // A post alone: only a download link, nothing the app installs by itself.
     expect(found.latest?.install).toBeUndefined();
@@ -74,7 +74,7 @@ describe('update check', () => {
 
     // GitHub knows a newer tag than any post: it counts too.
     lena.githubSetup = { ...lena.githubSetup, fetch: githubWith(['v0.4.0', 'v0.4.1', 'not-a-version']) };
-    expect(await lena.updateCheck({ current: '0.4.0' })).toMatchObject({ newer: true, latest: { version: '0.4.1', source: 'github', url: 'https://github.com/martldennl/Weave/releases/tag/v0.4.1' } });
+    expect(await lena.updateCheck({ current: '0.4.0' })).toMatchObject({ newer: true, latest: { version: '0.4.1', source: 'github', url: 'https://github.com/martl-projects/Weave/releases/tag/v0.4.1' } });
 
     await expect(lena.updateCheck({ current: 'banana' })).rejects.toThrow(/isn't a version/);
     for (const node of [martl, lena]) await node.close();
@@ -93,7 +93,7 @@ describe('self-update', { timeout: 120_000 }, () => {
     const project = await martl.createProject({ name: 'Weave' });
     await lena.joinSpace(await martl.invite('Weave'));
     for (const node of [martl, lena]) {
-      node.config = { ...node.config, updates: { project: project.id, repo: 'martldennl/Weave', artifact: 'weave-desktop' } };
+      node.config = { ...node.config, updates: { project: project.id, repo: 'martl-projects/Weave', artifact: 'weave-desktop' } };
       node.githubSetup = { ...node.githubSetup, fetch: githubWith('down') };
     }
     const platform = platformKey();
@@ -101,10 +101,10 @@ describe('self-update', { timeout: 120_000 }, () => {
     const manifest = { app: 'weave-desktop', name: 'Weave', services: [], file: {} };
 
     // The release post (the notes), and the release as the project's artifact (the files and their SHA-256).
-    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.4.0: installs itself', text: 'Restart to update.', link: 'https://github.com/martldennl/Weave/releases/tag/v0.4.0' });
-    await publishRelease(martl, { project: 'Weave', repo: 'martldennl/Weave', tag: 'v0.4.0', manifest, files: { [platform]: installer } });
+    await martl.submit({ space: 'Weave', board: 'releases', title: 'Weave v0.4.0: installs itself', text: 'Restart to update.', link: 'https://github.com/martl-projects/Weave/releases/tag/v0.4.0' });
+    await publishRelease(martl, { project: 'Weave', repo: 'martl-projects/Weave', tag: 'v0.4.0', manifest, files: { [platform]: installer } });
     // Not a maintainer: her "release" counts for nothing.
-    await lena.publish({ kind: 'weave.app', body: { ...manifest, install: { source: { provider: 'github', ref: 'martldennl/Weave' }, tag: 'v9.9.9', fetcher: 'github-checkout', access: 'direct', assets: { [platform]: { file: 'evil.exe', sha256: 'ab'.repeat(32), size: 3 } } } }, space: project.id });
+    await lena.publish({ kind: 'weave.app', body: { ...manifest, install: { source: { provider: 'github', ref: 'martl-projects/Weave' }, tag: 'v9.9.9', fetcher: 'github-checkout', access: 'direct', assets: { [platform]: { file: 'evil.exe', sha256: 'ab'.repeat(32), size: 3 } } } }, space: project.id });
     syncAll([martl, lena]);
 
     const found = await lena.updateCheck({ current: '0.3.0' });
@@ -114,7 +114,7 @@ describe('self-update', { timeout: 120_000 }, () => {
     await expect(lena.updateFetch({ version: '0.9.9' })).rejects.toThrow(/no release of Weave 0.9.9 for this computer/);
 
     // GitHub, on this computer: the release's files, as the fetcher Weave ships gets them (nobody added it: Weave's own updates).
-    const github = new PublicGitHub().add('martldennl/Weave', 'v0.4.0', installer);
+    const github = new PublicGitHub().add('martl-projects/Weave', 'v0.4.0', installer);
     const port = await github.serve();
     lena.wasmSetup.shippedDir = await shippedCheckout();
     lena.wasmSetup.testHosts = { ...lena.wasmSetup.testHosts, 'api.github.com': port, 'objects.githubusercontent.com': port };
@@ -154,8 +154,8 @@ describe('self-update', { timeout: 120_000 }, () => {
 
     // A newer release whose file on GitHub isn't what the maintainer fingerprinted: refused, gone, said plainly. The good one stays.
     const genuine = { name: `Weave-0.5.0-${platform}.exe`, bytes: Buffer.from('Weave 0.5.0 as the maintainer built it') };
-    await publishRelease(martl, { project: 'Weave', repo: 'martldennl/Weave', tag: 'v0.5.0', manifest, files: { [platform]: genuine } });
-    github.add('martldennl/Weave', 'v0.5.0', { name: genuine.name, bytes: Buffer.from('Weave 0.5.0 as somebody swapped it') });
+    await publishRelease(martl, { project: 'Weave', repo: 'martl-projects/Weave', tag: 'v0.5.0', manifest, files: { [platform]: genuine } });
+    github.add('martl-projects/Weave', 'v0.5.0', { name: genuine.name, bytes: Buffer.from('Weave 0.5.0 as somebody swapped it') });
     syncAll([martl, lena]);
     expect((await lena.updateCheck({ current: '0.3.0' })).latest).toMatchObject({ version: '0.5.0', install: { file: genuine.name } });
     await lena.updateFetch({ version: '0.5.0' });

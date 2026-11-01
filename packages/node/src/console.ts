@@ -95,7 +95,7 @@ textarea{width:100%;box-sizing:border-box;font:12px ui-monospace,monospace;heigh
 <main><img src="/favicon.svg" width="48" height="48" alt=""><h1>Join ${escape(company)} on Weave</h1>
 <p>Your company sets up your Weave account. You sign in with your company account; there are no passwords or recovery words to keep.</p>
 <a class="btn" id="open" href="#">Open Weave</a>
-<ol><li>Don't have Weave yet? <a href="${escape(process.env.WEAVE_DOWNLOAD_URL ?? 'https://github.com/martldennl/Weave/releases/latest')}">Get it</a>, start it, and come back to this page.</li>
+<ol><li>Don't have Weave yet? <a href="${escape(process.env.WEAVE_DOWNLOAD_URL ?? 'https://github.com/martl-projects/Weave/releases/latest')}">Get it</a>, start it, and come back to this page.</li>
 <li>Click <b>Open Weave</b>: it opens with your company's link filled in. Then sign in.</li></ol>
 <p>If nothing opens, choose <b>My company uses Weave…</b> in Weave and paste this link:</p><textarea id="link" readonly></textarea></main>
 <script>const l=decodeURIComponent(location.hash.slice(1));if(/^weave:enroll:[A-Za-z0-9_-]+$/.test(l)){document.getElementById('open').href=l;document.getElementById('link').value=l}else document.querySelector('main').innerHTML='<h1>This invitation is incomplete</h1><p>Open the whole link from the email, or ask your admin for a new one.</p>'</script>`);

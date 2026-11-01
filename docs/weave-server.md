@@ -4,7 +4,7 @@ A company's own Weave node, for a server or a container: it owns the company's p
 
 ## Get it
 
-- **Container**: `ghcr.io/martldennl/weave-server:<version>` (or `:latest`). Its home is the `/data` volume.
+- **Container**: `ghcr.io/martl-projects/weave-server:<version>` (or `:latest`). Its home is the `/data` volume.
 - **Folder for Node 24**: `weave-server-<version>.tgz` from the release. Unpack, `npm install --omit=dev` inside, run `node weave-server.mjs`.
 - **From the repository**: `node apps/server/build.ts` builds the same folder in `apps/server/dist`.
 
@@ -28,7 +28,7 @@ A company's own Weave node, for a server or a container: it owns the company's p
 ## Set up once
 
 ```
-docker run -it --rm -v weave:/data -e WEAVE_VAULT_TOKEN=… ghcr.io/martldennl/weave-server init
+docker run -it --rm -v weave:/data -e WEAVE_VAULT_TOKEN=… ghcr.io/martl-projects/weave-server init
 ```
 
 It asks for:
@@ -50,7 +50,7 @@ Without a terminal, give everything as flags or settings (`--name`, `--vault`, `
 ## Run
 
 ```
-docker run -d --name weave --restart unless-stopped -v weave:/data -e WEAVE_VAULT_TOKEN=… -p 7730:7730 -p 7720:7720 ghcr.io/martldennl/weave-server
+docker run -d --name weave --restart unless-stopped -v weave:/data -e WEAVE_VAULT_TOKEN=… -p 7730:7730 -p 7720:7720 ghcr.io/martl-projects/weave-server
 docker exec weave node /app/weave-server.mjs operator    # a one-time link into the console, for the first admin
 ```
 

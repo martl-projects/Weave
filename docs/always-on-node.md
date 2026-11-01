@@ -21,9 +21,9 @@ Spaces you join later reach it too: while you have an always-on node, your compu
 ## With Docker
 
 ```bash
-docker run -it --rm -v weave:/data ghcr.io/martldennl/weave-server pair kitchen-nas
-docker run -it --rm -v weave:/data ghcr.io/martldennl/weave-server join 'weave:node-answer:…'
-docker run -d --name weave --restart unless-stopped -v weave:/data ghcr.io/martldennl/weave-server
+docker run -it --rm -v weave:/data ghcr.io/martl-projects/weave-server pair kitchen-nas
+docker run -it --rm -v weave:/data ghcr.io/martl-projects/weave-server join 'weave:node-answer:…'
+docker run -d --name weave --restart unless-stopped -v weave:/data ghcr.io/martl-projects/weave-server
 ```
 
 - **Ports:** It needs no open ports: Weave finds its peers through the network's DHT and connects outward, and connections through firewalls work too (hole punching).
@@ -48,7 +48,7 @@ spec:
     spec:
       containers:
         - name: weave
-          image: ghcr.io/martldennl/weave-server:0.17.2
+          image: ghcr.io/martl-projects/weave-server:0.17.2
           volumeMounts: [{ name: data, mountPath: /data }]
           livenessProbe: { exec: { command: [node, /app/weave-server.mjs, status] }, periodSeconds: 60 }
         - name: party-app            # a room's app, beside the node

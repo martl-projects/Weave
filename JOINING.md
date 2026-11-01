@@ -9,7 +9,7 @@ You're invited to try Weave while it's young. It's a peer-to-peer place to show 
 
 ## 1. Get it running
 
-Download the installer for your computer from the [latest release](https://github.com/martldennl/Weave/releases): `Weave-…-win-x64.exe` for Windows, `Weave-…-mac-arm64.dmg` (Apple silicon) or `-mac-x64.dmg` (Intel) for macOS, the `.AppImage` for Linux. They aren't code-signed yet, so your computer will be suspicious the first time:
+Download the installer for your computer from the [latest release](https://github.com/martl-projects/Weave/releases): `Weave-…-win-x64.exe` for Windows, `Weave-…-mac-arm64.dmg` (Apple silicon) or `-mac-x64.dmg` (Intel) for macOS, the `.AppImage` for Linux. They aren't code-signed yet, so your computer will be suspicious the first time:
 
 - **Windows:** SmartScreen says "Windows protected your PC". Click **More info → Run anyway**.
 - **macOS:** open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
@@ -18,7 +18,7 @@ Download the installer for your computer from the [latest release](https://githu
 Or run it from source:
 
 ```bash
-git clone https://github.com/martldennl/Weave.git weave
+git clone https://github.com/martl-projects/Weave.git weave
 cd weave
 npm install
 npm test          # optional: should end with every test passing

@@ -1,6 +1,6 @@
 # @weave/sdk
 
-Who is playing, for apps shared in [Weave](https://github.com/martldennl/Weave) rooms.
+Who is playing, for apps shared in [Weave](https://github.com/martl-projects/Weave) rooms.
 
 When a host shares a project's app in a room, players reach it through an encrypted tunnel. To the app, every player arrives from `127.0.0.1`, so it can't tell them apart, or tell the host from a player who types `/host`. The host's Weave knows who opened each connection. This asks it.
 

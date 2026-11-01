@@ -49,7 +49,7 @@ gh variable set LINUX_RUNNER --body '"ubuntu-latest"'
 3. **A registration token.** On the host (valid for an hour):
 
    ```bash
-   gh api -X POST repos/martldennl/Weave/actions/runners/registration-token --jq .token
+   gh api -X POST repos/martl-projects/Weave/actions/runners/registration-token --jq .token
    ```
 
 4. **The runner.** In the VM, in PowerShell as Administrator, run
@@ -105,5 +105,5 @@ The runners update themselves. Check on them under the repository's Settings,
 Actions, Runners, or:
 
 ```bash
-gh api repos/martldennl/Weave/actions/runners --jq '.runners[] | .name + " " + .status'
+gh api repos/martl-projects/Weave/actions/runners --jq '.runners[] | .name + " " + .status'
 ```

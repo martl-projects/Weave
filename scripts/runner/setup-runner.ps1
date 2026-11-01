@@ -9,7 +9,7 @@
 
 param(
   [Parameter(Mandatory)] [string] $Token,
-  [string] $Url = 'https://github.com/martldennl/Weave',
+  [string] $Url = 'https://github.com/martl-projects/Weave',
   [string] $Name = 'weave-runner-vm',
   [string] $Labels = 'windows-vm',
   [string] $Folder = 'C:\actions-runner'

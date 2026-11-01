@@ -11,7 +11,7 @@
 
 set -euo pipefail
 TOKEN=${1:?registration token}
-URL=${URL:-https://github.com/martldennl/Weave}
+URL=${URL:-https://github.com/martl-projects/Weave}
 RUNNER_NAME=${RUNNER_NAME:-weave-runner-wsl}  # not NAME: WSL sets that to the computer name
 LABELS=${LABELS:-linux-wsl}
 export DEBIAN_FRONTEND=noninteractive
