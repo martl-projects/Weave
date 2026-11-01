@@ -106,6 +106,9 @@ import {
   currentEpoch,
   decodeContact,
   decodeInvite,
+  isInviteLink,
+  peekInvite,
+  peekKnock,
   directSpace,
   DEFAULT_CHANNEL,
   delegation,
@@ -456,6 +459,7 @@ import {
   type FeedQuery,
   type HomeSource,
   type GranteeInfo,
+  type InviteLook,
   type InviteOptions,
   type KeepersInfo,
   type AuditLine,
@@ -1695,6 +1699,39 @@ export class WeaveNode implements Backend {
     const { space, invite, proof } = await this.#takeInvite(text);
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
     return this.#spaceInfo(space);
+  }
+
+  async lookAtInvite(text: string): Promise<InviteLook> {
+    const link = text.trim();
+    const knock = isKnockLink(link);
+    if (!knock && !isInviteLink(link)) throw new Error('not a Weave invite link');
+    let parsed: { space: { id: string; kind: SpaceKind; name: string; founder: Did }; inviter: Did; expires: string; boards?: Record<string, unknown>; key?: string };
+    try {
+      parsed = knock ? peekKnock(link) : peekInvite(link);
+    } catch (error) {
+      throw new Error((error as Error).message);
+    }
+    const me = this.identity.author;
+    const held = this.#spaces.get(parsed.space.id);
+    const look: InviteLook = {
+      kind: knock ? 'knock' : 'invite',
+      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
+      inviter: { did: parsed.inviter, ...(this.nameOf(parsed.inviter) ? { name: this.nameOf(parsed.inviter) } : {}) },
+      expires: parsed.expires,
+      boards: Object.keys(parsed.boards ?? {}),
+      standing: 'open',
+    };
+    const state = held ? this.#state(held) : undefined;
+    if (parsed.inviter === me) return { ...look, standing: 'mine', ...(state ? { members: state.members.size } : {}) };
+    // In already: we hold its keys and weren't removed (a join written here counts before the invite it cites has synced).
+    // Removed and asked back with a new link: open, as #takeInvite takes it.
+    if (state && (state.members.has(me) || !state.removed.has(me))) return { ...look, standing: 'member', members: state.members.size };
+    if (knock && this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === parsed.space.id && b.inviter === parsed.inviter)) return { ...look, standing: 'waiting' };
+    if (!knock && typeof parsed.key !== 'string') return { ...look, standing: 'old', problem: 'this link was made by an older Weave and no longer works: ask for a new one' };
+    if (Date.parse(parsed.expires) < this.clock()) return { ...look, standing: 'expired', problem: 'this link has expired: ask for a new one' };
+    const inside = this.#insideOnly(parsed.space.founder);
+    if (inside) return { ...look, standing: 'elsewhere', problem: inside };
+    return look;
   }
 
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
@@ -6047,7 +6084,7 @@ export class WeaveNode implements Backend {
     const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
     // What a message says: its text, or the file it brings.
     const said = () => text('text') || (attachmentOf(body) ? `📎 ${attachmentOf(body)!.name}` : '');
-    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
+    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/weave:(?:invite|knock):[A-Za-z0-9_-]+/g, '[invite link]').replace(/\s+/g, ' ').trim().slice(0, 140);
     const who = item.authorName ?? this.nameOf(item.author) ?? 'Someone';
     const space = item.space;
     const where = space ? `${{ project: 'p/', community: 'r/', group: 'g/', direct: '@' }[space.kind]}${space.name}` : '';

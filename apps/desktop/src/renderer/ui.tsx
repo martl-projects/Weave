@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactN
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
 import { FigureHead, useFigure } from './avatar.tsx';
+import { loadInviteEmbeds } from './invites.tsx';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -17,7 +18,7 @@ function seeded(seed: string): () => number {
 }
 
 /** A mirrored pixel sprite (like an identicon) as an SVG string: people get faces, posts get patterns. */
-function sprite(seed: string, size: number, face: boolean): string {
+export function sprite(seed: string, size: number, face: boolean): string {
   const rand = seeded(seed);
   const h = hue(seed);
   const fg = `hsl(${h} 60% 42%)`;
@@ -93,6 +94,7 @@ const PREFIX: Record<string, string> = { project: 'p/', community: 'r/', group: 
 
 /** Fill in the post embeds renderMarkdown left (.post-embed[data-post]) with a card of each post. */
 export function loadEmbeds(root: HTMLElement): void {
+  loadInviteEmbeds(root);
   for (const box of root.querySelectorAll<HTMLElement>('.post-embed[data-post]:not([data-ready])')) {
     const id = box.dataset.post!;
     box.dataset.ready = 'loading';

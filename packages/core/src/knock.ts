@@ -38,7 +38,8 @@ export const isKnockLink = (text: string): boolean => text.trim().startsWith(PRE
 
 export const encodeKnock = (link: KnockLink): string => PREFIX + b64u.encode(utf8(canonicalJson(link as unknown as Json)));
 
-export function decodeKnock(text: string): KnockLink {
+/** A knock link's contents, expired or not (decodeKnock checks that too). */
+export function peekKnock(text: string): KnockLink {
   let link: KnockLink;
   try {
     link = JSON.parse(new TextDecoder().decode(b64u.decode(text.trim().slice(PREFIX.length))));
@@ -46,9 +47,14 @@ export function decodeKnock(text: string): KnockLink {
     throw new Error('invite is damaged');
   }
   const s = link?.space;
-  if (link?.v !== 1 || !s || typeof s.id !== 'string' || typeof s.name !== 'string' || !isDid(s.founder) || !isDid(link.inviter) || !isDid(link.enc) || typeof link.invite !== 'string') {
+  if (link?.v !== 1 || !s || typeof s.id !== 'string' || typeof s.name !== 'string' || !isDid(s.founder) || !isDid(link.inviter) || !isDid(link.enc) || typeof link.invite !== 'string' || typeof link.expires !== 'string') {
     throw new Error('invite is damaged or from a newer Weave version');
   }
+  return link;
+}
+
+export function decodeKnock(text: string): KnockLink {
+  const link = peekKnock(text);
   if (Date.parse(link.expires) < Date.now()) throw new Error('invite has expired');
   return link;
 }

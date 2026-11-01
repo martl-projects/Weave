@@ -761,6 +761,31 @@ export interface KnockInfo {
   access: Array<{ board: string; read?: boolean; write?: boolean }>;
 }
 
+/**
+ * What an invite or knock link says, looked at without joining: for the card a
+ * link makes in a chat, and the "Join?" that follows. Only what the link itself
+ * carries, plus where you stand with that space.
+ */
+export interface InviteLook {
+  /** An invite link joins right away; a knock link asks the inviter first. */
+  kind: 'invite' | 'knock';
+  space: SpaceRef & { founder: Did; founderName?: string };
+  inviter: { did: Did; name?: string };
+  expires: string;
+  /** Read-limited boards the link opens, by name. */
+  boards: string[];
+  /**
+   * Where you stand: open (you may join, or ask), member (you're in already), waiting (you asked, the inviter decides),
+   * mine (your own link), expired, old (made by an older Weave, no longer works), elsewhere (your company keeps you in
+   * its spaces), damaged.
+   */
+  standing: 'open' | 'member' | 'waiting' | 'mine' | 'expired' | 'old' | 'elsewhere' | 'damaged';
+  /** What's wrong, for expired, old, elsewhere and damaged. */
+  problem?: string;
+  /** How many are in, when you are (a link says nothing about the inside). */
+  members?: number;
+}
+
 /** Options for an invite link. */
 export interface InviteOptions {
   /** The link only lets people ask; you let each one in (they get no keys until then). */
@@ -1825,6 +1850,8 @@ export interface Backend {
   invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
   joinSpace(invite: string, note?: string): Promise<SpaceInfo>;
+  /** What an invite or knock link says and where you stand with its space, without joining: for the card and the "Join?" dialog. */
+  lookAtInvite(link: string): Promise<InviteLook>;
   /** People asking to join with your links that need your OK. */
   knocks(): Promise<KnockInfo[]>;
   /** Let someone in (or turn them away) who asked with your link. */
@@ -2472,7 +2499,7 @@ export { LENS_CSP } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',

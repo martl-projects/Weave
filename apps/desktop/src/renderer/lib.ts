@@ -166,7 +166,7 @@ export function usePaymentsSwitch(project: string): [boolean, (on: boolean) => v
 // ---------------------------------------------------------------- formatting
 
 /** Markdown reduced to plain text, for one-line previews. */
-export const plain = (text: string) => text.replace(/```[\s\S]*?```/g, '[code]').replace(/weave:post:[A-Za-z0-9_-]+/g, '[post]').replace(/[*_`~>#]+/g, '').replace(/\s+/g, ' ').trim();
+export const plain = (text: string) => text.replace(/```[\s\S]*?```/g, '[code]').replace(/weave:post:[A-Za-z0-9_-]+/g, '[post]').replace(/weave:(?:invite|knock):[A-Za-z0-9_-]+/g, '[invite]').replace(/[*_`~>#]+/g, '').replace(/\s+/g, ' ').trim();
 
 export const shortDid = (did: string) => `${did.slice(8, 14)}…${did.slice(-4)}`;
 
@@ -248,8 +248,12 @@ export function postRefOfHref(href: string): string | undefined {
   return POST_ADDRESS.test(href) ? href : undefined;
 }
 
-/** What renderMarkdown picks out of plain text: @mentions, post links and post addresses as text. */
-const INLINE = new RegExp(`@[\\w-]+|weave:post:[A-Za-z0-9_-]+|${POST_PATH.source}`);
+/** An invite link (weave:invite:…) or a knock link (weave:knock:…), which asks the inviter first. */
+const INVITE_LINK = /weave:(?:invite|knock):[A-Za-z0-9_-]+/;
+const isInviteHref = (href: string) => new RegExp(`^${INVITE_LINK.source}$`).test(href);
+
+/** What renderMarkdown picks out of plain text: @mentions, post links and post addresses as text, invite links. */
+const INLINE = new RegExp(`@[\\w-]+|weave:post:[A-Za-z0-9_-]+|${INVITE_LINK.source}|${POST_PATH.source}`);
 
 /**
  * Markdown (bold, italics, code, links, lists, images) rendered safely: messages
@@ -278,12 +282,17 @@ export function renderMarkdown(text: string, rich = false): string {
     for (const match of node.data.matchAll(new RegExp(INLINE, 'g'))) {
       fragment.append(node.data.slice(last, match.index));
       const post = POST_LINK.exec(match[0]);
-      const path = !post && POST_PATH.exec(match[0]);
-      const chip = document.createElement(post || path ? 'a' : 'span');
+      const invite = !post && isInviteHref(match[0]);
+      const path = !post && !invite && POST_PATH.exec(match[0]);
+      const chip = document.createElement(post || invite || path ? 'a' : 'span');
       if (post) chip.setAttribute('href', postLink(post[1]));
-      else if (path) chip.setAttribute('href', LINK_BASE + path[0]);
+      else if (invite) {
+        // Its text is hundreds of characters of nothing to read: a chip says what it is, and clicking it asks "Join?".
+        chip.setAttribute('href', match[0]);
+        chip.className = 'invite-chip';
+      } else if (path) chip.setAttribute('href', LINK_BASE + path[0]);
       else chip.className = 'mention';
-      chip.textContent = match[0];
+      chip.textContent = invite ? 'invite link' : match[0];
       fragment.append(chip);
       last = match.index! + match[0].length;
     }
@@ -296,23 +305,30 @@ export function renderMarkdown(text: string, rich = false): string {
 
 /**
  * A post link alone on its line becomes an embed: a placeholder that
- * loadEmbeds fills in with a card of the post. A link inside a sentence
- * stays a link.
+ * loadEmbeds fills in with a card of the post. So does an invite link: a card
+ * of the invitation (invites.tsx). A link inside a sentence stays a link.
  */
 function embedLonePostLinks(root: DocumentFragment): void {
   const lone = (nodes: Node[]) => {
     const meaningful = nodes.filter((n) => !(n.nodeType === Node.TEXT_NODE && !n.textContent?.trim()));
     const only = meaningful.length === 1 ? meaningful[0] : undefined;
     const href = only instanceof HTMLAnchorElement ? only.getAttribute('href') ?? '' : '';
-    return postRefOfHref(href) && href;
+    return (postRefOfHref(href) || isInviteHref(href)) && href;
   };
   const embed = (href: string) => {
     const box = document.createElement('div');
-    box.className = 'post-embed';
-    box.dataset.post = postRefOfHref(href)!;
     const link = document.createElement('a');
     link.setAttribute('href', href);
-    link.textContent = href;
+    if (isInviteHref(href)) {
+      box.className = 'invite-embed';
+      box.dataset.invite = href;
+      link.className = 'invite-chip';
+      link.textContent = 'invite link';
+    } else {
+      box.className = 'post-embed';
+      box.dataset.post = postRefOfHref(href)!;
+      link.textContent = href;
+    }
     box.append(link);
     return box;
   };

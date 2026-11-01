@@ -5,6 +5,7 @@ import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionReque
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
+import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
@@ -400,8 +401,10 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
 function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
   const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
   const name = chat.peer.name ?? shortDid(chat.peer.did);
+  const [inviting, setInviting] = useState(false);
   return (
     <div className="center">
+      {inviting && <InviteToDialog chat={chat.space} peerName={name} onClose={() => setInviting(false)} />}
       {!chat.friend && (
         <div className="notice">
           <Icon name="lock" /> You and {name} aren't friends any more, so this chat is read-only.
@@ -413,6 +416,11 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
             <Icon name="message" /> @{name}
           </b>
           <span className="pane-tools">
+            {chat.friend && (
+              <button onClick={() => setInviting(true)} title={`Invite ${name} to one of your projects, groups or communities: the invitation goes into this chat`}>
+                <Icon name="userPlus" /> Invite to…
+              </button>
+            )}
             <button onClick={() => navigate(`#/space/${encodeURIComponent(chat.peer.did)}`)}>
               <Icon name="user" /> Hub
             </button>
@@ -453,6 +461,7 @@ function openLink(link: string): void {
     else toast('This is a link to set up a company account. This computer has a Weave account already.');
     return;
   }
+  if (isInviteHref(link)) return openInviteLink(link);
   if (!ref) return toast('Paste this link into “Join with an invite link…” or “Add someone”');
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
@@ -775,6 +784,7 @@ function App() {
       ) : (
         <>
           <Shell />
+          <InviteLinkDialog />
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
