@@ -5,6 +5,7 @@ import { Icon } from './icons.tsx';
 import { api, bump, useApi } from './lib.ts';
 import { copy } from './posts.tsx';
 import { attempt, AsyncButton, toast } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /*
  * Your wallet: the address you pay from and get paid to, linked to your Weave
@@ -20,11 +21,12 @@ const hexOf = (text: string) => '0x' + [...new TextEncoder().encode(text)].map((
 
 /** Link (or change) your wallet: with the wallet in this browser in one go, or by signing the message elsewhere and pasting the signature. */
 export function WalletLink({ intro }: { intro?: string }) {
+  const { t } = useTexts();
   const [address, setAddress] = useState('');
   const [message, setMessage] = useState('');
   const [proof, setProof] = useState('');
   const wallet = browserWallet();
-  const link = (a: string, p: string) => attempt(() => api('linkWallet', { address: a, proof: p }).then(bump), 'Wallet linked');
+  const link = (a: string, p: string) => attempt(() => api('linkWallet', { address: a, proof: p }).then(bump), t('wallet.linked'));
   return (
     <>
       {intro && <p className="small">{intro}</p>}
@@ -44,30 +46,30 @@ export function WalletLink({ intro }: { intro?: string }) {
               }
             }}
           >
-            Link the wallet in this browser…
+            {t('wallet.link.browser')}
           </AsyncButton>
-          <span className="small grow">It asks your wallet to sign a short text saying the wallet is yours. No transaction, no cost.</span>
+          <span className="small grow">{t('wallet.link.browser.note')}</span>
         </div>
       )}
       <details className="small" open={!wallet}>
-        <summary>{wallet ? 'Or link another wallet by hand' : 'Link a wallet by hand'}</summary>
+        <summary>{t(wallet ? 'wallet.link.another.by.hand' : 'wallet.link.by.hand')}</summary>
         <div className="field-row">
-          <input className="grow" spellCheck={false} placeholder="0x… your wallet address" value={address} onChange={(e) => setAddress(e.target.value.trim())} aria-label="Wallet address" />
-          <AsyncButton onClick={async () => setMessage((await attempt(() => api<string>('walletMessage', address))) ?? '')}>Next</AsyncButton>
+          <input className="grow" spellCheck={false} placeholder={t('wallet.address.placeholder')} value={address} onChange={(e) => setAddress(e.target.value.trim())} aria-label={t('wallet.address')} />
+          <AsyncButton onClick={async () => setMessage((await attempt(() => api<string>('walletMessage', address))) ?? '')}>{t('button.next')}</AsyncButton>
         </div>
         {message && (
           <>
-            <p>Sign this text with that wallet (“Sign message”, personal_sign), then paste the signature:</p>
+            <p>{t('wallet.sign.text')}</p>
             <div className="field-row">
               <code className="grow sunken" style={{ padding: 4, wordBreak: 'break-all' }}>
                 {message}
               </code>
-              <button onClick={() => copy(message, 'Text copied')}>Copy</button>
+              <button onClick={() => copy(message, t('wallet.text.copied'))}>{t('button.copy')}</button>
             </div>
             <div className="field-row">
-              <input className="grow" spellCheck={false} placeholder="0x… signature" value={proof} onChange={(e) => setProof(e.target.value.trim())} aria-label="Signature" />
+              <input className="grow" spellCheck={false} placeholder={t('wallet.signature.placeholder')} value={proof} onChange={(e) => setProof(e.target.value.trim())} aria-label={t('wallet.signature')} />
               <AsyncButton className="default" onClick={() => link(address, proof)}>
-                Link wallet
+                {t('wallet.link')}
               </AsyncButton>
             </div>
           </>
@@ -82,11 +84,12 @@ export const WALLET_HREF = '#/keys/wallet';
 
 /** Said where a wallet is needed and none is linked: what for, and the way to Keys & devices. */
 export function WalletNeeded({ why }: { why: string }) {
+  const { t } = useTexts();
   return (
     <p className="small">
       {why}{' '}
       <a href={WALLET_HREF}>
-        <Icon name="lock" /> Link your wallet in Keys &amp; devices
+        <Icon name="lock" /> {t('wallet.link.in.keys')}
       </a>
     </p>
   );
@@ -94,6 +97,7 @@ export function WalletNeeded({ why }: { why: string }) {
 
 /** In Keys & devices: your wallet. */
 export function WalletBox() {
+  const { t } = useTexts();
   // null: no wallet linked; undefined: still asking.
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   const [changing, setChanging] = useState(false);
@@ -106,28 +110,25 @@ export function WalletBox() {
   if (wallet === undefined) return null;
   return (
     <fieldset id="wallet" ref={box}>
-      <legend>Wallet</legend>
+      <legend>{t('wallet.legend')}</legend>
       {wallet ? (
         <>
           <div className="field-row">
             <Icon name="user" />
             <code className="grow">{wallet.address}</code>
-            {wallet.contract && <span className="tag">smart wallet</span>}
-            <span className="tag">{wallet.verified ? 'verified' : 'not verified yet'}</span>
-            <button onClick={() => copy(wallet.address, 'Address copied')}>Copy</button>
+            {wallet.contract && <span className="tag">{t('wallet.smart')}</span>}
+            <span className="tag">{t(wallet.verified ? 'wallet.verified' : 'wallet.not.verified')}</span>
+            <button onClick={() => copy(wallet.address, t('address.copied'))}>{t('button.copy')}</button>
           </div>
-          <p className="small">
-            Linked to your identity: you pay tiers and tickets from it, and it owns your share of treasuries and shows' Safes. On {TREASURY_CHAIN.name}, a test network, for now.
-            Changing it retires this address: whoever pays it is told to pay the new one.
-          </p>
+          <p className="small">{t('wallet.linked.about', { chain: TREASURY_CHAIN.name })}</p>
           <div className="buttons">
-            <AsyncButton onClick={() => attempt(() => api('linkWallet', { address: '' }).then(bump), 'Wallet unlinked')}>Unlink</AsyncButton>
-            <button onClick={() => setChanging((c) => !c)}>{changing ? 'Keep this one' : 'Change wallet…'}</button>
+            <AsyncButton onClick={() => attempt(() => api('linkWallet', { address: '' }).then(bump), t('wallet.unlinked'))}>{t('wallet.unlink')}</AsyncButton>
+            <button onClick={() => setChanging((c) => !c)}>{t(changing ? 'wallet.keep.this' : 'wallet.change')}</button>
           </div>
           {changing && <WalletLink />}
         </>
       ) : (
-        <WalletLink intro="Link a wallet to pay tiers and tickets from it, and to own treasuries with others. Weave never sees its key. Best use an address just for Weave: everything on chain is public. A Safe or a Coinbase Smart Wallet works too." />
+        <WalletLink intro={t('wallet.intro')} />
       )}
     </fieldset>
   );

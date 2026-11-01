@@ -4,6 +4,7 @@ import { ago, api, bridge, navigate, onItem } from './lib.ts';
 import { PostHeader, spaceLabel } from './posts.tsx';
 import { attempt } from './ui.tsx';
 import { folderName, running } from './sessions.tsx';
+import { t, useTexts } from './texts.tsx';
 
 /*
  * The side panel: a small window that stays on top beside your work (Claude
@@ -14,21 +15,20 @@ import { folderName, running } from './sessions.tsx';
  * posted anywhere.
  */
 
-/** Board names say what a post is: "ideas" → an idea. */
-const SINGULAR: Record<string, string> = { ideas: 'idea', issues: 'issue', proposals: 'proposal', releases: 'release', posts: 'post', showcase: 'showcase post', journal: 'journal entry' };
+/** Board names say what a post is: "ideas" → an idea (post.kind.<board>). */
+const BOARD_KINDS = ['ideas', 'issues', 'proposals', 'releases', 'posts', 'showcase', 'journal'];
 
 /** "idea in p/Weave" */
 export function kindOf(p: PostInfo): string {
-  const kind = p.type === 'project' ? 'project' : p.type === 'issue' || p.type === 'proposal' ? p.type : (SINGULAR[p.board ?? ''] ?? 'post');
-  return p.space && p.type !== 'project' ? `${kind} in ${spaceLabel(p.space)}` : kind;
+  const kind = p.type === 'project' ? t('word.project') : p.type === 'issue' || p.type === 'proposal' ? t(`post.kind.${p.type}`) : t(`post.kind.${BOARD_KINDS.includes(p.board ?? '') ? p.board : 'post'}`);
+  return p.space && p.type !== 'project' ? t('post.kind.in', { kind, space: spaceLabel(p.space) }) : kind;
 }
 
 /** Who pointed to it: an agent's weave_show, or a link in a Claude Code session. */
 function source(m: MentionInfo): string {
-  if (m.source === 'agent') return m.agent ? `${m.agent} showed it` : 'shown';
-  return `in ${m.session?.name ?? 'Claude Code'}${m.session?.folder ? ` · ${m.session.folder}` : ''}`;
+  if (m.source === 'agent') return m.agent ? t('mention.showed', { agent: m.agent }) : t('mention.shown');
+  return t('mention.in.session', { session: m.session?.name ?? 'Claude Code', folder: m.session?.folder ? ` · ${m.session.folder}` : '' });
 }
-
 
 /** What every post needs to know: who you are and your spaces. */
 interface Context {
@@ -38,13 +38,19 @@ interface Context {
 
 /** A post in one line, for what isn't current: kind and place, title, and a note. Click opens it in Weave. */
 function Line({ post, note }: { post: PostInfo | { id: string; missing: true }; note: ReactNode }) {
-  if ('missing' in post) return <li className="panel-line muted">A post you can't see here · {note}</li>;
+  const { t } = useTexts();
+  if ('missing' in post)
+    return (
+      <li className="panel-line muted">
+        {t('panel.post.hidden')} {note}
+      </li>
+    );
   return (
-    <li className="panel-line" data-post={post.id} title="Click: open in Weave · Ctrl+click: work on it in Claude">
+    <li className="panel-line" data-post={post.id} title={t('panel.line.title')}>
       <a href={`#/post/${post.id}`}>{post.title}</a>
       <span className="panel-line-note">
         {kindOf(post)}
-        {post.issue ? ` · ${post.issue.status}` : ''} · {note}
+        {post.issue ? ` · ${t(`issue.status.${post.issue.status}`)}` : ''} · {note}
       </span>
     </li>
   );
@@ -52,12 +58,13 @@ function Line({ post, note }: { post: PostInfo | { id: string; missing: true }; 
 
 /** The work item a session is on, in full: as Weave shows a post, without its chat, and its starting prompt. */
 function CurrentItem({ post, ctx }: { post: PostInfo; ctx: Context }) {
+  const { t } = useTexts();
   return (
     <section className="panel-current" data-post={post.id}>
       <PostHeader post={post} meDid={ctx.me.did} spaces={ctx.spaces} />
       {post.prompt && (
         <div className="stack-prompt">
-          <b>Starting prompt</b>
+          <b>{t('panel.starting.prompt')}</b>
           <p>{post.prompt}</p>
         </div>
       )}
@@ -67,16 +74,14 @@ function CurrentItem({ post, ctx }: { post: PostInfo; ctx: Context }) {
 
 /** A session: the item it's on, in full. */
 function SessionView({ session, ctx }: { session: SessionInfo; ctx: Context }) {
+  const { t } = useTexts();
   const top = session.stack[0];
-  return top && !('missing' in top.post) ? (
-    <CurrentItem post={top.post} ctx={ctx} />
-  ) : (
-    <p className="empty">{top ? "This session is on a post you can't see here." : 'No work item on this session. Ctrl+click a post in Weave to bring one here.'}</p>
-  );
+  return top && !('missing' in top.post) ? <CurrentItem post={top.post} ctx={ctx} /> : <p className="empty">{t(top ? 'panel.on.hidden.post' : 'panel.no.item')}</p>;
 }
 
 /** The foldout under Stack: the session (to bring it up in Claude), what waits on its stack, and what was mentioned there. */
 function StackFoldout({ session, mentions, focused, onFollow, onClose }: { session: SessionInfo; mentions: MentionInfo[]; focused: boolean; onFollow(): void; onClose(): void }) {
+  const { t } = useTexts();
   const waiting = session.stack.slice(1);
   const here = mentions.filter((m) => m.session?.id === session.id);
   useEffect(() => {
@@ -86,37 +91,35 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
   }, [onClose]);
   return (
     <div className="panel-foldout window" onClick={(e) => (e.target as Element).closest('a') && onClose()}>
-      <div className="panel-heading">Session</div>
+      <div className="panel-heading">{t('word.session.cap')}</div>
       <div className="panel-foldout-session">
         <span className="grow">
-          <b title={session.description}>{session.title ?? 'Untitled session'}</b>
-          <span className="panel-line-note">
-            {[folderName(session.folder), focused ? 'open in Claude' : running(session) ? 'running' : session.active ? `active ${ago(session.active)}` : ''].filter(Boolean).join(' · ')}
-          </span>
+          <b title={session.description}>{session.title ?? t('session.untitled')}</b>
+          <span className="panel-line-note">{[folderName(session.folder), focused ? t('panel.open.in.claude') : running(session) ? t('session.running.lc') : session.active ? t('session.active', { time: session.active }) : ''].filter(Boolean).join(' · ')}</span>
           {session.description && <span className="panel-line-note">{session.description}</span>}
         </span>
         {session.host && bridge.showSession && (
-          <button onClick={() => void attempt(() => bridge.showSession!(session.host!))} title="Bring it to the front in the Claude app">
-            Open in Claude
+          <button onClick={() => void attempt(() => bridge.showSession!(session.host!))} title={t('panel.bring.front')}>
+            {t('panel.open.claude')}
           </button>
         )}
         {!focused && (
-          <button onClick={onFollow} title="Show the session open in the Claude app again">
-            Follow Claude
+          <button onClick={onFollow} title={t('panel.follow.title')}>
+            {t('panel.follow.claude')}
           </button>
         )}
       </div>
-      <div className="panel-heading">Stack ({waiting.length} waiting)</div>
+      <div className="panel-heading">{t('panel.stack.waiting', { n: waiting.length })}</div>
       {waiting.length ? (
         <ul className="panel-lines">
           {waiting.map((entry, i) => (
-            <Line key={`${entry.post.id}-${i}`} post={entry.post} note={`waiting since ${ago(entry.since)}`} />
+            <Line key={`${entry.post.id}-${i}`} post={entry.post} note={t('panel.waiting.since', { time: entry.since })} />
           ))}
         </ul>
       ) : (
-        <p className="empty">Nothing waits below this item.</p>
+        <p className="empty">{t('panel.nothing.waits')}</p>
       )}
-      <div className="panel-heading">Mentions ({here.length})</div>
+      <div className="panel-heading">{t('panel.mentions', { n: here.length })}</div>
       {here.length ? (
         <ul className="panel-lines">
           {here.map((m) => (
@@ -124,7 +127,7 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
           ))}
         </ul>
       ) : (
-        <p className="empty">No posts mentioned in this session yet.</p>
+        <p className="empty">{t('panel.no.mentions')}</p>
       )}
     </div>
   );
@@ -132,6 +135,7 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
 
 /** The sessions pane: sessions with work items and the ones active lately, what each is on; pick one to see it. */
 function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string): void }) {
+  const { t } = useTexts();
   const [sessions, setSessions] = useState<SessionInfo[]>();
   useEffect(() => {
     const load = () => void api<SessionInfo[]>('activeSessions', { hours: 12 }).then(setSessions, () => {});
@@ -146,27 +150,28 @@ function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string
     };
   }, []);
   if (!sessions) return null;
-  if (!sessions.length) return <p className="empty">No Claude Code sessions in the last 12 hours.</p>;
+  if (!sessions.length) return <p className="empty">{t('panel.no.sessions')}</p>;
   return (
     <ul className="panel-sessions">
       {sessions.map((s) => {
         const [top, ...waiting] = s.stack;
-        const state = s.id === focused ? 'open in Claude' : running(s) ? 'running' : s.active ? `active ${ago(s.active)}` : `changed ${ago(s.time)}`;
+        const state = s.id === focused ? t('panel.open.in.claude') : running(s) ? t('session.running.lc') : s.active ? t('session.active', { time: s.active }) : t('session.changed', { time: s.time });
         return (
           <li key={`${s.provider}:${s.id}`} className={`panel-session${s.id === focused ? ' focused' : ''}${running(s) ? ' running' : ''}`}>
-            <button className="link panel-session-pick" onClick={() => onPick(s.id)} title="Show this session here">
+            <button className="link panel-session-pick" onClick={() => onPick(s.id)} title={t('panel.show.here')}>
               <b>
-                {s.title ?? 'Untitled session'}
-                {s.role && <span className={`role-badge ${s.role}`}>{s.role === 'driver' ? 'driver' : s.available ? 'worker' : 'worker, resting'}</span>}
+                {s.title ?? t('session.untitled')}
+                {s.role && <span className={`role-badge ${s.role}`}>{t(s.role === 'driver' ? 'panel.role.driver' : s.available ? 'panel.role.worker' : 'panel.role.worker.resting')}</span>}
               </b>
-              <span className="panel-line-note">
-                {[folderName(s.folder), state].filter(Boolean).join(' · ')}
+              <span className="panel-line-note">{[folderName(s.folder), state].filter(Boolean).join(' · ')}</span>
+              <span className="panel-session-now">
+                {top ? ('missing' in top.post ? t('panel.on.hidden') : t('session.on', { title: top.post.title })) : t('panel.no.items')}
+                {waiting.length ? t('session.waiting', { n: waiting.length }) : ''}
               </span>
-              <span className="panel-session-now">{top ? ('missing' in top.post ? 'on a post you can’t see' : `on: ${top.post.title}`) : 'no work items'}{waiting.length ? ` · ${waiting.length} waiting` : ''}</span>
             </button>
             {s.host && bridge.showSession && (
-              <button onClick={() => void attempt(() => bridge.showSession!(s.host!))} title="Bring it to the front in the Claude app">
-                Open in Claude
+              <button onClick={() => void attempt(() => bridge.showSession!(s.host!))} title={t('panel.bring.front')}>
+                {t('panel.open.claude')}
               </button>
             )}
           </li>
@@ -187,6 +192,7 @@ function openInWeave(event: MouseEvent): void {
 }
 
 export function MentionsPanel() {
+  const { t } = useTexts();
   const [mentions, setMentions] = useState<MentionInfo[]>([]);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [focused, setFocused] = useState<string>();
@@ -237,30 +243,22 @@ export function MentionsPanel() {
     <div className="window mentions-window" onClickCapture={openInWeave}>
       <div className="title-bar mentions-drag">
         <button className="panel-nav" onClick={() => setPane(pane === 'sessions' ? 'session' : 'sessions')}>
-          {pane === 'sessions' ? '← Back' : 'Sessions'}
+          {t(pane === 'sessions' ? 'panel.back' : 'nav.sessions')}
         </button>
         <div className="title-bar-text" />
         {pane === 'session' && session && (
           <button className={`panel-nav${fold ? ' active' : ''}`} onClick={() => setFold((f) => !f)} aria-expanded={fold}>
-            Stack{session.stack.length > 1 ? ` (${session.stack.length - 1})` : ''} ▾
+            {session.stack.length > 1 ? t('panel.stack.n', { n: session.stack.length - 1 }) : t('panel.stack')} ▾
           </button>
         )}
         <div className="title-bar-controls">
-          <button aria-label="Close" onClick={() => window.close()} />
+          <button aria-label={t('window.close')} onClick={() => window.close()} />
         </div>
       </div>
       {fold && pane === 'session' && session && (
         <StackFoldout session={session} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
       )}
-      <div className="mentions-scroll">
-        {pane === 'sessions' ? (
-          <SessionsPane focused={focused} onPick={pick} />
-        ) : session && ctx ? (
-          <SessionView session={session} ctx={ctx} />
-        ) : (
-          <p className="empty">Switch to a session in the Claude app, or pick one under Sessions: the work item it is on shows here. (Weave follows the Claude app once Follow Claude Code is on, on its Sessions page.)</p>
-        )}
-      </div>
+      <div className="mentions-scroll">{pane === 'sessions' ? <SessionsPane focused={focused} onPick={pick} /> : session && ctx ? <SessionView session={session} ctx={ctx} /> : <p className="empty">{t('panel.pick.session')}</p>}</div>
     </div>
   );
 }
