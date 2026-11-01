@@ -65,9 +65,25 @@ describe('a space photo', () => {
     await expect(martin.setSpacePhoto({ space: 'Crew', photo: 'https://example.com/a.png' })).rejects.toThrow(/uploaded image/);
     await expect(martin.setSpacePhoto({ space: 'Crew', background: 'https://example.com/b.png' })).rejects.toThrow(/uploaded image/);
     expect(await martin.setSpacePhoto({ space: 'Crew', background: photo })).toMatchObject({ photo, bannerText: 'The crew', background: photo });
+    // Members on the banner: projects only (they have one).
+    await expect(martin.setSpacePhoto({ space: 'Crew', members: true })).rejects.toThrow(/only projects/);
+    await martin.createProject({ name: 'Stage' });
+    expect((await martin.setSpacePhoto({ space: 'Stage', members: true })).membersOnBanner).toBe(true);
+    expect((await martin.setSpacePhoto({ space: 'Stage', banner: 'On stage' })).membersOnBanner).toBe(true);
+    expect((await martin.setSpacePhoto({ space: 'Stage', members: false })).membersOnBanner).toBeUndefined();
+    // Who stands where: their keys, each once; kept when other things change.
+    const order = [lena.identity.author, martin.identity.author];
+    expect((await martin.setSpacePhoto({ space: 'Crew', order })).photoOrder).toEqual(order);
+    expect((await martin.setSpacePhoto({ space: 'Crew', background: '' })).photoOrder).toEqual(order);
+    await expect(martin.setSpacePhoto({ space: 'Crew', order: ['Lena'] })).rejects.toThrow(/by their keys/);
+    // Above the member list: groups by default, projects not (they have their banner); either way by choice.
+    expect((await martin.spaces()).find((s) => s.name === 'Stage')?.photoInList).toBe(false);
+    expect((await martin.setSpacePhoto({ space: 'Stage', list: true })).photoInList).toBe(true);
+    expect((await martin.setSpacePhoto({ space: 'Crew', list: false })).photoInList).toBe(false);
 
     // Left out stays; empty removes.
     expect(await martin.setSpacePhoto({ space: 'Crew', photo: '' })).toMatchObject({ bannerText: 'The crew' });
+    expect((await martin.spaces()).find((s) => s.name === 'Crew')?.photoInList).toBe(false);
     const back = await martin.setSpacePhoto({ space: 'Crew', banner: '', background: '' });
     expect(back.photo).toBeUndefined();
     expect(back.background).toBeUndefined();

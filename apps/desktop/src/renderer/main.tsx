@@ -229,7 +229,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
       </header>
       <div className="members-list sunken">
         {/* Its photo: its own picture, or everyone together holding up its banner (those online first). */}
-        <SpacePhoto space={space} dids={[...online, ...offline].map((m) => m.did)} />
+        {space.photoInList && <SpacePhoto space={space} dids={[...online, ...offline].map((m) => m.did)} />}
         {online.length > 0 && <h4>Online — {online.length}</h4>}
         {online.map((m) => row(m, true))}
         {offline.length > 0 && <h4>Away — {offline.length}</h4>}

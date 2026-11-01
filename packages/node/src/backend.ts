@@ -177,6 +177,12 @@ export interface SpaceInfo extends SpaceRef {
   bannerText?: string;
   /** A picture behind its group photo (wblob: reference); a project's banner too, unless its page has one. */
   background?: string;
+  /** Projects: their members stand on the banner, as a group. */
+  membersOnBanner?: true;
+  /** Who stands where on its group photo, front row first, left to right; others after them. */
+  photoOrder?: Did[];
+  /** Its photo stands above its member list (by default for groups and communities; projects have their banner). */
+  photoInList?: boolean;
   founder: Did;
   founderName?: string;
   members: number;
@@ -2289,7 +2295,7 @@ export interface Backend {
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
   /** A space's photo (a picture of its own, or '' for everyone's avatars), its banner's text ('' for its name) and the background behind it. */
-  setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; as?: string }): Promise<SpaceInfo>;
+  setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; list?: boolean; as?: string }): Promise<SpaceInfo>;
   /** The avatars of these people, by their did: those who have one. */
   avatars(people: Did[]): Promise<Record<Did, Record<string, number>>>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */

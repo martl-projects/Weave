@@ -1,11 +1,11 @@
 // Making your avatar (a turnable figure above, tabs of parts and colors below), and picking a scene for a post.
 
 import { useEffect, useRef, useState } from 'react';
-import type { Profile, SpaceInfo } from '@weave/node/client';
-import { api, bump, useApi, useBlobUrl } from './lib.ts';
+import type { MemberInfo, Profile, SpaceInfo } from '@weave/node/client';
+import { api, bump, shortDid, useApi, useBlobUrl } from './lib.ts';
 import { avatarLib, forgetFigure, GroupPhoto, SceneImage, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
 import { ImagePicker } from './editor.tsx';
-import { attempt, AsyncButton, BlobImage, Modal } from './ui.tsx';
+import { attempt, AsyncButton, Avatar, BlobImage, Modal } from './ui.tsx';
 
 interface Section {
   part: string;
@@ -218,6 +218,12 @@ export function ScenePicker({ value, onChange }: { value: string; onChange(scene
   );
 }
 
+/** People in the order its photo puts them: those it names first (who are still here), then the rest as given. */
+export function inPhotoOrder(space: SpaceInfo, dids: string[]): string[] {
+  const named: string[] = (space.photoOrder ?? []).filter((d) => dids.includes(d));
+  return [...named, ...dids.filter((d) => !named.includes(d))];
+}
+
 /** A space's photo: its own picture with its banner's text over it, or everyone's avatars holding the banner (in front of its background). */
 export function SpacePhoto({ space, dids }: { space: SpaceInfo; dids: string[] }) {
   const banner = space.bannerText ?? space.name;
@@ -225,7 +231,7 @@ export function SpacePhoto({ space, dids }: { space: SpaceInfo; dids: string[] }
   if (!space.photo)
     return dids.length ? (
       <div className={`space-photo-group${background ? ' has-background' : ''}`} style={background ? { backgroundImage: `url("${background}")` } : undefined}>
-        <GroupPhoto dids={dids} banner={banner} />
+        <GroupPhoto dids={inPhotoOrder(space, dids)} banner={banner} />
       </div>
     ) : null;
   return (
@@ -237,13 +243,19 @@ export function SpacePhoto({ space, dids }: { space: SpaceInfo; dids: string[] }
 }
 
 /** Settings: the space's photo (everyone's avatars, or a picture of its own) and the text on its banner. */
-export function SpacePhotoSettings({ space, dids, canSet }: { space: SpaceInfo; dids: string[]; canSet: boolean }) {
+export function SpacePhotoSettings({ space, members, canSet }: { space: SpaceInfo; members: MemberInfo[]; canSet: boolean }) {
+  const dids = members.map((m) => m.did);
+  const [order, setOrder] = useState(() => inPhotoOrder(space, dids));
+  const name = (did: string) => members.find((m) => m.did === did)?.name ?? shortDid(did);
+  const move = (i: number, by: number) => setOrder((o) => { const next = [...o]; [next[i], next[i + by]] = [next[i + by], next[i]]; return next; });
   const [own, setOwn] = useState(!!space.photo);
   const [photo, setPhoto] = useState(space.photo ?? '');
   const [banner, setBanner] = useState(space.bannerText ?? '');
   const [background, setBackground] = useState(space.background ?? '');
-  const changed = (own ? photo : '') !== (space.photo ?? '') || banner.trim() !== (space.bannerText ?? '') || background !== (space.background ?? '');
-  const preview: SpaceInfo = { ...space, photo: own && photo ? photo : undefined, bannerText: banner.trim() || undefined, background: background || undefined };
+  const [onBanner, setOnBanner] = useState(!!space.membersOnBanner);
+  const [inList, setInList] = useState(!!space.photoInList);
+  const changed = (own ? photo : '') !== (space.photo ?? '') || banner.trim() !== (space.bannerText ?? '') || background !== (space.background ?? '') || onBanner !== !!space.membersOnBanner || inList !== !!space.photoInList || order.join() !== inPhotoOrder(space, dids).join();
+  const preview: SpaceInfo = { ...space, photo: own && photo ? photo : undefined, bannerText: banner.trim() || undefined, background: background || undefined, photoOrder: order as SpaceInfo["photoOrder"] };
   return (
     <fieldset>
       <legend>Photo</legend>
@@ -271,12 +283,37 @@ export function SpacePhotoSettings({ space, dids, canSet }: { space: SpaceInfo; 
             <label htmlFor={`photo-banner-${space.id}`}>On the banner</label>
             <input id={`photo-banner-${space.id}`} value={banner} maxLength={40} placeholder={space.name} disabled={!canSet} onChange={(e) => setBanner(e.target.value)} />
           </div>
+          {!own && order.length > 1 && (
+            <div className="field-row-stacked">
+              <label>Who stands where (front row first, left to right)</label>
+              <ol className="photo-order">
+                {order.slice(0, 12).map((did, i) => (
+                  <li key={did}>
+                    <Avatar did={did} size={20} /> <span className="grow">{name(did)}</span>
+                    <button type="button" disabled={!canSet || i === 0} title="Further forward" onClick={() => move(i, -1)}>▲</button>
+                    <button type="button" disabled={!canSet || i === order.length - 1} title="Further back" onClick={() => move(i, 1)}>▼</button>
+                  </li>
+                ))}
+              </ol>
+              {order.length > 12 && <span className="small muted">The photo shows the first twelve.</span>}
+            </div>
+          )}
+          <div className="field-row">
+            <input id={`photo-list-${space.id}`} type="checkbox" checked={inList} disabled={!canSet} onChange={(e) => setInList(e.target.checked)} />
+            <label htmlFor={`photo-list-${space.id}`}>Show the photo above the member list</label>
+          </div>
+          {space.kind === 'project' && (
+            <div className="field-row">
+              <input id={`photo-hero-${space.id}`} type="checkbox" checked={onBanner} disabled={!canSet} onChange={(e) => setOnBanner(e.target.checked)} />
+              <label htmlFor={`photo-hero-${space.id}`}>Show the members on the project's banner</label>
+            </div>
+          )}
           {canSet ? (
             <div className="buttons">
               <AsyncButton
                 className="default"
                 disabled={!changed || (own && !photo)}
-                onClick={() => attempt(() => api('setSpacePhoto', { space: space.id, photo: own ? photo : '', banner: banner.trim(), background }).then(bump), 'Photo saved')}
+                onClick={() => attempt(() => api('setSpacePhoto', { space: space.id, photo: own ? photo : '', banner: banner.trim(), background, ...(space.kind === 'project' ? { members: onBanner } : {}), order, list: inList }).then(bump), 'Photo saved')}
               >
                 Save photo
               </AsyncButton>
