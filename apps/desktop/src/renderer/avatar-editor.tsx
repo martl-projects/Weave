@@ -42,7 +42,8 @@ function Variant({ lib, figure, section, sprites }: { lib: AvatarLib; figure: Fi
   useEffect(() => {
     let live = true;
     if (section.kind === 'flat' && sprites) setUrl(lib.thumb(section.part, figure));
-    else void lib.snapshot(figure, section.kind === 'bust' ? 'bust' : 'head').then((u) => live && setUrl(u));
+    // Hair and hats need the whole head; the rest is seen best close to the face.
+    else void lib.snapshot(figure, section.kind === 'bust' ? 'bust' : section.part === 'hair' || section.part === 'hat' ? 'head' : 'face').then((u) => live && setUrl(u));
     return () => {
       live = false;
     };
@@ -204,7 +205,7 @@ export function ScenePicker({ value, onChange }: { value: string; onChange(scene
         </button>
         {scenes.map((s) => (
           <button type="button" key={s.id} className={value === s.id ? 'sel' : ''} title={s.label} onClick={() => onChange(s.id)}>
-            <SceneImage did={me.did} scene={s.id} size={128} />
+            <SceneImage did={me.did} scene={s.id} size={128} close />
             <span>{s.label}</span>
           </button>
         ))}

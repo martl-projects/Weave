@@ -229,7 +229,7 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
       <a className={`thumb${post.image || post.scene ? ' has-image' : ''}`} href={href}>
-        {post.scene ? <SceneImage did={post.by.did} scene={post.scene} size={128} /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
+        {post.scene ? <SceneImage did={post.by.did} scene={post.scene} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>

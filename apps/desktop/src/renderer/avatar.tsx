@@ -18,8 +18,8 @@ export interface AvatarLib {
     fromSeed(text: string): Figure;
     offset(a: Figure, key: string): number;
   };
-  snapshot(a: Figure, kind?: 'head' | 'bust'): Promise<string>;
-  sceneSnapshot(a: Figure, scene: string, size?: number): Promise<string>;
+  snapshot(a: Figure, kind?: 'head' | 'face' | 'bust'): Promise<string>;
+  sceneSnapshot(a: Figure, scene: string, size?: number, frame?: 'full' | 'close'): Promise<string>;
   mountViewer(el: HTMLElement): { set(a: Figure, bounce?: boolean): void; dispose(): void };
   loadFaceSprites(): Promise<void>;
   thumb(part: string, a: Figure, size?: number): string;
@@ -108,14 +108,18 @@ function usePicture(draw: ((l: AvatarLib) => Promise<string>) | undefined, key: 
 
 /** Someone's head, as their avatar shows it; fallback while it's drawn (or when it can't be). */
 export function FigureHead({ figure, fallback }: { figure: Figure; fallback: ReactNode }) {
-  const url = usePicture((l) => l.snapshot(figure, 'head'), JSON.stringify(figure));
+  const url = usePicture((l) => l.snapshot(figure, 'face'), JSON.stringify(figure));
   return url ? <img className="figure-head" src={url} alt="" draggable={false} /> : <>{fallback}</>;
 }
 
-/** Someone's avatar in a scene ("idea": pointing up, a light bulb above): their figure, or the one their key makes. */
-export function SceneImage({ did, scene, size = 256, className = '' }: { did: string; scene: string; size?: number; className?: string }) {
+/**
+ * Someone's avatar in a scene ("idea": pointing up, a light bulb above): their figure, or the one their key makes.
+ * Small pictures come close (head and shoulders, with what's around them); big ones show all of it.
+ */
+export function SceneImage({ did, scene, size = 256, close = false, className = '' }: { did: string; scene: string; size?: number; close?: boolean; className?: string }) {
   const figure = useFigure(did);
-  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size), `${scene}:${size}:${JSON.stringify(figure ?? did)}`);
+  const frame = close ? 'close' : 'full';
+  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `${scene}:${size}:${frame}:${JSON.stringify(figure ?? did)}`);
   return <span className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
 }
 
