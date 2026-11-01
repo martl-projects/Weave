@@ -7,7 +7,7 @@ import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import type { Attachment } from '@weave/core';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { CharCount } from './editor.tsx';
-import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
+import { api, bump, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds, toast } from './ui.tsx';
 import { Marks } from './marks.tsx';
@@ -249,7 +249,7 @@ function Composer({
       // Keep it all if sending failed.
       setText(message);
       setFile(file);
-    }
+    } else bump(); // shown now, also when the daemon's events are late or their stream is down
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
