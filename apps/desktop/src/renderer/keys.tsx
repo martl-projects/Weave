@@ -10,6 +10,7 @@ import { AgentAppsBox } from './agents.tsx';
 import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 import { FetchersBox, ServicesBox } from './services.tsx';
+import { T, useTexts } from './texts.tsx';
 
 /*
  * Identity and keys. The 24 recovery words are the identity: every root key
@@ -33,6 +34,7 @@ function Words({ words }: { words: string }) {
 
 /** First start: a name, then the words to write down; or restore from words you already have; or a company account. */
 export function Onboarding({ onDone }: { onDone(): void }) {
+  const { t } = useTexts();
   const [mode, setMode] = useState<'create' | 'restore' | 'company'>('create');
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
@@ -74,23 +76,20 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
   if (words)
     return window(
-      'Your recovery words',
+      t('onboard.words.title'),
       <>
         <p>
-          Write these 24 words down <b>on paper</b>, in order. They are shown only now.
+          <T name="onboard.words.write" />
         </p>
         <Words words={words} />
-        <p className="small">
-          They are your identity: with them you set up another computer, replace a stolen key and rotate your keys. Weave never stores them. Keep them away from this
-          computer, from chats and from AI agents: whoever has them is you.
-        </p>
+        <p className="small">{t('onboard.words.why')}</p>
         <div className="field-row">
           <input id="wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
-          <label htmlFor="wrote">I wrote them down and put them somewhere safe</label>
+          <label htmlFor="wrote">{t('onboard.words.wrote')}</label>
         </div>
         <div className="buttons">
           <button className="default" disabled={!wrote} onClick={() => (setWords(undefined), onDone())}>
-            Continue
+            {t('button.continue')}
           </button>
         </div>
       </>,
@@ -98,19 +97,18 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
   if (enrolled)
     return window(
-      'Your company account is ready',
+      t('onboard.company.ready'),
       <>
         <div className="welcome-head">
           <WeaveMark size={48} />
           <p>
-            Welcome, <b>{enrolled.name}</b>. Your account belongs to <b>{enrolled.company?.name ?? 'your company'}</b>: it keeps it safe and can set it up on a new computer, so there are no words
-            to write down.
+            <T name="onboard.company.welcome" values={{ name: <b>{enrolled.name}</b>, company: <b>{enrolled.company?.name ?? t('company.yours')}</b> }} />
           </p>
         </div>
-        <p className="small">You stay signed in with your company account; Weave renews it by itself. Your company's projects and groups appear as soon as the company has let you in.</p>
+        <p className="small">{t('onboard.company.signed')}</p>
         <div className="buttons">
           <button className="default" onClick={() => (setEnrolled(undefined), onDone())}>
-            Open Weave
+            {t('onboard.open')}
           </button>
         </div>
       </>,
@@ -118,7 +116,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
   if (mode === 'company')
     return window(
-      'Set up your company account',
+      t('onboard.company.title'),
       <form
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
@@ -130,24 +128,24 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       >
         <div className="welcome-head">
           <WeaveMark size={48} />
-          <p>Your company sets up your Weave account. You sign in with your company account in your browser; there are no recovery words to keep.</p>
+          <p>{t('onboard.company.intro')}</p>
         </div>
         {managed.enrollLink ? (
-          <p className="small">Your company has set this computer up for its Weave already.</p>
+          <p className="small">{t('onboard.company.managed')}</p>
         ) : (
           <div className="field-row-stacked">
-            <label htmlFor="enroll-link">The enrollment link from your company</label>
+            <label htmlFor="enroll-link">{t('onboard.company.link')}</label>
             <textarea id="enroll-link" className="wide" rows={3} required autoFocus spellCheck={false} placeholder="weave:enroll:…" value={link} onChange={(e) => setLink(e.target.value)} />
           </div>
         )}
         <div className="buttons">
           {!managed.companyOnly && (
             <button type="button" onClick={() => setMode('create')}>
-              Back
+              {t('button.back')}
             </button>
           )}
           <button className="default" disabled={busy || !link.trim()}>
-            {busy ? 'Waiting for the sign-in in your browser…' : 'Sign in with your company'}
+            {t(busy ? 'onboard.company.waiting' : 'onboard.company.signin')}
           </button>
         </div>
       </form>,
@@ -155,31 +153,31 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
   if (mode === 'restore')
     return window(
-      'Restore Weave on this computer',
+      t('onboard.restore.title'),
       <form
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           setBusy(true);
-          const ok = await attempt(() => bridge.restore(restoring).then(() => true), 'This computer is now one of your devices');
+          const ok = await attempt(() => bridge.restore(restoring).then(() => true), t('onboard.restore.done'));
           setBusy(false);
           if (ok) onDone();
         }}
       >
-        <p className="small">Type your 24 recovery words. Keep another of your devices, or a friend who follows you, online: this computer fetches your identity from them.</p>
+        <p className="small">{t('onboard.restore.intro')}</p>
         <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
         <div className="buttons">
           <button type="button" onClick={() => setMode('create')}>
-            Back
+            {t('button.back')}
           </button>
           <button className="default" disabled={busy}>
-            {busy ? 'Looking for your identity…' : 'Restore'}
+            {t(busy ? 'onboard.restore.looking' : 'onboard.restore')}
           </button>
         </div>
       </form>,
     );
 
   return window(
-    'Welcome to Weave',
+    t('onboard.welcome'),
     <form
       onSubmit={async (e: FormEvent) => {
         e.preventDefault();
@@ -193,21 +191,21 @@ export function Onboarding({ onDone }: { onDone(): void }) {
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        <p>Your hub, your keys, your friends. Your identity is created on this computer and never leaves it.</p>
+        <p>{t('onboard.intro')}</p>
       </div>
       <div className="field-row-stacked">
-        <label htmlFor="welcome-name">What should people call you?</label>
+        <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="buttons">
         <button type="button" onClick={() => setMode('company')}>
-          My company uses Weave…
+          {t('onboard.company.button')}
         </button>
         <button type="button" onClick={() => setMode('restore')}>
-          I already use Weave…
+          {t('onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
-          Create my hub
+          {t('onboard.create')}
         </button>
       </div>
     </form>,
@@ -216,21 +214,18 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 
 /** A company account (stage 13): whose it is, and whether it's signed in and vouched for. */
 function CompanyAccountBox() {
+  const { t } = useTexts();
   const { data: status } = useApi(() => api<SignInStatus>('signInStatus'), []);
   if (!status?.company) return null;
-  const day = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
   return (
     <fieldset>
-      <legend>Company account</legend>
+      <legend>{t('company.account')}</legend>
       <p>
-        This account belongs to <b>{status.name}</b>
         {status.account ? (
-          <>
-            {' '}
-            and is signed in as <b>{status.account}</b>
-          </>
-        ) : null}
-        . The company keeps it safe and can set it up on a new computer.
+          <T name="company.belongs.signed" values={{ name: <b>{status.name}</b>, account: <b>{status.account}</b> }} />
+        ) : (
+          <T name="company.belongs" values={{ name: <b>{status.name}</b> }} />
+        )}
       </p>
       {status.problem ? (
         <p className="notice alarm">
@@ -238,12 +233,12 @@ function CompanyAccountBox() {
         </p>
       ) : (
         <p className="small">
-          {status.renews ? 'Weave renews the sign-in by itself.' : 'Sign in again when it runs out.'}
-          {status.vouchedUntil ? ` The company vouches for you until ${day(status.vouchedUntil)}.` : ' The company vouches for you once it has checked the sign-in.'}
+          {t(status.renews ? 'company.renews' : 'company.signin.again.when')}
+          {status.vouchedUntil ? t('company.vouches.until', { until: status.vouchedUntil }) : t('company.vouches.once')}
         </p>
       )}
-      <AsyncButton onClick={() => api('companySignIn').then(bump)} title="Opens your company's sign-in in the browser">
-        Sign in again
+      <AsyncButton onClick={() => api('companySignIn').then(bump)} title={t('company.signin.title')}>
+        {t('company.signin.again')}
       </AsyncButton>
     </fieldset>
   );
@@ -251,6 +246,7 @@ function CompanyAccountBox() {
 
 /** Asks for the recovery words (and, for revoking, since when the key can't be trusted). */
 function WordsDialog({ title, intro, since, encryption, onSubmit, onClose }: { title: string; intro: React.ReactNode; since?: boolean; encryption?: boolean; onSubmit(input: { words: string; since?: string; encryption?: boolean }): Promise<unknown>; onClose(): void }) {
+  const { t } = useTexts();
   const [words, setWords] = useState('');
   const [when, setWhen] = useState('');
   const [newEncryption, setNewEncryption] = useState(false);
@@ -267,24 +263,24 @@ function WordsDialog({ title, intro, since, encryption, onSubmit, onClose }: { t
         <p className="small">{intro}</p>
         {since && (
           <div className="field-row-stacked">
-            <label htmlFor="since">Last time you trusted it (empty: from now on)</label>
+            <label htmlFor="since">{t('keys.since')}</label>
             <input id="since" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
           </div>
         )}
         <div className="field-row-stacked">
-          <label htmlFor="words">Your 24 recovery words</label>
+          <label htmlFor="words">{t('keys.words')}</label>
           <textarea id="words" className="wide" rows={3} required spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
         </div>
         {encryption && (
           <div className="field-row">
             <input id="new-enc" type="checkbox" checked={newEncryption} onChange={(e) => setNewEncryption(e.target.checked)} />
-            <label htmlFor="new-enc">Also replace my encryption key (if it may have leaked)</label>
+            <label htmlFor="new-enc">{t('keys.replace.encryption')}</label>
           </div>
         )}
-        <p className="small">The words go to your own node only, are used once and are not stored.</p>
+        <p className="small">{t('keys.words.once')}</p>
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default">{title}</button>
         </div>
@@ -293,23 +289,25 @@ function WordsDialog({ title, intro, since, encryption, onSubmit, onClose }: { t
   );
 }
 
-/** The kinds most agents need, in plain words. Other kinds an agent already has are kept as they are. */
-const AGENT_KINDS: { kind: string; label: string }[] = [
-  { kind: 'weave.post', label: 'Post' },
-  { kind: 'weave.reply', label: 'Reply' },
-  { kind: 'weave.msg', label: 'Chat' },
-  { kind: 'weave.react', label: 'React' },
-  { kind: 'weave.issue.*', label: 'Open and work on issues' },
-  { kind: 'weave.vote', label: 'Vote' },
-  { kind: 'weave.post.coauthor', label: 'Confirm co-authorship' },
-  { kind: 'weave.post.edit', label: 'Edit its posts' },
-  { kind: 'weave.app', label: 'Publish apps and releases' },
-];
+/** The kinds most agents need, in plain words (agent.perm.<kind>). Other kinds an agent already has are kept as they are. */
+const AGENT_KINDS = ['weave.post', 'weave.reply', 'weave.msg', 'weave.react', 'weave.issue.*', 'weave.vote', 'weave.post.coauthor', 'weave.post.edit', 'weave.app'] as const;
+const PERM_NAMES: Record<(typeof AGENT_KINDS)[number], string> = {
+  'weave.post': 'agent.perm.post',
+  'weave.reply': 'agent.perm.reply',
+  'weave.msg': 'agent.perm.msg',
+  'weave.react': 'agent.perm.react',
+  'weave.issue.*': 'agent.perm.issue',
+  'weave.vote': 'agent.perm.vote',
+  'weave.post.coauthor': 'agent.perm.coauthor',
+  'weave.post.edit': 'agent.perm.edit',
+  'weave.app': 'agent.perm.app',
+};
 
 /** What an agent may sign: checkboxes for the common kinds, saved with updateAgent. */
 function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: string; permissions: string[] }; onClose(): void }) {
+  const { t } = useTexts();
   const [chosen, setChosen] = useState(() => new Set(agent.permissions));
-  const others = agent.permissions.filter((p) => !AGENT_KINDS.some((k) => k.kind === p));
+  const others = agent.permissions.filter((p) => !(AGENT_KINDS as readonly string[]).includes(p));
   const toggle = (kind: string, on: boolean) =>
     setChosen((prev) => {
       const next = new Set(prev);
@@ -318,51 +316,40 @@ function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: s
       return next;
     });
   return (
-    <Modal title={`What ${agent.name} may do`} onClose={onClose}>
+    <Modal title={t('agent.may.title', { name: agent.name })} onClose={onClose}>
       <form
         className="form"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          const permissions = [...AGENT_KINDS.map((k) => k.kind).filter((k) => chosen.has(k)), ...others];
-          const done = await attempt(() => api('updateAgent', { name: agent.name, permissions }).then(() => (bump(), true)), `Saved what ${agent.name} may do`);
+          const permissions = [...AGENT_KINDS.filter((k) => chosen.has(k)), ...others];
+          const done = await attempt(() => api('updateAgent', { name: agent.name, permissions }).then(() => (bump(), true)), t('agent.may.saved', { name: agent.name }));
           if (done) onClose();
         }}
       >
-        <p className="small">Everything {agent.name} writes is signed with its own key and shows as “you · {agent.name}”. It can only sign what you tick here.</p>
-        {AGENT_KINDS.map(({ kind, label }) => (
+        <p className="small">{t('agent.may.intro', { name: agent.name })}</p>
+        {AGENT_KINDS.map((kind) => (
           <div className="field-row" key={kind}>
             <input id={`perm-${kind}`} type="checkbox" checked={chosen.has(kind)} onChange={(e) => toggle(kind, e.target.checked)} />
             <label htmlFor={`perm-${kind}`} title={kind}>
-              {label}
+              {t(PERM_NAMES[kind])}
             </label>
           </div>
         ))}
         {others.length > 0 && (
           <p className="small">
-            It keeps these too: <code>{others.join(', ')}</code>
+            {t('agent.may.others')} <code>{others.join(', ')}</code>
           </p>
         )}
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
-          <button className="default">Save</button>
+          <button className="default">{t('button.save')}</button>
         </div>
       </form>
     </Modal>
   );
 }
-
-const KEYSTORE_NAME: Record<Status['keystore'], string> = {
-  dpapi: 'Windows (DPAPI)',
-  keychain: 'the macOS Keychain',
-  'secret-service': 'your desktop’s Secret Service',
-  file: 'nothing',
-  kms: 'your company’s key service',
-  tpm: 'this computer’s TPM chip',
-  'secure-enclave': 'this Mac’s Secure Enclave',
-  yubikey: 'your YubiKey',
-};
 
 type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boolean; why?: string; current: boolean };
 
@@ -371,46 +358,41 @@ type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boole
  * computers are off. It shows a request (weave-server pair); this answers it, and the answer goes back to it.
  */
 function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
+  const { t } = useTexts();
   const nodes = keys.filter((k) => k.name?.startsWith('node:'));
   const [request, setRequest] = useState('');
   const [answer, setAnswer] = useState<{ answer: string; name: string }>();
   return (
     <fieldset>
-      <legend>Always-on nodes</legend>
+      <legend>{t('nodes.legend')}</legend>
       {nodes.map((n) => (
         <div className="field-row" key={n.did}>
           <Icon name="community" />
           <span className="grow">
             <b>{n.name!.slice(5)}</b>{' '}
             <span className="small muted">
-              {n.revokedAfter !== undefined ? 'revoked' : n.lastTime ? `last heard ${ago(n.lastTime)}` : 'not heard from yet'} · {n.events} events
+              {n.revokedAfter !== undefined ? t('key.revoked') : n.lastTime ? t('node.last.heard', { time: n.lastTime }) : t('node.not.heard')} · {t('key.events', { n: n.events })}
             </span>
           </span>
           {n.revokedAfter === undefined && (
-            <AsyncButton
-              onClick={async () =>
-                (await ask(`Revoke the always-on node ${n.name!.slice(5)}? It stops hosting your rooms, and what it signs from now on counts nowhere.`, 'Revoke')) &&
-                attempt(() => api('revokeKey', { key: n.did }).then(bump), 'Revoked')
-              }
-            >
-              Revoke
+            <AsyncButton onClick={async () => (await ask(t('node.revoke.ask', { name: n.name!.slice(5) }), t('button.revoke'))) && attempt(() => api('revokeKey', { key: n.did }).then(bump), t('key.revoked.done'))}>
+              {t('button.revoke')}
             </AsyncButton>
           )}
         </div>
       ))}
       <p className="small">
-        A server, NAS or home cluster that keeps your spaces and hosts your rooms while your computers are off. It gets a key of its own that only hosts rooms (it can't post or change anything for
-        you), and your spaces' keys, but not your direct chats. On it, run <code>weave-server pair</code> and paste its request here.
+        <T name="nodes.about" />
       </p>
       {answer ? (
         <div className="field-row-stacked">
           <p className="small">
-            Linked <b>{answer.name}</b>. On the node, run <code>weave-server join</code> with this answer:
+            <T name="node.linked" values={{ name: <b>{answer.name}</b> }} />
           </p>
           <textarea className="wide" rows={3} readOnly value={answer.answer} onFocus={(e) => e.currentTarget.select()} />
           <div className="buttons">
-            <button onClick={() => void navigator.clipboard.writeText(answer.answer)}>Copy</button>
-            <button onClick={() => setAnswer(undefined)}>Done</button>
+            <button onClick={() => void navigator.clipboard.writeText(answer.answer)}>{t('button.copy')}</button>
+            <button onClick={() => setAnswer(undefined)}>{t('button.done')}</button>
           </div>
         </div>
       ) : (
@@ -426,7 +408,7 @@ function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
               }
             }}
           >
-            Link node
+            {t('node.link')}
           </AsyncButton>
         </div>
       )}
@@ -436,6 +418,8 @@ function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
 
 /** Where the key to your keys is kept, and moving it into hardware (stage 17). */
 function KeystoreChoice({ current }: { current: Status['keystore'] }) {
+  const { t } = useTexts();
+  const keystoreName = (k: Status['keystore']) => t(`keystore.${k}`);
   const { data: options } = useApi(() => api<KeystoreOption[]>('keystores'), []);
   const [to, setTo] = useState('');
   if (!options || current === 'kms') return null;
@@ -444,12 +428,12 @@ function KeystoreChoice({ current }: { current: Status['keystore'] }) {
   if (!others.length) return null;
   return (
     <div className="field-row">
-      <label htmlFor="keystore">Keep it in</label>
+      <label htmlFor="keystore">{t('keystore.keep.in')}</label>
       <select id="keystore" value={to} onChange={(e) => setTo(e.target.value)}>
-        <option value="">{KEYSTORE_NAME[current]} (now)</option>
+        <option value="">{t('keystore.now', { name: keystoreName(current) })}</option>
         {others.map((o) => (
           <option key={o.keystore} value={o.keystore}>
-            {KEYSTORE_NAME[o.keystore]}
+            {keystoreName(o.keystore)}
           </option>
         ))}
       </select>
@@ -457,53 +441,57 @@ function KeystoreChoice({ current }: { current: Status['keystore'] }) {
         <AsyncButton
           onClick={async () => {
             const hardware = to === 'tpm' || to === 'secure-enclave' || to === 'yubikey';
-            if (hardware && !(await ask(`Keep the key to your keys in ${KEYSTORE_NAME[to as Status['keystore']]}? Weave then opens only with it${to === 'yubikey' ? ' plugged in (touch it if it blinks)' : ''}. If it's lost or replaced, you set Weave up again from your recovery words, or your company does.`, 'Move it')))
-              return;
-            if (await attempt(() => api('moveHomeKey', { to }), `The key is now kept by ${KEYSTORE_NAME[to as Status['keystore']]}`)) {
+            if (hardware && !(await ask(t('keystore.move.ask', { name: keystoreName(to as Status['keystore']), yubikey: to === 'yubikey' ? t('keystore.move.yubikey') : '' }), t('keystore.move.it')))) return;
+            if (await attempt(() => api('moveHomeKey', { to }), t('keystore.moved', { name: keystoreName(to as Status['keystore']) }))) {
               setTo('');
               bump();
             }
           }}
         >
-          Move
+          {t('keystore.move')}
         </AsyncButton>
       )}
-      {missing.length > 0 && <span className="small muted"> Not here: {missing.map((o) => KEYSTORE_NAME[o.keystore]).join(', ')}.</span>}
+      {missing.length > 0 && <span className="small muted"> {t('keystore.not.here', { names: missing.map((o) => keystoreName(o.keystore)) })}</span>}
     </div>
   );
 }
 
 export function KeysView() {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
   const { data: keeping } = useApi(() => api<KeepersInfo>('keepers'), []);
   // A company account has no recovery words: its company holds them.
   const { data: signIn } = useApi(() => api<SignInStatus>('signInStatus'), []);
-  const company = signIn?.company ? (signIn.name ?? 'your company') : undefined;
+  const company = signIn?.company ? (signIn.name ?? t('company.yours')) : undefined;
   const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
-  if (!info || !keys) return <Page title="Keys & devices">{null}</Page>;
+  if (!info || !keys) return <Page title={t('nav.keys')}>{null}</Page>;
+  const keystoreWhy = status?.keystoreWarning ? /\((.*)\)$/.exec(status.keystoreWarning)?.[1] : undefined;
   return (
-    <Page title={<><Icon name="lock" /> Keys &amp; devices</>}>
+    <Page
+      title={
+        <>
+          <Icon name="lock" /> {t('nav.keys')}
+        </>
+      }
+    >
       {info.forks.length > 0 && (
         <div className="notice alarm">
-          <Icon name="lock" /> A key of yours was seen signing in two places at once: it may be stolen, or your Weave folder was copied to another computer. Revoke it from the time you
-          last trusted it.
+          <Icon name="lock" /> {t('keys.forked')}
         </div>
       )}
       <CompanyAccountBox />
       {status && (
         <fieldset>
-          <legend>On this computer</legend>
+          <legend>{t('keys.computer')}</legend>
           {status.keystoreWarning ? (
             <p className="notice alarm">
-              <Icon name="lock" /> Your keys are not protected by the operating system here: anyone who copies your Weave folder can use them. Weave found no keystore it can use
-              {/\((.*)\)$/.exec(status.keystoreWarning)?.[1] ? ` (${/\((.*)\)$/.exec(status.keystoreWarning)![1]})` : ' on this system'}.
+              <Icon name="lock" /> {t('keys.unprotected.long', { where: keystoreWhy ? ` (${keystoreWhy})` : t('keys.unprotected.system') })}
             </p>
           ) : (
             <p className="small">
-              Your keys are sealed, and the key to them is kept by {KEYSTORE_NAME[status.keystore]}: a copy of your Weave folder can't be opened on another computer or by another user.{' '}
-              {company ? `To use Weave on another computer, ask ${company} to set it up.` : 'To use Weave on another computer, set it up from your recovery words.'}
+              {t('keys.sealed', { name: t(`keystore.${status.keystore}`) })} {company ? t('keys.other.computer.company', { company }) : t('keys.other.computer.words')}
             </p>
           )}
           <KeystoreChoice current={status.keystore} />
@@ -511,47 +499,40 @@ export function KeysView() {
       )}
       {keeping && (
         <fieldset>
-          <legend>Keepers</legend>
-          <p className="small">
-            Friends keep a sealed copy of your own space, your direct chats and your small groups, so that you can get them back with your recovery words even if every device is
-            lost. They can't read it or tell what it is.
-          </p>
+          <legend>{t('keepers.legend')}</legend>
+          <p className="small">{t('keepers.about')}</p>
           {keeping.spaces.map((s) => (
             <div className="field-row" key={s.space.id}>
               <span className="grow">{s.space.name}</span>
-              <span className="small muted">{s.keepers.length ? `kept by ${s.keepers.map((k) => k.name ?? shortDid(k.did)).join(', ')}` : 'no keeper yet: you need friends (people you follow who follow you back)'}</span>
+              <span className="small muted">{s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none')}</span>
             </div>
           ))}
-          <p className="small muted">
-            You keep {(keeping.forOthers / 1048576).toFixed(1)} MB for friends (at most {Math.round(keeping.quota / 1048576)} MB).
-          </p>
+          <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
         </fieldset>
       )}
       <fieldset>
-        <legend>Your identity</legend>
+        <legend>{t('identity.legend')}</legend>
         <p className="small">
           <code>{info.did}</code>
         </p>
         {company ? (
           <p className="small">
-            {company} holds this identity's recovery words. For a new computer, run <code>weave recover-request</code> there and give the request to one of {company}'s admins.
+            <T name="identity.company.holds" values={{ company }} />
           </p>
         ) : info.recoverable ? (
-          <p className="small">
-            Protected by your recovery words. Your root key was rotated {info.rotations} time{info.rotations === 1 ? '' : 's'}; your words already cover the next one.
-          </p>
+          <p className="small">{t('identity.recoverable', { n: info.rotations })}</p>
         ) : (
-          <p className="small">This identity was made before recovery words existed: it can't rotate keys or add devices. Creating a new identity gives you both.</p>
+          <p className="small">{t('identity.old')}</p>
         )}
         {info.recoverable && !company && (
           <div className="buttons">
-            <button onClick={() => setDialog({ kind: 'rotate' })}>Rotate keys…</button>
+            <button onClick={() => setDialog({ kind: 'rotate' })}>{t('keys.rotate.button')}</button>
           </div>
         )}
       </fieldset>
       <WalletBox />
       <fieldset>
-        <legend>Devices and agents</legend>
+        <legend>{t('devices.legend')}</legend>
         <table className="keys-table">
           <tbody>
             {keys.map((k) => (
@@ -560,26 +541,26 @@ export function KeysView() {
                   <Icon name={k.role === 'device' ? 'user' : 'gear'} />
                 </td>
                 <td>
-                  <b>{k.name ?? shortDid(k.did)}</b> <span className="small">{k.role}</span>
-                  {k.current && <span className="tag friend">this device</span>}
-                  {k.forked && <span className="tag rejected">seen in two places</span>}
-                  {k.revokedAfter !== undefined && <span className="tag">revoked</span>}
+                  <b>{k.name ?? shortDid(k.did)}</b> <span className="small">{t(`key.role.${k.role}`)}</span>
+                  {k.current && <span className="tag friend">{t('key.this.device')}</span>}
+                  {k.forked && <span className="tag rejected">{t('key.forked')}</span>}
+                  {k.revokedAfter !== undefined && <span className="tag">{t('key.revoked')}</span>}
                   <div className="small muted">
-                    {k.events} event{k.events === 1 ? '' : 's'}
-                    {k.lastTime ? ` · last ${ago(k.lastTime)}` : ''}
+                    {t('key.events', { n: k.events })}
+                    {k.lastTime ? t('key.last', { time: k.lastTime }) : ''}
                   </div>
                 </td>
                 <td>
                   {k.revokedAfter === undefined &&
                     (k.role === 'agent' ? (
                       <>
-                        {k.name && k.permissions && <button onClick={() => setDialog({ kind: 'permissions', key: { ...k, name: k.name!, permissions: k.permissions! } })}>Permissions…</button>}{' '}
-                        <AsyncButton onClick={async () => (await ask(`Revoke the agent ${k.name}? It can't sign anything from now on.`, 'Revoke')) && attempt(() => api('revokeKey', { key: k.did }).then(bump), `${k.name} is revoked`)}>
-                          Revoke
+                        {k.name && k.permissions && <button onClick={() => setDialog({ kind: 'permissions', key: { ...k, name: k.name!, permissions: k.permissions! } })}>{t('agent.permissions')}</button>}{' '}
+                        <AsyncButton onClick={async () => (await ask(t('agent.revoke.ask', { name: k.name }), t('button.revoke'))) && attempt(() => api('revokeKey', { key: k.did }).then(bump), t('agent.revoked', { name: k.name }))}>
+                          {t('button.revoke')}
                         </AsyncButton>
                       </>
                     ) : company ? null : (
-                      <button onClick={() => setDialog({ kind: 'revoke', key: k })}>{k.current ? 'Replace…' : 'Revoke…'}</button>
+                      <button onClick={() => setDialog({ kind: 'revoke', key: k })}>{t(k.current ? 'key.replace' : 'key.revoke')}</button>
                     ))}
                 </td>
               </tr>
@@ -587,8 +568,7 @@ export function KeysView() {
           </tbody>
         </table>
         <p className="small">
-          Each computer signs with its own key.{' '}
-          {company ? `For another computer, ask ${company}; don't copy your Weave folder.` : 'To use Weave on another computer, choose “I already use Weave” there and type your words; don\'t copy your Weave folder.'}
+          {t('devices.each.signs')} {company ? t('devices.other.company', { company }) : t('devices.other.words')}
         </p>
       </fieldset>
       {/* Pairing more phones is for the computer itself; a phone may not. */}
@@ -601,26 +581,16 @@ export function KeysView() {
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (
         <WordsDialog
-          title={dialog.key.current ? 'Replace this device key' : 'Revoke device'}
-          intro={
-            dialog.key.current
-              ? 'This computer gets a fresh key; anything signed with the old one after the time you choose becomes void.'
-              : `Everything ${dialog.key.name ?? 'this device'} signed after the time you choose becomes void, on every node.`
-          }
+          title={t(dialog.key.current ? 'key.replace.title' : 'key.revoke.title')}
+          intro={dialog.key.current ? t('key.replace.intro') : t('key.revoke.intro', { name: dialog.key.name ?? t('key.this.device.lc') })}
           since
-          onSubmit={(input) => attempt(() => api('revokeKey', { key: dialog.key.did, ...input }).then(bump), 'Revoked')}
+          onSubmit={(input) => attempt(() => api('revokeKey', { key: dialog.key.did, ...input }).then(bump), t('key.revoked.done'))}
           onClose={() => setDialog(undefined)}
         />
       )}
       {dialog?.kind === 'permissions' && <AgentPermissionsDialog agent={dialog.key} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rotate' && (
-        <WordsDialog
-          title="Rotate keys"
-          intro="Your root key moves on to the next one your words hold; the old one stops counting. Do this if you think your root key leaked, or now and then."
-          encryption
-          onSubmit={(input) => attempt(() => api('rotateRoot', input).then(bump), 'Keys rotated')}
-          onClose={() => setDialog(undefined)}
-        />
+        <WordsDialog title={t('keys.rotate')} intro={t('keys.rotate.intro')} encryption onSubmit={(input) => attempt(() => api('rotateRoot', input).then(bump), t('keys.rotated'))} onClose={() => setDialog(undefined)} />
       )}
     </Page>
   );

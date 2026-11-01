@@ -48,6 +48,8 @@ export interface CheckResult {
 }
 
 const isName = (s: string) => TEXT_NAME.test(s) && s.includes('.');
+/** A link's form, shown as a placeholder (weave:enroll:…, https://): not a text. */
+const isLinkForm = (s: string) => /^[a-z][a-z0-9-]*:[^\s]*$/.test(s);
 
 const parseSource = (file: string, source: string) =>
   parse(source, { sourceType: 'module', sourceFilename: file, plugins: ['typescript', 'jsx'], errorRecovery: true, attachComment: false });
@@ -77,7 +79,7 @@ export function findHardcoded(file: string, source: string): Finding[] {
   const literalsIn = (node: b.Node | null | undefined): void => {
     if (!node) return;
     if (b.isStringLiteral(node)) {
-      if (LETTERS.test(node.value) && !isName(node.value) && !NOT_TEXT.has(node.value)) add(node, node.value);
+      if (LETTERS.test(node.value) && !isName(node.value) && !NOT_TEXT.has(node.value) && !isLinkForm(node.value)) add(node, node.value);
     } else if (b.isTemplateLiteral(node)) {
       const text = node.quasis.map((q) => q.value.cooked ?? q.value.raw).join(' ');
       if (node.expressions.length === 0) {

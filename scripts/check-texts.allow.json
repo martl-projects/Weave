@@ -14,7 +14,6 @@
   "apps/desktop/src/renderer/catalog.tsx",
   "apps/desktop/src/renderer/editor.tsx",
   "apps/desktop/src/renderer/hubprojects.tsx",
-  "apps/desktop/src/renderer/keys.tsx",
   "apps/desktop/src/renderer/keyvaults.tsx",
   "apps/desktop/src/renderer/lens.tsx",
   "apps/desktop/src/renderer/lists.tsx",
