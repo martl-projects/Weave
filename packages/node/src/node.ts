@@ -513,7 +513,7 @@ import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
 import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
-import { entryState, harnessesIn, writeEntry, type McpLaunch } from './harnesses.ts';
+import { entryHome, entryState, harnessesIn, staleEntry, writeEntry, type McpLaunch } from './harnesses.ts';
 import { guessPlatform, platformKey } from './appinstall.ts';
 import { publicReleases, type Fetch } from './github.ts';
 import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
@@ -1499,8 +1499,37 @@ export class WeaveNode implements Backend {
       offered: this.config.agentsOffered === true,
       harnesses: this.#harnessList()
         .filter((h) => h.found)
-        .map((h) => ({ id: h.id, name: h.name, agent: h.agent, file: h.file, state: entryState(h, launch), restart: h.restart })),
+        .map((h) => ({ id: h.id, name: h.name, agent: h.agent, file: h.file, state: entryState(h, launch), restart: h.restart, ...(this.#repaired.has(h.id) ? { repaired: true } : {}) })),
     };
+  }
+
+  /** Harnesses whose entry this daemon pointed back at itself, until the person has seen it. */
+  #repaired = new Set<string>();
+
+  /**
+   * At the daemon's start: Weave's entries that point to a Weave no longer there (an uninstalled app, a moved checkout)
+   * start this one instead, for the same home and an agent it has. An entry for another Weave that's still there stays:
+   * the person switches in Keys & devices, or every start would flip it.
+   */
+  repairHarnesses(): string[] {
+    if (process.env.APPIMAGE) return [];
+    const launch = this.mcpLaunch();
+    const home = (dir: string | undefined) => resolvePath(dir ?? resolveHome().dir);
+    const own = launch.args.indexOf('--home');
+    const ownHome = home(own >= 0 ? launch.args[own + 1] : undefined);
+    const fixed: string[] = [];
+    for (const h of this.#harnessList().filter((x) => x.found)) {
+      if (entryState(h, launch) !== 'other' || !staleEntry(h)) continue;
+      if (home(entryHome(h)) !== ownHome || !this.#agents.some((a) => a.name === h.agent)) continue;
+      try {
+        writeEntry(h, launch);
+      } catch {
+        continue; // a file Weave can't read stays as it is
+      }
+      this.#repaired.add(h.id);
+      fixed.push(h.name);
+    }
+    return fixed;
   }
 
   async connectHarness(input: { harness: string; on: boolean }): Promise<{ offered: boolean; harnesses: HarnessInfo[] }> {
@@ -1515,6 +1544,7 @@ export class WeaveNode implements Backend {
   }
 
   async dismissHarnesses(): Promise<void> {
+    this.#repaired.clear();
     if (this.config.agentsOffered) return;
     this.config = { ...this.config, agentsOffered: true };
     saveConfig(this.home, this.config);

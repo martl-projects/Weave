@@ -21,6 +21,28 @@ export function AgentsOffer() {
   const [done, setDone] = useState<HarnessInfo[]>();
   const [closed, setClosed] = useState(false);
   const open = data?.harnesses.filter((h) => h.state !== 'ours') ?? [];
+  const repaired = data?.harnesses.filter((h) => h.repaired) ?? [];
+  const seen = () => {
+    void api('dismissHarnesses');
+    setClosed(true);
+  };
+  if (!closed && repaired.length && !done)
+    return (
+      <Modal title="Your agents find Weave again" onClose={seen}>
+        <ul>
+          {repaired.map((h) => (
+            <li key={h.id}>
+              <b>{h.name}</b> started a Weave that's no longer on this computer; it starts this one now. {h.restart}
+            </li>
+          ))}
+        </ul>
+        <div className="buttons">
+          <button className="default" onClick={seen}>
+            OK
+          </button>
+        </div>
+      </Modal>
+    );
   if (closed || !data || (data.offered && !done) || (!open.length && !done)) return null;
   const picked = chosen ?? open.map((h) => h.id);
 

@@ -44,6 +44,13 @@ export async function startDaemon(
     console.error(`weave: post links are off: ${error.code === 'EADDRINUSE' ? 'another Weave serves them on this computer' : error.message}`);
     return undefined;
   });
+  // Agent apps whose Weave entry points to a Weave no longer there (uninstalled, moved) start this one instead.
+  try {
+    const repaired = node.repairHarnesses();
+    if (repaired.length) console.error(`weave: ${repaired.join(', ')} pointed to a Weave that's gone; they start this one now (restart them)`);
+  } catch (error) {
+    console.error(`weave: could not check the agent apps' entries: ${(error as Error).message}`);
+  }
   // Claude Code sessions, for the Mentions panel, if the person turned that on.
   node.startFollowing();
   const online = node.goOnline().catch((error: Error) => console.error(`weave: could not go online: ${error.message}`));

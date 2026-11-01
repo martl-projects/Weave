@@ -83,6 +83,53 @@ describe('telling agent harnesses about Weave', () => {
     await expect(martl.connectHarness({ harness: 'claude-desktop', on: true })).rejects.toThrow(/isn't installed/);
   });
 
+  it('at the start, points an entry to a Weave that is gone back at this one, and leaves one that still runs', async () => {
+    const home = userFolder();
+    const gone = join(home, 'Uninstalled', 'Weave');
+    const claudeFile = join(home, '.claude.json');
+    const codexFile = join(home, '.codex', 'config.toml');
+    // Claude Code: the app it started was uninstalled. Codex: the same, written as TOML.
+    writeFileSync(claudeFile, JSON.stringify({ mcpServers: { other: { type: 'stdio', command: 'other' }, weave: { type: 'stdio', command: join(gone, 'Weave.exe'), args: [join(gone, 'weave.mjs'), 'mcp', '--as', 'claude'] } } }, null, 2));
+    writeFileSync(codexFile, `model = "gpt-5"\n\n[mcp_servers.weave]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(gone, 'main.ts'))}, "mcp", "--as", "codex"]\n`);
+    // Cursor: another Weave that's still there (this test's own program and file).
+    const cursorFile = join(home, '.cursor', 'mcp.json');
+    const elsewhere = { command: process.execPath, args: [import.meta.filename, 'mcp', '--as', 'cursor'] };
+    writeFileSync(cursorFile, JSON.stringify({ mcpServers: { weave: elsewhere } }));
+    const martl = node(home);
+    for (const agent of ['claude', 'codex', 'cursor']) await martl.addAgent(agent, ['weave.post']);
+
+    expect(martl.repairHarnesses()).toEqual(['Claude Code', 'Codex']);
+    const claude = JSON.parse(readFileSync(claudeFile, 'utf8')).mcpServers;
+    expect(claude.weave.args).toEqual(['C:\\Program Files\\Weave\\resources\\daemon\\weave.mjs', 'mcp', '--as', 'claude']);
+    expect(claude.other).toEqual({ type: 'stdio', command: 'other' });
+    expect(existsSync(`${claudeFile}.weave-backup`)).toBe(true);
+    expect(readFileSync(codexFile, 'utf8')).toContain('"--as", "codex"');
+    expect(readFileSync(codexFile, 'utf8')).not.toContain('Uninstalled');
+    expect(JSON.parse(readFileSync(cursorFile, 'utf8')).mcpServers.weave).toEqual(elsewhere);
+    // The app says so once.
+    const list = (await martl.harnesses()).harnesses;
+    expect(list.filter((h) => h.repaired).map((h) => h.id)).toEqual(['claude-code', 'codex']);
+    await martl.dismissHarnesses();
+    expect((await martl.harnesses()).harnesses.some((h) => h.repaired)).toBe(false);
+    // Nothing more to do on the next start.
+    expect(martl.repairHarnesses()).toEqual([]);
+  });
+
+  it('leaves a gone entry for another home, or for an agent this Weave lacks', async () => {
+    const home = userFolder();
+    const gone = join(home, 'Moved', 'weave');
+    const claudeFile = join(home, '.claude.json');
+    const entry = { type: 'stdio', command: process.execPath, args: [join(gone, 'main.ts'), '--home', join(home, 'other-home'), 'mcp', '--as', 'claude'] };
+    writeFileSync(claudeFile, JSON.stringify({ mcpServers: { weave: entry } }));
+    const codexFile = join(home, '.codex', 'config.toml');
+    writeFileSync(codexFile, `[mcp_servers.weave]\ncommand = ${JSON.stringify(join(gone, 'node.exe'))}\nargs = ["main.ts", "mcp", "--as", "codex"]\n`);
+    const martl = node(home);
+    await martl.addAgent('claude', ['weave.post']);
+    expect(martl.repairHarnesses()).toEqual([]);
+    expect(JSON.parse(readFileSync(claudeFile, 'utf8')).mcpServers.weave).toEqual(entry);
+    expect(readFileSync(codexFile, 'utf8')).toContain('Moved');
+  });
+
   it('asks once: "not now" is remembered', async () => {
     const martl = node(userFolder());
     await martl.dismissHarnesses();

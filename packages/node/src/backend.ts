@@ -67,6 +67,8 @@ export interface HarnessInfo {
   state: 'none' | 'ours' | 'other';
   /** What to do so it notices a change. */
   restart: string;
+  /** Its entry pointed to a Weave no longer there; this one put itself in (until dismissed). */
+  repaired?: boolean;
 }
 
 export interface AgentInfo {

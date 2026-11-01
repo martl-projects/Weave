@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 /*
  * Agent harnesses on this computer (Claude Code, Claude Desktop, Codex,
@@ -64,6 +64,43 @@ export function entryState(h: Harness, launch: McpLaunch): 'none' | 'ours' | 'ot
   }
   if (!entry) return 'none';
   return entry.command === want.command && JSON.stringify(entry.args) === JSON.stringify(want.args) ? 'ours' : 'other';
+}
+
+/** Weave's entry in a harness's config as written (its program and arguments), whoever wrote it. */
+function readEntry(h: Harness): { command?: string; args?: string[] } | undefined {
+  if (!existsSync(h.file)) return undefined;
+  const text = readFileSync(h.file, 'utf8');
+  try {
+    if (h.format === 'toml') {
+      const section = tomlSection(text, 'mcp_servers.weave');
+      const value = (key: string) => section?.split('\n').find((l) => l.trim().startsWith(`${key} =`))?.split('=').slice(1).join('=').trim();
+      const command = value('command');
+      const args = value('args');
+      return section ? { ...(command ? { command: JSON.parse(command) as string } : {}), ...(args ? { args: JSON.parse(args) as string[] } : {}) } : undefined;
+    }
+    return (JSON.parse(text) as { mcpServers?: Record<string, { command?: string; args?: string[] }> }).mcpServers?.weave;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A Weave entry that can only fail: it starts `weave mcp`, but its program or script is gone (the app was
+ * uninstalled, the checkout moved). Commands found on the PATH ("node") count as there.
+ */
+export function staleEntry(h: Harness): boolean {
+  const entry = readEntry(h);
+  const args = entry?.args ?? [];
+  if (!entry?.command || !args.includes('mcp') || !args.includes('--as')) return false;
+  const gone = (p: string | undefined) => !!p && isAbsolute(p) && !existsSync(p);
+  return gone(entry.command) || gone(args[0] === 'mcp' ? undefined : args[0]);
+}
+
+/** The home an entry starts Weave with (--home), if it names one. */
+export function entryHome(h: Harness): string | undefined {
+  const args = readEntry(h)?.args ?? [];
+  const at = args.indexOf('--home');
+  return at >= 0 ? args[at + 1] : undefined;
 }
 
 /** Add (or replace) Weave's entry, or remove it; the file is backed up first. */

@@ -16,6 +16,8 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    # Its tests fetch the services Weave ships from their repositories (WEAVE_SERVICES_TOKEN).
+    secrets: inherit
 
   # The release as a draft, with its notes: what the build jobs attach their files to.
   draft:
