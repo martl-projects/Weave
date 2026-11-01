@@ -403,18 +403,20 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .avatar { position: relative; display: inline-block; flex: none; line-height: 0; }
 .avatar .sprite { border: 1px solid #808080; }
 /* Weave avatars: someone's head, their avatar in a scene, and making yours. */
-.avatar .figure-head { display: block; width: 100%; height: 100%; box-sizing: border-box; border: 1px solid #808080; background: radial-gradient(circle at 50% 40%, #ffffff, #c8d4e0); }
+.avatar .figure-head { display: block; width: 100%; height: 100%; object-fit: contain; }
 .scene-image { display: inline-block; line-height: 0; }
 .scene-image img { width: 100%; height: 100%; object-fit: contain; }
-.thumb .scene-image { width: 100%; height: 100%; background: radial-gradient(circle at 50% 45%, #ffffff, #d8e0ea); }
-.post-scene { flex: none; width: 160px; height: 160px; align-self: flex-start; background: radial-gradient(circle at 50% 45%, #ffffff, #d8e0ea); border: 1px solid #c0c0c0; }
+.thumb .scene-image { width: 100%; height: 100%; }
+.thumb.has-image .scene-image img { object-fit: contain; }
+.thumb:has(.scene-image) { background: transparent; box-shadow: none; border: 0; }
+.post-scene { flex: none; width: 160px; height: 160px; align-self: flex-start; }
 .scene-picker { display: flex; flex-wrap: wrap; gap: 4px; }
-.scene-picker button { display: flex; flex-direction: column; align-items: center; width: 76px; min-width: 0; height: 88px; padding: 2px; }
+.field-row-stacked .scene-picker button { display: flex; flex-direction: column; align-items: center; width: 76px; min-width: 0; height: 88px; padding: 2px; }
 .scene-picker .scene-image { width: 64px; height: 64px; }
 .scene-picker button span { font-size: 10px; line-height: 1.1; text-align: center; }
 .scene-picker button.sel, .avatar-grid button.sel, .avatar-colors button.sel { outline: 2px solid #000080; outline-offset: -2px; }
 .avatar-editor { display: flex; gap: 8px; min-height: 420px; }
-.avatar-stage { position: relative; flex: 0 0 260px; height: 420px; background: radial-gradient(ellipse at 50% 85%, #c8d4e0, #ffffff 70%); border: 1px solid #808080; touch-action: pan-y; }
+.avatar-stage { position: relative; flex: 0 0 260px; height: 420px; touch-action: pan-y; }
 .avatar-canvas { position: absolute; inset: 0; }
 .avatar-canvas canvas { display: block; width: 100%; height: 100%; }
 .avatar-dice { position: absolute; right: 6px; top: 6px; min-width: 0; padding: 2px 6px; font-size: 16px; z-index: 1; }
@@ -422,8 +424,9 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .avatar-panel { flex: 1; max-height: 390px; overflow: auto; padding: 6px; }
 .avatar-panel h4 { margin: 8px 0 4px; }
 .avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; }
-.avatar-grid button { aspect-ratio: 1; min-width: 0; padding: 0; overflow: hidden; background: radial-gradient(circle at 50% 40%, #ffffff, #d8e0ea); font-size: 11px; }
-.avatar-grid button img { width: 100%; height: 100%; display: block; }
+/* The skins pad their buttons: these are pictures, square and edge to edge. */
+.avatar-editor .avatar-grid button { aspect-ratio: 1; min-width: 0; min-height: 0; height: auto; padding: 0; overflow: hidden; font-size: 11px; }
+.avatar-editor .avatar-grid button img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .avatar-colors { display: flex; flex-wrap: wrap; gap: 4px; }
 .avatar-colors button { width: 24px; height: 24px; min-width: 0; padding: 0; border: 1px solid #404040; box-shadow: none; }
 .avatar-adjust { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 4px; font-size: 11px; }
