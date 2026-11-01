@@ -1,6 +1,6 @@
 {
   "name": "@weave/texts",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Weave's UI texts by name, a package per language (docs/localization.md)",
   "license": "MIT",
   "private": true,

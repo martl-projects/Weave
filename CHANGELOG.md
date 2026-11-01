@@ -2,6 +2,12 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.27.0 · 2026-11-01
+
+- Trust starts before the first packet: a node is found at a meeting point only its links carry (never at its DID), turns away peers that share nothing with it and hold none of its links, and adding a contact tells only the two of them instead of following publicly; the app connects newcomers to no one
+- A node announces every key it holds of a space, so a member who missed more than one rotation still gets the rekeys
+- A post's picture sits beside its title only; the text below runs the post's whole width
+
 ## v0.26.0 · 2026-11-01
 
 - A post's group picture beside its title is as big as a scene alone, not the post's whole width (it squeezed the text)
