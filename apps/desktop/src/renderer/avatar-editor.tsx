@@ -18,13 +18,14 @@ interface Section {
   names?: string[];
 }
 
-const TABS: Array<{ label: string; sections: Section[] }> = [
-  { label: 'Head', sections: [{ part: 'face', title: 'Shape', color: 'skin', colorTitle: 'Skin' }, { part: 'blush', title: 'Cheeks', names: ['plain', 'rosy'] }] },
-  { label: 'Hair', sections: [{ part: 'hair', title: 'Hair', color: 'hairColor', colorTitle: 'Color' }] },
-  { label: 'Eyes', sections: [{ part: 'eyes', title: 'Eyes', color: 'eyeColor', colorTitle: 'Color', kind: 'flat', adjust: 'eye' }, { part: 'brows', title: 'Brows', kind: 'flat', adjust: 'brow' }] },
-  { label: 'Mouth', sections: [{ part: 'nose', title: 'Nose', adjust: 'nose' }, { part: 'mouth', title: 'Mouth', kind: 'flat', adjust: 'mouth' }, { part: 'beard', title: 'Beard' }] },
-  { label: 'Extras', sections: [{ part: 'glasses', title: 'Glasses' }, { part: 'hat', title: 'Hat', color: 'propColor', colorTitle: 'Color' }] },
-  { label: 'Outfit', sections: [{ part: 'shirt', title: 'Top', color: 'shirtColor', colorTitle: 'Color', kind: 'bust' }] },
+// zoom: how close the 3D figure comes for a tab (1: the face, 0: all of it); the wheel zooms too.
+const TABS: Array<{ label: string; zoom: number; sections: Section[] }> = [
+  { label: 'Head', zoom: 0.85, sections: [{ part: 'face', title: 'Shape', color: 'skin', colorTitle: 'Skin' }, { part: 'blush', title: 'Cheeks', names: ['plain', 'rosy'] }] },
+  { label: 'Hair', zoom: 0.6, sections: [{ part: 'hair', title: 'Hair', color: 'hairColor', colorTitle: 'Color' }] },
+  { label: 'Eyes', zoom: 1, sections: [{ part: 'eyes', title: 'Eyes', color: 'eyeColor', colorTitle: 'Color', kind: 'flat', adjust: 'eye' }, { part: 'brows', title: 'Brows', kind: 'flat', adjust: 'brow' }] },
+  { label: 'Mouth', zoom: 1, sections: [{ part: 'nose', title: 'Nose', adjust: 'nose' }, { part: 'mouth', title: 'Mouth', kind: 'flat', adjust: 'mouth' }, { part: 'beard', title: 'Beard' }] },
+  { label: 'Extras', zoom: 0.6, sections: [{ part: 'glasses', title: 'Glasses' }, { part: 'hat', title: 'Hat', color: 'propColor', colorTitle: 'Color' }] },
+  { label: 'Outfit', zoom: 0, sections: [{ part: 'shirt', title: 'Top', color: 'shirtColor', colorTitle: 'Color', kind: 'bust' }] },
 ];
 
 // Fine adjustments: one word and two buttons each, for those a part has.
@@ -89,6 +90,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
   };
   useEffect(() => {
     if (figure) viewer.current?.set(figure);
+    viewer.current?.zoom(TABS[tab].zoom);
   }, [lib, !!figure]);
   const save = async (avatar: Figure | null) => {
     const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as your sprite again');
@@ -121,6 +123,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                     onClick={(e) => {
                       e.preventDefault();
                       setTab(i);
+                      viewer.current?.zoom(t.zoom);
                     }}
                   >
                     {t.label}

@@ -20,7 +20,7 @@ export interface AvatarLib {
   };
   snapshot(a: Figure, kind?: 'head' | 'face' | 'bust'): Promise<string>;
   sceneSnapshot(a: Figure, scene: string, size?: number, frame?: 'full' | 'close'): Promise<string>;
-  mountViewer(el: HTMLElement): { set(a: Figure, bounce?: boolean): void; dispose(): void };
+  mountViewer(el: HTMLElement): { set(a: Figure, bounce?: boolean): void; zoom(k: number): void; dispose(): void };
   loadFaceSprites(): Promise<void>;
   thumb(part: string, a: Figure, size?: number): string;
   partNames(part: string): string[];
@@ -67,13 +67,13 @@ function want(did: string): void {
 // Someone changed theirs: ask again.
 onItem((item) => {
   if (item.kind !== 'weave.avatar' || !figures.has(item.author)) return;
-  figures.delete(item.author);
-  changed();
+  forgetFigure(item.author);
 });
 
 /** Forget what we know of someone's figure (after you changed yours). */
 export function forgetFigure(did: string): void {
   figures.delete(did);
+  want(did);
   changed();
 }
 
