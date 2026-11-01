@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { b64u } from '@weave/core';
+import { b64u, errorToWire } from '@weave/core';
 import { createConnection } from 'node:net';
 import { readLine, roomKeyPair, splice, type DhtServer, type DhtSocket } from '@weave/net';
 import type { HyperDHT } from 'hyperswarm';
@@ -23,7 +23,7 @@ import { readSecretJson, writeSecretJson } from './vault.ts';
  *
  * Then one JSON message per line:
  *   phone → node   {id, method, args}       a call, as the desktop app makes them
- *   node → phone   {id, result} | {id, error}
+ *   node → phone   {id, result} | {id, error, name?, values?}   a named error's name and values too (docs/localization.md)
  *   node → phone   {event}                  a new event, like the desktop's live updates
  * Calls a phone may not make (keys, agents, starting programs, pairing more
  * phones) are refused. The node signs what the phone posts, with its own key.
@@ -298,7 +298,7 @@ export class RemoteAccess {
       const args = (Array.isArray(message.args) ? message.args : []).map((a) => (a === null ? undefined : a));
       this.#host.call(method, args).then(
         (result) => send(socket, { id, result: result ?? null }),
-        (error: Error) => send(socket, { id, error: error.message }),
+        (error: Error) => send(socket, { id, ...errorToWire(error) }),
       );
     });
   }

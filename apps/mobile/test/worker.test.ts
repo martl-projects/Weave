@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
-import { SERVICE_LABEL } from '@weave/core';
+import { errorFromWire, SERVICE_LABEL, WeaveError, type ErrorAnswer } from '@weave/core';
 import { loadConfig, resolveHome, saveConfig, WeaveNode, type PostInfo, type WebsiteInfo } from '@weave/node';
 import { buildComponent } from '../../../packages/node/test/helpers/components.ts';
 import { registry } from '../../../packages/node/test/helpers/registry.ts';
@@ -60,7 +60,8 @@ async function worker(dir: string) {
     ask: <T = unknown>(op: string, fields: Record<string, unknown> = {}) =>
       new Promise<T>((resolve, reject) => {
         const id = next++;
-        waiting.set(id, (m) => (typeof m.error === 'string' ? reject(new Error(m.error)) : resolve(m.result as T)));
+        // As the phone's bridge does: a named error is a WeaveError again.
+        waiting.set(id, (m) => (typeof m.error === 'string' ? reject(errorFromWire(m as Partial<ErrorAnswer>, m.error)) : resolve(m.result as T)));
         write({ id, op, ...fields });
       }),
     stop: () => {
@@ -132,6 +133,10 @@ describe('the phone app worker on Bare', () => {
     expect(post.title).toBe('From the phone app');
     await until(() => phone.said.find((m) => 'event' in m));
     await expect(phone.ask('call', { method: 'pairPhone', args: [] })).rejects.toThrow(/a phone can't do pairPhone/);
+    // The node's named errors reach the screen with their name and values (docs/localization.md), so it shows them in the phone's language.
+    const missing = await phone.ask('call', { method: 'post', args: ['zzzzzz'] }).catch((e: unknown) => e);
+    expect(missing).toBeInstanceOf(WeaveError);
+    expect(missing).toMatchObject({ message: 'no post found with id zzzzzz', text: { name: 'daemon.post.not.found', values: { id: 'zzzzzz' } } });
 
     // The app is closed and opened again: paired still, no new code.
     phone.stop();

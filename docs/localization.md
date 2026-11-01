@@ -183,7 +183,9 @@ Named so far, under `daemon.*`: what screens show on purpose. Joining and invite
 
 **The check** walks `packages/node/src` too: a `new WeaveError('x', …)` name must be in the English package (an error otherwise, like a `t()` name), a notice's `name:` literal counts as used, and `x.text` counts as used when `x` is. The node's English sentences are no hard-coded text to it. `packages/node/test/errors.test.ts` sends a named error over the API and back.
 
-**Not yet**: the phone's worker (`apps/mobile/worklet/phone.ts`) passes the node's errors on as `{ id, error }` without the name, so the phone shows the English message until it carries `name` and `values` the same way; the daemon's problem, reason and note fields are still strings.
+**The phone** gets the same: the node answers a paired phone's call with `{ id, error, name, values }` (`remote.ts`), the phone's session rebuilds the `WeaveError` (`remote-client.ts`), the worker (`apps/mobile/worklet/phone.ts`) answers the screen with the same fields, and the phone's bridge (`apps/mobile/src/bridge.ts`) throws a `WeaveError` again, so `errorText` resolves it in the phone's language, which may differ from its computer's. `packages/node/test/remote.test.ts` and the worker's test check the hops.
+
+**Not yet**: the daemon's problem, reason and note fields are still strings.
 
 ## Decided (1.11.2026)
 
