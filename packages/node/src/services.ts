@@ -1,4 +1,4 @@
-import { releaseTextsOf, type TextPackage } from '@weave/core';
+import { releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
@@ -113,7 +113,7 @@ export class Services {
 
   storedService(name: string): StoredService {
     const found = this.storedServices().find((s) => s.name === name);
-    if (!found) throw new Error(`this node runs no service "${name}"`);
+    if (!found) throw new WeaveError('daemon.service.none', { name }, `this node runs no service "${name}"`);
     return found;
   }
 
@@ -131,7 +131,7 @@ export class Services {
   serviceSpaces(refs: string[]): string[] {
     return [...new Set(refs.map((ref) => {
       const space = this.h.space(ref);
-      if (space.kind === 'direct') throw new Error('services work in groups, projects and communities, not in direct chats');
+      if (space.kind === 'direct') throw new WeaveError('daemon.service.direct', undefined, 'services work in groups, projects and communities, not in direct chats');
       return space.id;
     }))];
   }
@@ -226,7 +226,10 @@ export class Services {
     const all = artifactsOf(this.h.entries(project), this.h.state(project).maintainers).filter((a) => a.kind !== 'file');
     // By its id, or its tag.
     const artifact = tag ? (all.find((a) => a.id === tag) ?? all.find((a) => a.tag === tag)) : all[0];
-    if (!artifact) throw new Error(tag ? `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}` : `${project.name} has released nothing to run yet (weave app release)`);
+    if (!artifact)
+      throw tag
+        ? new WeaveError('daemon.release.none', { project: project.name, tag }, `${project.name} has no release ${tag}${all.length ? ` (its releases: ${all.slice(0, 5).map((a) => a.tag).join(', ')})` : ''}`)
+        : new WeaveError('daemon.release.nothing', { project: project.name }, `${project.name} has released nothing to run yet (weave app release)`);
     return { project, artifact };
   }
 
@@ -360,7 +363,7 @@ export class Services {
     if (builtin === 'github') throw new Error(GITHUB_SERVICE_GONE);
     // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
-    if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
+    if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.service.settings.maintainers.only', { space: this.h.spaceName(keptIn) }, `only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
     if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
     // Except what it asks for as yours: that stays with you, for every project it's in.
     const yours = (name: string) => (asks ?? []).some((e) => e.name === name && e.yours);
@@ -369,22 +372,22 @@ export class Services {
     const missing = (asks ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !given[e.name]);
     if (missing.length) throw new Error(`${manifest!.name} needs ${missing.map((e) => e.label).join(', ')} (--setting ${missing[0].name}=…)`);
     let name = serviceName(input.name ?? builtin ?? shipped?.name ?? manifest?.app);
-    if (!name) throw new Error('a service name is lowercase letters, digits and dashes (up to 40)');
+    if (!name) throw new WeaveError('daemon.service.name.form', undefined, 'a service name is lowercase letters, digits and dashes (up to 40)');
     // A release's name, unnamed: numbered when one of yours goes by it already.
     if (found && !input.name) {
       const taken = new Set([...this.h.agents.map((a) => a.name), ...this.storedServices().map((s) => s.name), ...shippedHere(this.h).keys()]);
       for (let n = 2, base = name; taken.has(name); n++) name = `${base}-${n}`;
     }
     // The names of what Weave ships are its own: nothing else goes by them, so nothing passes for them.
-    if (this.reservedName(name) && shipped?.name !== name) throw new Error(`"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
-    if (this.h.agents.some((a) => a.name === name) || this.storedServices().some((s) => s.name === name)) throw new Error(`you already have an agent or service named "${name}"`);
+    if (this.reservedName(name) && shipped?.name !== name) throw new WeaveError('daemon.service.name.reserved', { name }, `"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
+    if (this.h.agents.some((a) => a.name === name) || this.storedServices().some((s) => s.name === name)) throw new WeaveError('daemon.service.name.taken', { name }, `you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
     const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
     if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
     const description = input.description?.trim().slice(0, 1000) ?? (builtin ? (BUILTIN[builtin]?.description ?? '') : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
     if (input.node) {
-      if (this.handedOver().has(name)) throw new Error(`you already have a service named "${name}"`);
+      if (this.handedOver().has(name)) throw new WeaveError('daemon.service.name.taken', { name }, `you already have a service named "${name}"`);
       return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
     }
     const stored: StoredService = {
@@ -438,7 +441,7 @@ export class Services {
   nodeKey(ref: string): { did: Did; name: string } {
     const nodes = this.h.replica.authority.grantsOf(this.h.identity.author).filter((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
     const found = nodes.find((g) => g.subject === ref || g.name === ref || g.name === `${NODE_PREFIX}${ref}`);
-    if (!found) throw new Error(`you have no always-on node "${ref}"${nodes.length ? ` (yours: ${nodes.map((g) => g.name!.slice(NODE_PREFIX.length)).join(', ')})` : ''}`);
+    if (!found) throw new WeaveError('daemon.node.none', { name: ref }, `you have no always-on node "${ref}"${nodes.length ? ` (yours: ${nodes.map((g) => g.name!.slice(NODE_PREFIX.length)).join(', ')})` : ''}`);
     return { did: found.subject, name: found.name!.slice(NODE_PREFIX.length) };
   }
 
@@ -877,19 +880,21 @@ export class Services {
     const [person, name] = ref.includes('/') ? ref.split('/', 2) : [undefined, ref];
     const matches = profiles.filter((p) => p.name === name && (!person || p.person.name === person || p.person.did === person));
     if (matches.length === 1) return matches[0].did;
-    throw new Error(matches.length ? `several services are named "${ref}": say whose (person/name)` : `no service "${ref}" is known here`);
+    throw matches.length
+      ? new WeaveError('daemon.service.ambiguous', { name: ref }, `several services are named "${ref}": say whose (person/name)`)
+      : new WeaveError('daemon.service.unknown', { name: ref }, `no service "${ref}" is known here`);
   }
 
   async askService(input: { space: string; service: string; text: string; data?: Json; action?: string; as?: string; within?: number }): Promise<ServiceRequestInfo> {
     const to = await this.serviceDid(input.service);
     const profile = (await this.serviceProfiles()).find((p) => p.did === to);
-    if (profile && !takesRequests(profile.contract)) throw new Error(`${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
+    if (profile && !takesRequests(profile.contract)) throw new WeaveError('daemon.service.no.requests', { service: profile.name }, `${profile.name} takes no requests: it ${contractWords(profile.contract)}`);
     if (input.action && profile) {
       const why = this.refusal(profile.contract, to, this.h.space(input.space), this.h.identity.author, input.action);
       if (why) throw new Error(`${profile.name}: ${why}`);
     }
     const text = input.text?.trim() ?? '';
-    if (!text && input.data === undefined) throw new Error('ask with some text or data');
+    if (!text && input.data === undefined) throw new WeaveError('daemon.service.ask.empty', undefined, 'ask with some text or data');
     // What's asked is for the service (and me) alone: the others see that it was asked, of whom, not what.
     const asked: Json = { ...(text ? { text } : {}), ...(input.data !== undefined ? { data: input.data } : {}), ...(input.action ? { action: input.action } : {}) };
     const sealed = [boxTo(to, asked), boxTo(this.h.encryptionKeyOf(this.h.identity.author), asked)] as unknown as Json[];
@@ -1050,12 +1055,12 @@ export class Services {
     const project = this.h.project(input.project);
     const from = this.h.project(input.artifact.project);
     const a = artifactsOf(this.h.entries(from), this.h.state(from).maintainers).find((x) => x.id === input.artifact.id);
-    if (!a) throw new Error(`${this.h.spaceName(from)} has no such artifact`);
-    if (a.kind !== 'website') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}, not a website to launch`);
+    if (!a) throw new WeaveError('daemon.artifact.none', { space: this.h.spaceName(from) }, `${this.h.spaceName(from)} has no such artifact`);
+    if (a.kind !== 'website') throw new WeaveError('daemon.artifact.not.website', { name: a.manifest.name }, `${a.manifest.name} is a ${a.kind.replace('-', ' ')}, not a website to launch`);
     const no = this.artifactRefusal(from, a.id, this.h.identity.author);
     if (no) throw new Error(no);
     const site = this.storedServices().find((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id) && this.h.agents.some((k) => k.name === s.name));
-    if (!site) throw new Error(`you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
+    if (!site) throw new WeaveError('daemon.website.no.host', { space: this.h.spaceName(project) }, `you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
     const manifest = a.manifest;
     if (!this.h.runtime.runs(manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const found = this.artifact(from.id, a.id);
@@ -1063,7 +1068,7 @@ export class Services {
     const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
     this.checkSettings(manifest, settings);
     const missing = (manifest.env ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !settings[e.name]);
-    if (missing.length) throw new Error(`${manifest.name} needs ${missing.map((e) => e.label).join(', ')}`);
+    if (missing.length) throw new WeaveError('daemon.service.needs', { name: manifest.name, settings: missing.map((e) => e.label).join(', ') }, `${manifest.name} needs ${missing.map((e) => e.label).join(', ')}`);
     // Named only for this computer (its folder, its run): nobody sees it.
     const taken = new Set([...this.h.agents.map((k) => k.name), ...this.storedServices().map((s) => s.name)]);
     let name: string;
@@ -1152,8 +1157,8 @@ export class Services {
   /** Maintainers: who may get one of a project's artifacts (null: everyone there). */
   async setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]> {
     const project = this.h.project(input.project);
-    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
-    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such artifact`);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.artifact.access.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new WeaveError('daemon.artifact.none', { space: this.h.spaceName(project) }, `${this.h.spaceName(project)} has no such artifact`);
     const who = input.who === null ? 'members' : parseWho(input.who);
     if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_ACCESS, body: { artifact: input.artifact, who: who as unknown as Json } }));
@@ -1163,8 +1168,8 @@ export class Services {
   /** Maintainers: withdraw a release. It's no longer listed, launched or handed out; who got it keeps what they have. */
   async withdrawArtifact(input: { project: string; artifact: string }): Promise<ArtifactInfo[]> {
     const project = this.h.project(input.project);
-    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
-    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new Error(`${this.h.spaceName(project)} has no such release (withdrawn already?)`);
+    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.release.withdraw.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
+    if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new WeaveError('daemon.release.gone', { space: this.h.spaceName(project) }, `${this.h.spaceName(project)} has no such release (withdrawn already?)`);
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: input.artifact } }));
     return this.artifacts(project.id);
   }
@@ -1196,13 +1201,13 @@ export class Services {
   /** Maintainers: who may use a service's action in a space, tighter than its contract (or null: as it says). */
   async setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]> {
     const space = this.h.space(input.space);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.service.who.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
     const did = await this.serviceDid(input.service);
     const action = (await this.serviceProfiles()).find((p) => p.did === did)?.contract.actions?.find((a) => a.name === input.action);
-    if (!action) throw new Error(`that service has no action ${input.action}`);
+    if (!action) throw new WeaveError('daemon.service.no.action', { action: input.action }, `that service has no action ${input.action}`);
     const who = input.who === null ? action.who : parseWho(input.who);
-    if (!who) throw new Error('who is members, maintainers, owner, or {board: <name>}');
-    if (!tightens(action.who, who)) throw new Error(`${action.label} is for ${whoWords(action.who)}: a project can make that narrower, not wider`);
+    if (!who) throw new WeaveError('daemon.service.who.values', undefined, 'who is members, maintainers, owner, or {board: <name>}');
+    if (!tightens(action.who, who)) throw new WeaveError('daemon.service.who.wider', { label: action.label, who: whoWords(action.who) }, `${action.label} is for ${whoWords(action.who)}: a project can make that narrower, not wider`);
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(space), { kind: KIND_SERVICE_POLICY, body: { service: did, action: action.name, who: who as unknown as Json } }));
     return this.serviceActions({ space: space.id, service: did });
   }
@@ -1329,7 +1334,7 @@ export class Services {
   /** List a Weave service in a catalog (its maintainers): a release of a project you're in, by its image. */
   async listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo> {
     const space = this.h.space(input.catalog);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} list things in it`);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.catalog.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} list things in it`);
     const { project, artifact } = this.artifact(input.artifact.project, input.artifact.tag);
     const image = artifact.manifest.install?.image;
     if (!image?.packaged) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't a Weave service: catalogs list images that carry their manifest (weave service release)`);
@@ -1341,8 +1346,8 @@ export class Services {
   /** Take an app off a catalog (its maintainers). */
   async unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void> {
     const space = this.h.space(input.catalog);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} take things off it`);
-    if (!(await this.catalog(space.id)).some((e) => e.app === input.app)) throw new Error(`${this.h.spaceName(space)} lists no "${input.app}"`);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.catalog.remove.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} take things off it`);
+    if (!(await this.catalog(space.id)).some((e) => e.app === input.app)) throw new WeaveError('daemon.catalog.not.listed', { space: this.h.spaceName(space), app: input.app }, `${this.h.spaceName(space)} lists no "${input.app}"`);
     await this.h.publish({ kind: KIND_CATALOG_ENTRY, body: { app: input.app, removed: true }, space: space.id, as: input.as });
   }
 
@@ -1381,7 +1386,7 @@ export class Services {
     // One that hands out artifacts and takes this action: for the source its releases come from, if one says.
     const providers = (await this.servicesIn(project.id)).filter((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && p.contract.actions?.some((a) => a.name === action));
     const provider = providers.find((p) => !source || !p.contract.sources || p.contract.sources.includes(source)) ?? (source ? undefined : providers[0]);
-    if (!provider) throw new Error(`${this.h.spaceName(project)} has no service that ${action === 'publish' ? 'publishes' : 'lists'} releases${source ? ` from ${source}` : ''}: add one (GitHub releases, say: Services, Add a service)`);
+    if (!provider) throw new WeaveError('daemon.release.no.provider', { space: this.h.spaceName(project), action }, `${this.h.spaceName(project)} has no service that ${action === 'publish' ? 'publishes' : 'lists'} releases${source ? ` from ${source}` : ''}: add one (GitHub releases, say: Services, Add a service)`);
     const by = `${provider.name} (${provider.person.name ?? 'its person'})`;
     const wait = action === 'publish' ? this.publishWait : this.locateWait;
     const asked = await this.askService({ space: project.id, service: provider.did, text: action === 'publish' ? `publish ${String((data as { tag?: unknown }).tag ?? '')}` : action, action, data, ...(as ? { as } : {}), within: Math.ceil(wait / 1000) });

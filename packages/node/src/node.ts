@@ -409,12 +409,13 @@ import {
   LANGUAGES,
   type LanguageSetting,
 } from '@weave/core';
-import { checkServicePackage, KIND_APP_TEXTS } from '@weave/core';
+import { checkServicePackage, KIND_APP_TEXTS, WeaveError } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
   HOME_SOURCES,
   PROJECT_STATUSES,
+  noAgentError,
   type Actor,
   type Admission,
   type AgentInfo,
@@ -1452,7 +1453,7 @@ export class WeaveNode implements Backend {
 
   async publish(input: PublishInput): Promise<FeedItem> {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
-    if (!signer) throw new Error(noAgent(input.as!, this.#agents.map((a) => a.name)));
+    if (!signer) throw noAgentError(input.as!, this.#agents.map((a) => a.name));
     if (input.as) this.#agentMay(input.as, input.kind);
     // An always-on node hosts its person's rooms; everyone else would drop anything else it signed (stage 18).
     if (!input.as && this.#isLinkedNode && !permits(NODE_PERMISSIONS, input.kind)) throw new Error(`this is ${this.nameOf(this.identity.author) ?? 'your'} always-on node: it keeps spaces and hosts rooms, and doesn't post or change anything for them (${input.kind})`);
@@ -1460,7 +1461,7 @@ export class WeaveNode implements Backend {
     checkTextFields(input.body);
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
-    if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
+    if (space && space.kind !== 'direct' && this.#state(space).closed) throw new WeaveError('daemon.space.closed', { space: space.name }, `${space.name} is closed: it's kept as it is, read-only`);
     if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
     const fields: EventFields = space ? sealFor(await this.#cipherReady(space), inner) : inner;
@@ -1471,8 +1472,8 @@ export class WeaveNode implements Backend {
   /** An agent may sign this kind, or an error saying how its person allows it. */
   #agentMay(name: string, kind: string): void {
     const agent = this.#agents.find((a) => a.name === name);
-    if (!agent) throw new Error(noAgent(name, this.#agents.map((a) => a.name)));
-    if (!permits(agent.permissions, kind)) throw new Error(`agent "${name}" may not sign ${kind}; its person can allow it in Keys & devices in the Weave app, or with: weave agent can ${name} ${[...agent.permissions, kind].join(',')}`);
+    if (!agent) throw noAgentError(name, this.#agents.map((a) => a.name));
+    if (!permits(agent.permissions, kind)) throw new WeaveError('daemon.agent.may.not.sign', { agent: name, kind }, `agent "${name}" may not sign ${kind}; its person can allow it in Keys & devices in the Weave app, or with: weave agent can ${name} ${[...agent.permissions, kind].join(',')}`);
   }
 
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
@@ -1511,7 +1512,7 @@ export class WeaveNode implements Backend {
       offered: this.config.agentsOffered === true,
       harnesses: this.#harnessList()
         .filter((h) => h.found)
-        .map((h) => ({ id: h.id, name: h.name, agent: h.agent, file: h.file, state: entryState(h, launch), restart: h.restart, ...(this.#repaired.has(h.id) ? { repaired: true } : {}) })),
+        .map((h) => ({ id: h.id, name: h.name, agent: h.agent, file: h.file, state: entryState(h, launch), restart: h.restart, restartText: h.restartText, ...(this.#repaired.has(h.id) ? { repaired: true } : {}) })),
     };
   }
 
@@ -1665,12 +1666,20 @@ export class WeaveNode implements Backend {
   async invite(ref: string, hours = 24 * 7, options: InviteOptions = {}): Promise<string> {
     const space = this.#space(ref);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat is between two people; start a group to talk with more');
-    if (state.closed) throw new Error(`${space.name} is closed`);
-    if (state.tier && state.founder !== this.identity.author) throw new Error(`only ${this.nameOf(state.founder) ?? 'its creator'} lets people into ${space.name}`);
+    if (space.kind === 'direct') throw new WeaveError('daemon.invite.direct', undefined, 'a direct chat is between two people; start a group to talk with more');
+    if (state.closed) throw new WeaveError('daemon.invite.closed', { space: space.name }, `${space.name} is closed`);
+    if (state.tier && state.founder !== this.identity.author) {
+      const who = this.nameOf(state.founder);
+      throw who
+        ? new WeaveError('daemon.invite.founder.only', { who, space: space.name }, `only ${who} lets people into ${space.name}`)
+        : new WeaveError('daemon.invite.founder.only.unknown', { space: space.name }, `only its creator lets people into ${space.name}`);
+    }
     const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
-    if (!allowed) throw new Error(space.kind === 'project' ? 'only maintainers can invite people into a project' : `you are not a member of ${space.name}`);
-    if (options.access?.length && space.kind !== 'project') throw new Error('board rights are for projects');
+    if (!allowed)
+      throw space.kind === 'project'
+        ? new WeaveError('daemon.invite.maintainers.only', undefined, 'only maintainers can invite people into a project')
+        : new WeaveError('daemon.invite.not.member', { space: space.name }, `you are not a member of ${space.name}`);
+    if (options.access?.length && space.kind !== 'project') throw new WeaveError('daemon.invite.board.rights', undefined, 'board rights are for projects');
     const boards = space.kind === 'project' ? this.#spacePosts(space).boards : [];
     const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
     // The space reads the link's public key as its id; the link keeps the secret one (inviteKeys).
@@ -1709,7 +1718,7 @@ export class WeaveNode implements Backend {
     if (held) {
       // Removed, and asked back with a new link (_Ak3UUmp): the space as it is now, keys added to the ones we kept.
       const state = this.#state(held);
-      if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new Error(`you are already in ${invite.space.name}`);
+      if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new WeaveError('daemon.join.already', { space: invite.space.name }, `you are already in ${invite.space.name}`);
       for (const [epoch, key] of Object.entries(invite.space.keys)) if (!held.keys[epoch]) held.keys[epoch] = key;
       held.via = invite.inviter;
       if (invite.boards) for (const [board, epochs] of Object.entries(invite.boards)) held.boards = { ...held.boards, [board]: { ...held.boards?.[board], ...epochs } };
@@ -1727,8 +1736,8 @@ export class WeaveNode implements Backend {
   /** Ask to be let in with a link that needs the inviter's OK. */
   async #knock(text: string, note: string): Promise<SpaceInfo> {
     const link = decodeKnock(text);
-    if (this.#spaces.has(link.space.id)) throw new Error(`you are already in ${link.space.name}`);
-    if (link.inviter === this.identity.author) throw new Error("that's your own link");
+    if (this.#spaces.has(link.space.id)) throw new WeaveError('daemon.join.already', { space: link.space.name }, `you are already in ${link.space.name}`);
+    if (link.inviter === this.identity.author) throw new WeaveError('daemon.join.own.link', undefined, "that's your own link");
     this.#adoptBootstrap(link.entry);
     for (const topic of new Set([link.inviter, ...link.entry.topics])) await this.join(topic);
     this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter } }));
@@ -1750,7 +1759,10 @@ export class WeaveNode implements Backend {
 
   async answerKnock(input: { knock: string; accept: boolean }): Promise<void> {
     const matches = this.#openKnocks().filter((k) => k.id.startsWith(input.knock));
-    if (matches.length !== 1) throw new Error(matches.length ? 'that id is ambiguous — use more characters' : 'no such request (maybe already answered)');
+    if (matches.length !== 1)
+      throw matches.length
+        ? new WeaveError('daemon.request.ambiguous', undefined, 'that id is ambiguous — use more characters')
+        : new WeaveError('daemon.request.none', undefined, 'no such request (maybe already answered)');
     const { id, event, space, invite, rights } = matches[0];
     if (input.accept) {
       const member = event.author;
@@ -1808,7 +1820,7 @@ export class WeaveNode implements Backend {
     // Only a manager's new key counts for the others (T3a83nLy): when one is needed, nobody else lets people in, or they'd read it all.
     const fresh = this.#needsFreshKey(space, state);
     if (fresh && !canManage(state, this.identity.author)) {
-      throw new Error(`${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
+      throw new WeaveError('daemon.invite.needs.key', { space: space.name }, `${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
     }
     if (fresh) {
       this.#rotateKey(space);
@@ -1929,20 +1941,23 @@ export class WeaveNode implements Backend {
     const what = service ? `service "${name}"` : `agent "${name}"`;
     const rule = service ? state.visitors?.services : state.visitors?.agents;
     const ref = `${this.nameOf(this.identity.author) ?? this.identity.author}/${name}`;
-    if (rule?.who === 'nobody') throw new Error(`${space.name} doesn't let ${service ? 'services' : 'agents'} act in it: its maintainers decide that`);
-    if (managed || rule?.who === 'approved') if (!state.approvedAgents?.has(key)) throw new Error(`${what} isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${ref})`);
-    throw new Error(`${space.name} doesn't let ${service ? 'services' : 'agents'} write ${kind} (only ${rule?.kinds?.join(', ')}): its maintainers decide that`);
+    const whoActs = service ? 'services' : 'agents';
+    if (rule?.who === 'nobody') throw new WeaveError('daemon.rules.nobody', { space: space.name, what: whoActs }, `${space.name} doesn't let ${whoActs} act in it: its maintainers decide that`);
+    if (managed || rule?.who === 'approved')
+      if (!state.approvedAgents?.has(key)) throw new WeaveError('daemon.rules.not.approved', { what, space: space.name }, `${what} isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${ref})`);
+    const kinds = rule?.kinds?.join(', ') ?? '';
+    throw new WeaveError('daemon.rules.kinds', { space: space.name, what: whoActs, kind, kinds }, `${space.name} doesn't let ${whoActs} write ${kind} (only ${kinds}): its maintainers decide that`);
   }
 
   /** What people's agents and services may do in a space (those who manage it). Leaving one out keeps it as it is. */
   async setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat has no rules for agents');
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} decide what agents and services may do there`);
+    if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
+    if (!canManage(state, this.identity.author)) throw new WeaveError('daemon.rules.manage.only', { space: space.name }, `only those who manage ${space.name} decide what agents and services may do there`);
     const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
     const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
-    if ((input.agents && !agents) || (input.services && !services)) throw new Error('a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
+    if ((input.agents && !agents) || (input.services && !services)) throw new WeaveError('daemon.rules.who', undefined, 'a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
     return this.#spaceInfo(space);
   }
@@ -2039,8 +2054,8 @@ export class WeaveNode implements Backend {
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat has no rules for agents');
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} approve agents and services there`);
+    if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
+    if (!canManage(state, this.identity.author)) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
     return this.#spaceInfo(space);
   }
@@ -2061,7 +2076,7 @@ export class WeaveNode implements Backend {
 
   async agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>> {
     const key = this.#agents.find((a) => a.name === agent)?.did;
-    if (!key) throw new Error(noAgent(agent, this.#agents.map((a) => a.name)));
+    if (!key) throw noAgentError(agent, this.#agents.map((a) => a.name));
     // Where its key doesn't count at all (what it may write there is a matter of kinds).
     return [...this.#spaces.values()]
       .filter((s) => {
@@ -2182,11 +2197,13 @@ export class WeaveNode implements Backend {
 
   async leave(ref: string): Promise<void> {
     const space = this.#space(ref);
-    if (space.kind === 'direct') throw new Error('a direct chat has no leaving; unfollow or block the person instead');
+    if (space.kind === 'direct') throw new WeaveError('daemon.leave.direct', undefined, 'a direct chat has no leaving; unfollow or block the person instead');
     const state = this.#state(space);
     if (state.founder === this.identity.author) {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
-      throw new Error(others.length ? `you own ${space.name}: hand it over to someone first` : `you're the only one in ${space.name}: close it instead`);
+      throw others.length
+        ? new WeaveError('daemon.leave.owner', { space: space.name }, `you own ${space.name}: hand it over to someone first`)
+        : new WeaveError('daemon.leave.last', { space: space.name }, `you're the only one in ${space.name}: close it instead`);
     }
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
@@ -2200,12 +2217,12 @@ export class WeaveNode implements Backend {
   async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat has no owner');
-    if (state.founder !== this.identity.author) throw new Error(`only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
-    if (state.tier) throw new Error("a membership tier stays with its creator; take it off your hub instead");
+    if (space.kind === 'direct') throw new WeaveError('daemon.handover.direct', undefined, 'a direct chat has no owner');
+    if (state.founder !== this.identity.author) throw new WeaveError('daemon.handover.owner.only', { space: space.name }, `only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
+    if (state.tier) throw new WeaveError('daemon.handover.tier', undefined, 'a membership tier stays with its creator; take it off your hub instead');
     const to = this.resolve(input.to);
-    if (to === this.identity.author) throw new Error("that's you");
-    if (!state.members.has(to)) throw new Error(`${input.to} isn't in ${space.name}`);
+    if (to === this.identity.author) throw new WeaveError('daemon.handover.self', undefined, "that's you");
+    if (!state.members.has(to)) throw new WeaveError('daemon.handover.not.member', { who: input.to, space: space.name }, `${input.to} isn't in ${space.name}`);
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     return this.#spaceInfo(space);
   }
@@ -2213,9 +2230,10 @@ export class WeaveNode implements Backend {
   async setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat is between two people: there are no newcomers');
-    if (!HISTORIES.includes(input.history)) throw new Error('history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
-    if (!canManage(state, this.identity.author)) throw new Error(space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
+    if (space.kind === 'direct') throw new WeaveError('daemon.history.direct', undefined, 'a direct chat is between two people: there are no newcomers');
+    if (!HISTORIES.includes(input.history)) throw new WeaveError('daemon.history.values', undefined, 'history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
+    if (!canManage(state, this.identity.author))
+      throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
     if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
     return this.#spaceInfo(space);
   }
@@ -2223,8 +2241,9 @@ export class WeaveNode implements Backend {
   async closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error("a direct chat can't be closed");
-    if (!canManage(state, this.identity.author)) throw new Error(space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
+    if (space.kind === 'direct') throw new WeaveError('daemon.close.direct', undefined, "a direct chat can't be closed");
+    if (!canManage(state, this.identity.author))
+      throw new WeaveError('daemon.close.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
     if (!!state.closed === input.closed) return this.#spaceInfo(space);
     this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
     return this.#spaceInfo(space);
@@ -2256,11 +2275,11 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     const state = this.#state(space);
     if (!canManage(state, this.identity.author)) {
-      throw new Error({ project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
+      throw new WeaveError('daemon.remove.manage.only', { kind: space.kind }, { project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
     }
     const member = this.resolve(who);
-    if (!state.members.has(member)) throw new Error(`${who} is not in ${space.name}`);
-    if (member === state.founder) throw new Error(`the owner can't be removed from ${space.name}`);
+    if (!state.members.has(member)) throw new WeaveError('daemon.remove.not.member', { who, space: space.name }, `${who} is not in ${space.name}`);
+    if (member === state.founder) throw new WeaveError('daemon.remove.owner', { space: space.name }, `the owner can't be removed from ${space.name}`);
     this.replica.write(this.identity, sealFor(await this.#cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
@@ -2310,7 +2329,7 @@ export class WeaveNode implements Backend {
     let pinned: string[] = [];
     if (query.space) {
       const space = this.#space(query.space);
-      if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
+      if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
       const { posts: all, boards } = this.#spacePosts(space);
       const board = query.board ? this.#board(space, boards, query.board) : undefined;
       posts = board ? all.filter((p) => p.board === board.name) : all;
@@ -2334,8 +2353,8 @@ export class WeaveNode implements Backend {
     ref = postRefOf(ref ?? '');
     if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
     const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
-    if (matches.length === 0) throw new Error(`no post found with id ${ref}`);
-    if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
+    if (matches.length === 0) throw new WeaveError('daemon.post.not.found', { id: ref }, `no post found with id ${ref}`);
+    if (matches.length > 1) throw new WeaveError('daemon.post.ambiguous', { id: ref }, `id ${ref} is ambiguous — use more characters`);
     const space = matches[0].space && this.#spaces.get(matches[0].space.id);
     if (space && this.#pulled(space)) {
       // Opened: kept for 30 days, like anything you read.
@@ -2347,16 +2366,16 @@ export class WeaveNode implements Backend {
 
   async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
-    if (!title) throw new Error('a post needs a title');
+    if (!title) throw new WeaveError('daemon.post.title', undefined, 'a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
     const link = input.link?.trim();
-    if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
+    if (link && !/^https?:\/\//.test(link)) throw new WeaveError('daemon.post.link', undefined, 'links start with http:// or https://');
     const image = input.image?.trim();
-    if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
+    if (image && !parseBlobRef(image)) throw new WeaveError('daemon.post.image', undefined, 'attach an uploaded image (a wblob: reference)');
     const scene = input.scene?.trim();
     if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
     const space = this.#space(input.space);
-    if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
+    if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
@@ -2378,12 +2397,14 @@ export class WeaveNode implements Backend {
   async confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo> {
     const post = await this.post(input.post);
     const agent = input.as ? this.#agents.find((a) => a.name === input.as) : undefined;
-    if (input.as && !agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (input.as && !agent) throw noAgentError(input.as, this.#agents.map((a) => a.name));
     const me = agent?.did ?? this.identity.author;
     const named = this.#namedIn(post.id);
-    if (!named) throw new Error("that post doesn't name any co-authors");
+    if (!named) throw new WeaveError('daemon.coauthor.none', undefined, "that post doesn't name any co-authors");
     if (!named.includes(me) && !named.some((did) => this.replica.authority.personOf(did) === this.identity.author && !agent)) {
-      throw new Error(agent ? `that post doesn't name ${agent.name} as a co-author` : "that post doesn't name you as a co-author");
+      throw agent
+        ? new WeaveError('daemon.coauthor.not.agent', { agent: agent.name }, `that post doesn't name ${agent.name} as a co-author`)
+        : new WeaveError('daemon.coauthor.not.you', undefined, "that post doesn't name you as a co-author");
     }
     await this.publish({ kind: KIND_POST_COAUTHOR, body: { target: post.id, on: input.on }, space: post.space?.id, as: input.as });
     return this.post(post.id);
@@ -2412,9 +2433,9 @@ export class WeaveNode implements Backend {
 
   async updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo> {
     const agent = this.#agents.find((a) => a.name === input.name);
-    if (!agent) throw new Error(`no agent named "${input.name}"`);
+    if (!agent) throw new WeaveError('daemon.agent.none', { name: input.name }, `no agent named "${input.name}"`);
     const permissions = [...new Set(input.permissions.map((p) => p.trim()).filter(Boolean))];
-    if (permissions.includes('*')) throw new Error("agents can't get every permission: name the kinds they may sign");
+    if (permissions.includes('*')) throw new WeaveError('daemon.agent.all.permissions', undefined, "agents can't get every permission: name the kinds they may sign");
     this.replica.write(this.identity, delegation(agent.did, 'agent', permissions, agent.name));
     agent.permissions = permissions;
     saveAgent(this.home, agent);
@@ -2433,7 +2454,7 @@ export class WeaveNode implements Backend {
 
   async requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest> {
     const agent = this.#agents.find((a) => a.name === input.as);
-    if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (!agent) throw noAgentError(input.as, this.#agents.map((a) => a.name));
     const kinds = [...new Set(input.kinds.map((k) => k.trim()))].filter((k) => /^weave\.[a-z0-9.*-]{1,60}$/.test(k));
     if (!kinds.length) throw new Error('name the kinds to ask for, like weave.app');
     const missing = kinds.filter((k) => !permits(agent.permissions, k));
@@ -2451,6 +2472,8 @@ export class WeaveNode implements Backend {
       category: 'requests',
       title: `Your agent ${agent.name} asks for a permission`,
       text: `To sign ${missing.join(', ')}${request.reason ? `: “${request.reason}”` : ''}`,
+      name: 'daemon.notice.permission',
+      values: { agent: agent.name, kinds: missing.join(', '), hasReason: request.reason ? 'yes' : 'no', reason: request.reason },
       open: { inbox: true },
     });
     return request;
@@ -2458,7 +2481,7 @@ export class WeaveNode implements Backend {
 
   async requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest> {
     const agent = this.#agents.find((a) => a.name === input.as);
-    if (!agent) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (!agent) throw noAgentError(input.as, this.#agents.map((a) => a.name));
     const platform = input.platform ?? 'github';
     const resources = [...new Set(input.resources.map((r) => String(r).trim()).filter((r) => r && r.length <= 200))].slice(0, 20);
     if (!resources.length) throw new Error('name the repositories, like owner/name');
@@ -2497,6 +2520,8 @@ export class WeaveNode implements Backend {
       category: 'requests',
       title: `Your agent ${agent.name} asks for ${hand.resources.length === 1 ? 'a repository' : 'repositories'}`,
       text: `To give ${project.name} ${hand.resources.join(', ')} from your ${title}${request.reason ? `: “${request.reason}”` : ''}`,
+      name: 'daemon.notice.hand',
+      values: { agent: agent.name, n: hand.resources.length, project: project.name, resources: hand.resources.join(', '), keyvault: title, hasReason: request.reason ? 'yes' : 'no', reason: request.reason },
       open: { inbox: true },
     });
     return request;
@@ -2527,7 +2552,7 @@ export class WeaveNode implements Backend {
   }
 
   async showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]> {
-    if (input.as && !this.#agents.some((a) => a.name === input.as)) throw new Error(noAgent(input.as, this.#agents.map((a) => a.name)));
+    if (input.as && !this.#agents.some((a) => a.name === input.as)) throw noAgentError(input.as, this.#agents.map((a) => a.name));
     if (!input.posts?.length) throw new Error('say which posts to show');
     const note = input.note?.trim().slice(0, 500) || undefined;
     const shown: MentionInfo[] = [];
@@ -2811,9 +2836,9 @@ export class WeaveNode implements Backend {
     const space = this.#routineSpace(input.space);
     this.#maintainerState(space);
     const name = input.name?.trim();
-    if (!name || name.length > 100) throw new Error('a routine needs a name (up to 100 characters)');
+    if (!name || name.length > 100) throw new WeaveError('daemon.routine.name', undefined, 'a routine needs a name (up to 100 characters)');
     const trigger = parseTrigger(input.trigger);
-    if (!trigger) throw new Error('a routine runs on a schedule (days 0-6, Sunday is 0, and a time like 08:00) or at first start');
+    if (!trigger) throw new WeaveError('daemon.routine.trigger', undefined, 'a routine runs on a schedule (days 0-6, Sunday is 0, and a time like 08:00) or at first start');
     const create = parseCreate(input.create);
     if (!create) throw new Error('say what the routine creates: a board and a title pattern ({date}, {day}, {weekday})');
     this.#board(space, this.#spacePosts(space).boards, create.board);
@@ -2879,7 +2904,7 @@ export class WeaveNode implements Backend {
     if (create.prompt) body.prompt = create.prompt;
     const { id } = await this.publish({ kind: KIND_POST, body, space: space.id });
     const post = await this.post(id);
-    this.#emitLive({ type: 'routine', category: 'activity', title: routine.name, text: `${post.title} is ready`, open: { post: post.id } });
+    this.#emitLive({ type: 'routine', category: 'activity', title: routine.name, text: `${post.title} is ready`, name: 'daemon.notice.routine', values: { routine: routine.name, title: post.title }, open: { post: post.id } });
     return post;
   }
 
@@ -3129,20 +3154,20 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
       const title = input.title.trim();
-      if (!title) throw new Error('a post needs a title');
+      if (!title) throw new WeaveError('daemon.post.title', undefined, 'a post needs a title');
       if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
       body.title = title;
     }
     if (input.text !== undefined) body.text = input.text;
     if (input.link !== undefined) {
       const link = input.link.trim();
-      if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
+      if (link && !/^https?:\/\//.test(link)) throw new WeaveError('daemon.post.link', undefined, 'links start with http:// or https://');
       body.link = link;
     }
     if (input.prompt !== undefined) body.prompt = input.prompt.trim();
     if (input.image !== undefined) {
       const image = input.image.trim();
-      if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
+      if (image && !parseBlobRef(image)) throw new WeaveError('daemon.post.image', undefined, 'attach an uploaded image (a wblob: reference)');
       body.image = image;
     }
     if (input.scene !== undefined) {
@@ -6108,43 +6133,43 @@ export class WeaveNode implements Backend {
     };
 
     if (item.kind === KIND_MSG && space) {
-      if (space.kind === 'direct') return { type: 'dm', category: 'messages', title: who, text: snippet(said()), open: { space } };
+      if (space.kind === 'direct') return { type: 'dm', category: 'messages', title: who, text: snippet(said()), name: 'daemon.notice.dm', values: { who }, open: { space } };
       const post = lookup(body.post, POSTS);
       const channel = text('channel') || 'general';
       const open = post ? { space, post: post.id } : { space, channel };
       const place = post ? `“${post.title}”` : `${where} #${channel}`;
       // Something live announced (a website opened, a version offered): news for everyone following the project.
-      if (body.announce && space.kind === 'project' && !this.#homeHidden().has(space.id)) return { type: 'live', category: 'activity', title: `${who} ${snippet(said())}`, text: where, open };
+      if (body.announce && space.kind === 'project' && !this.#homeHidden().has(space.id)) return { type: 'live', category: 'activity', title: `${who} ${snippet(said())}`, text: where, name: 'daemon.notice.live', values: { who, said: snippet(said()) }, open };
       const name = this.nameOf(me)?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (name && new RegExp(`@${name}(?![\\w-])`, 'i').test(text('text')))
-        return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(said()), open };
-      if (lookup(body.replyTo, [KIND_MSG, KIND_REPLY])?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to you in ${place}`, text: snippet(said()), open };
-      if (post?.author === me) return { type: 'reply', category: 'messages', title: `${who} in your post ${place}`, text: snippet(said()), open };
+        return { type: 'mention', category: 'messages', title: `${who} mentioned you in ${place}`, text: snippet(said()), name: 'daemon.notice.mention', values: { who, place }, open };
+      if (lookup(body.replyTo, [KIND_MSG, KIND_REPLY])?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to you in ${place}`, text: snippet(said()), name: 'daemon.notice.reply', values: { who, place }, open };
+      if (post?.author === me) return { type: 'reply', category: 'messages', title: `${who} in your post ${place}`, text: snippet(said()), name: 'daemon.notice.reply.post', values: { who, place }, open };
       return undefined;
     }
     if (item.kind === KIND_REPLY && space) {
       const target = lookup(body.target, POSTS);
-      if (target?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to “${target.title}”`, text: snippet(text('text')), open: { space, post: target.id } };
+      if (target?.author === me) return { type: 'reply', category: 'messages', title: `${who} replied to “${target.title}”`, text: snippet(text('text')), name: 'daemon.notice.reply.title', values: { who, title: target.title }, open: { space, post: target.id } };
       return undefined;
     }
     if (item.kind === KIND_POST || item.kind === KIND_ISSUE || item.kind === KIND_PROPOSAL) {
       const mine = new Set<string>([me, ...this.#agents.map((a) => a.did)]);
       const named = Array.isArray(body.with) ? body.with : [];
       const title = text('title') || snippet(text('text'));
-      if (named.some((d) => typeof d === 'string' && mine.has(d))) return { type: 'coauthor', category: 'requests', title: `${who} named you as co-author`, text: title, open: { inbox: true } };
+      if (named.some((d) => typeof d === 'string' && mine.has(d))) return { type: 'coauthor', category: 'requests', title: `${who} named you as co-author`, text: title, name: 'daemon.notice.coauthor', values: { who }, open: { inbox: true } };
       // Unfollowed (off Home): no news from it. Followed communities tell you about every new post.
       if (!space || !title || this.#homeHidden().has(space.id)) return undefined;
-      if (space.kind === 'community') return { type: 'post', category: 'activity', title: `New post in ${where}`, text: `${who}: ${title}`, open: { space, post: item.id } };
+      if (space.kind === 'community') return { type: 'post', category: 'activity', title: `New post in ${where}`, text: `${who}: ${title}`, name: 'daemon.notice.new', values: { type: 'post', where, who, title }, open: { space, post: item.id } };
       if (space.kind !== 'project') return undefined;
       const stored = this.#spaces.get(space.id);
       const board = stored && this.#spacePosts(stored).posts.find((p) => p.id === item.id)?.board;
       if (!board || !this.#follows(space.id, board)) return undefined;
       const type = item.kind === KIND_ISSUE ? 'issue' : item.kind === KIND_PROPOSAL ? 'proposal' : 'post';
-      return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, open: { space, post: item.id } };
+      return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, name: 'daemon.notice.new', values: { type, where, who, title }, open: { space, post: item.id } };
     }
     if (item.kind === KIND_KNOCK) {
       const knock = (await this.knocks()).find((k) => k.id === item.id);
-      if (knock) return { type: 'knock', category: 'requests', title: `${knock.name ?? who} asks to join ${knock.space.name}`, text: snippet(knock.note), open: { inbox: true } };
+      if (knock) return { type: 'knock', category: 'requests', title: `${knock.name ?? who} asks to join ${knock.space.name}`, text: snippet(knock.note), name: 'daemon.notice.knock', values: { who: knock.name ?? who, space: knock.space.name }, open: { inbox: true } };
     }
     // A badge given or passed on to you: it shows on your hub, with its personal note if it has one.
     if ((item.kind === KIND_BADGE || item.kind === KIND_BADGE_TRANSFER) && body.to === me) {
@@ -6154,11 +6179,19 @@ export class WeaveNode implements Backend {
       if (!series || series.broken) return undefined;
       const name = `${series.symbol ? `${series.symbol} ` : ''}${series.name} #${badge.n}${series.limit ? ` of ${series.limit}` : ''}`;
       const text = item.kind === KIND_BADGE ? [badge.note ? `“${badge.note}”` : '', badge.personal ? 'With a personal note for you.' : ''].filter(Boolean).join(' ') : '';
-      return { type: 'badge', category: 'activity', title: item.kind === KIND_BADGE ? `${who} gave you ${name}` : `${who} passed ${name} on to you`, text: snippet(text), open: { hub: me } };
+      return {
+        type: 'badge',
+        category: 'activity',
+        title: item.kind === KIND_BADGE ? `${who} gave you ${name}` : `${who} passed ${name} on to you`,
+        text: snippet(text),
+        name: item.kind === KIND_BADGE ? 'daemon.notice.badge.given' : 'daemon.notice.badge.passed',
+        values: { who, badge: name, hasNote: badge.note ? 'yes' : 'no', note: snippet(badge.note ?? ''), personal: badge.personal ? 'yes' : 'no' },
+        open: { hub: me },
+      };
     }
     if (item.kind === KIND_MEMBERSHIP_REQUEST) {
       const request = (await this.membershipRequests()).find((r) => r.id === item.id);
-      if (request) return { type: 'membership', category: 'requests', title: `${request.name ?? who} asks for ${request.tier.name}`, text: snippet(request.note), open: { inbox: true } };
+      if (request) return { type: 'membership', category: 'requests', title: `${request.name ?? who} asks for ${request.tier.name}`, text: snippet(request.note), name: 'daemon.notice.membership', values: { who: request.name ?? who, tier: request.tier.name }, open: { inbox: true } };
     }
     return undefined;
   }
@@ -9116,7 +9149,7 @@ export class WeaveNode implements Backend {
       target.public ? !p.space : !!target.space && !!p.space?.id.startsWith(target.space) && (target.post ? p.type !== 'project' : p.type === 'project'),
     );
     const matches = target.post ? posts.filter((p) => p.id.startsWith(target.post!)) : posts;
-    if (matches.length === 0) throw new Error(`no post found at that address (it may be in a project or community you're not in)`);
+    if (matches.length === 0) throw new WeaveError('daemon.post.not.found.address', undefined, `no post found at that address (it may be in a project or community you're not in)`);
     if (matches.length > 1) throw new Error(`that address fits ${matches.length} posts here: use more characters of the id`);
     return matches[0];
   }

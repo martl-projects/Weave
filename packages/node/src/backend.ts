@@ -1,6 +1,6 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { TextPackage } from '@weave/core';
+import { WeaveError, type TextPackage, type TextRecord } from '@weave/core';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, Language, LanguageSetting, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, Attachment, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
@@ -43,8 +43,15 @@ export interface FeedItem {
 export interface Notice {
   type: 'dm' | 'mention' | 'reply' | 'coauthor' | 'knock' | 'membership' | 'post' | 'issue' | 'proposal' | 'permission' | 'badge' | 'routine' | 'live';
   category: NoticeCategory;
+  /** The two lines, in English: what a terminal or an old app shows. */
   title: string;
   text: string;
+  /**
+   * The title by name (docs/localization.md, "Texts the daemon writes"): a screen shows `t(name, values)` in the
+   * reader's language, and the text line from `<name>.text` when the package has it; otherwise the English lines.
+   */
+  name?: string;
+  values?: TextRecord['values'];
   /** Where it leads: the Inbox, a space's channel, a post (by id), or someone's hub. */
   open: { inbox?: true; space?: SpaceRef; channel?: string; post?: string; hub?: Did };
   /** Who it's from. */
@@ -71,8 +78,9 @@ export interface HarnessInfo {
   file: string;
   /** Weave's entry there: none, this installation's, or another (an old or different setup). */
   state: 'none' | 'ours' | 'other';
-  /** What to do so it notices a change. */
+  /** What to do so it notices a change, in English, and by name for screens. */
   restart: string;
+  restartText?: TextRecord;
   /** Its entry pointed to a Weave no longer there; this one put itself in (until dismissed). */
   repaired?: boolean;
 }
@@ -555,6 +563,9 @@ export const noAgent = (name: string, agents: string[]): string =>
   `this node has no agent named "${name}"${agents.length ? ` (its agents: ${agents.join(', ')})` : ' (it has no agents yet)'}. ` +
   `Create it with: weave agent add ${name} --can weave.post,weave.reply` +
   (agents.length ? `, or act as ${agents.length === 1 ? 'it' : 'one of them'}: start the MCP server with --as ${agents[0]}` : '');
+
+/** The same, as the error to throw: screens show it in the reader's language. */
+export const noAgentError = (name: string, agents: string[]): WeaveError => new WeaveError('daemon.agent.unknown', { name }, noAgent(name, agents));
 
 export const PROJECT_STATUSES = ['idea', 'active', 'paused', 'shipped', 'archived'] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];

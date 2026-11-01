@@ -1,4 +1,5 @@
 import { request as httpRequest } from 'node:http';
+import { errorFromWire, type ErrorAnswer } from '@weave/core';
 import { RPC_METHODS, type Backend, type FeedItem, type RpcMethod } from './backend.ts';
 import { readJson, type Home } from './home.ts';
 
@@ -53,8 +54,9 @@ export class ApiClient {
           res.on('data', (chunk: string) => (text += chunk));
           res.on('end', () => {
             try {
-              const data = JSON.parse(text) as { result?: T; error?: string };
-              if ((res.statusCode ?? 500) >= 400) reject(new Error(data.error ?? `daemon answered ${res.statusCode}`));
+              const data = JSON.parse(text) as { result?: T } & Partial<ErrorAnswer>;
+              // A named error is a WeaveError again here (docs/localization.md, "Texts the daemon writes").
+              if ((res.statusCode ?? 500) >= 400) reject(errorFromWire(data, `daemon answered ${res.statusCode}`));
               else resolve(data.result as T);
             } catch (error) {
               reject(error);
