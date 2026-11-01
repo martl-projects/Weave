@@ -23,6 +23,7 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
+import { GroupPhoto } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
@@ -226,6 +227,8 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         </b>
       </header>
       <div className="members-list sunken">
+        {/* Everyone together, holding up the space's name: those online first. */}
+        {members.length > 0 && <GroupPhoto dids={[...online, ...offline].map((m) => m.did)} banner={space.name} />}
         {online.length > 0 && <h4>Online — {online.length}</h4>}
         {online.map((m) => row(m, true))}
         {offline.length > 0 && <h4>Away — {offline.length}</h4>}

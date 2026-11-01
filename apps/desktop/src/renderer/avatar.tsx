@@ -25,6 +25,8 @@ export interface AvatarLib {
   thumb(part: string, a: Figure, size?: number): string;
   partNames(part: string): string[];
   SCENES: Array<{ id: string; label: string }>;
+  groupSnapshot(people: Figure[], width?: number, height?: number, opts?: { banner?: string; color?: string }): Promise<string>;
+  GROUP_PHOTO_MAX: number;
 }
 
 let lib: Promise<AvatarLib> | undefined;
@@ -82,6 +84,15 @@ const subscribe = (listener: () => void) => {
   return () => listeners.delete(listener);
 };
 
+/** Several people's figures at once: each theirs or null, undefined while any is still asked for. */
+export function useFigures(dids: string[]): Array<Figure | null> | undefined {
+  useSyncExternalStore(subscribe, () => version);
+  const key = dids.join(',');
+  useEffect(() => dids.forEach(want), [key]);
+  const all = dids.map((did) => figures.get(did));
+  return all.some((f) => f === undefined) ? undefined : (all as Array<Figure | null>);
+}
+
 /** Someone's figure: theirs, null when they have none, undefined while it's asked for. */
 export function useFigure(did: string): Figure | null | undefined {
   useSyncExternalStore(subscribe, () => version);
@@ -136,3 +147,16 @@ export function useScenes(): Array<{ id: string; label: string }> | undefined {
   return scenes;
 }
 export const sceneLabel = (id: string) => labels[id] ?? id;
+
+/**
+ * A group photo: up to twelve of its people (the first ones given), in rows, holding a banner with its name. Who has
+ * no avatar stands there as the figure their key makes.
+ */
+export function GroupPhoto({ dids, banner, className = '' }: { dids: string[]; banner?: string; className?: string }) {
+  const people = dids.slice(0, 12);
+  // Few people: a taller picture, so they aren't small in a wide one.
+  const [width, height] = people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
+  const figures = useFigures(people);
+  const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner }) : undefined, `${width}x${height}:${banner ?? ''}:${JSON.stringify(figures ?? people)}`);
+  return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
+}
