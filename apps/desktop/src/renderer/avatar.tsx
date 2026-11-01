@@ -132,7 +132,7 @@ export function FigureHead({ figure, seed, fallback }: { figure: Figure | null; 
 export function SceneImage({ did, scene, size = 256, close = false, className = '' }: { did: string; scene: string; size?: number; close?: boolean; className?: string }) {
   const figure = useFigure(did);
   const frame = close ? 'close' : 'full';
-  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `${scene}:${size}:${frame}:${JSON.stringify(figure ?? did)}`);
+  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size, frame), `${scene}:${size}:${frame}:${figure === undefined ? 'asking' : JSON.stringify(figure ?? did)}`);
   return <span className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
 }
 
@@ -143,6 +143,22 @@ export function useGroupPoses(): Array<{ id: string; label: string; scene?: true
     void avatarLib().then((l) => setPoses([...l.GROUP_POSES.map(({ id, label }) => ({ id, label })), ...l.SCENES.map(({ id, label }) => ({ id, label, scene: true as const }))]));
   }, []);
   return poses;
+}
+
+/**
+ * A post's picture, as it chose: its image, no picture (scene "none"), a scene of its own, or (chosen nothing, like
+ * every post from before) its author's avatar in a scene picked by its id: the same one every time, for everyone.
+ * Only calm scenes are picked, none that says something the post doesn't (a bug, a release).
+ */
+const PICKED_SCENES = ['hello', 'thinking', 'coffee', 'coding', 'bookworm', 'cozy', 'bird-friend', 'good-dog', 'idea', 'celebrate'];
+export function pickedScene(id: string): string {
+  let h = 2166136261;
+  for (const c of id) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return PICKED_SCENES[(h >>> 0) % PICKED_SCENES.length];
+}
+export function postScene(post: { id: string; image?: string; scene?: string }): string | undefined {
+  if (post.image || post.scene === 'none') return undefined;
+  return post.scene ?? pickedScene(post.id);
 }
 
 // The scenes' names, once the renderer is here (they come with it).

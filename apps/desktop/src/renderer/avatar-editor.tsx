@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MemberInfo, Profile, SpaceInfo } from '@weave/node/client';
 import { api, bump, shortDid, useApi, useBlobUrl } from './lib.ts';
-import { avatarLib, forgetFigure, GroupPhoto, SceneImage, useGroupPoses, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
+import { avatarLib, forgetFigure, GroupPhoto, pickedScene, SceneImage, useGroupPoses, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
 import { ImagePicker } from './editor.tsx';
 import { attempt, AsyncButton, Avatar, BlobImage, Modal } from './ui.tsx';
 
@@ -195,17 +195,50 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
   );
 }
 
-/** A scene for a post: your avatar in a pose, with things around it. None is a choice too. */
-export function ScenePicker({ value, onChange }: { value: string; onChange(scene: string): void }) {
+/**
+ * A post's picture: your avatar in a scene (the default: one you pick, or "Surprise me", picked by the post), an image
+ * of your own, or none. image and scene as the post keeps them: an image wins; scene "none" is no picture.
+ */
+export function PicturePicker({ image, scene, onImage, onScene, imageAllowed = true, postId }: { image: string; scene: string; onImage(ref: string): void; onScene(scene: string): void; imageAllowed?: boolean; postId?: string }) {
+  const mode = image ? 'image' : scene === 'none' ? 'none' : 'avatar';
+  const choose = (next: 'avatar' | 'image' | 'none') => {
+    if (next !== 'image') onImage('');
+    onScene(next === 'none' ? 'none' : next === 'avatar' && scene === 'none' ? '' : scene);
+  };
+  const [wantsImage, setWantsImage] = useState(false);
+  const shown = wantsImage && mode !== 'image' ? 'image' : mode;
+  return (
+    <div className="field-row-stacked">
+      <label>Picture</label>
+      <div className="field-row">
+        <input id="picture-avatar" type="radio" name="picture" checked={shown === 'avatar'} onChange={() => { setWantsImage(false); choose('avatar'); }} />
+        <label htmlFor="picture-avatar">Your avatar</label>
+        {imageAllowed && (
+          <>
+            <input id="picture-image" type="radio" name="picture" checked={shown === 'image'} onChange={() => setWantsImage(true)} />
+            <label htmlFor="picture-image">An image</label>
+          </>
+        )}
+        <input id="picture-none" type="radio" name="picture" checked={shown === 'none'} onChange={() => { setWantsImage(false); choose('none'); }} />
+        <label htmlFor="picture-none">No picture</label>
+      </div>
+      {shown === 'avatar' && <ScenePicker value={scene === 'none' ? '' : scene} onChange={onScene} postId={postId} />}
+      {shown === 'image' && imageAllowed && <ImagePicker value={image} onChange={(ref) => { onImage(ref); if (ref) onScene(''); }} label="Image" wide />}
+    </div>
+  );
+}
+
+/** A scene for a post: your avatar in a pose, with things around it; or "Surprise me" (picked by the post itself). */
+export function ScenePicker({ value, onChange, postId }: { value: string; onChange(scene: string): void; postId?: string }) {
   const scenes = useScenes();
   const { data: me } = useApi(() => api<{ did: string }>('whoami'), []);
   if (!scenes || !me) return null;
   return (
     <div className="field-row-stacked">
-      <label>Scene (optional): your avatar on the post</label>
       <div className="scene-picker">
-        <button type="button" className={value ? '' : 'sel'} onClick={() => onChange('')}>
-          None
+        <button type="button" className={value ? '' : 'sel'} title="A calm scene, picked by the post" onClick={() => onChange('')}>
+          {postId ? <SceneImage did={me.did} scene={pickedScene(postId)} size={128} close /> : <span className="surprise">?</span>}
+          <span>Surprise me</span>
         </button>
         {scenes.map((s) => (
           <button type="button" key={s.id} className={value === s.id ? 'sel' : ''} title={s.label} onClick={() => onChange(s.id)}>

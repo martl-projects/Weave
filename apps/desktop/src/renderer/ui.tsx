@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
-import { FigureHead, useFigure } from './avatar.tsx';
+import { avatarLib, FigureHead, postScene, useFigure, type Figure } from './avatar.tsx';
 import { loadInviteEmbeds } from './invites.tsx';
 
 // ---------------------------------------------------------------- pixel art
@@ -130,7 +130,19 @@ function embedCard(p: PostInfo): HTMLElement {
   card.setAttribute('href', `weave:post:${p.id}`);
   card.dataset.post = p.id;
   const thumb = el('span', 'post-embed-thumb');
-  if (p.image) {
+  const scene = postScene(p);
+  if (scene) {
+    // Its author's avatar in its scene, like on the post's card.
+    const img = document.createElement('img');
+    img.alt = '';
+    thumb.innerHTML = sprite(p.id, 10, false);
+    void Promise.all([avatarLib(), api<Record<string, Figure>>('avatars', [p.by.did]).catch(() => ({}) as Record<string, Figure>)])
+      .then(([l, found]) => l.sceneSnapshot(found[p.by.did] ?? l.Avatar.fromSeed(p.by.did), scene, 128, 'close'))
+      .then((url) => {
+        img.src = url;
+        thumb.replaceChildren(img);
+      }, () => {});
+  } else if (p.image) {
     const img = document.createElement('img');
     img.alt = '';
     blobUrl(p.image).then((url) => (img.src = url), () => {});

@@ -7,8 +7,8 @@ import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectI
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { Marks } from './marks.tsx';
-import { SceneImage } from './avatar.tsx';
-import { ScenePicker } from './avatar-editor.tsx';
+import { postScene, SceneImage } from './avatar.tsx';
+import { PicturePicker } from './avatar-editor.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -228,8 +228,8 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
   return (
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
-      <a className={`thumb${post.image || post.scene ? ' has-image' : ''}`} href={href}>
-        {post.scene ? <SceneImage did={post.by.did} scene={post.scene} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
+      <a className={`thumb${post.image || postScene(post) ? ' has-image' : ''}${post.scene === 'none' && !post.image ? ' no-picture' : ''}`} href={href}>
+        {post.scene === 'none' && !post.image ? null : postScene(post) ? <SceneImage did={post.by.did} scene={postScene(post)!} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -477,7 +477,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
       )}
       <div className="post-full-main">
         <VoteBox post={post} />
-        {post.scene && <SceneImage did={post.by.did} scene={post.scene} size={320} className="post-scene" />}
+        {postScene(post) && <SceneImage did={post.by.did} scene={postScene(post)!} size={320} className="post-scene" />}
         <div className="post-body">
           <h2 className="post-title">
             {post.title} <Badges post={post} />
@@ -610,13 +610,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
             <label htmlFor="submit-link">Link (optional)</label>
             <input id="submit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
           </div>
-          {!chosenBoard || chosenBoard.type === 'posts' ? (
-            <div className="field-row-stacked">
-              <label>Image (optional)</label>
-              <ImagePicker value={image} onChange={setImage} label="Image" wide />
-            </div>
-          ) : null}
-          <ScenePicker value={scene} onChange={setScene} />
+          <PicturePicker image={image} scene={scene} onImage={setImage} onScene={setScene} imageAllowed={!chosenBoard || chosenBoard.type === 'posts'} />
           <div className="field-row-stacked">
             <label>Text (optional)</label>
             <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
@@ -721,11 +715,7 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
           <label htmlFor="edit-link">Link (optional)</label>
           <input id="edit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
         </div>
-        <div className="field-row-stacked">
-          <label>Image (optional)</label>
-          <ImagePicker value={image} onChange={setImage} label="Image" wide />
-        </div>
-        <ScenePicker value={scene} onChange={setScene} />
+        <PicturePicker image={image} scene={scene} onImage={setImage} onScene={setScene} postId={post.id} />
         <div className="field-row-stacked">
           <label>Text (optional)</label>
           <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
