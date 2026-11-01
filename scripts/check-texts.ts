@@ -48,8 +48,8 @@ export interface CheckResult {
 }
 
 const isName = (s: string) => TEXT_NAME.test(s) && s.includes('.');
-/** A link's form, shown as a placeholder (weave:enroll:…, https://): not a text. */
-const isLinkForm = (s: string) => /^[a-z][a-z0-9-]*:[^\s]*$/.test(s);
+/** A link's or address's form, shown as a placeholder (weave:enroll:…, https://, git@github.com:owner/repo.git): not a text. */
+const isLinkForm = (s: string) => /^[a-z][a-z0-9-]*:[^\s]*$/.test(s) || /^[a-z]+@[a-z0-9.-]+:[^\s]*$/.test(s);
 
 const parseSource = (file: string, source: string) =>
   parse(source, { sourceType: 'module', sourceFilename: file, plugins: ['typescript', 'jsx'], errorRecovery: true, attachComment: false });
