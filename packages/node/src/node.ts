@@ -1954,12 +1954,39 @@ export class WeaveNode implements Backend {
    * boards) and its latest state (page, app, channels, curation, theme), with
    * their original ids, authors and times.
    */
-  #carry(space: StoredSpace, shared: Set<string>): void {
+  #carry(space: StoredSpace, shared: Set<string>): boolean {
     const events = this.#decodedIn(space.id)
       .filter((d) => (classOf(canonicalKind(d.inner.kind)) === 'control' || CARRIED_STATE.has(d.inner.kind)) && d.inner.kind !== KIND_CARRY && !d.board)
       .filter((d) => !shared.has(String((d.event.body as { epoch?: unknown } | null)?.epoch ?? '')))
       .map(carriedItem);
-    if (events.length) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json } }));
+    if (!events.length) return false;
+    // v: 3, its items carry their envelopes: checkable (or, from before protocol 3, vouched for by the founder).
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json, v: 3 } }));
+    return true;
+  }
+
+  /**
+   * Carries from before protocol 3 restate their events without envelopes, which nobody else takes any more: who came
+   * in through one never learns what came before, not even who founded the space, so its founder's messages don't
+   * show (Julian, 1.11.2026). The founder restates it all once more, in today's shape, under the current key, so
+   * everyone who read an old one reads the new one.
+   */
+  #recarry(space: StoredSpace, state: SpaceState): number {
+    if (space.kind === 'direct' || space.founder !== this.identity.author || (state.history?.value ?? 'all') === 'all') return 0;
+    const epochOf = (d: Decoded) => Number((d.event.body as { epoch?: unknown } | null)?.epoch);
+    // Our carries as written (the decoded views have them only as the events they restate).
+    const scope = spaceScope(space);
+    const carries = this.replica
+      .events((r) => r.scope === scope && r.author === this.identity.author && r.kind === KIND_SEALED)
+      .flatMap((r) => {
+        const d = this.#decode(r);
+        return d && d.inner.kind === KIND_CARRY ? [d] : [];
+      });
+    const old = carries.filter((d) => (d.inner.body as { v?: unknown } | null)?.v !== 3).map(epochOf).filter(Number.isSafeInteger);
+    if (!old.length) return 0;
+    const newest = Math.max(...old);
+    if (carries.some((d) => (d.inner.body as { v?: unknown } | null)?.v === 3 && epochOf(d) >= newest)) return 0;
+    return this.#carry(space, new Set([String(currentEpoch(space))])) ? 1 : 0;
   }
 
   /**
@@ -1967,7 +1994,9 @@ export class WeaveNode implements Backend {
    * envelope: signed by its author's key, in this space, sealing exactly what
    * the carry says (ih). Who wrote it and when come from that envelope, never
    * from the carry. Items that can't be checked count only in our own private
-   * carries (`unchecked`): anyone else could make them up.
+   * carries (`unchecked`): anyone else could make them up. One exception: an
+   * envelope from before protocol 3 (no inner hash), restated by the space's
+   * founder, who vouches for what it sealed.
    */
   #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined, unchecked = false): Decoded[] {
     if (d.inner.kind !== KIND_CARRY || !space) return [];
@@ -1984,7 +2013,12 @@ export class WeaveNode implements Backend {
       const signed = sealed && typeof sealed.kind === 'string' ? { kind: sealed.kind, body: (sealed.body ?? null) as Json } : inner;
       const opened = signed === inner ? undefined : space.kind === 'project' ? openBoard(space, signed, space.boards) : undefined;
       const opensTo = signed === inner || (!!opened && opened.kind === inner.kind && canonicalJson(opened.body) === canonicalJson(inner.body));
-      if (isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e)) {
+      const checked = isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e);
+      // An envelope from before protocol 3 signs no inner hash: what it sealed can't be checked against it. Its author,
+      // signer, number and time still can (its signature), and the space's founder vouches for the rest: in a space
+      // that lets newcomers read only from when they come, that's how they learn what came before (Julian, 1.11.2026).
+      const vouched = !checked && !sealed && isWellFormedV2(e) && e.ih === undefined && e.kind === KIND_SEALED && e.space === scope && d.event.author === space.founder && verifyEventV2(e);
+      if (checked || vouched) {
         const id = canonicalIdV2(e);
         if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
         const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, cseq: e.class === 'control' ? e.seq : undefined, cs: e.class === 'content' ? e.cs : undefined, time: e.time, body: null };
@@ -3676,6 +3710,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#handMissedKeys(space, this.#state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#recarry(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
     changed += this.#forget();
