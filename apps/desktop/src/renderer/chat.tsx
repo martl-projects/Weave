@@ -1,16 +1,18 @@
 import data from '@emoji-mart/data';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
+import type { Attachment } from '@weave/core';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { CharCount } from './editor.tsx';
 import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
-import { ask, attempt, Avatar, loadEmbeds } from './ui.tsx';
+import { ask, attempt, Avatar, loadEmbeds, toast } from './ui.tsx';
 import { Marks } from './marks.tsx';
 import { HintSigns, useHints } from './notify.tsx';
 import { AnnounceCard } from './announce.tsx';
+import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, uploadFile } from './attachments.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -121,7 +123,8 @@ function Message({
               <time>{`${dayLabel(m.time)} at ${clock(m.time)}`}</time>
             </div>
           )}
-          <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />
+          {m.text && <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />}
+          {m.file && <AttachmentView file={m.file} />}
           {m.announce && <AnnounceCard space={space} announce={m.announce} />}
           {m.reactions.length > 0 && (
             <div className="reactions">
@@ -187,6 +190,19 @@ function Composer({
   const [picking, setPicking] = useState(false);
   const [suggestIndex, setSuggestIndex] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
+  // One file per message: picked here, uploaded when sent (shrunk if it is a picture), taken off with ✕ before.
+  const [file, setFile] = useState<File>();
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const pick = (e: ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0];
+    e.target.value = '';
+    if (!picked) return;
+    // Pictures shrink before the check; anything else is sent as it is.
+    if (!picked.type.startsWith('image/') && picked.size > MAX_FILE) return void toast(`${picked.name} is too big: files are at most 2 MB`, 'error');
+    setFile(picked);
+    area.current?.focus();
+  };
 
   useEffect(() => {
     if (replyTo) area.current?.focus();
@@ -212,11 +228,24 @@ function Composer({
 
   const send = async () => {
     const message = text.trim();
-    if (!message) return;
+    if ((!message && !file) || uploading) return;
+    let attachment: Attachment | undefined;
+    if (file) {
+      setUploading(true);
+      attachment = await attempt(() => uploadFile(file));
+      setUploading(false);
+      if (!attachment) return; // the file stays in the composer, the error said why
+    }
     setText('');
+    setFile(undefined);
     onCancelReply();
-    const sent = await attempt(() => api('say', post ? { post, text: message, replyTo: replyTo?.id } : { space: space.id, channel, text: message, replyTo: replyTo?.id }));
-    if (sent === undefined) setText(message); // keep it if sending failed
+    const where = post ? { post } : { space: space.id, channel };
+    const sent = await attempt(() => api('say', { ...where, text: message, replyTo: replyTo?.id, ...(attachment ? { file: attachment } : {}) }));
+    if (sent === undefined) {
+      // Keep it all if sending failed.
+      setText(message);
+      setFile(file);
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -245,7 +274,7 @@ function Composer({
       {replyTo && (
         <div className="replying">
           Replying to <b>{replyTo.by.name ?? 'someone'}</b>
-          <span className="reply-text">{plain(replyTo.text)}</span>
+          <span className="reply-text">{plain(replyTo.text) || fileLine(replyTo.file)}</span>
           <button onClick={onCancelReply} title="Cancel reply">
             ✕
           </button>
@@ -260,12 +289,17 @@ function Composer({
           ))}
         </div>
       )}
-      <div className={`composer${replyTo ? ' with-reply' : ''}`}>
+      {file && <AttachedChip file={file} uploading={uploading} onRemove={() => setFile(undefined)} />}
+      <div className={`composer${replyTo || file ? ' with-reply' : ''}`}>
+        <input ref={fileInput} type="file" hidden onChange={pick} />
+        <button className="emoji-btn attach-btn" title="Attach a file or image (at most 2 MB)" disabled={uploading} onClick={() => fileInput.current?.click()}>
+          <Icon name="attachment" />
+        </button>
         <textarea
           ref={area}
           rows={1}
           value={text}
-          placeholder={post ? 'Chat about this post…' : space.kind === 'direct' ? `Message @${space.name}` : `Message #${channel}`}
+          placeholder={file ? `Say something about ${file.name}, or just send it` : post ? 'Chat about this post…' : space.kind === 'direct' ? `Message @${space.name}` : `Message #${channel}`}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -311,7 +345,11 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller,
-    estimateSize: (i) => (rows[i]?.kind === 'day' ? 44 : (rows[i] as Extract<Row, { kind: 'msg' }>).compact ? 26 : 62),
+    estimateSize: (i) => {
+      if (rows[i]?.kind === 'day') return 44;
+      const row = rows[i] as Extract<Row, { kind: 'msg' }>;
+      return (row.compact ? 26 : 62) + (row.m.file ? (isImage(row.m.file.type) ? 240 : 40) : 0);
+    },
     overscan: 12,
     getItemKey: (i) => rows[i].key,
   });

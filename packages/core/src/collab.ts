@@ -2,6 +2,7 @@ import { TEXT_LIMITS } from './limits.ts';
 import type { Json } from './bytes.ts';
 import type { EventView } from './records.ts';
 import type { Did } from './keys.ts';
+import { attachmentOf, type Attachment } from './blobs.ts';
 
 /*
  * Working together inside a group (or in public). All of these are ordinary
@@ -10,7 +11,8 @@ import type { Did } from './keys.ts';
  *
  *   weave.thread        {title, text}                     start a discussion
  *   weave.reply         {target, text}                    reply to a thread, issue or proposal
- *   weave.msg           {text, channel, post, replyTo}    chat message in a channel (default "general") or in a post's chat, optionally replying to one;
+ *   weave.msg           {text, channel, post, replyTo, file}  chat message in a channel (default "general") or in a post's chat, optionally replying to one;
+ *                                                         file {ref, name, size, type}: a file or image attached (its blob by wblob: reference); text may be empty then;
  *                                                         weave.post.delete {target} takes it down too (its author, or the space's maintainers or moderators)
  *   weave.channel       {name, topic}                     create a chat channel
  *   weave.react         {target, emoji, on}               add or remove an emoji reaction on any event
@@ -113,6 +115,8 @@ export interface Message {
   reactions: Reaction[];
   /** It announces something live in the project: a website opened, a version offered (by its id there). */
   announce?: Announce;
+  /** A file or image attached: its blob and what the message says about it. */
+  file?: Attachment;
 }
 
 /** What a message announces: a website (its id, or the service hosting it) or a released version (its artifact id). */
@@ -240,13 +244,15 @@ export function messagesOf(entries: Entry[], where: { channel?: string; post?: s
   const reactions = reactionsOf(entries);
   const deleted = deletedMessages(entries, maintainers);
   return entries
-    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && str(e.body, 'text') && !deleted.has(e.id))
+    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && (str(e.body, 'text') || (e.kind === KIND_MSG && attachmentOf(e.body))) && !deleted.has(e.id))
     .map((e) => {
       const replyTo = str(e.body, 'replyTo', 200);
       const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);
       const announce = e.kind === KIND_MSG ? announceOf(e.body) : undefined;
+      const file = e.kind === KIND_MSG ? attachmentOf(e.body) : undefined;
       return {
         ...(announce ? { announce } : {}),
+        ...(file ? { file } : {}),
         id: e.id,
         author: e.event.author,
         signer: e.event.signer,

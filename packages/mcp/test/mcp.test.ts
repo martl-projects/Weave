@@ -1,5 +1,5 @@
 import { closeOpenStores } from '@weave/node';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -187,6 +187,22 @@ describe('Weave over MCP', () => {
     expect((await node.project('Weave')).page.subtitle).toBe('Build together');
     // Making it public also needs weave.project.public.
     expect((await call('weave_set_project_page', { project: 'Weave', public: true })).error).toMatch(/weave\.project\.public/);
+    close();
+  });
+
+  it('attaches a file to a message and gets it back', async () => {
+    const { node, call, close } = await setup();
+    const log = join(node.home.dir, 'build.log');
+    writeFileSync(log, 'all green\n');
+    expect((await call('weave_say', { space: 'Weave' })).error).toMatch(/say something, or attach/);
+    const said = (await call('weave_say', { space: 'Weave', text: 'the log', file: log })).data;
+    expect(said.file).toMatchObject({ name: 'build.log', size: 10, type: 'text/plain' });
+    expect(said.file.ref).toMatch(/^wblob:/);
+    const [message] = (await call('weave_chat', { space: 'Weave' })).data;
+    expect(message.file).toEqual(said.file);
+    const to = join(node.home.dir, 'got.log');
+    expect((await call('weave_get_file', { ref: message.file.ref, to })).data).toMatchObject({ path: to, type: 'text/plain', size: 10 });
+    expect(readFileSync(to, 'utf8')).toBe('all green\n');
     close();
   });
 

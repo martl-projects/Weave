@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseUnits, TEST_USDC, whoWords, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseBlobRef, parseUnits, TEST_USDC, whoWords, type Attachment, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -130,6 +130,7 @@ projects — something being built; participants chat, discuss, vote and work on
                                                            [--status idea|active|paused|shipped|archived] [--public | --private]
 
   image <file>                           upload an image; prints its wblob: reference for Markdown: ![alt](wblob:…)
+  get <wblob:…> [--to <path>]            save an image or a file someone attached (its wblob: reference, as chat shows it)
   project invite <project>               print an invite link (maintainers)  [--hours <n>] [--accept]
                                          [--read-board <b,…>] [--write-board <b,…>]: board rights the link gives
   project join <link>                    join with an invite link (or ask to, with an --accept link)  [--text <note>]
@@ -386,8 +387,8 @@ direct chats with friends (people you follow who follow you back):
   dm <who> <text...>         send them a message              [--reply <id>]
 
 chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
-  chat                       recent messages            [-c <channel>] [-n <count>]
-  say <text...>              send a message             [-c <channel>] [--reply <id>]
+  chat                       recent messages            [-c <channel>] [-n <count>]   (a file attached shows as 📎 name (size) wblob:…)
+  say <text...>              send a message             [-c <channel>] [--reply <id>] [--file <path>: attach a file or image, at most 2 MB; text optional then]
   unsay <id>                 take a message down: yours, or any where you moderate (it stays in the logs)
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
   react <id> <emoji>         react to a message, post, thread or issue; --off to take it back
@@ -915,6 +916,33 @@ async function uploadImage(b: Backend, path: string): Promise<string> {
   if (!type) throw new Error(`images are ${Object.keys(IMAGE_TYPES).join(', ')} files`);
   return b.putBlob({ data: readFileSync(path).toString('base64'), type });
 }
+
+/** Media types by extension, for files attached to chat messages; anything else goes as application/octet-stream. */
+const FILE_TYPES: Record<string, string> = {
+  ...IMAGE_TYPES,
+  svg: 'image/svg+xml',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  log: 'text/plain',
+  csv: 'text/csv',
+  json: 'application/json',
+  zip: 'application/zip',
+  mp3: 'audio/mpeg',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+};
+
+/** Upload a file of any type (at most 2 MB), to attach to a chat message. */
+async function uploadFile(b: Backend, path: string): Promise<Attachment> {
+  const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), path);
+  const bytes = readFileSync(file);
+  if (bytes.length > 2 * 1024 * 1024) throw new Error(`${basename(file)} is ${(bytes.length / 1024 / 1024).toFixed(1)} MB; files are at most 2 MB`);
+  return b.putFile({ data: bytes.toString('base64'), name: basename(file), type: FILE_TYPES[file.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream' });
+}
+
+/** A size as people read it. */
+const fileSize = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 /**
  * The contacts and free tiers a new identity starts with: a company's own, placed
@@ -2835,7 +2863,8 @@ ${postLine(p)}`);
             const time = new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const reply = m.replyTo ? `  ↪ ${actor(m.replyTo.by)}: ${m.replyTo.text.slice(0, 40)}\n` : '';
             const reactions = m.reactions.length ? `  ${m.reactions.map((r) => `${r.emoji}${r.count}`).join(' ')}` : '';
-            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel || values.post ? '' : `#${m.channel} `}${m.text}${reactions}`;
+            const file = m.file ? `${m.text ? '\n  ' : ''}📎 ${m.file.name} (${fileSize(m.file.size)}, ${m.file.type})  ${m.file.ref}` : '';
+            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel || values.post ? '' : `#${m.channel} `}${m.text}${file}${reactions}`;
           })
           .join('\n') || '(quiet so far)',
       );
@@ -2843,9 +2872,22 @@ ${postLine(p)}`);
 
     case 'say': {
       const text = args.join(' ').trim();
-      if (!text) throw new Error('usage: weave say <text...> -p <project> | -g <group> | -r <community> | --post <id>');
-      const m = await (await backend()).say({ space: values.post ? undefined : needSpace(), post: values.post, text, channel: values.channel, replyTo: values.reply, as: values.as });
-      return out(m, () => `${actor(m.by)}: ${m.text}`);
+      if (!text && !values.file) throw new Error('usage: weave say <text...> -p <project> | -g <group> | -r <community> | --post <id>   [--file <path>]');
+      const b = await backend();
+      const file = values.file ? await uploadFile(b, values.file) : undefined;
+      const m = await b.say({ space: values.post ? undefined : needSpace(), post: values.post, text, channel: values.channel, replyTo: values.reply, as: values.as, ...(file ? { file } : {}) });
+      return out(m, () => `${actor(m.by)}: ${m.text}${m.file ? `${m.text ? '\n  ' : ''}📎 ${m.file.name} (${fileSize(m.file.size)})` : ''}`);
+    }
+
+    case 'get': {
+      const ref = parseBlobRef(args[0]);
+      if (!ref) throw new Error('usage: weave get <wblob:…> [--to <path>]   (the reference weave chat shows next to 📎)');
+      const got = await (await backend()).blob(args[0]);
+      const ext = Object.entries(FILE_TYPES).find(([, type]) => type === got.type)?.[0];
+      const to = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.to ?? `${ref.hash.slice(0, 12)}${ext ? `.${ext}` : ''}`);
+      const bytes = Buffer.from(got.data, 'base64');
+      writeFileSync(to, bytes);
+      return out({ path: to, type: got.type, size: bytes.length }, () => `${to}  (${got.type}, ${fileSize(bytes.length)})`);
     }
 
     case 'channels': {

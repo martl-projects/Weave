@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { blobHash, MAX_BLOB } from '@weave/core';
 import type { BlobSource } from '@weave/net';
@@ -46,6 +46,11 @@ export class BlobStore implements BlobSource {
     return hash;
   }
 
+  /** Forget a blob: its file goes (nothing happens if it isn't here). */
+  drop(hash: string): void {
+    if (this.has(hash)) rmSync(this.#path(hash), { force: true });
+  }
+
   receive(hash: string, data: Uint8Array): void {
     if (this.#waiting.has(hash) && data.length <= MAX_BLOB && blobHash(data) === hash) this.put(data);
   }
@@ -70,7 +75,7 @@ export class BlobStore implements BlobSource {
         const rest = (this.#waiting.get(hash) ?? []).filter((d) => d !== done);
         if (rest.length) this.#waiting.set(hash, rest);
         else this.#waiting.delete(hash);
-        reject(new Error("couldn't get that image from anyone online right now"));
+        reject(new Error("couldn't get that file from anyone online right now"));
       }, timeoutMs);
       const first = !this.#waiting.has(hash);
       this.#waiting.set(hash, [...(this.#waiting.get(hash) ?? []), done]);

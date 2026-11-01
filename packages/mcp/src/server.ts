@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { readFileSync, statSync } from 'node:fs';
-import { extname } from 'node:path';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, extname } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
 import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, wasmReleaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
@@ -551,7 +551,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_chat',
     {
       title: 'Read chat',
-      description: "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat.",
+      description: "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat. A message's file (name, size, type, ref) is a file or image attached: weave_get_file saves it here.",
       inputSchema: {
         space: z.string().optional().describe('Project, group or community name or id'),
         channel: z.string().optional(),
@@ -563,22 +563,54 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     run(async ({ space, channel, post, limit }: { space?: string; channel?: string; post?: string; limit?: number }) => backend.messages(space, { channel, post, limit: limit ?? 50 })),
   );
 
+  /** Media types by extension for files attached to chat; anything else goes as application/octet-stream. */
+  const FILE_TYPES: Record<string, string> = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown', '.log': 'text/plain', '.csv': 'text/csv', '.json': 'application/json', '.zip': 'application/zip',
+    '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.webm': 'video/webm',
+  };
+
   server.registerTool(
     'weave_say',
     {
       title: 'Send a chat message',
-      description: 'Send a short chat message to a channel (default "general") of a project, group or community, or into a post\'s chat, optionally as a reply to a message id.',
+      description:
+        'Send a short chat message to a channel (default "general") of a project, group or community, or into a post\'s chat, optionally as a reply to a message id. With file (a path on this computer, at most 2 MB) the file or image goes with it, encrypted, for the chat\'s readers to fetch; text may be empty then.',
       inputSchema: {
         space: z.string().optional().describe('Project, group or community name or id'),
         post: z.string().min(6).optional().describe('Talk in this post\'s chat instead of a channel'),
-        text: z.string().min(1),
+        text: z.string().optional(),
         channel: z.string().optional(),
         reply_to: z.string().min(6).optional(),
+        file: z.string().optional().describe('Path of a file or image to attach (at most 2 MB)'),
       },
     },
-    run(async ({ space, post, text, channel, reply_to }: { space?: string; post?: string; text: string; channel?: string; reply_to?: string }) =>
-      backend.say({ space, post, text, channel, replyTo: reply_to, as }),
-    ),
+    run(async ({ space, post, text, channel, reply_to, file }: { space?: string; post?: string; text?: string; channel?: string; reply_to?: string; file?: string }) => {
+      if (!text?.trim() && !file) throw new Error('say something, or attach a file');
+      let attachment;
+      if (file) {
+        const size = statSync(file).size;
+        if (size > 2 * 1024 * 1024) throw new Error(`${file} is ${(size / 1024 / 1024).toFixed(1)} MB; files are at most 2 MB`);
+        attachment = await backend.putFile({ data: readFileSync(file).toString('base64'), name: basename(file), type: FILE_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream' });
+      }
+      return backend.say({ space, post, text: text ?? '', channel, replyTo: reply_to, as, ...(attachment ? { file: attachment } : {}) });
+    }),
+  );
+
+  server.registerTool(
+    'weave_get_file',
+    {
+      title: 'Get a file from chat',
+      description:
+        "Save a file or image attached to a chat message (its wblob: reference, in weave_chat's file.ref) to a path on this computer, fetched from peers if it isn't here yet (fails after a while when nobody online has it). Read the saved file with your own tools.",
+      inputSchema: { ref: z.string().startsWith('wblob:'), to: z.string().describe('Where to save it: a file path') },
+    },
+    run(async ({ ref, to }: { ref: string; to: string }) => {
+      const got = await backend.blob(ref);
+      const bytes = Buffer.from(got.data, 'base64');
+      writeFileSync(to, bytes);
+      return { path: to, type: got.type, size: bytes.length };
+    }),
   );
 
   server.registerTool(

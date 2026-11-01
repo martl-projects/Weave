@@ -379,21 +379,24 @@ export function loadBlobImages(root: HTMLElement): void {
 }
 
 /**
- * Upload an image: shrunk to at most `maxSide` pixels and re-encoded (which also
- * drops metadata such as GPS positions), then stored encrypted. Returns its wblob: reference.
+ * An image shrunk to at most `maxSide` pixels and re-encoded as WebP (which also
+ * drops metadata such as GPS positions); a GIF stays as it is, to keep moving.
  */
-export async function uploadImage(file: Blob, maxSide = 1600): Promise<string> {
+export async function shrinkImage(file: Blob, maxSide: number): Promise<Blob> {
   if (!file.type.startsWith('image/')) throw new Error('that is not an image');
-  let blob: Blob = file;
-  if (file.type !== 'image/gif') {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bitmap.width * scale);
-    canvas.height = Math.round(bitmap.height * scale);
-    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("couldn't read that image"))), 'image/webp', 0.86));
-  }
+  if (file.type === 'image/gif') return file;
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("couldn't read that image"))), 'image/webp', 0.86));
+}
+
+/** Upload an image, shrunk (see shrinkImage) and stored encrypted. Returns its wblob: reference. */
+export async function uploadImage(file: Blob, maxSide = 1600): Promise<string> {
+  const blob = await shrinkImage(file, maxSide);
   if (blob.size > 2 * 1024 * 1024) throw new Error('images are at most 2 MB');
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = '';
