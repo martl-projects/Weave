@@ -118,6 +118,8 @@
   overflow: hidden;
 }
 :root[data-skin='clean'] .app-window.window { border: none; border-radius: 0; box-shadow: none; overflow: visible; }
+/* A dialog taller than the window scrolls (Save is at its bottom). */
+:root[data-skin='clean'] .window.modal { overflow-y: auto; }
 :root[data-skin='clean'] .window-body { margin: 16px; }
 :root[data-skin='clean'] .title-bar,
 :root[data-skin='clean'] .title-bar.inactive {
