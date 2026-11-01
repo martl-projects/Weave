@@ -25,8 +25,8 @@ describe('the texts check', () => {
     expect([...used.candidates]).toEqual(['a.b', 'c.d', 'e.f', 'g.h', 'i.j', 'k.l', 'weave.skin']);
   });
 
-  it("lets the product's name and a toast's kind through", () => {
-    expect(findHardcoded('a.tsx', "toast(t('x.y'), 'error'); const b = <b>Weave</b>;")).toEqual([]);
+  it("lets the product's name, a toast's kind and code shown as code through", () => {
+    expect(findHardcoded('a.tsx', "toast(t('x.y'), 'error'); const b = <b>Weave</b>; const c = <p><code>weave app publish -p \"{name}\"</code> <pre>npm start</pre></p>;")).toEqual([]);
   });
 
   it('passes on this checkout: nothing hard-coded off the allowlist, packages in step with the code', () => {

@@ -72,6 +72,8 @@ const keyName = (key: b.Node): string | undefined => (b.isIdentifier(key) ? key.
 const jsxName = (name: b.JSXIdentifier | b.JSXNamespacedName): string => (b.isJSXIdentifier(name) ? name.name : `${name.namespace.name}:${name.name.name}`);
 
 /** The hard-coded texts of one file. */
+const CODE_TAGS = new Set(['code', 'pre', 'kbd']);
+
 export function findHardcoded(file: string, source: string): Finding[] {
   const findings: Finding[] = [];
   const add = (node: b.Node, text: string) => findings.push({ file, line: node.loc?.start.line ?? 0, text: text.trim().slice(0, 60) });
@@ -98,8 +100,13 @@ export function findHardcoded(file: string, source: string): Finding[] {
       literalsIn(node.expression);
     }
   };
+  // Code shown as code (<code>, <pre>, <kbd>) is no text: it's the same in every language.
+  const code = new WeakSet<b.Node>();
   walk(parseSource(file, source), (node) => {
-    if (b.isJSXText(node)) {
+    if (b.isJSXElement(node) && b.isJSXIdentifier(node.openingElement.name) && CODE_TAGS.has(node.openingElement.name.name)) {
+      for (const child of node.children) code.add(child);
+    } else if (b.isJSXText(node)) {
+      if (code.has(node)) return;
       if (LETTERS.test(node.value) && !NOT_TEXT.has(node.value.trim())) add(node, node.value);
     } else if (b.isJSXAttribute(node) && node.value && TEXT_KEYS.has(jsxName(node.name))) {
       literalsIn(node.value);
