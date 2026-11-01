@@ -217,6 +217,7 @@ export {
   KIND_UPVOTE,
   POST_SORTS,
   postsOf,
+  sceneOf,
   rank,
   SAVE_MODES,
   savesOf,

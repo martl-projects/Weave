@@ -1,0 +1,134 @@
+// Weave avatars: everyone's figure (a public weave.avatar event, a few numbers), drawn by Weave avatar's renderer
+// (martl-projects/weave-avatar, pinned; it ships as dist/renderer/avatar3d/weave-avatar.js and loads when first needed).
+// Someone without one shows as their pixel sprite; in a scene, as the figure their key makes.
+
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { api, onItem } from './lib.ts';
+
+export type Figure = Record<string, number>;
+
+/** What Weave uses of the renderer (see the weave-avatar repository's README). */
+export interface AvatarLib {
+  Avatar: {
+    PARTS: Record<string, number>;
+    ADJUST: Record<string, number>;
+    COLORS: Record<string, string[]>;
+    clean(a: unknown): Figure;
+    random(): Figure;
+    fromSeed(text: string): Figure;
+    offset(a: Figure, key: string): number;
+  };
+  snapshot(a: Figure, kind?: 'head' | 'bust'): Promise<string>;
+  sceneSnapshot(a: Figure, scene: string, size?: number): Promise<string>;
+  mountViewer(el: HTMLElement): { set(a: Figure, bounce?: boolean): void; dispose(): void };
+  loadFaceSprites(): Promise<void>;
+  thumb(part: string, a: Figure, size?: number): string;
+  partNames(part: string): string[];
+  SCENES: Array<{ id: string; label: string }>;
+}
+
+let lib: Promise<AvatarLib> | undefined;
+/** The renderer, loaded once (three.js and the figure: about 2 MB, so only when an avatar is drawn). */
+export function avatarLib(): Promise<AvatarLib> {
+  lib ??= import(/* not bundled: it's the pinned release */ new URL('./avatar3d/weave-avatar.js', import.meta.url).href) as Promise<AvatarLib>;
+  return lib;
+}
+
+// ---------------------------------------------------------------- whose figure is what (asked in batches, kept)
+
+const figures = new Map<string, Figure | null>();
+const wanted = new Set<string>();
+const listeners = new Set<() => void>();
+let version = 0;
+let asking: ReturnType<typeof setTimeout> | undefined;
+
+function changed(): void {
+  version++;
+  for (const listener of listeners) listener();
+}
+
+function want(did: string): void {
+  if (figures.has(did) || wanted.has(did)) return;
+  wanted.add(did);
+  asking ??= setTimeout(() => {
+    asking = undefined;
+    const people = [...wanted];
+    wanted.clear();
+    for (const did of people) figures.set(did, null);
+    void api<Record<string, Figure>>('avatars', people)
+      .then((found) => {
+        for (const did of people) figures.set(did, found[did] ?? null);
+        changed();
+      })
+      .catch(() => {});
+  }, 30);
+}
+
+// Someone changed theirs: ask again.
+onItem((item) => {
+  if (item.kind !== 'weave.avatar' || !figures.has(item.author)) return;
+  figures.delete(item.author);
+  changed();
+});
+
+/** Forget what we know of someone's figure (after you changed yours). */
+export function forgetFigure(did: string): void {
+  figures.delete(did);
+  changed();
+}
+
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+};
+
+/** Someone's figure: theirs, null when they have none, undefined while it's asked for. */
+export function useFigure(did: string): Figure | null | undefined {
+  useSyncExternalStore(subscribe, () => version);
+  useEffect(() => want(did), [did]);
+  return figures.get(did);
+}
+
+/** A picture from the renderer, once it's drawn. */
+function usePicture(draw: ((l: AvatarLib) => Promise<string>) | undefined, key: string): string | undefined {
+  const [url, setUrl] = useState<{ key: string; url: string }>();
+  useEffect(() => {
+    if (!draw) return;
+    let live = true;
+    avatarLib()
+      .then(draw)
+      .then((u) => live && setUrl({ key, url: u }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return url?.key === key ? url.url : undefined;
+}
+
+/** Someone's head, as their avatar shows it; fallback while it's drawn (or when it can't be). */
+export function FigureHead({ figure, fallback }: { figure: Figure; fallback: ReactNode }) {
+  const url = usePicture((l) => l.snapshot(figure, 'head'), JSON.stringify(figure));
+  return url ? <img className="figure-head" src={url} alt="" draggable={false} /> : <>{fallback}</>;
+}
+
+/** Someone's avatar in a scene ("idea": pointing up, a light bulb above): their figure, or the one their key makes. */
+export function SceneImage({ did, scene, size = 256, className = '' }: { did: string; scene: string; size?: number; className?: string }) {
+  const figure = useFigure(did);
+  const url = usePicture(figure === undefined ? undefined : (l) => l.sceneSnapshot(figure ?? l.Avatar.fromSeed(did), scene, size), `${scene}:${size}:${JSON.stringify(figure ?? did)}`);
+  return <span className={`scene-image ${className}`}>{url && <img src={url} alt={sceneLabel(scene)} title={sceneLabel(scene)} draggable={false} />}</span>;
+}
+
+// The scenes' names, once the renderer is here (they come with it).
+let labels: Record<string, string> = {};
+export function useScenes(): Array<{ id: string; label: string }> | undefined {
+  const [scenes, setScenes] = useState<Array<{ id: string; label: string }>>();
+  useEffect(() => {
+    void avatarLib().then((l) => {
+      labels = Object.fromEntries(l.SCENES.map((s) => [s.id, s.label]));
+      setScenes(l.SCENES);
+    });
+  }, []);
+  return scenes;
+}
+export const sceneLabel = (id: string) => labels[id] ?? id;

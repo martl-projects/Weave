@@ -1,8 +1,9 @@
 // Bundles the desktop app: main and preload for Electron (CommonJS), the
 // renderer for the browser, plus its static files.
 
-import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, readFileSync } from 'node:fs';
 import { build } from 'esbuild';
+import { pinnedRelease } from '../../packages/shipped/pinned.ts';
 
 mkdirSync('dist/renderer', { recursive: true });
 
@@ -52,6 +53,8 @@ await Promise.all([
 ]);
 
 copyFileSync('src/renderer/index.html', 'dist/renderer/index.html');
+// Weave avatar's renderer (its own repository, pinned): one module and its files, loaded when an avatar is drawn.
+cpSync(await pinnedRelease('avatar'), 'dist/renderer/avatar3d', { recursive: true });
 // The tray icon (see src/main.ts).
 copyFileSync('assets/icon.png', 'dist/icon.png');
 console.log('desktop app built');

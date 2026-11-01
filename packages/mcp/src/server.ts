@@ -387,10 +387,11 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         link: z.string().url().optional(),
         board: z.string().optional(),
         prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it (its starting prompt)'),
+        scene: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing"),
       },
     },
-    run(async ({ space, title, text, link, board, prompt }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string }) =>
-      backend.submit({ space, board, title, text, link, prompt, as }),
+    run(async ({ space, title, text, link, board, prompt, scene }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string; scene?: string }) =>
+      backend.submit({ space, board, title, text, link, prompt, scene, as }),
     ),
   );
 
@@ -399,17 +400,18 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Edit a post',
       description:
-        'Change the title, text, link or starting prompt of your own post (an empty link or prompt removes it). Leave out what stays the same. Everyone sees it marked as edited.',
+        'Change the title, text, link, starting prompt or scene of your own post (an empty link, prompt or scene removes it). Leave out what stays the same. Everyone sees it marked as edited.',
       inputSchema: {
         post: z.string().min(6),
         title: z.string().min(1).max(200).optional(),
         text: z.string().optional(),
         link: z.union([z.string().url(), z.literal('')]).optional(),
         prompt: z.string().max(4000).optional().describe('As a work item: what a session should do with it'),
+        scene: z.union([z.string().regex(/^[a-z][a-z0-9-]{0,23}$/), z.literal('')]).optional().describe("Decorate it with your person's avatar in a scene: idea (a light bulb), celebrate, shipped, bug, question, thinking, hello, coffee, thanks, fixing; empty removes it"),
       },
     },
-    run(async ({ post, title, text, link, prompt }: { post: string; title?: string; text?: string; link?: string; prompt?: string }) =>
-      backend.editPost({ post, title, text, link, prompt, as }),
+    run(async ({ post, title, text, link, prompt, scene }: { post: string; title?: string; text?: string; link?: string; prompt?: string; scene?: string }) =>
+      backend.editPost({ post, title, text, link, prompt, scene, as }),
     ),
   );
 

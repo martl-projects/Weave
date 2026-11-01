@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
+import { FigureHead, useFigure } from './avatar.tsx';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -57,10 +58,13 @@ export function ProjectIcon({ id, icon, size = 40, className = '' }: { id: strin
   );
 }
 
+/** Someone's picture: their avatar (Weave avatar), or else their pixel sprite. */
 export function Avatar({ did, size = 32, status }: { did: string; name?: string; size?: number; status?: 'online' | 'offline' }) {
+  const figure = useFigure(did);
+  const sprite = <Sprite seed={did} size={size} face />;
   return (
     <span className="avatar" style={{ width: size, height: size }}>
-      <Sprite seed={did} size={size} face />
+      {figure ? <FigureHead figure={figure} fallback={sprite} /> : sprite}
       {status && <i className={`presence ${status}`} />}
     </span>
   );

@@ -16,6 +16,7 @@ import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
 import { SetupPackDialog } from './packs.tsx';
+import { AvatarEditor } from './avatar-editor.tsx';
 import type { Pack } from '@weave/core';
 
 const textOf = (item: FeedItem): string => {
@@ -116,6 +117,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
   const p = profile.data;
   const posts = useApi(() => (p ? api<FeedItem[]>('feed', { author: p.did, publicOnly: true, kinds: ['weave.post'], limit: 100 }) : Promise.resolve([])), [p?.did]);
   const [editing, setEditing] = useState(false);
+  const [avatar, setAvatar] = useState(false);
   const [text, setText] = useState('');
   if (!p) return <Page title="Hub">{null}</Page>;
   const name = p.name ?? shortDid(p.did);
@@ -123,7 +125,14 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
     <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: kind, who: p.did, on }).then(bump))}>{label}</AsyncButton>
   );
   return (
-    <Page title={<>{p.me ? 'My hub' : `${name}'s hub`}</>} actions={p.me && <button onClick={() => setEditing(true)}>Customize…</button>}>
+    <Page title={<>{p.me ? 'My hub' : `${name}'s hub`}</>} actions={
+        p.me && (
+          <>
+            <button onClick={() => setAvatar(true)}>Avatar…</button> <button onClick={() => setEditing(true)}>Customize…</button>
+          </>
+        )
+      }
+    >
       <div className="space" style={themeVars(p.theme) as React.CSSProperties} data-pattern={p.theme.pattern}>
         <header className="space-box space-head">
           <Avatar did={p.did} size={96} />
@@ -214,6 +223,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           }}
         />
       )}
+      {avatar && <AvatarEditor me={p} onClose={() => setAvatar(false)} />}
     </Page>
   );
 }

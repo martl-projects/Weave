@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 const here = import.meta.dirname;
@@ -32,9 +32,11 @@ export interface Pin {
   /** owner/name on GitHub. */
   repo: string;
   tag: string;
-  /** The release's archive: the component, weave.app.json and README.md. */
+  /** The release's archive: the component, weave.app.json and README.md (a library: its files and README.md). */
   asset: string;
   sha256: string;
+  /** Not a service: files the app ships as they are (Weave avatar's renderer, say). */
+  library?: true;
 }
 
 export function pins(): Record<string, Pin> {
@@ -47,7 +49,9 @@ export async function pinnedRelease(name: string): Promise<string> {
   const pin = pins()[name];
   if (!pin) throw new Error(`pinned.json pins no ${name}`);
   const dir = join(here, '.cache', `${name}-${pin.sha256.slice(0, 16)}`);
-  if (existsSync(join(dir, 'weave.app.json'))) return dir;
+  // What every such release holds: a service its manifest, a library its README.
+  const marker = pin.library ? 'README.md' : 'weave.app.json';
+  if (existsSync(join(dir, marker))) return dir;
   const archive = join(here, '.cache', `${pin.sha256}.tar.gz`);
   if (!existsSync(archive)) await download(pin, archive);
   const bytes = readFileSync(archive);
@@ -58,12 +62,15 @@ export async function pinnedRelease(name: string): Promise<string> {
   }
   const unpacking = `${dir}.${mine}.part`;
   mkdirSync(unpacking, { recursive: true });
-  for (const [path, content] of untar(gunzipSync(bytes))) writeFileSync(join(unpacking, path), content);
-  if (!existsSync(join(unpacking, 'weave.app.json'))) {
-    rmSync(unpacking, { recursive: true, force: true });
-    throw new Error(`${pin.asset} holds no weave.app.json`);
+  for (const [path, content] of untar(gunzipSync(bytes))) {
+    mkdirSync(dirname(join(unpacking, path)), { recursive: true });
+    writeFileSync(join(unpacking, path), content);
   }
-  settle(unpacking, dir, () => existsSync(join(dir, 'weave.app.json')));
+  if (!existsSync(join(unpacking, marker))) {
+    rmSync(unpacking, { recursive: true, force: true });
+    throw new Error(`${pin.asset} holds no ${marker}`);
+  }
+  settle(unpacking, dir, () => existsSync(join(dir, marker)));
   return dir;
 }
 
@@ -94,7 +101,7 @@ async function download(pin: Pin, to: string): Promise<void> {
   settle(`${to}.${mine}.part`, to, () => existsSync(to));
 }
 
-/** A tar archive's plain files at its top level, by name: all a release's archive holds. */
+/** A tar archive's plain files by their path (folders in it too, never outside it): all a release's archive holds. */
 function untar(tar: Buffer): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
   for (let at = 0; at + 512 <= tar.length; ) {
@@ -104,7 +111,8 @@ function untar(tar: Buffer): Map<string, Buffer> {
     const size = parseInt(field(124, 12).trim() || '0', 8);
     const type = field(156, 1);
     const name = field(0, 100).replace(/^\.\//, '');
-    if ((type === '0' || type === '') && name && !name.includes('/') && !name.includes('\\') && name !== '..') files.set(name, Buffer.from(tar.subarray(at + 512, at + 512 + size)));
+    const parts = name.split('/');
+    if ((type === '0' || type === '') && name && !name.includes('\\') && !name.includes(':') && parts.every((p) => p && p !== '.' && p !== '..')) files.set(name, Buffer.from(tar.subarray(at + 512, at + 512 + size)));
     at += 512 + Math.ceil(size / 512) * 512;
   }
   return files;

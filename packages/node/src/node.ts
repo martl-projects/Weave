@@ -315,6 +315,7 @@ import {
   POST_SORTS,
   postsOf,
   proposalsOf,
+  sceneOf,
   randomBytes,
   recoveryEncryptionKey,
   recoveryIdentity,
@@ -570,9 +571,10 @@ import { checkOnchainPayment, ethCall, rpc, type PaymentChecker } from './onchai
 import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroadAccount, startGumroadSignIn, type GumroadSignIn, type LicenseCheck, type LicenseChecker } from './gumroad.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
+import { KIND_AVATAR, sanitizeFigure, type AvatarFigure } from './avatar.ts';
 
 /** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
-const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
+const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_AVATAR, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
 /** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
 interface Sso {
   idToken: string;
@@ -2333,7 +2335,7 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -2341,11 +2343,14 @@ export class WeaveNode implements Backend {
     if (link && !/^https?:\/\//.test(link)) throw new Error('links start with http:// or https://');
     const image = input.image?.trim();
     if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
+    const scene = input.scene?.trim();
+    if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
     const space = this.#space(input.space);
     if (space.kind === 'group') throw new Error(`${space.name} is a group: groups have chat, posts live in projects and communities`);
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
+    if (scene) body.scene = scene;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
     const prompt = input.prompt?.trim();
     if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
@@ -3109,7 +3114,7 @@ export class WeaveNode implements Backend {
     return out;
   }
 
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
+  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
     const post = await this.#ownPost(input.post, 'edit');
     const body: Record<string, Json> = { target: post.id };
     if (input.title !== undefined) {
@@ -3130,12 +3135,17 @@ export class WeaveNode implements Backend {
       if (image && !parseBlobRef(image)) throw new Error('attach an uploaded image (a wblob: reference)');
       body.image = image;
     }
+    if (input.scene !== undefined) {
+      const scene = input.scene.trim();
+      if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
+      body.scene = scene;
+    }
     if (input.with !== undefined) {
       const space = post.space && this.#spaces.get(post.space.id);
       if (!space) throw new Error("co-authors are named in the space a post is in, and you aren't in it");
       body.with = this.#coauthorList(space, input.with);
     }
-    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link, image or co-authors');
+    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link, image, scene or co-authors');
     await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
     return this.post(post.id);
   }
@@ -3663,6 +3673,7 @@ export class WeaveNode implements Backend {
       name,
       url: personUrl(name, did),
       theme: this.themeOf(did),
+      ...((figure) => (figure ? { avatar: figure } : {}))(this.avatarOf(did)),
       me: did === me,
       following: mine?.following.has(did) ?? false,
       followsMe: graph.get(did)?.following.has(me) ?? false,
@@ -3685,6 +3696,11 @@ export class WeaveNode implements Backend {
     if (input.theme) {
       const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
       this.replica.write(this.identity, { kind: KIND_THEME, body: { ...theme } });
+    }
+    if (input.avatar !== undefined) {
+      const figure = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+      if (input.avatar !== null && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
+      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null } });
     }
     return this.profile();
   }
@@ -3753,6 +3769,23 @@ export class WeaveNode implements Backend {
   }
 
   /** A space's theme: the latest theme event its author published. */
+  /** Someone's avatar: their figure, or none (they show as their sprite). */
+  avatarOf(author: Did): AvatarFigure | undefined {
+    let body: unknown;
+    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
+    return sanitizeFigure((body as { figure?: unknown } | undefined)?.figure);
+  }
+
+  /** The avatars of these people, those who have one: what the app draws for them. */
+  async avatars(people: Did[]): Promise<Record<Did, AvatarFigure>> {
+    const out: Record<Did, AvatarFigure> = {};
+    for (const did of new Set(people.slice(0, 500))) {
+      const figure = this.avatarOf(did);
+      if (figure) out[did] = figure;
+    }
+    return out;
+  }
+
   themeOf(author: Did): Theme {
     let theme: unknown;
     for (const event of this.#eventsOf(author)) if (event.kind === KIND_THEME) theme = event.body;
@@ -8841,6 +8874,7 @@ export class WeaveNode implements Backend {
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
       ...(p.image ? { image: p.image } : {}),
+      ...(p.scene ? { scene: p.scene } : {}),
       ...(p.prompt ? { prompt: p.prompt } : {}),
       ...(p.routine ? { routine: p.routine } : {}),
       time: p.time,

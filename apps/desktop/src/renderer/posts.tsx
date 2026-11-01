@@ -7,6 +7,8 @@ import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectI
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { Marks } from './marks.tsx';
+import { SceneImage } from './avatar.tsx';
+import { ScenePicker } from './avatar-editor.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -226,8 +228,8 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
   return (
     <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
       <VoteBox post={post} />
-      <a className={`thumb${post.image ? ' has-image' : ''}`} href={href}>
-        {post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
+      <a className={`thumb${post.image || post.scene ? ' has-image' : ''}`} href={href}>
+        {post.scene ? <SceneImage did={post.by.did} scene={post.scene} size={128} /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -475,6 +477,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
       )}
       <div className="post-full-main">
         <VoteBox post={post} />
+        {post.scene && <SceneImage did={post.by.did} scene={post.scene} size={320} className="post-scene" />}
         <div className="post-body">
           <h2 className="post-title">
             {post.title} <Badges post={post} />
@@ -557,12 +560,13 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const [text, setText] = useState('');
   const [link, setLink] = useState('');
   const [image, setImage] = useState('');
+  const [scene, setScene] = useState('');
   const [coauthors, setCoauthors] = useState<string[]>([]);
   const writable = boards?.filter((b) => b.canWrite !== false);
   const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, with: coauthors.length ? coauthors : undefined }), 'Posted');
+    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, scene: scene || undefined, with: coauthors.length ? coauthors : undefined }), 'Posted');
     if (post) {
       onClose();
       bump();
@@ -612,6 +616,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
               <ImagePicker value={image} onChange={setImage} label="Image" wide />
             </div>
           ) : null}
+          <ScenePicker value={scene} onChange={setScene} />
           <div className="field-row-stacked">
             <label>Text (optional)</label>
             <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
@@ -678,12 +683,13 @@ function CoauthorPicker({ space, value, onChange }: { space: string; value: stri
   );
 }
 
-/** Change your own post: title, link and text. */
+/** Change your own post: title, link, image, scene and text. */
 function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) {
   const [title, setTitle] = useState(post.title);
   const [text, setText] = useState(post.text);
   const [link, setLink] = useState(post.link ?? '');
   const [image, setImage] = useState(post.image ?? '');
+  const [scene, setScene] = useState(post.scene ?? '');
   const { data: me } = useApi(() => api<{ did: string }>('whoami'), []);
   // The picker's keys: people by did, your own agents by name, others' agents as "did·agent".
   const named = (post.coauthors ?? []).map((c) => (!c.agent ? c.did : me && c.did === me.did ? c.agent : `${c.did}·${c.agent}`));
@@ -696,6 +702,7 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
     if (text !== post.text) changes.text = text;
     if (link.trim() !== (post.link ?? '')) changes.link = link.trim();
     if (image !== (post.image ?? '')) changes.image = image;
+    if (scene !== (post.scene ?? '')) changes.scene = scene;
     if (!Object.keys(changes).length) return onClose();
     const saved = await attempt(() => api<PostInfo>('editPost', { post: post.id, ...changes }), 'Saved');
     if (saved) {
@@ -718,6 +725,7 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
           <label>Image (optional)</label>
           <ImagePicker value={image} onChange={setImage} label="Image" wide />
         </div>
+        <ScenePicker value={scene} onChange={setScene} />
         <div className="field-row-stacked">
           <label>Text (optional)</label>
           <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />

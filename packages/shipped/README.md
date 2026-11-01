@@ -10,6 +10,10 @@ checks it and unpacks it). Their source is only there, and what Weave ships is t
 releases. A new version: tag it there, release it in its project, then move its pin here. Pinned so far: Spotlight
 and Unread, and the GitHub ones (martl-projects/weave-github-access, -checkout, -keyvault, -releases, -verify).
 
+A pin with `"library": true` isn't a service: the app ships its files as they are. Weave avatar
+(martl-projects/weave-avatar: the figure everyone's avatar is, and the scenes on posts) is one; the desktop app's
+build puts it next to its renderer (`dist/renderer/avatar3d/`).
+
 The packaged daemon carries those digests (apps/desktop/package.ts): a component that isn't exactly what Weave ships
 doesn't start, and a service's profile names its digest, so every member's Weave can tell whether it runs what their
 own Weave ships. Add one with `weave service add --shipped <name> --spaces <project>`.

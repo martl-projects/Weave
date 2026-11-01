@@ -12,14 +12,16 @@ import { parseManifest, type AppManifest } from './rooms.ts';
  * one board of posts. Every post has a chat (weave.msg with `post`) instead of
  * a comment tree.
  *
- *   weave.post     {title, text, link, image, board, share, with, prompt, routine}
+ *   weave.post     {title, text, link, image, scene, board, share, with, prompt, routine}
  *                                                      routine: {id, occurrence} when a routine made it (see routines.ts)
+ *                                                      scene: a Weave avatar scene's id ("idea"): its author's avatar in that
+ *                                                      pose with its things, drawn by whoever shows it
  *                                                      a post in a community or in a project's board; image: a wblob: reference;
  *                                                      with: co-authors it names (people's identifiers or agents' keys);
  *                                                      an edit by its author may carry a new `with` list
  *   weave.post.coauthor {target, on}                  someone named in `with` confirms (or declines) being a co-author;
  *                                                      only confirmed ones are shown (see coauthorsOf)
- *   weave.post.edit   {target, title, text, link, image, prompt}
+ *   weave.post.edit   {target, title, text, link, image, scene, prompt}
  *                                                      prompt: what a session should do with it as a work item
  *                                                      (posts and issues carry one; '' removes it)
  *                                                      the post's author changes it; the latest edit counts
@@ -228,6 +230,8 @@ export interface Post {
   link?: string;
   /** An attached image (wblob: reference): the post's thumbnail. */
   image?: string;
+  /** Its author's avatar in a scene (Weave avatar), by the scene's id, like "idea". */
+  scene?: string;
   /** As a work item: what a session should do with it (its starting prompt). */
   prompt?: string;
   /** The routine occurrence that made it. */
@@ -483,6 +487,11 @@ const titleOf = (body: Json): string =>
  * Posts show their author's latest edit; deleted ones are left out.
  * `maintainers` (or moderators) may delete others' posts in their space.
  */
+/** A scene's id (Weave avatar): a short word of small letters and dashes; what it shows is the renderer's. */
+export function sceneOf(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(value) ? value : undefined;
+}
+
 export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintainers: Set<Did> = new Set()): Post[] {
   const posts: Post[] = [];
   for (const e of entries) {
@@ -495,6 +504,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const board = kind === 'project' ? (boardName(field(e.body, 'board')) ?? 'releases') : COMMUNITY_BOARD;
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
+      const scene = sceneOf(field(e.body, 'scene'));
       const coauthors = withOf(e.body, e.event.author, e.event.signer);
       const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
       const made = field(e.body, 'routine') as Json;
@@ -507,6 +517,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
         text,
         ...(/^https?:\/\//.test(link) ? { link } : {}),
         ...(image ? { image } : {}),
+        ...(scene ? { scene } : {}),
         ...(share ? { share } : {}),
         ...(coauthors.length ? { with: coauthors } : {}),
         ...(prompt ? { prompt } : {}),
@@ -551,6 +562,9 @@ function reviseAll(posts: Post[], entries: Entry[], maintainers: Set<Did>): Post
     const image = field(e.body, 'image');
     if (image === '') delete post.image;
     else if (parseBlobRef(image)) post.image = (image as string).trim();
+    const scene = field(e.body, 'scene');
+    if (scene === '') delete post.scene;
+    else if (sceneOf(scene)) post.scene = sceneOf(scene);
     // A new list of co-authors replaces the old one; confirmations already given still count.
     if (Array.isArray(field(e.body, 'with'))) {
       const named = withOf(e.body, post.author, post.signer);
