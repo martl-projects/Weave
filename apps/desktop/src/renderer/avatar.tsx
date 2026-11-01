@@ -180,10 +180,10 @@ export const sceneLabel = (id: string) => labels[id] ?? id;
  * no avatar stands there as the figure their key makes.
  */
 export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids: string[]; banner?: string; poses?: Record<string, string>; peek?: boolean; className?: string }) {
-  const people = dids.slice(0, 12);
-  // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: one row, heads and
-  // shoulders, as wide as there are people.
-  const [width, height] = peek ? [Math.round(256 * Math.min(4, Math.max(1, ((people.length - 1) * 1.75 + 1.7) / 3.5))), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
+  const people = dids.slice(0, peek ? 36 : 12);
+  // Few people: a taller picture, so they aren't small in a wide one. Peeking over an edge: from the navel up, shoulder
+  // to shoulder, as wide as there are people (up to a banner's width; then rows behind).
+  const [width, height] = peek ? [Math.round(256 * Math.min(5.5, Math.max(1, ((people.length - 1) * 1.3 + 1.5) / 3.6))), 256] : people.length <= 2 ? [400, 400] : people.length <= 4 ? [512, 384] : [512, 288];
   const figures = useFigures(people);
   const url = usePicture(figures ? (l) => l.groupSnapshot(figures.map((f, i) => f ?? l.Avatar.fromSeed(people[i])), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
   return <div className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? `${banner}: a group photo` : 'A group photo'} draggable={false} />}</div>;
