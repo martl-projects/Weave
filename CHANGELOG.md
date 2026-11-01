@@ -2,6 +2,13 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.27.3 · 2026-11-01
+
+- The founder's node looks for old carries once per space and run, not on every pass; what a founder's word for an envelope from before protocol 3 can't prove is written down
+- A newcomer to a space that lets them read only from when they come learns what came before protocol 3 again: the founder's carry vouches for envelopes without an inner hash, and the founder's node restates it all once in today's shape
+- Pull requests from forks run on GitHub's runners, never on ours: on a public repository their code is anyone's
+- From a peer behind in a space, only a join with an invite the space made is taken, and at most 16 per connection: someone behind may be someone removed, and control events aren't rate-limited
+
 ## v0.27.2 · 2026-11-01
 
 - A join that reaches the maintainer only after the next new key still gets in: its join is taken in, and the keys it missed are handed over
