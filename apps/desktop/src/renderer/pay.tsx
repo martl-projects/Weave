@@ -5,6 +5,7 @@ import { formatUnits, isTxHash, TREASURY_CHAIN } from '@weave/core/chain';
 import { api, bump } from './lib.ts';
 import { copy } from './posts.tsx';
 import { attempt, AsyncButton, toast } from './ui.tsx';
+import { T, useTexts } from './texts.tsx';
 
 /*
  * Paying a tier or a show from a wallet without copying anything: a phone
@@ -17,6 +18,7 @@ type Ethereum = { request(args: { method: string; params?: unknown[] }): Promise
 const browserWallet = (): Ethereum | undefined => (window as unknown as { ethereum?: Ethereum }).ethereum;
 
 export function PayFromWallet({ tier, creator, show, payee, onDone }: { tier?: string; creator?: string; show?: string; payee: string; onDone(): void }) {
+  const { t } = useTexts();
   const [request, setRequest] = useState<PaymentRequestInfo>();
   const [error, setError] = useState('');
   const [svg, setSvg] = useState('');
@@ -48,7 +50,7 @@ export function PayFromWallet({ tier, creator, show, payee, onDone }: { tier?: s
         if (answer.found) {
           stopped = true;
           bump();
-          toast(`Payment found: you're in as soon as ${payee}'s Weave has read it`);
+          toast(t('pay.found', { payee }));
           return onDone();
         }
         since = answer.checkedTo + 1;
@@ -64,21 +66,21 @@ export function PayFromWallet({ tier, creator, show, payee, onDone }: { tier?: s
     };
   }, [request]);
 
-  const send = (payment: string) => attempt(() => api(tier ? 'requestMembership' : 'buyTicket', tier ? { ...target, payment } : { show, ...(creator ? { host: creator } : {}), payment }).then(bump), `Sent: you're in as soon as ${payee}'s Weave has read it on chain`).then((sent) => sent !== undefined && onDone());
+  const send = (payment: string) => attempt(() => api(tier ? 'requestMembership' : 'buyTicket', tier ? { ...target, payment } : { show, ...(creator ? { host: creator } : {}), payment }).then(bump), t('pay.sent', { payee })).then((sent) => sent !== undefined && onDone());
 
   if (error) return <p className="small">{error}</p>;
-  if (!request) return <p className="small">Preparing the payment…</p>;
+  if (!request) return <p className="small">{t('pay.preparing')}</p>;
   const amount = `${formatUnits(request.amount, request.decimals)} ${request.symbol}`;
   const wallet = browserWallet();
   return (
     <div>
       <p>
-        Pay <b>{amount}</b> for {request.what}, from your wallet <code>{request.from}</code> on {TREASURY_CHAIN.name} (a test network).
+        <T name="pay.intro" values={{ amount: <b>{amount}</b>, what: request.what, from: <code>{request.from}</code>, chain: TREASURY_CHAIN.name }} />
       </p>
       <div className="field-row" style={{ alignItems: 'flex-start' }}>
         <div className="qr" style={{ width: 168 }} dangerouslySetInnerHTML={{ __html: svg }} />
         <div className="grow small">
-          <p>Scan it with your phone's wallet (MetaMask, Coinbase Wallet, Rainbow…): it opens the payment ready to confirm.</p>
+          <p>{t('pay.scan')}</p>
           {wallet && (
             <AsyncButton
               className="default"
@@ -93,23 +95,23 @@ export function PayFromWallet({ tier, creator, show, payee, onDone }: { tier?: s
                 }
               }}
             >
-              Pay with the wallet in this browser
+              {t('pay.with.browser.wallet')}
             </AsyncButton>
           )}
-          <p className="muted">Weave watches for the payment and sends it on by itself; keep this open.</p>
+          <p className="muted">{t('pay.watching')}</p>
         </div>
       </div>
       <details className="small">
-        <summary>Pay another way, or paste the transaction</summary>
+        <summary>{t('pay.another.way')}</summary>
         <div className="field-row">
           <span className="grow">
-            Send {amount} to <code>{request.to}</code>
+            <T name="pay.send.to" values={{ amount, to: <code>{request.to}</code> }} />
           </span>
-          <button onClick={() => copy(request.to, 'Address copied')}>Copy</button>
+          <button onClick={() => copy(request.to, t('address.copied'))}>{t('button.copy')}</button>
         </div>
         <div className="field-row">
-          <input className="grow" spellCheck={false} placeholder="0x… the transaction's hash" value={hash} onChange={(e) => setHash(e.target.value.trim())} aria-label="Transaction hash" />
-          <AsyncButton onClick={() => (isTxHash(hash) ? send(hash) : Promise.resolve())}>Send</AsyncButton>
+          <input className="grow" spellCheck={false} placeholder={t('pay.hash.placeholder')} value={hash} onChange={(e) => setHash(e.target.value.trim())} aria-label={t('pay.hash')} />
+          <AsyncButton onClick={() => (isTxHash(hash) ? send(hash) : Promise.resolve())}>{t('button.send')}</AsyncButton>
         </div>
       </details>
     </div>

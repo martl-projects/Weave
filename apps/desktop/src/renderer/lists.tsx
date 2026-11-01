@@ -6,6 +6,7 @@ import { HandDialog } from './keyvaults.tsx';
 import { api, bump, navigate, onItem } from './lib.ts';
 import { ActionDialog, askAndWait, SERVICE_CHANGED } from './services.tsx';
 import { ask, attempt, AsyncButton } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /** One row of a list: its icon, title, a badge, a quieter line, its main button (or what's said instead), its icon buttons, and taking it out. */
 export interface ItemRow {
@@ -33,6 +34,7 @@ const PAGE = 10;
  * searching and the next page ask it.
  */
 export function ItemList({ title, add, rows, empty, error, more, query }: { title: string; add?: { label: string; run(): void }; rows?: ItemRow[]; empty: string; error?: string; more?(): void; query?(text: string): void }) {
+  const { t } = useTexts();
   const [text, setText] = useState('');
   const [pages, setPages] = useState(1);
   const searching = !!query || (rows?.length ?? 0) > 8;
@@ -41,30 +43,30 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
   // Searching its service: once typing pauses.
   useEffect(() => {
     if (!query) return;
-    const t = setTimeout(() => query(text.trim()), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => query(text.trim()), 300);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
   return (
     <div className="item-list">
       {/* Its title (none where the page titles it already), its search, and +. */}
       {(title || searching || add) && (
-      <div className="item-list-head">
-        <b className="grow">{title}</b>
-        {searching && <input className="item-search" type="search" placeholder="Search…" value={text} onChange={(e) => (setText(e.target.value), setPages(1))} />}
-        {add && (
-          <button className="icon-button item-add" title={add.label} aria-label={add.label} onClick={add.run}>
-            +
-          </button>
-        )}
-      </div>
+        <div className="item-list-head">
+          <b className="grow">{title}</b>
+          {searching && <input className="item-search" type="search" placeholder={t('list.search')} value={text} onChange={(e) => (setText(e.target.value), setPages(1))} />}
+          {add && (
+            <button className="icon-button item-add" title={add.label} aria-label={add.label} onClick={add.run}>
+              +
+            </button>
+          )}
+        </div>
       )}
       {error ? (
         <p className="small error-text">{error}</p>
       ) : !shown ? (
-        <p className="small muted">Looking…</p>
+        <p className="small muted">{t('looking')}</p>
       ) : !shown.length ? (
-        <p className="small muted">{text.trim() ? 'Nothing matches.' : empty}</p>
+        <p className="small muted">{text.trim() ? t('addservice.nothing.matches') : empty}</p>
       ) : (
         shown.map((r) => (
           <div className="item-row" key={r.key}>
@@ -76,9 +78,9 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
               {r.detail && <div className="small muted">{r.detail}</div>}
             </div>
             {r.main}
-            {r.tools?.map((t) => (
-              <button key={t.label} className="icon-button" title={t.label} aria-label={t.label} onClick={t.run}>
-                <Icon name={t.icon} />
+            {r.tools?.map((tool) => (
+              <button key={tool.label} className="icon-button" title={tool.label} aria-label={tool.label} onClick={tool.run}>
+                <Icon name={tool.icon} />
               </button>
             ))}
             {r.remove && (
@@ -92,12 +94,12 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
       {/* The next page: kept here, or asked of its service. */}
       {!query && found && found.length > pages * PAGE && (
         <button className="item-more" onClick={() => setPages((n) => n + 1)}>
-          Show {Math.min(PAGE, found.length - pages * PAGE)} more of {found.length}
+          {t('list.show.more.of', { n: Math.min(PAGE, found.length - pages * PAGE), total: found.length })}
         </button>
       )}
       {more && (
         <button className="item-more" onClick={more}>
-          Show more
+          {t('list.show.more')}
         </button>
       )}
     </div>
@@ -125,6 +127,7 @@ type ServicePage = ServiceItem[] | { items: ServiceItem[]; next?: string };
 
 /** A service's list (its manifest's lists): its items asked of it, its buttons as yours to use. */
 export function ServiceList({ space, service, list, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; list: ServiceListInfo; actions: ServiceActionInfo[] }) {
+  const { t } = useTexts();
   const [items, setItems] = useState<ServiceItem[]>();
   const [error, setError] = useState<string>();
   // A list its service pages itself: where its next page starts, and what's searched for.
@@ -164,15 +167,16 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
   }, [service.did]);
   const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
   const act = (action: string, id: string, label: string) => attempt(() => askAndWait(space.id, service, action, { id }, label).then((r) => (again(), bump(), r.text ?? '')));
+  const removeLabel = list.remove?.label ?? t('button.remove');
   const add = list.add?.mine
     ? {
-        label: list.add.label ?? `Add ${list.item ?? 'one'}`,
+        label: list.add.label ?? t('list.add.item', { item: list.item ?? t('list.one') }),
         run: () =>
           void (async () => {
             if (list.add!.hand) {
               // From your keyvault for that platform: yours alone to hand to a project.
               const vault = (await api<KeyvaultInfo[]>('keyvaults')).find((k) => k.platform === list.add!.hand && k.added);
-              if (!vault?.apps.length) return void ((await ask(`First add your ${list.add!.hand} keyvault in Keys & devices, and make an app there: it holds your access, and you hand projects what it reaches.`, 'Go there')) && navigate('#/keys'));
+              if (!vault?.apps.length) return void ((await ask(t('list.keyvault.first', { platform: list.add!.hand }), t('list.go.there'))) && navigate('#/keys'));
               setHanding(vault);
             } else {
               const a = actions.find((x) => x.name === list.add!.action);
@@ -219,14 +223,12 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
           )}
         </>
       ),
-      ...(list.remove?.mine && it.remove !== false
-        ? { remove: { label: list.remove.label ?? 'Remove', run: () => void (async () => (await ask(`${list.remove!.label ?? 'Remove'}: ${it.title}?`, list.remove!.label ?? 'Remove')) && act(list.remove!.action, it.id, `${list.remove!.label ?? 'Remove'}: ${it.title}`))() } }
-        : {}),
+      ...(list.remove?.mine && it.remove !== false ? { remove: { label: removeLabel, run: () => void (async () => (await ask(`${removeLabel}: ${it.title}?`, removeLabel)) && act(list.remove!.action, it.id, `${removeLabel}: ${it.title}`))() } } : {}),
     }),
   );
   return (
     <>
-      <ItemList title={list.title} add={add} rows={rows} error={error} empty={`No ${list.item ?? 'item'}s yet.`} {...(more ? { more } : {})} {...(query ? { query } : {})} />
+      <ItemList title={list.title} add={add} rows={rows} error={error} empty={t('list.none.yet', { item: list.item ?? t('list.item') })} {...(more ? { more } : {})} {...(query ? { query } : {})} />
       {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => (setProving(undefined), again())} />}
       {handing && <HandDialog vault={handing} project={{ id: space.id, name: space.name.replace(/^p\//, '') }} onClose={() => (setHanding(undefined), again())} />}
       {using && <ActionDialog space={space} service={service} action={using} onClose={() => (setUsing(undefined), again())} />}

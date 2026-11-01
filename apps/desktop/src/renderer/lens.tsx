@@ -3,6 +3,7 @@ import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
 import { toast } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /*
  * A board shown through its client service: the service's own renderer (its site) in a sandboxed frame, which gets
@@ -42,6 +43,7 @@ export function useLensChoice(space: SpaceInfo, board?: BoardInfo): [boolean, (o
 }
 
 export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; board: BoardInfo; meDid: string; onOpen(post: string): void }) {
+  const { t } = useTexts();
   const { data: view, error } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
   const frame = useRef<HTMLIFrameElement>(null);
   // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
@@ -80,25 +82,26 @@ export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; bo
   }, [space.id, board.name]);
 
   if (error) return <p className="muted pad">{error}</p>;
-  if (!view) return <p className="muted pad">Getting {board.lens?.name ?? 'its view'} ready…</p>;
-  if (view.lens?.problem) return <p className="muted pad">{view.lens.name} can't show this board here: {view.lens.problem}</p>;
+  if (!view) return <p className="muted pad">{t('lens.getting.ready', { name: board.lens?.name ?? t('lens.its.view') })}</p>;
+  if (view.lens?.problem) return <p className="muted pad">{t('lens.cant.show', { name: view.lens.name, problem: view.lens.problem })}</p>;
   if (!view.lens?.site)
     return (
       <div className="pad">
-        <p className="muted">{view.lens?.name} has no view of its own. Its state:</p>
+        <p className="muted">{t('lens.no.view', { name: view.lens?.name })}</p>
         <pre className="sunken">{JSON.stringify(view.state, null, 2)}</pre>
       </div>
     );
-  if (!base) return <p className="muted pad">Getting {view.lens.name} ready…</p>;
+  if (!base) return <p className="muted pad">{t('lens.getting.ready', { name: view.lens.name })}</p>;
   return <iframe ref={frame} className="lens-frame" title={view.lens.name} src={base} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
 }
 
 /** The switch between a board's posts and its suggested client service. */
 export function LensSwitch({ board, on, choose }: { board: BoardInfo; on: boolean; choose(on: boolean): void }) {
+  const { t } = useTexts();
   if (!board.lens || board.lens.mode === 'require') return null;
   return (
-    <button onClick={() => choose(!on)} title={on ? 'Show the posts as a list' : `The maintainers suggest viewing this board with ${board.lens.name}`}>
-      <Icon name={on ? 'hash' : 'zap'} /> {on ? 'Posts' : board.lens.name}
+    <button onClick={() => choose(!on)} title={on ? t('lens.show.list') : t('lens.suggested', { name: board.lens.name })}>
+      <Icon name={on ? 'hash' : 'zap'} /> {on ? t('lens.posts') : board.lens.name}
     </button>
   );
 }

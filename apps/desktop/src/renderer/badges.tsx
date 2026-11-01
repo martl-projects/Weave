@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { BadgeInfo } from '@weave/node/client';
 import { api, onItem, useBlobUrl } from './lib.ts';
 import { AsyncButton, attempt, Modal } from './ui.tsx';
+import { t, useTexts } from './texts.tsx';
 
 /*
  * Badges on people's hubs: lasting recognition from a project, like
@@ -45,8 +46,12 @@ function useHeldBadges(did: string): BadgeInfo[] {
   return badges;
 }
 
+/** "Super Supporter #7 of 20 · p/Weave, from Lena" and the note. */
 export const badgeTitle = (b: BadgeInfo) =>
-  `${b.series.name} #${b.n}${b.series.limit ? ` of ${b.series.limit}` : ''}${b.series.project ? ` · ${b.series.project.name}${b.series.project.checked === false ? ' (not checked: you are not in it)' : ''}` : ''}, from ${b.issuer.name ?? 'its issuer'}${b.note ? `\n“${b.note}”` : ''}`;
+  `${badgeNumber(b)}${b.series.project ? ` · ${b.series.project.name}${b.series.project.checked === false ? t('badge.not.checked') : ''}` : ''}${t('badge.from', { issuer: b.issuer.name ?? t('badge.its.issuer') })}${b.note ? `\n“${b.note}”` : ''}`;
+
+/** "Super Supporter #7 of 20", or "#7" without a limit. */
+const badgeNumber = (b: BadgeInfo) => (b.series.limit ? t('badge.number.of', { name: b.series.name, n: b.n, limit: b.series.limit }) : t('badge.number', { name: b.series.name, n: b.n }));
 
 /** One badge: its picture, else its symbol, else its initial. A click shows it in full. */
 export function BadgeMark({ badge, size = 16 }: { badge: BadgeInfo; size?: number }) {
@@ -79,26 +84,26 @@ export function BadgeMark({ badge, size = 16 }: { badge: BadgeInfo; size?: numbe
  * it was given to (and its issuer) until they publish it; the issuer's signed hash proves the words are theirs.
  */
 export function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): void }) {
-  const issuer = badge.issuer.name ?? 'its issuer';
+  const { t } = useTexts();
+  const issuer = badge.issuer.name ?? t('badge.its.issuer');
   const personal = badge.personal;
   const picture = useBlobUrl(badge.series.image);
-  const publish = (on: boolean) => attempt(() => api('publishBadgeNote', { badge: badge.id, on }), on ? 'Published: everyone can read it now' : 'Taken back');
+  const publish = (on: boolean) => attempt(() => api('publishBadgeNote', { badge: badge.id, on }), t(on ? 'badge.published' : 'badge.taken.back'));
   return (
-    <Modal title={`${badge.series.symbol ? `${badge.series.symbol} ` : ''}${badge.series.name} #${badge.n}${badge.series.limit ? ` of ${badge.series.limit}` : ''}`} onClose={onClose}>
+    <Modal title={`${badge.series.symbol ? `${badge.series.symbol} ` : ''}${badgeNumber(badge)}`} onClose={onClose}>
       {picture && <img className="badge-picture" src={picture} alt={badge.series.name} width={128} height={128} />}
       <p className="small muted">
-        {badge.series.limit ? `Number ${badge.n} of ${badge.series.limit}` : `Number ${badge.n}`}
-        {badge.series.project ? ` · ${badge.series.project.name}` : ''}, from {issuer}, held by {badge.holder.name ?? 'someone'}.
+        {t('badge.card.line', { number: badge.series.limit ? t('badge.number.plain.of', { n: badge.n, limit: badge.series.limit }) : t('badge.number.plain', { n: badge.n }), project: badge.series.project ? ` · ${badge.series.project.name}` : '', issuer, holder: badge.holder.name ?? t('word.someone.lc') })}
       </p>
       {badge.note && <p>“{badge.note}”</p>}
       {personal && (
         <fieldset>
-          <legend>Personal note from {issuer}</legend>
-          {personal.text !== undefined ? <p style={{ whiteSpace: 'pre-wrap' }}>{personal.text}</p> : <p className="small muted">Sealed: only the one it was given to and {issuer} can read it.</p>}
+          <legend>{t('badge.personal.note', { issuer })}</legend>
+          {personal.text !== undefined ? <p style={{ whiteSpace: 'pre-wrap' }}>{personal.text}</p> : <p className="small muted">{t('badge.sealed', { issuer })}</p>}
           {personal.text !== undefined && (
-            <p className="small muted">{personal.published ? `Public, in ${issuer}'s own words: anyone can check them against what ${issuer} signed.` : `Only you${personal.mayPublish ? ` and ${issuer}` : ` and the one it was given to`} can read it${personal.mayPublish ? ', until you publish it' : ''}.`}</p>
+            <p className="small muted">{personal.published ? t('badge.public.words', { issuer }) : t(personal.mayPublish ? 'badge.only.you.and.issuer' : 'badge.only.you.and.holder', { issuer })}</p>
           )}
-          {personal.mayPublish && <AsyncButton onClick={() => publish(!personal.published)}>{personal.published ? 'Make it private again' : 'Publish'}</AsyncButton>}
+          {personal.mayPublish && <AsyncButton onClick={() => publish(!personal.published)}>{t(personal.published ? 'badge.make.private' : 'badge.publish')}</AsyncButton>}
         </fieldset>
       )}
     </Modal>
@@ -107,24 +112,22 @@ export function BadgeCard({ badge, onClose }: { badge: BadgeInfo; onClose(): voi
 
 /** Every badge someone holds, on their hub: big, with what each is and who gave it; a click shows it in full. */
 export function HubBadges({ did, me, name }: { did: string; me: boolean; name: string }) {
+  const { t } = useTexts();
   const badges = useHeldBadges(did);
   if (!badges.length) return null;
   return (
     <section className="space-box">
-      <h3>{me ? 'My badges' : `${name}'s badges`}</h3>
+      <h3>{me ? t('badges.mine') : t('badges.of', { name })}</h3>
       <div className="hub-badges">
         {badges.map((b) => (
           <div className="hub-badge" key={b.id} title={badgeTitle(b)}>
             <BadgeMark badge={b} size={40} />
             <div>
-              <b>
-                {b.series.name} #{b.n}
-                {b.series.limit ? ` of ${b.series.limit}` : ''}
-              </b>
+              <b>{badgeNumber(b)}</b>
               <div className="small muted">
-                from {b.issuer.name ?? 'its issuer'}
+                {t('badge.from.plain', { issuer: b.issuer.name ?? t('badge.its.issuer') })}
                 {b.series.project ? ` · ${b.series.project.name}` : ''}
-                {me && b.personal && !b.personal.published ? ' · a personal note for you' : ''}
+                {me && b.personal && !b.personal.published ? t('badge.personal.for.you') : ''}
               </div>
             </div>
           </div>

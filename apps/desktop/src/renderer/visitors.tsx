@@ -3,6 +3,7 @@ import type { SpaceInfo } from '@weave/node/client';
 import type { VisitorRule } from '@weave/core';
 import { api, bump } from './lib.ts';
 import { attempt, AsyncButton } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /*
  * What people's agents and services may do in a space: whose count (everyone's, approved ones, none) and which
@@ -10,40 +11,41 @@ import { attempt, AsyncButton } from './ui.tsx';
  * whole history (nothing is deleted: a looser rule shows it again). Their own agents and services aren't held to it.
  */
 
-const WHO: Array<[VisitorRule['who'], string]> = [
-  ['everyone', "Everyone's"],
-  ['approved', 'Approved ones only'],
-  ['nobody', 'None'],
-];
+/** Whose count, in the picker's order; their texts are visitors.who.<value>. */
+const WHO: VisitorRule['who'][] = ['everyone', 'approved', 'nobody'];
 
 export function VisitorsSettings({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
+  const { t } = useTexts();
   const v = space.visitors;
   const [approving, setApproving] = useState('');
   if (!v) return null;
-  const set = (change: { agents?: VisitorRule; services?: VisitorRule }) => attempt(() => api('setVisitors', { space: space.id, ...change }).then(bump), 'Saved');
-  const approve = (agent: string, on: boolean) => attempt(() => api('approveAgent', { space: space.id, agent, on }).then(bump), on ? `${agent} is approved here` : `${agent} is no longer approved here`);
+  const set = (change: { agents?: VisitorRule; services?: VisitorRule }) => attempt(() => api('setVisitors', { space: space.id, ...change }).then(bump), t('post.saved'));
+  const approve = (agent: string, on: boolean) => attempt(() => api('approveAgent', { space: space.id, agent, on }).then(bump), t(on ? 'visitors.approved' : 'visitors.unapproved', { agent }));
   return (
     <fieldset>
-      <legend>Agents and services</legend>
-      <p className="small">What people's agents and services may do here. What they write against it counts for nobody (and shows again if you loosen it).{space.managed ? ' In a company space, only approved ones count.' : ' Your own, and those of whoever manages this space with you, act as you let them.'}</p>
-      <RuleRow label="Agents" rule={v.agents} canSet={canSet && !space.managed} onSave={(agents) => set({ agents })} />
-      <RuleRow label="Services" rule={v.services} canSet={canSet && !space.managed} onSave={(services) => set({ services })} />
+      <legend>{t('visitors.legend')}</legend>
+      <p className="small">
+        {t('visitors.about')}
+        {t(space.managed ? 'visitors.managed.note' : 'visitors.own.note')}
+      </p>
+      <RuleRow id="agents" label={t('visitors.agents')} rule={v.agents} canSet={canSet && !space.managed} onSave={(agents) => set({ agents })} />
+      <RuleRow id="services" label={t('visitors.services')} rule={v.services} canSet={canSet && !space.managed} onSave={(services) => set({ services })} />
       {(v.agents.who === 'approved' || v.services.who === 'approved' || v.approved.length > 0) && (
         <>
           <p className="small">
-            <b>Approved:</b> {v.approved.length ? '' : 'none yet'}
+            <b>{t('visitors.approved.list')}</b> {v.approved.length ? '' : t('visitors.none.yet')}
           </p>
           {v.approved.map((name) => (
             <div className="field-row" key={name}>
               <span className="grow small">{name}</span>
-              {canSet && <AsyncButton onClick={() => approve(name, false)}>Remove</AsyncButton>}
+              {canSet && <AsyncButton onClick={() => approve(name, false)}>{t('button.remove')}</AsyncButton>}
             </div>
           ))}
           {canSet && (
             <div className="field-row">
-              <input className="grow" placeholder="person/agent or person/service, like Lena/claude" value={approving} onChange={(e) => setApproving(e.target.value)} aria-label="Agent or service to approve" />
+              <input className="grow" placeholder={t('visitors.approve.placeholder')} value={approving} onChange={(e) => setApproving(e.target.value)} aria-label={t('visitors.approve.label')} />
               <AsyncButton disabled={!approving.includes('/')} onClick={() => approve(approving.trim(), true).then(() => setApproving(''))}>
-                Approve
+                {t('visitors.approve')}
               </AsyncButton>
             </div>
           )}
@@ -54,27 +56,28 @@ export function VisitorsSettings({ space, canSet }: { space: SpaceInfo; canSet: 
 }
 
 /** One rule: whose count, and the kinds they may write (all their person allows, when empty). */
-function RuleRow({ label, rule, canSet, onSave }: { label: string; rule: VisitorRule; canSet: boolean; onSave(rule: VisitorRule): Promise<unknown> }) {
+function RuleRow({ id, label, rule, canSet, onSave }: { id: string; label: string; rule: VisitorRule; canSet: boolean; onSave(rule: VisitorRule): Promise<unknown> }) {
+  const { t } = useTexts();
   const [kinds, setKinds] = useState((rule.kinds ?? []).join(', '));
   const listed = kinds.split(',').map((k) => k.trim()).filter(Boolean);
   const changed = listed.join(',') !== (rule.kinds ?? []).join(',');
   const save = (who: VisitorRule['who']) => onSave({ who, ...(listed.length ? { kinds: listed } : {}) });
   return (
     <div className="field-row">
-      <label className="small" htmlFor={`who-${label}`} style={{ minWidth: '5em' }}>
+      <label className="small" htmlFor={`who-${id}`} style={{ minWidth: '5em' }}>
         {label}
       </label>
-      <select id={`who-${label}`} disabled={!canSet} value={rule.who} onChange={(e) => void save(e.target.value as VisitorRule['who'])}>
-        {WHO.map(([value, text]) => (
+      <select id={`who-${id}`} disabled={!canSet} value={rule.who} onChange={(e) => void save(e.target.value as VisitorRule['who'])}>
+        {WHO.map((value) => (
           <option key={value} value={value}>
-            {text}
+            {t(`visitors.who.${value}`)}
           </option>
         ))}
       </select>
       {rule.who !== 'nobody' && (
         <>
-          <input className="grow" disabled={!canSet} placeholder="may write: all their person allows" value={kinds} onChange={(e) => setKinds(e.target.value)} aria-label={`Kinds ${label.toLowerCase()} may write`} title="Kinds they may write, comma separated, like weave.msg, weave.reply (empty: all their person allows)" />
-          {canSet && changed && <AsyncButton onClick={() => save(rule.who)}>Save</AsyncButton>}
+          <input className="grow" disabled={!canSet} placeholder={t('visitors.kinds.placeholder')} value={kinds} onChange={(e) => setKinds(e.target.value)} aria-label={t('visitors.kinds.label', { who: label.toLowerCase() })} title={t('visitors.kinds.title')} />
+          {canSet && changed && <AsyncButton onClick={() => save(rule.who)}>{t('button.save')}</AsyncButton>}
         </>
       )}
     </div>

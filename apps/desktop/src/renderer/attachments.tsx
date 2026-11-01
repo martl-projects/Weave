@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Attachment } from '@weave/core';
 import { api, blobUrl, shrinkImage } from './lib.ts';
 import { Icon } from './icons.tsx';
+import { t, useTexts } from './texts.tsx';
 
 /*
  * Files and images in chat. A message carries its file by blob reference with
@@ -40,7 +41,7 @@ export async function uploadFile(file: File): Promise<Attachment> {
     type = blob.type;
     if (blob.type !== file.type) name = name.replace(/\.[^.]+$/, '') + (blob.type === 'image/webp' ? '.webp' : '');
   }
-  if (blob.size > MAX_FILE) throw new Error(`${name} is ${fileSize(blob.size)}; files are at most 2 MB`);
+  if (blob.size > MAX_FILE) throw new Error(t('file.too.big.size', { name, size: fileSize(blob.size) }));
   const data = toBase64(new Uint8Array(await blob.arrayBuffer()));
   if (isImage(type)) return { ref: await api<string>('putBlob', { data, type }), name, size: blob.size, type };
   return api<Attachment>('putFile', { data, name, type });
@@ -89,12 +90,13 @@ export function useBlob(ref: string, now: boolean): BlobState & { fetch(): Promi
 
 /** A picture in the chat, bounded; click for full size. */
 function ImageAttachment({ file }: { file: Attachment }) {
+  const { t } = useTexts();
   const blob = useBlob(file.ref, true);
   const [open, setOpen] = useState(false);
   if (blob.status === 'ready' && blob.url) {
     return (
       <>
-        <button className="msg-image" title={`${file.name} · ${fileSize(file.size)} · click to view`} onClick={() => setOpen(true)}>
+        <button className="msg-image" title={t('file.image.title', { name: file.name, size: fileSize(file.size) })} onClick={() => setOpen(true)}>
           <img src={blob.url} alt={file.name} />
         </button>
         {open && createPortal(<Lightbox file={file} url={blob.url} onClose={() => setOpen(false)} />, document.body)}
@@ -115,13 +117,14 @@ function ImageAttachment({ file }: { file: Attachment }) {
 
 /** What a card says about its bytes: fetching, not to be had right now (with a retry), or nothing while they are here or not asked for. */
 function FetchState({ state }: { state: BlobState & { fetch(): Promise<unknown> } }) {
-  if (state.status === 'fetching') return <span className="file-state">fetching from peers…</span>;
+  const { t } = useTexts();
+  if (state.status === 'fetching') return <span className="file-state">{t('file.fetching')}</span>;
   if (state.status === 'missing')
     return (
       <span className="file-state missing" title={state.error}>
-        not available from anyone online right now
+        {t('file.unavailable')}
         <button className="link-btn" onClick={() => void state.fetch()}>
-          Retry
+          {t('file.retry')}
         </button>
       </span>
     );
@@ -130,6 +133,7 @@ function FetchState({ state }: { state: BlobState & { fetch(): Promise<unknown> 
 
 /** A file in the chat: name, type and size, and a button to save it (which fetches it first). */
 function FileAttachment({ file }: { file: Attachment }) {
+  const { t } = useTexts();
   const blob = useBlob(file.ref, false);
   const [saving, setSaving] = useState(false);
   const save = async () => {
@@ -152,8 +156,8 @@ function FileAttachment({ file }: { file: Attachment }) {
         {fileSize(file.size)} · {file.type}
       </span>
       <FetchState state={blob} />
-      <button className="file-save" title="Save this file" disabled={saving} onClick={() => void save()}>
-        <Icon name="download" /> Save
+      <button className="file-save" title={t('file.save.file')} disabled={saving} onClick={() => void save()}>
+        <Icon name="download" /> {t('button.save')}
       </button>
     </div>
   );
@@ -165,6 +169,7 @@ export function AttachmentView({ file }: { file: Attachment }) {
 
 /** The picture full size over a dimmed screen (in a portal: the chat's rows are transformed, which would pin it inside): Escape, a click outside or the button closes it; Save keeps the file. */
 export function Lightbox({ file, url, onClose }: { file: Attachment; url: string; onClose(): void }) {
+  const { t } = useTexts();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -177,10 +182,10 @@ export function Lightbox({ file, url, onClose }: { file: Attachment; url: string
           {file.name}
         </span>
         <span className="file-meta">{fileSize(file.size)}</span>
-        <button onClick={() => void saveBlob(file)} title="Save this image">
-          <Icon name="download" /> Save
+        <button onClick={() => void saveBlob(file)} title={t('file.save.image')}>
+          <Icon name="download" /> {t('button.save')}
         </button>
-        <button onClick={onClose} title="Close (Esc)">
+        <button onClick={onClose} title={t('file.close.esc')}>
           <Icon name="close" />
         </button>
       </div>
@@ -191,6 +196,7 @@ export function Lightbox({ file, url, onClose }: { file: Attachment; url: string
 
 /** The file waiting in the composer: its name and size, and a way to take it off before sending. */
 export function AttachedChip({ file, uploading, onRemove }: { file: File; uploading: boolean; onRemove(): void }) {
+  const { t } = useTexts();
   return (
     <div className={`attached${uploading ? ' uploading' : ''}`}>
       <Icon name={file.type.startsWith('image/') ? 'image' : 'file'} />
@@ -199,9 +205,9 @@ export function AttachedChip({ file, uploading, onRemove }: { file: File; upload
       </span>
       <span className="file-meta">{fileSize(file.size)}</span>
       {uploading ? (
-        <span className="file-state">uploading…</span>
+        <span className="file-state">{t('file.uploading')}</span>
       ) : (
-        <button onClick={onRemove} title="Remove the file">
+        <button onClick={onRemove} title={t('file.remove')}>
           ✕
         </button>
       )}
