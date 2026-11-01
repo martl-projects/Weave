@@ -1052,8 +1052,13 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
                 <td>{m.did === info.founder ? <span className="tag">{t('ppeople.owner')}</span> : m.maintainer && <span className="tag">{t('role.maintainer')}</span>}</td>
                 <td>
                   {info.maintainer && m.did !== info.founder && (
-                    <AsyncButton className="small-btn" onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>
-                      {t(m.maintainer ? 'ppeople.drop.maintainer' : 'ppeople.make.maintainer')}
+                    <AsyncButton className="icon-button people-tool" title={t(m.maintainer ? 'ppeople.drop.maintainer' : 'ppeople.make.maintainer')} onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump), t(m.maintainer ? 'ppeople.dropped.maintainer' : 'ppeople.made.maintainer', { name: m.name ?? shortDid(m.did) }))}>
+                      <Icon name={m.maintainer ? 'star' : 'users'} />
+                    </AsyncButton>
+                  )}{' '}
+                  {info.maintainer && m.did !== info.founder && m.did !== meDid && (
+                    <AsyncButton className="icon-button people-tool" title={t('button.remove')} onClick={async () => (await ask(t('ppeople.remove.ask', { name: m.name ?? shortDid(m.did), project: project.name }), t('button.remove'))) && attempt(() => api('removeMember', project.id, m.did).then(bump), t('ppeople.removed', { name: m.name ?? shortDid(m.did) }))}>
+                      <Icon name="trash" />
                     </AsyncButton>
                   )}
                 </td>
@@ -1061,7 +1066,7 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
             ))}
           </tbody>
         </table>
-        <p className="small muted">{t('ppeople.maintainers.do')}</p>
+        <p className="small muted">{t('ppeople.maintainers.do')} {info.maintainer ? t('ppeople.remove.note') : ''}</p>
       </fieldset>
       <fieldset>
         <legend>{t('tree.groups')}</legend>
@@ -1074,6 +1079,25 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
                 <>
                   <input id={id} type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} />
                   <label htmlFor={id}>{t('ppeople.admit.auto')}</label>
+                  <AsyncButton className="small-btn" onClick={async () => (await ask(t('ppeople.uninvite.ask', { group: g.name, project: project.name }), t('ppeople.uninvite'))) && attempt(() => api('uninviteGroup', { project: project.id, group: g.id }).then(bump), t('ppeople.uninvited', { group: g.name }))}>
+                    {t('ppeople.uninvite')}
+                  </AsyncButton>
+                  {members.some((m) => m.via?.id === g.id && m.did !== info.founder && m.did !== meDid) && (
+                    <AsyncButton
+                      className="small-btn"
+                      onClick={async () => {
+                        const came = members.filter((m) => m.via?.id === g.id && m.did !== info.founder && m.did !== meDid);
+                        if (!(await ask(t('ppeople.uninvite.remove.ask', { group: g.name, project: project.name, n: came.length }), t('ppeople.uninvite.remove')))) return;
+                        await attempt(async () => {
+                          await api('uninviteGroup', { project: project.id, group: g.id });
+                          for (const m of came) await api('removeMember', project.id, m.did);
+                          bump();
+                        }, t('ppeople.uninvited.removed', { group: g.name, n: came.length }));
+                      }}
+                    >
+                      {t('ppeople.uninvite.remove')}
+                    </AsyncButton>
+                  )}
                 </>
               ) : (
                 <span className="small">{t(g.auto ? 'ppeople.admitted.auto' : 'ppeople.asked.about')}</span>

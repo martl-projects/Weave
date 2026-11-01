@@ -391,3 +391,16 @@ export function AsyncButton({ onClick, className = '', children, title, disabled
     </button>
   );
 }
+
+/** A quiet ⓘ that unfolds an explanation: a screen's long words, out of the way until asked for. */
+export function Info({ children }: { children: ReactNode }) {
+  const { t } = useTexts();
+  return (
+    <details className="info">
+      <summary title={t('info.more')} aria-label={t('info.more')}>
+        ⓘ
+      </summary>
+      <div className="info-body small">{children}</div>
+    </details>
+  );
+}

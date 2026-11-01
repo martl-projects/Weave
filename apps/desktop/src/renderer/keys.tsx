@@ -4,7 +4,7 @@ import { AgentAvatarEditor } from './avatar-editor.tsx';
 import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
+import { ask, attempt, AsyncButton, Modal, WeaveMark, Info } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
 import { LinkedAccountsBox } from './accounts.tsx';
 import { KeyvaultsBox } from './keyvaults.tsx';
@@ -384,8 +384,17 @@ function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
         </div>
       ))}
       <p className="small">
-        <T name="nodes.about" />
+        {t('nodes.about')} <Info>{t('nodes.about.more')}</Info>
       </p>
+      <ol className="small">
+        <li>
+          <T name="nodes.step.1" />
+        </li>
+        <li>{t('nodes.step.2')}</li>
+        <li>
+          <T name="nodes.step.3" />
+        </li>
+      </ol>
       {answer ? (
         <div className="field-row-stacked">
           <p className="small">
@@ -471,6 +480,8 @@ export function KeysView() {
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   if (!info || !keys) return <Page title={t('nav.keys')}>{null}</Page>;
   const keystoreWhy = status?.keystoreWarning ? /\((.*)\)$/.exec(status.keystoreWarning)?.[1] : undefined;
+  // Who keeps anything of yours, each once.
+  const keeperNames = keeping ? [...new Map(keeping.spaces.flatMap((s) => s.keepers).map((k) => [k.did, k.name ?? shortDid(k.did)])).values()] : [];
   return (
     <Page
       title={
@@ -485,45 +496,24 @@ export function KeysView() {
         </div>
       )}
       <CompanyAccountBox />
-      {status && (
-        <fieldset>
-          <legend>{t('keys.computer')}</legend>
-          {status.keystoreWarning ? (
-            <p className="notice alarm">
-              <Icon name="lock" /> {t('keys.unprotected.long', { where: keystoreWhy ? ` (${keystoreWhy})` : t('keys.unprotected.system') })}
-            </p>
-          ) : (
-            <p className="small">
-              {t('keys.sealed', { name: t(`keystore.${status.keystore}`) })} {company ? t('keys.other.computer.company', { company }) : t('keys.other.computer.words')}
-            </p>
-          )}
-          <KeystoreChoice current={status.keystore} />
-        </fieldset>
-      )}
-      {keeping && (
-        <fieldset>
-          <legend>{t('keepers.legend')}</legend>
-          <p className="small">{t('keepers.about')}</p>
-          {keeping.spaces.map((s) => (
-            <div className="field-row" key={s.space.id}>
-              <span className="grow">{s.space.name}</span>
-              <span className="small muted">{s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none')}</span>
-            </div>
-          ))}
-          <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
-        </fieldset>
-      )}
       <fieldset>
         <legend>{t('identity.legend')}</legend>
         <p className="small">
-          <code>{info.did}</code>
+          <code>{info.did}</code> <span className="muted">{t('identity.public')}</span>
         </p>
         {company ? (
           <p className="small">
             <T name="identity.company.holds" values={{ company }} />
           </p>
         ) : info.recoverable ? (
-          <p className="small">{t('identity.recoverable', { n: info.rotations })}</p>
+          <>
+            <p className="small">
+              {t('identity.words')} <Info>{t('identity.words.info')}</Info>
+            </p>
+            <p className="small">
+              {t('identity.rotations', { n: info.rotations })} <Info>{t('identity.rotation.info')}</Info>
+            </p>
+          </>
         ) : (
           <p className="small">{t('identity.old')}</p>
         )}
@@ -533,6 +523,43 @@ export function KeysView() {
           </div>
         )}
       </fieldset>
+      {status && (
+        <fieldset>
+          <legend>{t('keys.computer')}</legend>
+          {status.keystoreWarning ? (
+            <p className="notice alarm">
+              <Icon name="lock" /> {t('keys.unprotected.long', { where: keystoreWhy ? ` (${keystoreWhy})` : t('keys.unprotected.system') })}
+            </p>
+          ) : (
+            <p className="small">
+              {t('keys.sealed.short', { name: t(`keystore.${status.keystore}`) })}{' '}
+              <Info>
+                {t('keys.sealed', { name: t(`keystore.${status.keystore}`) })} {company ? t('keys.other.computer.company', { company }) : t('keys.other.computer.words')}
+              </Info>
+            </p>
+          )}
+          <KeystoreChoice current={status.keystore} />
+        </fieldset>
+      )}
+      {keeping && (
+        <fieldset>
+          <legend>{t('keepers.legend')}</legend>
+          <p className="small">
+            {keeperNames.length ? t('keepers.names', { names: keeperNames }) : t('keepers.none')}{' '}
+            <Info>
+              {t('keepers.about')}
+              <ul>
+                {keeping.spaces.map((s) => (
+                  <li key={s.space.id}>
+                    {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
+                  </li>
+                ))}
+              </ul>
+            </Info>
+          </p>
+          <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
+        </fieldset>
+      )}
       <WalletBox />
       <fieldset>
         <legend>{t('devices.legend')}</legend>

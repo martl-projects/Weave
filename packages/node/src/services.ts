@@ -40,7 +40,7 @@ export const NODE_PREFIX = 'node:';
  */
 const BUILTIN: Partial<Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }>> = {
   // Reads nothing and writes its websites.
-  website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
+  website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: runs websites for the project, open to everyone in it' },
 };
 
 /** What replaced Weave's own GitHub service. */
