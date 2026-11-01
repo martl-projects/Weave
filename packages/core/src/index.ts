@@ -59,6 +59,8 @@ export {
   canonicalKind,
   currentEpoch,
   decodeInvite,
+  isInviteLink,
+  peekInvite,
   directSpace,
   encodeInvite,
   gift,
@@ -453,8 +455,8 @@ export {
   type BoardRules,
   type Grantee,
 } from './access.ts';
-export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
-export { KIND_SESSION, MAX_ABOUT, MAX_DESCRIPTION, MAX_NAME, MAX_STACK, nameProblem, pushOnto, reorder, sameName, SESSION_NAME, SESSION_ROLES, sessionKey, sessionsOf, sessionTitle, takeOff, type SessionRecord, type SessionRole, type StackItem } from './sessions.ts';
+export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, peekKnock, type KnockLink } from './knock.ts';
+export { KIND_SESSION, MAX_ABOUT, MAX_DESCRIPTION, MAX_NAME, MAX_STACK, nameProblem, pushOnto, reorder, sameName, SESSION_NAME, SESSION_ROLES, sessionKey, sessionsOf, sessionTitle, takeOff, sessionStampOf, type SessionRecord, type SessionRole, type SessionStamp, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
 export {
   KIND_SERVICE_PROFILE,

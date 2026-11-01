@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { IdentityInfo, KeepersInfo, KeyInfo, SignInStatus, Status } from '@weave/node/client';
+import { AgentAvatar } from './avatar.tsx';
+import { AgentAvatarEditor } from './avatar-editor.tsx';
+import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark } from './ui.tsx';
@@ -465,7 +467,8 @@ export function KeysView() {
   // A company account has no recovery words: its company holds them.
   const { data: signIn } = useApi(() => api<SignInStatus>('signInStatus'), []);
   const company = signIn?.company ? (signIn.name ?? t('company.yours')) : undefined;
-  const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } }>();
+  const [dialog, setDialog] = useState<{ kind: 'revoke'; key: KeyInfo } | { kind: 'rotate' } | { kind: 'permissions'; key: KeyInfo & { name: string; permissions: string[] } } | { kind: 'avatar'; agent: string }>();
+  const { data: me } = useApi(() => api<Profile>('profile'), []);
   if (!info || !keys) return <Page title={t('nav.keys')}>{null}</Page>;
   const keystoreWhy = status?.keystoreWarning ? /\((.*)\)$/.exec(status.keystoreWarning)?.[1] : undefined;
   return (
@@ -538,7 +541,7 @@ export function KeysView() {
             {keys.map((k) => (
               <tr key={k.did} className={k.revokedAfter !== undefined ? 'revoked' : ''}>
                 <td>
-                  <Icon name={k.role === 'device' ? 'user' : 'gear'} />
+                  {k.role === 'agent' && k.name && me ? <AgentAvatar person={me.did} agent={k.name} size={28} /> : <Icon name={k.role === 'device' ? 'user' : 'gear'} />}
                 </td>
                 <td>
                   <b>{k.name ?? shortDid(k.did)}</b> <span className="small">{t(`key.role.${k.role}`)}</span>
@@ -555,6 +558,7 @@ export function KeysView() {
                     (k.role === 'agent' ? (
                       <>
                         {k.name && k.permissions && <button onClick={() => setDialog({ kind: 'permissions', key: { ...k, name: k.name!, permissions: k.permissions! } })}>{t('agent.permissions')}</button>}{' '}
+                        {k.name && me && <button onClick={() => setDialog({ kind: 'avatar', agent: k.name! })}>{t('hub.avatar')}</button>}{' '}
                         <AsyncButton onClick={async () => (await ask(t('agent.revoke.ask', { name: k.name }), t('button.revoke'))) && attempt(() => api('revokeKey', { key: k.did }).then(bump), t('agent.revoked', { name: k.name }))}>
                           {t('button.revoke')}
                         </AsyncButton>
@@ -589,6 +593,7 @@ export function KeysView() {
         />
       )}
       {dialog?.kind === 'permissions' && <AgentPermissionsDialog agent={dialog.key} onClose={() => setDialog(undefined)} />}
+      {dialog?.kind === 'avatar' && me && <AgentAvatarEditor me={me} agent={dialog.agent} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rotate' && (
         <WordsDialog title={t('keys.rotate')} intro={t('keys.rotate.intro')} encryption onSubmit={(input) => attempt(() => api('rotateRoot', input).then(bump), t('keys.rotated'))} onClose={() => setDialog(undefined)} />
       )}

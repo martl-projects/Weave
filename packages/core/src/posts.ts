@@ -5,6 +5,7 @@ import { KIND_ISSUE, KIND_PROPOSAL, KIND_THREAD, type Entry } from './collab.ts'
 import { isDid, type Did } from './keys.ts';
 import type { SpaceKind } from './spaces.ts';
 import { parseManifest, type AppManifest } from './rooms.ts';
+import { sessionStampOf, type SessionStamp } from './sessions.ts';
 
 /*
  * Posts, boards and upvotes: the Reddit side of Weave. A project is itself a
@@ -232,6 +233,8 @@ export interface Post {
   image?: string;
   /** Its author's avatar in a scene (Weave avatar), by the scene's id, like "idea". */
   scene?: string;
+  /** The agent session that wrote it (its name and figure), when an agent did. */
+  session?: SessionStamp;
   /** As a work item: what a session should do with it (its starting prompt). */
   prompt?: string;
   /** The routine occurrence that made it. */
@@ -505,6 +508,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
       const scene = sceneOf(field(e.body, 'scene'));
+      const session = e.event.signer !== e.event.author ? sessionStampOf(e.body) : undefined;
       const coauthors = withOf(e.body, e.event.author, e.event.signer);
       const prompt = str(e.body, 'prompt', TEXT_LIMITS.prompt).trim();
       const made = field(e.body, 'routine') as Json;
@@ -518,6 +522,7 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
         ...(/^https?:\/\//.test(link) ? { link } : {}),
         ...(image ? { image } : {}),
         ...(scene ? { scene } : {}),
+        ...(session ? { session } : {}),
         ...(share ? { share } : {}),
         ...(coauthors.length ? { with: coauthors } : {}),
         ...(prompt ? { prompt } : {}),

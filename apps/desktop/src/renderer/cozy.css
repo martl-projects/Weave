@@ -385,3 +385,10 @@
 :root[data-skin='cozy'] .file-state.missing { color: var(--cz-red); }
 :root[data-skin='cozy'] .msg-image { border: 2px solid var(--cz-soft); border-radius: 8px; overflow: hidden; }
 :root[data-skin='cozy'] .lightbox-bar { background: var(--cz-paper); color: var(--cz-ink); border: 2px solid var(--cz-soft); border-radius: 10px; box-shadow: none; }
+
+/* invitations in chat */
+:root[data-skin='cozy'] .invite-card { padding: 10px; background: var(--cz-paper); color: var(--cz-ink); border: 2px solid var(--cz-line); border-radius: 12px; box-shadow: var(--cz-lift); font-size: 13px; }
+:root[data-skin='cozy'] .invite-card:active { transform: translateY(2px); box-shadow: none; }
+:root[data-skin='cozy'] .invite-chip { background: var(--cz-cream); color: var(--cz-green); border: 2px solid var(--cz-soft); border-radius: 8px; }
+:root[data-skin='cozy'] .invite-card.member .post-embed-meta { color: var(--cz-green); }
+:root[data-skin='cozy'] :is(.invite-card.expired, .invite-card.old, .invite-card.elsewhere) .post-embed-meta { color: var(--cz-red); }

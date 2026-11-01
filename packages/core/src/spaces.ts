@@ -432,7 +432,10 @@ const INVITE_PREFIX = 'weave:invite:';
 
 export const encodeInvite = (invite: Invite): string => INVITE_PREFIX + b64u.encode(utf8(canonicalJson(invite as unknown as Json)));
 
-export function decodeInvite(text: string): Invite {
+export const isInviteLink = (text: string): boolean => text.trim().startsWith(INVITE_PREFIX);
+
+/** An invite link's contents, whatever its age: well formed, but maybe expired or without a key. decodeInvite checks those too. */
+export function peekInvite(text: string): Invite {
   const trimmed = text.trim();
   if (!trimmed.startsWith(INVITE_PREFIX)) throw new Error('not a Weave invite');
   let invite: Invite;
@@ -442,9 +445,14 @@ export function decodeInvite(text: string): Invite {
     throw new Error('invite is damaged');
   }
   const s = invite?.space;
-  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
+  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || typeof s.name !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys || typeof invite.expires !== 'string') {
     throw new Error('invite is damaged or from an older Weave version');
   }
+  return invite;
+}
+
+export function decodeInvite(text: string): Invite {
+  const invite = peekInvite(text);
   // A link without its own key (made before protocol 3) proves nothing about who holds it: its maker's node closed it (xQ0as76W), and a join with it wouldn't count.
   if (typeof invite.key !== 'string') throw new Error('this link was made by an older Weave and no longer works: ask for a new one');
   if (Date.parse(invite.expires) < Date.now()) throw new Error('invite has expired');
