@@ -13,6 +13,13 @@ builds away from its host's files and keys:
 The server image is built there too, with rootless Podman: Docker would give
 jobs root in the distro, Podman runs as runner in its own user namespace.
 
+**Pull requests from forks never run here.** Once the repository is public,
+anyone can open one, with code of their own: CI sends those to GitHub's runners
+(`ci.yml`), and only pushes to main, pull requests from branches of this
+repository, installers and releases come to these machines. Keep it that way,
+and in the repository's settings (Actions → General) require approval for all
+external contributors, so a fork's workflow waits for a maintainer to look first.
+
 To send jobs back to GitHub's runners (a machine is off, say), set the repository
 variable `WINDOWS_RUNNER` to `"windows-latest"`, `MACOS_RUNNER` to
 `"macos-latest"` or `LINUX_RUNNER` to `"ubuntu-latest"`, quotes included (they're
