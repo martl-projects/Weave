@@ -27,6 +27,7 @@ export async function startDaemon(
   // A company server's home key may be in the company's key service: unlock it before anything opens the home.
   await unlockHomeKey(home);
   const node = WeaveNode.open(home.dir);
+  if (node.shippedMissing) console.error("weave: no folder of the services Weave ships next to this daemon (in a checkout, build it: node packages/shipped/build.ts). Unread's counts, Websites, GitHub releases and the rest are missing until then");
   // Serve the API right away; joining the DHT can take a while (or never finish when offline).
   const api = await startApi(node, options.port, { ...(options.onStopRequest ? { stop: options.onStopRequest } : {}), service: (token) => node.serviceGate(token) });
   const info: DaemonInfo = {
