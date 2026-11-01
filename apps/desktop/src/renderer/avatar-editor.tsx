@@ -5,12 +5,15 @@ import type { Profile } from '@weave/node/client';
 import { api, bump, useApi } from './lib.ts';
 import { avatarLib, forgetFigure, SceneImage, useScenes, type AvatarLib, type Figure } from './avatar.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 interface Section {
   part: string;
-  title: string;
+  /** Its heading's text: avatar.part.<heading>. */
+  heading: string;
   color?: string;
-  colorTitle?: string;
+  /** Its color heading's text: avatar.color.<colorHeading>. */
+  colorHeading?: string;
   /** Eyes, brows and mouths show flat from their sprites; the rest as a head, or a bust (tops). */
   kind?: 'flat' | 'bust';
   /** Its fine adjustments (eye, brow, mouth, nose). */
@@ -18,21 +21,22 @@ interface Section {
   names?: string[];
 }
 
-const TABS: Array<{ label: string; sections: Section[] }> = [
-  { label: 'Head', sections: [{ part: 'face', title: 'Shape', color: 'skin', colorTitle: 'Skin' }, { part: 'blush', title: 'Cheeks', names: ['plain', 'rosy'] }] },
-  { label: 'Hair', sections: [{ part: 'hair', title: 'Hair', color: 'hairColor', colorTitle: 'Color' }] },
-  { label: 'Eyes', sections: [{ part: 'eyes', title: 'Eyes', color: 'eyeColor', colorTitle: 'Color', kind: 'flat', adjust: 'eye' }, { part: 'brows', title: 'Brows', kind: 'flat', adjust: 'brow' }] },
-  { label: 'Mouth', sections: [{ part: 'nose', title: 'Nose', adjust: 'nose' }, { part: 'mouth', title: 'Mouth', kind: 'flat', adjust: 'mouth' }, { part: 'beard', title: 'Beard' }] },
-  { label: 'Extras', sections: [{ part: 'glasses', title: 'Glasses' }, { part: 'hat', title: 'Hat', color: 'propColor', colorTitle: 'Color' }] },
-  { label: 'Outfit', sections: [{ part: 'shirt', title: 'Top', color: 'shirtColor', colorTitle: 'Color', kind: 'bust' }] },
+/** The tabs, each with its sections; a tab's text is avatar.tab.<id>. */
+const TABS: Array<{ id: string; sections: Section[] }> = [
+  { id: 'head', sections: [{ part: 'face', heading: 'shape', color: 'skin', colorHeading: 'skin' }, { part: 'blush', heading: 'cheeks', names: ['plain', 'rosy'] }] },
+  { id: 'hair', sections: [{ part: 'hair', heading: 'hair', color: 'hairColor', colorHeading: 'color' }] },
+  { id: 'eyes', sections: [{ part: 'eyes', heading: 'eyes', color: 'eyeColor', colorHeading: 'color', kind: 'flat', adjust: 'eye' }, { part: 'brows', heading: 'brows', kind: 'flat', adjust: 'brow' }] },
+  { id: 'mouth', sections: [{ part: 'nose', heading: 'nose', adjust: 'nose' }, { part: 'mouth', heading: 'mouth', kind: 'flat', adjust: 'mouth' }, { part: 'beard', heading: 'beard' }] },
+  { id: 'extras', sections: [{ part: 'glasses', heading: 'glasses' }, { part: 'hat', heading: 'hat', color: 'propColor', colorHeading: 'color' }] },
+  { id: 'outfit', sections: [{ part: 'shirt', heading: 'top', color: 'shirtColor', colorHeading: 'color', kind: 'bust' }] },
 ];
 
-// Fine adjustments: one word and two buttons each, for those a part has.
+// Fine adjustments: one word (avatar.step.<id>) and two buttons each, for those a part has.
 const STEPS = [
-  { k: 'Y', label: 'Height', less: '▲', more: '▼' },
-  { k: 'Gap', label: 'Spacing', less: '▸◂', more: '◂▸' },
-  { k: 'Size', label: 'Size', less: '−', more: '+' },
-  { k: 'Rot', label: 'Turn', less: '↺', more: '↻' },
+  { k: 'Y', id: 'height', less: '▲', more: '▼' },
+  { k: 'Gap', id: 'spacing', less: '▸◂', more: '◂▸' },
+  { k: 'Size', id: 'size', less: '−', more: '+' },
+  { k: 'Rot', id: 'turn', less: '↺', more: '↻' },
 ];
 
 /** A variant's picture: flat from the sprites, or the figure drawn with it. */
@@ -53,6 +57,7 @@ function Variant({ lib, figure, section, sprites }: { lib: AvatarLib; figure: Fi
 
 /** Your avatar: everyone sees it wherever you show up, and in the scenes on your posts. */
 export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) {
+  const { t } = useTexts();
   const [lib, setLib] = useState<AvatarLib>();
   const [failed, setFailed] = useState<string>();
   const [figure, setFigure] = useState<Figure>();
@@ -75,7 +80,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
     try {
       viewer.current = lib.mountViewer(stage.current);
     } catch {
-      setFailed("3D doesn't work here");
+      setFailed(t('avatar.no.3d'));
     }
     return () => {
       viewer.current?.dispose();
@@ -91,7 +96,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
     if (figure) viewer.current?.set(figure);
   }, [lib, !!figure]);
   const save = async (avatar: Figure | null) => {
-    const saved = await attempt(() => api<Profile>('setProfile', { avatar }), avatar ? 'Your avatar is saved' : 'You show as your sprite again');
+    const saved = await attempt(() => api<Profile>('setProfile', { avatar }), t(avatar ? 'avatar.saved' : 'avatar.sprite.again'));
     if (saved) {
       forgetFigure(me.did);
       bump();
@@ -100,22 +105,22 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
   };
   const A = lib?.Avatar;
   return (
-    <Modal title="Your avatar" onClose={onClose} wide>
+    <Modal title={t('avatar.title')} onClose={onClose} wide>
       {failed ? (
-        <p className="error-text">The avatar can't be drawn here: {failed}</p>
+        <p className="error-text">{t('avatar.cant.draw', { why: failed })}</p>
       ) : (
         <div className="avatar-editor">
           <div className="avatar-stage">
             {/* The renderer's own: it fills and empties it. */}
             <div className="avatar-canvas" ref={stage} />
-            <button type="button" className="avatar-dice" title="Roll a new one" onClick={() => A && change(A.random())}>
+            <button type="button" className="avatar-dice" title={t('avatar.roll')} onClick={() => A && change(A.random())}>
               🎲
             </button>
           </div>
           <div className="avatar-parts">
             <menu role="tablist" className="avatar-tabs">
-              {TABS.map((t, i) => (
-                <li key={t.label} role="tab" aria-selected={i === tab}>
+              {TABS.map((tabDef, i) => (
+                <li key={tabDef.id} role="tab" aria-selected={i === tab}>
                   <a
                     href="#"
                     onClick={(e) => {
@@ -123,7 +128,7 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                       setTab(i);
                     }}
                   >
-                    {t.label}
+                    {t(`avatar.tab.${tabDef.id}`)}
                   </a>
                 </li>
               ))}
@@ -134,22 +139,22 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                     <section key={s.part}>
                       {s.color && (
                         <>
-                          <h4>{s.colorTitle}</h4>
+                          <h4>{t(`avatar.color.${s.colorHeading}`)}</h4>
                           <div className="avatar-colors">
                             {A.COLORS[s.color].map((c, i) => (
-                              <button type="button" key={c} className={figure[s.color!] === i ? 'sel' : ''} style={{ background: c }} aria-label={`${s.colorTitle} ${i + 1}`} onClick={() => change({ ...figure, [s.color!]: i })} />
+                              <button type="button" key={c} className={figure[s.color!] === i ? 'sel' : ''} style={{ background: c }} aria-label={`${t(`avatar.color.${s.colorHeading}`)} ${i + 1}`} onClick={() => change({ ...figure, [s.color!]: i })} />
                             ))}
                           </div>
                         </>
                       )}
-                      <h4>{s.title}</h4>
+                      <h4>{t(`avatar.part.${s.heading}`)}</h4>
                       {s.adjust && (
                         <div className="avatar-adjust">
                           {STEPS.filter((st) => `${s.adjust}${st.k}` in A.ADJUST).map((st) => {
                             const k = `${s.adjust}${st.k}`;
                             return (
                               <span key={k} className="avatar-step">
-                                {st.label}
+                                {t(`avatar.step.${st.id}`)}
                                 <button type="button" disabled={figure[k] <= 0} onClick={() => change({ ...figure, [k]: figure[k] - 1 }, false)}>
                                   {st.less}
                                 </button>
@@ -164,7 +169,8 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                       <div className="avatar-grid">
                         {Array.from({ length: A.PARTS[s.part] }, (_, v) => {
                           const name = s.kind === 'flat' && sprites ? lib.partNames(s.part)[v] : undefined;
-                          const none = s.names?.[v] ?? (v === 0 && ['beard', 'glasses', 'hat'].includes(s.part) ? 'none' : undefined);
+                          const noneKey = s.names?.[v] ?? (v === 0 && ['beard', 'glasses', 'hat'].includes(s.part) ? 'none' : undefined);
+                          const none = noneKey ? t(`avatar.variant.${noneKey}`) : undefined;
                           return (
                             <button type="button" key={v} className={figure[s.part] === v ? 'sel' : ''} title={name ?? none} onClick={() => figure[s.part] !== v && change({ ...figure, [s.part]: v })}>
                               {none && s.part !== 'blush' ? none : <Variant lib={lib} figure={{ ...figure, [s.part]: v }} section={s} sprites={sprites} />}
@@ -174,17 +180,17 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
                       </div>
                     </section>
                   ))
-                : 'Loading…'}
+                : t('loading')}
             </div>
           </div>
         </div>
       )}
       <div className="buttons">
-        {me.avatar && <AsyncButton onClick={() => save(null)}>Use my sprite</AsyncButton>}
+        {me.avatar && <AsyncButton onClick={() => save(null)}>{t('avatar.use.sprite')}</AsyncButton>}
         <span className="grow" />
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton className="default" disabled={!figure} onClick={() => save(figure!)}>
-          Save
+          {t('button.save')}
         </AsyncButton>
       </div>
     </Modal>
@@ -193,15 +199,16 @@ export function AvatarEditor({ me, onClose }: { me: Profile; onClose(): void }) 
 
 /** A scene for a post: your avatar in a pose, with things around it. None is a choice too. */
 export function ScenePicker({ value, onChange }: { value: string; onChange(scene: string): void }) {
+  const { t } = useTexts();
   const scenes = useScenes();
   const { data: me } = useApi(() => api<{ did: string }>('whoami'), []);
   if (!scenes || !me) return null;
   return (
     <div className="field-row-stacked">
-      <label>Scene (optional): your avatar on the post</label>
+      <label>{t('scene.label')}</label>
       <div className="scene-picker">
         <button type="button" className={value ? '' : 'sel'} onClick={() => onChange('')}>
-          None
+          {t('scene.none')}
         </button>
         {scenes.map((s) => (
           <button type="button" key={s.id} className={value === s.id ? 'sel' : ''} title={s.label} onClick={() => onChange(s.id)}>
