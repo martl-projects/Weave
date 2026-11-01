@@ -1,6 +1,6 @@
 /**
  * Someone's avatar: their figure (Weave avatar, martl-projects/weave-avatar) as a few small numbers, in a public
- * `weave.avatar` state event; the latest one wins, and `{ figure: null }` takes it back (the pixel sprite again).
+ * `weave.avatar` state event; the latest one wins, and `{ figure: null }` takes it back (the figure their key makes again).
  * Weave keeps only numbers by name; what they mean is the renderer's, which cleans them when it draws.
  */
 export const KIND_AVATAR = 'weave.avatar';

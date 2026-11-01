@@ -106,6 +106,9 @@ import {
   currentEpoch,
   decodeContact,
   decodeInvite,
+  isInviteLink,
+  peekInvite,
+  peekKnock,
   directSpace,
   DEFAULT_CHANNEL,
   delegation,
@@ -222,6 +225,7 @@ import {
   sessionsOf,
   takeOff,
   type SessionRecord,
+  type SessionStamp,
   type StackItem,
   postTargetOf,
   postUrl,
@@ -460,6 +464,7 @@ import {
   type FeedQuery,
   type HomeSource,
   type GranteeInfo,
+  type InviteLook,
   type InviteOptions,
   type KeepersInfo,
   type AuditLine,
@@ -599,6 +604,16 @@ interface Sso {
 export const KIND_PROFILE = 'weave.profile';
 /** A project's page, sealed inside the project; the latest one by a maintainer counts. */
 export const KIND_PAGE = 'weave.project.page';
+/**
+ * A space's photo, as those who run it set it: a picture of their own (a wblob: reference), or none (everyone's
+ * avatars as a group photo), the text on the banner in it (its name when empty), and a background behind the group
+ * photo (a wblob: reference; a project's banner too, unless its page has one), and whether a project's members stand
+ * on its banner (members: true), who stands where in the group photo (order: dids, front row first) and how (poses:
+ * did → a pose's or a scene's id, as Weave avatar names them), and whether the
+ * photo stands above its member list (list; by default for groups and communities, not for projects, which have a
+ * banner). The latest one counts.
+ */
+export const KIND_SPACE_PHOTO = 'weave.space.photo';
 /** A public copy of a project's page, published by a maintainer when the project is public. */
 export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
@@ -820,8 +835,22 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
   ...(d.outer ? { sealed: { kind: d.outer.kind, body: d.outer.body } as unknown as Json, ...(d.outer.salt ? { salt: d.outer.salt } : {}) } : d.inner.salt ? { salt: d.inner.salt } : {}),
 });
 
+/** Who stands where on a space's group photo: people's keys, each once, front row first (at most 100). */
+const photoOrderOf = (value: unknown): Did[] =>
+  Array.isArray(value) ? [...new Set(value.filter((d): d is Did => typeof d === 'string' && /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(d)))].slice(0, 100) : [];
+
+/** How each one poses on a space's group photo: their key → a pose's or a scene's id (what they mean is Weave avatar's). */
+const photoPosesOf = (value: unknown): Record<Did, string> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.entries(value)
+          .filter((e): e is [Did, string] => /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(e[0]) && typeof e[1] === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(e[1]))
+          .slice(0, 100),
+      )
+    : {};
+
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
-const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
+const CARRIED_STATE = new Set(['weave.project.page', 'weave.space.photo', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -1702,6 +1731,39 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(space);
   }
 
+  async lookAtInvite(text: string): Promise<InviteLook> {
+    const link = text.trim();
+    const knock = isKnockLink(link);
+    if (!knock && !isInviteLink(link)) throw new Error('not a Weave invite link');
+    let parsed: { space: { id: string; kind: SpaceKind; name: string; founder: Did }; inviter: Did; expires: string; boards?: Record<string, unknown>; key?: string };
+    try {
+      parsed = knock ? peekKnock(link) : peekInvite(link);
+    } catch (error) {
+      throw new Error((error as Error).message);
+    }
+    const me = this.identity.author;
+    const held = this.#spaces.get(parsed.space.id);
+    const look: InviteLook = {
+      kind: knock ? 'knock' : 'invite',
+      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
+      inviter: { did: parsed.inviter, ...(this.nameOf(parsed.inviter) ? { name: this.nameOf(parsed.inviter) } : {}) },
+      expires: parsed.expires,
+      boards: Object.keys(parsed.boards ?? {}),
+      standing: 'open',
+    };
+    const state = held ? this.#state(held) : undefined;
+    if (parsed.inviter === me) return { ...look, standing: 'mine', ...(state ? { members: state.members.size } : {}) };
+    // In already: we hold its keys and weren't removed (a join written here counts before the invite it cites has synced).
+    // Removed and asked back with a new link: open, as #takeInvite takes it.
+    if (state && (state.members.has(me) || !state.removed.has(me))) return { ...look, standing: 'member', members: state.members.size };
+    if (knock && this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === parsed.space.id && b.inviter === parsed.inviter)) return { ...look, standing: 'waiting' };
+    if (!knock && typeof parsed.key !== 'string') return { ...look, standing: 'old', problem: 'this link was made by an older Weave and no longer works: ask for a new one' };
+    if (Date.parse(parsed.expires) < this.clock()) return { ...look, standing: 'expired', problem: 'this link has expired: ask for a new one' };
+    const inside = this.#insideOnly(parsed.space.founder);
+    if (inside) return { ...look, standing: 'elsewhere', problem: inside };
+    return look;
+  }
+
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
   async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
     const invite = decodeInvite(text);
@@ -2345,7 +2407,14 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
+  /** What an agent writes in a session says which one (by its name, once it has one); the session itself stays yours. */
+  #sessionStamp(session: SessionRef | undefined, as: string | undefined): Json | undefined {
+    if (!session || !as) return undefined;
+    const record = this.#sessionRecord(session);
+    return record.name ? { name: record.name } : undefined;
+  }
+
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -2361,6 +2430,8 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (image) body.image = image;
     if (scene) body.scene = scene;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
     const prompt = input.prompt?.trim();
     if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
@@ -2734,6 +2805,15 @@ export class WeaveNode implements Backend {
     return this.#saveSession({ ...record, name: name === '' ? undefined : (name ?? record.name), about, description });
   }
 
+  /** A session's avatar (Weave avatar), so you know it again; null: the one its name makes. Only you set it. */
+  async setSessionAvatar(input: { session: SessionRef; avatar: Record<string, number> | null }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const avatar = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+    if (input.avatar !== null && !avatar) throw new Error('an avatar is parts with whole numbers, like { "head": 1, "screen": 2 }');
+    const { avatar: _old, ...rest } = record;
+    return this.#saveSession({ ...rest, ...(avatar ? { avatar } : {}) });
+  }
+
   /** Names a session can't take (except `own`'s): your other sessions', people's around you, your agents' and yours. */
   #takenNames(own: SessionRecord): Array<string | undefined> {
     const names: Array<string | undefined> = [this.nameOf(this.identity.author), ...this.#agents.map((a) => a.name)];
@@ -2978,6 +3058,7 @@ export class WeaveNode implements Backend {
       ...(known?.role ? { role: known.role } : {}),
       ...(known?.projects ? { projects: known.projects } : {}),
       ...(known?.available ? { available: true } : {}),
+      ...(known?.avatar ? { avatar: known.avatar } : {}),
       ...(known?.last ? { last: known.last } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
@@ -2998,6 +3079,7 @@ export class WeaveNode implements Backend {
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length ? { projects: record.projects } : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar as unknown as Json } : {}),
       ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
     };
     const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
@@ -3030,6 +3112,7 @@ export class WeaveNode implements Backend {
         ? { projects: record.projects.map((id) => this.#spaces.get(id)).filter((s): s is StoredSpace => !!s).map((s) => ({ id: s.id, kind: s.kind, name: s.name })) }
         : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar } : {}),
       ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
       time: record.time,
     };
@@ -3695,6 +3778,7 @@ export class WeaveNode implements Backend {
       url: personUrl(name, did),
       theme: this.themeOf(did),
       ...((figure) => (figure ? { avatar: figure } : {}))(this.avatarOf(did)),
+      ...((agents) => (Object.keys(agents).length ? { agentAvatars: agents } : {}))(this.#agentAvatars(did)),
       me: did === me,
       following: mine?.following.has(did) ?? false,
       followsMe: graph.get(did)?.following.has(me) ?? false,
@@ -3718,10 +3802,19 @@ export class WeaveNode implements Backend {
       const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
       this.replica.write(this.identity, { kind: KIND_THEME, body: { ...theme } });
     }
-    if (input.avatar !== undefined) {
-      const figure = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
-      if (input.avatar !== null && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
-      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null } });
+    if (input.avatar !== undefined || input.agentAvatars !== undefined) {
+      const figure = input.avatar === undefined ? this.avatarOf(this.identity.author) : input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+      if (input.avatar && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
+      // Your agents' figures: by their name, null takes one back (it shows as its default again).
+      const agents = { ...this.#agentAvatars(this.identity.author) };
+      for (const [name, f] of Object.entries(input.agentAvatars ?? {})) {
+        if (!this.#agents.some((a) => a.name === name)) throw new Error(`you have no agent named ${name}`);
+        const clean = f === null ? undefined : sanitizeFigure(f);
+        if (f !== null && !clean) throw new Error(`${name}'s avatar is parts with whole numbers, like { "head": 1 }`);
+        if (clean) agents[name] = clean;
+        else delete agents[name];
+      }
+      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null, ...(Object.keys(agents).length ? { agents: agents as unknown as Json } : {}) } });
     }
     return this.profile();
   }
@@ -3790,19 +3883,37 @@ export class WeaveNode implements Backend {
   }
 
   /** A space's theme: the latest theme event its author published. */
-  /** Someone's avatar: their figure, or none (they show as their sprite). */
+  /** Someone's avatar: their figure, or none (they show as the figure their key makes). */
   avatarOf(author: Did): AvatarFigure | undefined {
     let body: unknown;
     for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
     return sanitizeFigure((body as { figure?: unknown } | undefined)?.figure);
   }
 
-  /** The avatars of these people, those who have one: what the app draws for them. */
-  async avatars(people: Did[]): Promise<Record<Did, AvatarFigure>> {
-    const out: Record<Did, AvatarFigure> = {};
-    for (const did of new Set(people.slice(0, 500))) {
-      const figure = this.avatarOf(did);
-      if (figure) out[did] = figure;
+  /** Someone's agents' avatars, by the agent's name, as they set them. */
+  #agentAvatars(author: Did): Record<string, AvatarFigure> {
+    let body: unknown;
+    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
+    const agents = (body as { agents?: unknown } | undefined)?.agents;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return {};
+    const out: Record<string, AvatarFigure> = {};
+    for (const [name, f] of Object.entries(agents).slice(0, 50)) {
+      const figure = sanitizeFigure(f);
+      if (figure && name.length <= 40) out[name] = figure;
+    }
+    return out;
+  }
+
+  /**
+   * The avatars of these people (and of their agents, asked for as "did·agent"), those who have one: what the app
+   * draws for them.
+   */
+  async avatars(people: string[]): Promise<Record<string, AvatarFigure>> {
+    const out: Record<string, AvatarFigure> = {};
+    for (const ref of new Set(people.slice(0, 500))) {
+      const at = ref.indexOf('·');
+      const figure = at < 0 ? this.avatarOf(ref as Did) : this.#agentAvatars(ref.slice(0, at) as Did)[ref.slice(at + 1)];
+      if (figure) out[ref] = figure;
     }
     return out;
   }
@@ -5848,7 +5959,7 @@ export class WeaveNode implements Backend {
       .map((m) => this.#messageInfo(m, byId));
   }
 
-  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo> {
+  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo> {
     const text = input.text?.trim() ?? '';
     const file = input.file ? attachmentOf({ file: input.file }) : undefined;
     if (input.file && !file) throw new Error('a file goes with its wblob: reference, a name, its size in bytes and a media type (use putFile)');
@@ -5868,6 +5979,8 @@ export class WeaveNode implements Backend {
       if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
     }
     if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
     return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
   }
@@ -6091,7 +6204,7 @@ export class WeaveNode implements Backend {
     const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
     // What a message says: its text, or the file it brings.
     const said = () => text('text') || (attachmentOf(body) ? `📎 ${attachmentOf(body)!.name}` : '');
-    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
+    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/weave:(?:invite|knock):[A-Za-z0-9_-]+/g, '[invite link]').replace(/\s+/g, ' ').trim().slice(0, 140);
     const who = item.authorName ?? this.nameOf(item.author) ?? 'Someone';
     const space = item.space;
     const where = space ? `${{ project: 'p/', community: 'r/', group: 'g/', direct: '@' }[space.kind]}${space.name}` : '';
@@ -8534,6 +8647,7 @@ export class WeaveNode implements Backend {
       members: state.members.size,
       epoch: currentEpoch(space),
       ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
+      ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
@@ -8541,6 +8655,47 @@ export class WeaveNode implements Backend {
       ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
+  }
+
+  /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
+  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } {
+    if (space.kind === 'direct') return {};
+    const managers = this.#managers(state);
+    let out: { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } = { photoInList: space.kind !== 'project' };
+    for (const e of this.#entries(space)) {
+      if (e.kind !== KIND_SPACE_PHOTO || !managers.has(e.event.author)) continue;
+      const body = (e.body ?? {}) as Record<string, unknown>;
+      const banner = typeof body.banner === 'string' ? body.banner.trim().slice(0, 40) : '';
+      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}), ...(space.kind === 'project' && body.members === true ? { membersOnBanner: true as const } : {}), ...((order) => (order.length ? { photoOrder: order } : {}))(photoOrderOf(body.order)), ...((poses) => (Object.keys(poses).length ? { photoPoses: poses } : {}))(photoPosesOf(body.poses)), photoInList: typeof body.list === 'boolean' ? body.list : space.kind !== 'project' };
+    }
+    return out;
+  }
+
+  /**
+   * A space's photo: a picture of its own, or none for everyone's avatars together; the banner's text; and the
+   * background behind the group photo. Its founder, maintainers or moderators set it. Empty removes; left out stays.
+   */
+  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('a direct chat has no photo');
+    const state = this.#state(space);
+    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only those who run ${space.name} set its photo`);
+    if (input.as) this.#agentMay(input.as, KIND_SPACE_PHOTO);
+    for (const image of [input.photo, input.background]) if (image && !parseBlobRef(image)) throw new Error('a photo or background is an uploaded image (a wblob: reference)');
+    if (input.banner !== undefined && input.banner.trim().length > 40) throw tooLong('The banner', input.banner.trim().length, 40);
+    const before = this.#spacePhoto(space, state);
+    const photo = input.photo === undefined ? before.photo : input.photo || undefined;
+    const banner = input.banner === undefined ? before.bannerText : input.banner.trim() || undefined;
+    const background = input.background === undefined ? before.background : input.background || undefined;
+    if (input.members && space.kind !== 'project') throw new Error("members stand on a project's banner; only projects have one");
+    const members = input.members ?? !!before.membersOnBanner;
+    if (input.order && input.order.length !== photoOrderOf(input.order).length) throw new Error("the photo's order lists people by their keys (did:key:…), each once, at most 100");
+    const order = input.order ?? before.photoOrder ?? [];
+    if (input.poses && Object.keys(input.poses).length !== Object.keys(photoPosesOf(input.poses)).length) throw new Error("the photo's poses go by people's keys (did:key:…), each a pose's id like wave or idea, at most 100");
+    const poses = input.poses ? photoPosesOf(input.poses) : (before.photoPoses ?? {});
+    const list = input.list ?? before.photoInList ?? space.kind !== 'project';
+    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '', members, order, poses, list }, space: space.id, as: input.as });
+    return this.#spaceInfo(space);
   }
 
   /** A space's name; a direct chat is named after the other person. */
@@ -8953,7 +9108,7 @@ export class WeaveNode implements Backend {
       url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
-      by: this.#actor(p.author, p.signer),
+      by: this.#actor(p.author, p.signer, p.session),
       title: p.title,
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
@@ -9514,12 +9669,13 @@ export class WeaveNode implements Backend {
     return (await this.issues(issue.space.id)).find((i) => i.id === issue.id)!;
   }
 
-  #actor(author: Did, signer: Did): Actor {
+  #actor(author: Did, signer: Did, session?: SessionStamp): Actor {
     const actor: Actor = { did: author };
     const name = this.nameOf(author);
     if (name) actor.name = name;
     const agent = this.#agentName(signer, author);
     if (agent) actor.agent = agent;
+    if (agent && session) actor.session = session;
     return actor;
   }
 
@@ -9538,7 +9694,7 @@ export class WeaveNode implements Backend {
     return {
       id: m.id,
       short: m.id.slice(0, 8),
-      by: this.#actor(m.author, m.signer),
+      by: this.#actor(m.author, m.signer, m.session),
       text: m.text,
       time: m.time,
       channel: m.channel,

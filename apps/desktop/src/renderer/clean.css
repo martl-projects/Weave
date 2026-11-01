@@ -461,3 +461,11 @@
 :root[data-skin='clean'] .file-state.missing { color: var(--cl-danger-text); }
 :root[data-skin='clean'] .msg-image { border-color: var(--cl-line); border-radius: 8px; overflow: hidden; }
 :root[data-skin='clean'] .lightbox-bar { background: var(--cl-panel); color: var(--cl-text); border: 1px solid var(--cl-line); border-radius: 8px; box-shadow: var(--cl-shadow); }
+
+/* invitations in chat */
+:root[data-skin='clean'] .invite-card { padding: 12px; background: var(--cl-panel); color: var(--cl-text); border: 1px solid var(--cl-line); border-radius: 10px; box-shadow: var(--cl-shadow); font-size: 13px; }
+:root[data-skin='clean'] .invite-card:hover { border-color: var(--cl-line-2); box-shadow: var(--cl-shadow-lg); }
+:root[data-skin='clean'] .invite-card:hover .post-embed-title { text-decoration: none; color: var(--cl-accent); }
+:root[data-skin='clean'] .invite-chip { background: var(--cl-success-soft); color: var(--cl-success); border-color: var(--cl-success-line); border-radius: 6px; }
+:root[data-skin='clean'] .invite-card.member .post-embed-meta { color: var(--cl-success); }
+:root[data-skin='clean'] :is(.invite-card.expired, .invite-card.old, .invite-card.elsewhere) .post-embed-meta { color: var(--cl-danger-text); }

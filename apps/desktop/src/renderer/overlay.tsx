@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { SessionAvatar } from './avatar.tsx';
 import type { MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
 import { PostHeader, spaceLabel } from './posts.tsx';
@@ -80,7 +81,7 @@ function SessionView({ session, ctx }: { session: SessionInfo; ctx: Context }) {
 }
 
 /** The foldout under Stack: the session (to bring it up in Claude), what waits on its stack, and what was mentioned there. */
-function StackFoldout({ session, mentions, focused, onFollow, onClose }: { session: SessionInfo; mentions: MentionInfo[]; focused: boolean; onFollow(): void; onClose(): void }) {
+function StackFoldout({ session, me, mentions, focused, onFollow, onClose }: { session: SessionInfo; me?: string; mentions: MentionInfo[]; focused: boolean; onFollow(): void; onClose(): void }) {
   const { t } = useTexts();
   const waiting = session.stack.slice(1);
   const here = mentions.filter((m) => m.session?.id === session.id);
@@ -93,6 +94,7 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
     <div className="panel-foldout window" onClick={(e) => (e.target as Element).closest('a') && onClose()}>
       <div className="panel-heading">{t('word.session.cap')}</div>
       <div className="panel-foldout-session">
+        {me && <SessionAvatar session={session} person={me} size={36} />}
         <span className="grow">
           <b title={session.description}>{session.title ?? t('session.untitled')}</b>
           <span className="panel-line-note">{[folderName(session.folder), focused ? t('panel.open.in.claude') : running(session) ? t('session.running.lc') : session.active ? t('session.active', { time: session.active }) : ''].filter(Boolean).join(' · ')}</span>
@@ -134,7 +136,7 @@ function StackFoldout({ session, mentions, focused, onFollow, onClose }: { sessi
 }
 
 /** The sessions pane: sessions with work items and the ones active lately, what each is on; pick one to see it. */
-function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string): void }) {
+function SessionsPane({ focused, me, onPick }: { focused?: string; me?: string; onPick(id: string): void }) {
   const { t } = useTexts();
   const [sessions, setSessions] = useState<SessionInfo[]>();
   useEffect(() => {
@@ -158,6 +160,7 @@ function SessionsPane({ focused, onPick }: { focused?: string; onPick(id: string
         const state = s.id === focused ? t('panel.open.in.claude') : running(s) ? t('session.running.lc') : s.active ? t('session.active', { time: s.active }) : t('session.changed', { time: s.time });
         return (
           <li key={`${s.provider}:${s.id}`} className={`panel-session${s.id === focused ? ' focused' : ''}${running(s) ? ' running' : ''}`}>
+            {me && <SessionAvatar session={s} person={me} size={32} />}
             <button className="link panel-session-pick" onClick={() => onPick(s.id)} title={t('panel.show.here')}>
               <b>
                 {s.title ?? t('session.untitled')}
@@ -256,9 +259,17 @@ export function MentionsPanel() {
         </div>
       </div>
       {fold && pane === 'session' && session && (
-        <StackFoldout session={session} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
+        <StackFoldout session={session} me={ctx?.me.did} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
       )}
-      <div className="mentions-scroll">{pane === 'sessions' ? <SessionsPane focused={focused} onPick={pick} /> : session && ctx ? <SessionView session={session} ctx={ctx} /> : <p className="empty">{t('panel.pick.session')}</p>}</div>
+      <div className="mentions-scroll">
+        {pane === 'sessions' ? (
+          <SessionsPane focused={focused} me={ctx?.me.did} onPick={pick} />
+        ) : session && ctx ? (
+          <SessionView session={session} ctx={ctx} />
+        ) : (
+          <p className="empty">{t('panel.pick.session')}</p>
+        )}
+      </div>
     </div>
   );
 }

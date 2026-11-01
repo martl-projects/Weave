@@ -3,7 +3,7 @@
 
 import { copyFileSync, cpSync, mkdirSync, readFileSync } from 'node:fs';
 import { build } from 'esbuild';
-import { pinnedRelease } from '../../packages/shipped/pinned.ts';
+import { pinnedRelease, pins } from '../../packages/shipped/pinned.ts';
 
 mkdirSync('dist/renderer', { recursive: true });
 
@@ -39,7 +39,7 @@ await Promise.all([
     jsx: 'automatic',
     minify: true,
     sourcemap: true,
-    define: { 'process.env.NODE_ENV': '"production"', WEAVE_VERSION: JSON.stringify(version) },
+    define: { 'process.env.NODE_ENV': '"production"', WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
     loader: { '.svg': 'text', '.png': 'dataurl' },
   }),
   // Styles, with 98.css and its pixel font inlined.

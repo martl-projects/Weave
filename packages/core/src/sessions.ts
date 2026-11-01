@@ -11,13 +11,14 @@ import type { Entry } from './collab.ts';
  *
  *   weave.session  {provider, id, host?, folder?, title?, stack,   sealed to yourself; the latest per
  *                   name?, about?, description?,                     provider and id counts
- *                   role?, projects?, available?, last?}
+ *                   role?, projects?, available?, last?, avatar?}
  *     name: chosen once by the session, permanent, unique among your sessions ("Skala")
  *     about: one line on what it specializes in; description: its job at length
  *     stack: [{post, since}], top first
  *     role: 'driver' (plans and hands out work) or 'worker' (takes work items)
  *     projects: the spaces whose items it takes (none: any); available: it takes new items
  *     last: {post, time}, the item it last finished
+ *     avatar: its figure (Weave avatar: parts and numbers; a screen for a head), so you know it again
  *
  * Kept sealed to the person: a stack is their own scratch board, on all their
  * devices. An item's team only sees what the sessions posted into its chat.
@@ -53,6 +54,8 @@ export interface SessionRecord {
   projects?: string[];
   /** It takes new work items (from the app and from the driver). */
   available?: boolean;
+  /** Its figure (Weave avatar), so it's known again at a glance; without one, the one its name makes. */
+  avatar?: Record<string, number>;
   /** The item it last finished. */
   last?: { post: string; time: string };
   /** When it last changed. */
@@ -122,11 +125,33 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       ...(role ? { role } : {}),
       ...(projects.length ? { projects } : {}),
       ...(b?.available === true ? { available: true } : {}),
+      ...((avatar) => (avatar ? { avatar } : {}))(figureOf(b?.avatar)),
       ...(str(last?.post, 100) ? { last: { post: str(last?.post, 100), time: str(last?.time, 40) || e.event.time } } : {}),
       time: e.event.time,
     });
   }
   return out;
+}
+
+/**
+ * The session an agent wrote something in (its post or message carries it: session {name}), so readers see which of
+ * its person's sessions it was. Only the name: the session itself (its stack, its face) stays its person's.
+ */
+export interface SessionStamp {
+  name: string;
+}
+export function sessionStampOf(body: unknown): SessionStamp | undefined {
+  const s = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).session : undefined;
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return undefined;
+  const name = typeof (s as Record<string, unknown>).name === 'string' ? ((s as Record<string, unknown>).name as string).trim().slice(0, MAX_NAME) : '';
+  return name ? { name } : undefined;
+}
+
+/** A figure (Weave avatar): parts named by letters, whole numbers 0 to 255, at most 64; else none. */
+export function figureOf(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out = Object.fromEntries(Object.entries(value).slice(0, 64).filter(([k, v]) => /^[a-zA-Z]{1,24}$/.test(k) && Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 255)) as Record<string, number>;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Put a post on top; whatever was on top waits below. A post already on the stack moves up. */

@@ -1,4 +1,5 @@
 import data from '@emoji-mart/data';
+import { AuthorAvatar } from './avatar.tsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
@@ -100,7 +101,7 @@ function Message({
       <HintSigns signs={hint.signs} />
       {m.by.agent && (
         <span className="agent-tag" title={t('member.agent.title', { name: m.by.name ?? t('word.someone') })}>
-          {t('agent.tag.caps', { agent: m.by.agent })}
+          {t('agent.tag.caps', { agent: m.by.agent })}{m.by.session ? t('agent.tag.in.session', { session: m.by.session.name }) : ''}
         </span>
       )}
     </span>
@@ -117,7 +118,7 @@ function Message({
         </div>
       )}
       <div className="msg-main">
-        <div className="gutter">{compact ? <time className="hover-time">{clock(m.time)}</time> : <Avatar did={m.by.did} name={m.by.name} size={40} />}</div>
+        <div className="gutter">{compact ? <time className="hover-time">{clock(m.time)}</time> : <AuthorAvatar by={m.by} size={40} />}</div>
         <div className="msg-body">
           {!compact && (
             <div className="msg-head">

@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { ClaudeCodeFollow, SessionInfo, SpaceInfo } from '@weave/node/client';
+import { SessionAvatar } from './avatar.tsx';
+import { SessionAvatarEditor } from './avatar-editor.tsx';
+import type { ClaudeCodeFollow, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { Page } from './views.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
@@ -47,11 +49,19 @@ function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode 
   const meta = [folderName(session.folder), !running(session) && status(session), top && t('session.on', { title: postTitle(top.post) }), waiting.length && t('session.waiting.n', { n: waiting.length })].filter(Boolean).join(' · ');
   const show = session.host && bridge.showSession ? () => void attempt(() => bridge.showSession!(session.host!)) : undefined;
   const [naming, setNaming] = useState(false);
+  const [dressing, setDressing] = useState(false);
+  const { data: me } = useApi(() => api<Profile>('profile'), []);
   // A named session's title is its own; the Claude app's title is the note under it.
   const about = [session.description, session.name && session.providerTitle && session.providerTitle !== session.title ? t('session.in.claude', { title: session.providerTitle }) : ''].filter(Boolean).join('\n');
   return (
     <div className={`session-row${session.role ? ` is-${session.role}` : ''}${running(session) ? ' running' : ''}`}>
       <span className="session-dot" title={running(session) ? t('session.running') : status(session)} />
+      {me && (
+        <button className="link session-face" onClick={() => setDressing(true)} title={t('session.avatar.change')} aria-label={t('word.avatar')}>
+          <SessionAvatar session={session} person={me.did} size={28} />
+        </button>
+      )}
+      {dressing && me && <SessionAvatarEditor session={session} me={me} onClose={() => setDressing(false)} />}
       <div className="session-text">
         {show ? (
           <button className="session-title" onClick={show} title={about || t('session.open.claude')}>

@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { GumroadInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
+import type { GumroadInfo, MemberInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
 import { formatUnits, isHexAddress, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
 import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { WalletNeeded } from './wallet.tsx';
 import { t, T, useTexts } from './texts.tsx';
 
@@ -18,6 +18,23 @@ import { t, T, useTexts } from './texts.tsx';
 
 export const money = (cents: number, currency: string) => (cents === 0 ? t('tier.free') : t('tier.per.month', { price: { amount: cents / 100, currency } }));
 
+/** Your tier's members, as their faces (a few, then how many more). */
+function TierFaces({ tier }: { tier: string }) {
+  const { data: members } = useApi(() => api<MemberInfo[]>('members', tier).catch(() => [] as MemberInfo[]), [tier]);
+  const shown = (members ?? []).slice(0, 8);
+  if (!shown.length) return null;
+  return (
+    <span className="tier-faces">
+      {shown.map((m) => (
+        <span key={m.did} title={m.name ?? shortDid(m.did)}>
+          <Avatar did={m.did} size={22} />
+        </span>
+      ))}
+      {(members?.length ?? 0) > shown.length && <span className="small muted">+{members!.length - shown.length}</span>}
+    </span>
+  );
+}
+
 function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; onEdit?(): void }) {
   const { t } = useTexts();
   let status;
@@ -28,6 +45,7 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
           {t('tier.members', { n: tier.members })}
           {tier.open ? '' : t('tier.closed')}
         </span>
+        {!!tier.members && <TierFaces tier={tier.id} />}
         {onEdit && <button onClick={onEdit}>{t('tier.edit')}</button>}
       </>
     );
@@ -37,7 +55,7 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
   else status = <span className="small">{t('tier.not.taking')}</span>;
   return (
     <article className="tier sunken">
-      <Sprite seed={tier.id} size={40} />
+      <Avatar did={tier.creator.did} size={40} />
       <div className="grow">
         <b>{tier.name}</b> <span className="price">{money(tier.price, tier.currency)}</span>
         {tier.gumroad && <span className="tag">{t('tier.via.gumroad')}</span>}

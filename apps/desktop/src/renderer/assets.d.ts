@@ -12,3 +12,5 @@ declare module '*.png' {
 
 /** The release version, set by the build (esbuild define). */
 declare const WEAVE_VERSION: string;
+/** Weave avatar's pinned release (its archive's SHA-256, shortened): pictures kept on disk are its. */
+declare const AVATAR_RELEASE: string;

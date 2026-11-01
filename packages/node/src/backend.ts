@@ -177,6 +177,20 @@ export interface FeedQuery {
 export interface SpaceInfo extends SpaceRef {
   /** Projects: the icon from the project's page (wblob: reference), if it has one. */
   icon?: string;
+  /** A photo of its own (wblob: reference) instead of everyone's avatars as a group photo. */
+  photo?: string;
+  /** The text on its group photo's banner (its name when not set). */
+  bannerText?: string;
+  /** A picture behind its group photo (wblob: reference); a project's banner too, unless its page has one. */
+  background?: string;
+  /** Projects: their members stand on the banner, as a group. */
+  membersOnBanner?: true;
+  /** Who stands where on its group photo, front row first, left to right; others after them. */
+  photoOrder?: Did[];
+  /** How someone poses on its group photo: their key → a pose's or a scene's id (Weave avatar's); the others take turns. */
+  photoPoses?: Record<Did, string>;
+  /** Its photo stands above its member list (by default for groups and communities; projects have their banner). */
+  photoInList?: boolean;
   founder: Did;
   founderName?: string;
   members: number;
@@ -771,6 +785,31 @@ export interface KnockInfo {
   access: Array<{ board: string; read?: boolean; write?: boolean }>;
 }
 
+/**
+ * What an invite or knock link says, looked at without joining: for the card a
+ * link makes in a chat, and the "Join?" that follows. Only what the link itself
+ * carries, plus where you stand with that space.
+ */
+export interface InviteLook {
+  /** An invite link joins right away; a knock link asks the inviter first. */
+  kind: 'invite' | 'knock';
+  space: SpaceRef & { founder: Did; founderName?: string };
+  inviter: { did: Did; name?: string };
+  expires: string;
+  /** Read-limited boards the link opens, by name. */
+  boards: string[];
+  /**
+   * Where you stand: open (you may join, or ask), member (you're in already), waiting (you asked, the inviter decides),
+   * mine (your own link), expired, old (made by an older Weave, no longer works), elsewhere (your company keeps you in
+   * its spaces), damaged.
+   */
+  standing: 'open' | 'member' | 'waiting' | 'mine' | 'expired' | 'old' | 'elsewhere' | 'damaged';
+  /** What's wrong, for expired, old, elsewhere and damaged. */
+  problem?: string;
+  /** How many are in, when you are (a link says nothing about the inside). */
+  members?: number;
+}
+
 /** Options for an invite link. */
 export interface InviteOptions {
   /** The link only lets people ask; you let each one in (they get no keys until then). */
@@ -1236,6 +1275,8 @@ export interface SessionInfo {
   role?: 'driver' | 'worker';
   /** The projects whose items it takes; none means any. */
   projects?: SpaceRef[];
+  /** Its avatar (Weave avatar), so it's known again; none: the one its name makes. */
+  avatar?: Record<string, number>;
   /** It takes new work items, from the app (Ctrl+click) and from your driver. */
   available?: boolean;
   /** The item it last finished. */
@@ -1477,8 +1518,10 @@ export interface Profile {
    */
   url: string;
   theme: Theme;
-  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as their sprite. */
+  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as the figure their key makes. */
   avatar?: Record<string, number>;
+  /** Their agents' avatars, by the agent's name (a screen for a head); the others show as their default. */
+  agentAvatars?: Record<string, Record<string, number>>;
   me: boolean;
   /** I follow them. */
   following: boolean;
@@ -1681,8 +1724,10 @@ export type { PlatformInfo };
 export interface ProfileInput {
   name?: string;
   theme?: Partial<Theme>;
-  /** Your avatar's figure (Weave avatar), or null to show your sprite again. */
+  /** Your avatar's figure (Weave avatar), or null for the one your key makes. */
   avatar?: Record<string, number> | null;
+  /** Your agents' avatars, by name: a figure, or null for their default again. Agents not named keep theirs. */
+  agentAvatars?: Record<string, Record<string, number> | null>;
 }
 
 /** Who did something: the person, and the agent if one acted for them. */
@@ -1690,6 +1735,8 @@ export interface Actor {
   did: Did;
   name?: string;
   agent?: string;
+  /** The session the agent wrote it in, by its name (the session itself stays its person's). */
+  session?: { name: string };
 }
 
 export interface ReactionInfo {
@@ -1835,6 +1882,8 @@ export interface Backend {
   invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
   joinSpace(invite: string, note?: string): Promise<SpaceInfo>;
+  /** What an invite or knock link says and where you stand with its space, without joining: for the card and the "Join?" dialog. */
+  lookAtInvite(link: string): Promise<InviteLook>;
   /** People asking to join with your links that need your OK. */
   knocks(): Promise<KnockInfo[]>;
   /** Let someone in (or turn them away) who asked with your link. */
@@ -2085,7 +2134,7 @@ export interface Backend {
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
   /** prompt: as a work item, what a session should do with it (its starting prompt). */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
@@ -2265,8 +2314,12 @@ export interface Backend {
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
-  /** The avatars of these people, by their did: those who have one. */
-  avatars(people: Did[]): Promise<Record<Did, Record<string, number>>>;
+  /** A space's photo (a picture of its own, or '' for everyone's avatars), its banner's text ('' for its name) and the background behind it. */
+  setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo>;
+  /** The avatars of these people (did) and agents ("did·agent"): those who have one. */
+  avatars(people: string[]): Promise<Record<string, Record<string, number>>>;
+  /** A session's avatar, so you know it again; null for the one its name makes. */
+  setSessionAvatar(input: { session: SessionRef; avatar: Record<string, number> | null }): Promise<SessionInfo>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
   directory(query?: string): Promise<Profile[]>;
   /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url; `only` keeps one kind. */
@@ -2454,7 +2507,7 @@ export interface Backend {
   /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
   messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
   /** Say something, with a file or image attached (from putFile, or an image from putBlob): text may be empty then. */
-  say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo>;
+  say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
   /** Take a chat message down: yours, or any in a space you maintain or moderate. */
   deleteMessage(input: { message: string; as?: string }): Promise<void>;
@@ -2485,12 +2538,12 @@ export { LENS_CSP } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'directory', 'find', 'contactLink', 'addContact',
+  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',

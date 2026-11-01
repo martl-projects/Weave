@@ -7,6 +7,7 @@ import type { CoauthorRequest, KnockInfo, MembershipRequestInfo, PermissionReque
 import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo, Profile, SessionInfo, WebsiteInfo, SpaceInfo, Status } from '@weave/node/client';
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
+import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { KeysView, Onboarding } from './keys.tsx';
@@ -25,6 +26,8 @@ import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
+import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
+import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
 import {
@@ -49,13 +52,14 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind:
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   return (
     <li style={{ paddingLeft: depth * 14 }}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
-        {sprite ? image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} face={face} /> : icon && <Icon name={icon} />}
+        {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
+        {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
@@ -88,7 +92,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
       {open && (
         <>
           {space.kind === 'project' &&
@@ -222,7 +226,7 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         {m.via && <div className="member-sub">{t('member.via.group', { group: m.via.name })}</div>}
         {m.agents.map((agent) => (
           <div key={agent} className="member-sub agent" title={m.name ? t('member.agent.title', { name: m.name }) : t('member.agent.title.theirs')}>
-            ⚙ {agent} <span className="agent-tag">{t('word.agent')}</span>
+            <AgentAvatar person={m.did} agent={agent} size={14} /> {agent} <span className="agent-tag">{t('word.agent')}</span>
           </div>
         ))}
       </div>
@@ -235,6 +239,8 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         <b>{t(space.kind === 'project' ? 'members.participants' : 'members.members', { n: members.length })}</b>
       </header>
       <div className="members-list sunken">
+        {/* Its photo: its own picture, or everyone together holding up its banner (those online first). */}
+        {space.photoInList && <SpacePhoto space={space} dids={[...online, ...offline].map((m) => m.did)} />}
         {online.length > 0 && <h4>{t('members.online', { n: online.length })}</h4>}
         {online.map((m) => row(m, true))}
         {offline.length > 0 && <h4>{t('members.away', { n: offline.length })}</h4>}
@@ -409,8 +415,10 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
   const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
   const { t } = useTexts();
   const name = chat.peer.name ?? shortDid(chat.peer.did);
+  const [inviting, setInviting] = useState(false);
   return (
     <div className="center">
+      {inviting && <InviteToDialog chat={chat.space} peerName={name} onClose={() => setInviting(false)} />}
       {!chat.friend && (
         <div className="notice">
           <Icon name="lock" /> {t('chat.readonly', { name })}
@@ -422,6 +430,11 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
             <Icon name="message" /> @{name}
           </b>
           <span className="pane-tools">
+            {chat.friend && (
+              <button onClick={() => setInviting(true)} title={t('chat.invite.title', { name })}>
+                <Icon name="userPlus" /> {t('chat.invite.to')}
+              </button>
+            )}
             <button onClick={() => navigate(`#/space/${encodeURIComponent(chat.peer.did)}`)}>
               <Icon name="user" /> {t('chat.hub')}
             </button>
@@ -458,6 +471,7 @@ function openLink(link: string): void {
     else toast(t('link.enroll.taken'));
     return;
   }
+  if (isInviteHref(link)) return openInviteLink(link);
   if (!ref) return toast(t('link.paste'));
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
@@ -789,6 +803,7 @@ function App() {
       ) : (
         <>
           <Shell />
+          <InviteLinkDialog />
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />
