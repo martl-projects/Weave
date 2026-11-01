@@ -106,7 +106,16 @@ export interface SpaceAccess {
    * public, and nothing it sends is read; a hello that shows none closes the connection.
    */
   firewall?: boolean;
+  /**
+   * A control event from a peer that holds only an older key of the space: may it be taken? Only a join with an invite
+   * the space knows: whoever's behind may also be someone removed, and control events aren't rate-limited. Without
+   * it, nothing from such a peer is taken.
+   */
+  fromBehind?(item: WireItemV2): boolean;
 }
+
+/** How many control events one connection takes from a peer behind in a space: a join or two, never a flood. */
+const MAX_FROM_BEHIND = 16;
 
 export interface KeepAccess {
   /** Our streams this peer may hold (to recover them), with the tags of the items we have; `keeper`: it's one we chose to keep them. */
@@ -163,6 +172,8 @@ export class PeerSession2 {
   #shared = new Set<string>(['public']);
   /** The peer may have what we share (always, without a firewall); behind one, once its hello showed something that admits. */
   #admitted: boolean;
+  /** Control events taken from the peer in spaces it's behind in (see MAX_FROM_BEHIND). */
+  #takenFromBehind = 0;
   /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
   #behind = new Set<string>();
   /** Per space whose sync has started, the tag of the key it started with: a new key starts it again. */
@@ -376,8 +387,13 @@ export class PeerSession2 {
       case 'items':
         if (v2 && Array.isArray(message.items)) {
           for (const item of message.items) {
-            // From a peer behind in a space, only its control events (a join that came in before our newer key was made).
-            if (!isWireItemV2(item) || !(this.#shared.has(item.e.space) || (this.#behind.has(item.e.space) && item.e.class === 'control'))) continue;
+            if (!isWireItemV2(item)) continue;
+            if (!this.#shared.has(item.e.space)) {
+              // From a peer behind in a space, only a join the node accepts (one that came in before our newer key was
+              // made), and only a few: someone behind may be someone removed.
+              if (!this.#behind.has(item.e.space) || item.e.class !== 'control' || this.#takenFromBehind >= MAX_FROM_BEHIND || !this.#access.fromBehind?.(item)) continue;
+              this.#takenFromBehind++;
+            }
             // Marked as held by the peer before taking it, so accepting it doesn't echo it back.
             this.#notePeerHas(item);
             this.replica.ingest(item);

@@ -6605,7 +6605,23 @@ export class WeaveNode implements Backend {
       farewells: () => this.#farewells(),
       // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
       firewall: this.config.firewall !== false,
+      fromBehind: (item) => this.#joinFromBehind(item),
     };
+  }
+
+  /**
+   * A control event from a peer that holds only an older key of a space: taken only if it's a join with an invite this
+   * space made (a join that reached us after our newer key). Whoever's behind may also be someone removed: nothing
+   * else of theirs counts here, and control events aren't rate-limited.
+   */
+  #joinFromBehind(item: WireItemV2): boolean {
+    const scope = parseScope(item.e.space);
+    const space = scope && this.#spaces.get(scope.id);
+    if (!space) return false;
+    const d = this.#decode(recordOfV2(canonicalIdV2(item.e), item.e, item.b));
+    if (!d || canonicalKind(d.inner.kind) !== KIND_JOIN) return false;
+    const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
+    return typeof invite === 'string' && this.#decodedIn(space.id).some((x) => canonicalKind(x.inner.kind) === KIND_INVITE && (x.inner.body as { invite?: unknown } | null)?.invite === invite);
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)

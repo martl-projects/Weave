@@ -51,4 +51,28 @@ describe('someone whose join reaches the maintainer only after the next new key'
       close();
     }
   });
+
+  it("takes nothing else from a peer behind: someone removed still holds an older key, and control events aren't rate-limited", async () => {
+    const [martl, eve] = [person('martl'), person('eve')];
+    await martl.createGroup('Home'); // in a group, any member may invite
+    await eve.joinSpace(await martl.invite('Home'));
+    const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((e) => to.replica.ingest(e));
+    sync(eve, martl);
+    sync(martl, eve);
+    // Removed while away: her node still thinks she's in.
+    await martl.removeMember('Home', eve.identity.author);
+    // Eve, out, writes control events with the key she kept: an invite of her own, links that martl never made.
+    const before = new Set(eve.replica.events().map((e) => e.id));
+    await eve.invite('Home');
+    await eve.invite('Home');
+    const hers = eve.replica.events().filter((e) => !before.has(e.id) && e.author === eve.identity.author);
+    expect(hers.length).toBeGreaterThan(0);
+    const { close } = link(martl, eve);
+    try {
+      await settle();
+      for (const e of hers) expect(martl.replica.events().some((m) => m.id === e.id)).toBe(false);
+    } finally {
+      close();
+    }
+  });
 });
