@@ -663,9 +663,13 @@ export class PeerSession2 {
 
   // ---------------------------------------------------------------- v1 logs
 
-  /** Keys whose v1 logs travel: those that never wrote v2 (frozen history), and root keys (the identity foundation). */
+  /**
+   * Keys whose v1 logs travel: those that never wrote v2 (frozen history), root keys (the identity foundation), and
+   * keys that signed their v1 events again as v2 (`was`): a node takes those only with the v1 original, so one that
+   * came after v0.4 needs it too (E and Liane, 2.11.2026: a profile from before v0.4 never showed for them).
+   */
   #sendsV1(signer: Did): boolean {
-    return this.#peerVersion === 1 || this.replica.store.number2(signer) === 0 || !this.replica.authority.grant(signer);
+    return this.#peerVersion === 1 || this.replica.store.number2(signer) === 0 || !this.replica.authority.grant(signer) || this.replica.store.range(signer, 1, 1).length > 0;
   }
 
   #v1Heads(): Record<string, number> {
