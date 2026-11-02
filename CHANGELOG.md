@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.27.4 · 2026-11-02
+
+- A space set to everything after it let newcomers read only from when they came: those already in get the keys from before their invite too, once
+
 ## v0.27.3 · 2026-11-01
 
 - The founder's node looks for old carries once per space and run, not on every pass; what a founder's word for an envelope from before protocol 3 can't prove is written down

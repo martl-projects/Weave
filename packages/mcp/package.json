@@ -1,6 +1,6 @@
 {
   "name": "@weave/mcp",
-  "version": "0.27.3",
+  "version": "0.27.4",
   "license": "MIT",
   "private": true,
   "type": "module",
