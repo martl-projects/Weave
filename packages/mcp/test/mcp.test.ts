@@ -7,6 +7,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WeaveNode } from '@weave/node';
 import { createWeaveMcp, sessionFromEnv } from '../src/index.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
+
+/** The services Weave ships, as a list holding these ones (CI never builds packages/shipped/dist). */
+async function shippedNamed(...names: string[]): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-shipped-'));
+  dirs.push(dir);
+  const listed: Record<string, unknown> = {};
+  for (const name of names) {
+    const manifest = JSON.parse(readFileSync(join(await pinnedRelease(name), 'weave.app.json'), 'utf8')) as unknown;
+    writeFileSync(join(dir, name + '.wasm'), name);
+    listed[name] = { component: name + '.wasm', digest: 'sha256:' + '0'.repeat(64), manifest };
+  }
+  writeFileSync(join(dir, 'shipped.json'), JSON.stringify(listed));
+  return dir;
+}
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -178,7 +193,8 @@ describe('Weave over MCP', () => {
   });
 
   it('brings the app to the front at a keyvault, ready to hand a project a repository (Codex, 2.11.2026)', async () => {
-    const { call, close } = await setup();
+    const { node, call, close } = await setup();
+    node.wasmSetup.shippedDir = await shippedNamed('github-keyvault');
     // Keys & devices at the GitHub keyvault Weave ships; with a project, its hand dialog.
     const opened = await call('weave_open_in_app', { what: 'keyvault', space: 'Weave' });
     expect(opened.data).toMatchObject({ what: 'keyvault', keyvault: { name: 'github-keyvault' }, space: { kind: 'project', name: 'Weave' } });
