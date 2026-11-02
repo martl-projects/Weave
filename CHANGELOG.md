@@ -2,6 +2,18 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.28.1 · 2026-11-02
+
+- The MCP test of opening a keyvault brings its own shipped list: CI never builds packages/shipped/dist
+- martl in the app's bundle again, through his front door: a new install knows him and reaches his always-on node, never his computer; weave-server join reads a long answer from a file or stdin
+- An always-on node gets its person's public side whole: each key's events form a chain, and the identity events alone left gaps the delegations waited behind
+- An always-on node links for someone whose history is from before v0.4: the answer brings the v1 originals its v2 identity events restate
+- Who reaches your Weave and your front door, in the app: "People you know" or "Anyone" in Keys & devices, the front door with its link beside your always-on node, and My contact link giving the front-door link once you have one
+- An agent guides its person to the one dialog: weave_open_in_app opens a keyvault (make the GitHub App, hand a project a repository) or a project's services, "Add github-access" saying which agent asks
+- Getting a file artifact shows its size and how far the download got, instead of a greyed button for a minute
+- Open link in the toolbar: paste any link someone sent, or the whole message, and Weave does the right thing (an invite asks to join, a contact link adds them, a post or space opens)
+- Your contact link is one click away: My link in the toolbar, next to Invite (it was only on People)
+
 ## v0.28.0 · 2026-11-02
 
 - A node shares only its person's public side and that of whom the peer shares something with, and an always-on node is a front door: found at a public meeting point that only front doors announce

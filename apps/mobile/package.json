@@ -1,6 +1,6 @@
 {
   "name": "@weave/mobile",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "license": "MIT",
   "private": true,
   "type": "module",
