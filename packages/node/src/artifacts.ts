@@ -37,6 +37,9 @@ export interface ArtifactRef {
 }
 
 /** How fetching one goes: its progress, or why it failed. */
+/** A file artifact's file: its one file, or (an installer) the one for this computer. */
+export const fileAssetOf = (manifest: AppManifest): AppAsset | undefined => manifest.install?.assets?.file ?? manifest.install?.assets?.[platformKey()];
+
 export interface InstallJob {
   progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number };
   error?: string;
@@ -122,11 +125,11 @@ export class Releases {
    * A file artifact, into dir: fetched unless it's there already and still matches its fingerprint. Its path, and who
    * delivered it.
    */
-  async getFile(dir: string, a: ArtifactRef): Promise<{ path: string; by: string }> {
+  async getFile(dir: string, a: ArtifactRef, onBytes?: (n: number) => void): Promise<{ path: string; by: string }> {
     // Its one file, or (an installer) the one for this computer.
-    const asset = a.manifest.install?.assets?.file ?? a.manifest.install?.assets?.[platformKey()];
+    const asset = fileAssetOf(a.manifest);
     if (!asset) throw new Error(`${a.manifest.name} ${a.tag} is no file${a.manifest.install?.assets ? ` for this computer (${platformKey()})` : ''}`);
-    return this.fetchFile(dir, a, asset);
+    return this.fetchFile(dir, a, asset, onBytes);
   }
 
   /**

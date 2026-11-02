@@ -568,7 +568,7 @@ import {
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
-import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { fileAssetOf, Releases, type ArtifactRef as StoredArtifact, type InstallJob } from './artifacts.ts';
 import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
@@ -10342,7 +10342,23 @@ export class WeaveNode implements Backend {
     const a = artifactsOf(this.#entries(project), this.#state(project).maintainers).find((x) => x.id === input.artifact);
     if (!a) throw new Error(`${project.name} has no such artifact`);
     if (a.kind !== 'file') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}: something to use, not a file to get`);
-    return this.#releases.getFile(joinPath(this.home.dir, 'files', project.id, `${a.manifest.app}-${a.tag.replace(/[^A-Za-z0-9._-]/g, '_')}`), { project: project.id, id: a.id, tag: a.tag, manifest: a.manifest });
+    // How far it got, for the app to show while it waits (artifactFileJob); gone once the file is here.
+    const job = `file:${project.id}:${a.id}`;
+    const size = fileAssetOf(a.manifest)?.size;
+    const progress = { state: 'downloading' as const, done: 0, ...(size ? { total: size } : {}) };
+    this.#releases.jobs.set(job, { progress });
+    try {
+      const got = await this.#releases.getFile(joinPath(this.home.dir, 'files', project.id, `${a.manifest.app}-${a.tag.replace(/[^A-Za-z0-9._-]/g, '_')}`), { project: project.id, id: a.id, tag: a.tag, manifest: a.manifest }, (n) => void (progress.done += n));
+      this.#releases.jobs.delete(job);
+      return got;
+    } catch (error) {
+      this.#releases.jobs.set(job, { error: (error as Error).message });
+      throw error;
+    }
+  }
+
+  async artifactFileJob(input: { project: string; artifact: string }): Promise<InstallJob | undefined> {
+    return this.#releases.jobs.get(`file:${this.#project(input.project).id}:${input.artifact}`);
   }
 
   /** My fetchers: client apps that fetch artifacts for me (fetchers.ts). */

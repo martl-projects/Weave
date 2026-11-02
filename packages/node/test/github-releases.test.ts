@@ -199,7 +199,11 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       expect(guide).toMatchObject({ kind: 'file', name: 'Guide', tag: 'v1.0', source: { provider: 'github', ref: 'martl/bot' }, file: { name: 'Guide.pdf', size: github.guide.length }, type: 'application/pdf' });
       await vi.waitFor(async () => expect((await lena.artifacts('Bot')).map((a) => [a.name, a.kind]).sort()).toEqual([['Bot für Grüße', 'service'], ['Guide', 'file']]), { timeout: 10_000, interval: 100 });
       await expect(lena.getArtifactFile({ project: 'Bot', artifact: (await lena.artifacts('Bot')).find((a) => a.kind === 'service')!.id })).rejects.toThrow(/not a file to get/);
-      const got = await lena.getArtifactFile({ project: 'Bot', artifact: guide.id });
+      // While it comes, the app can ask how far it got; nothing to ask once it's here.
+      const getting = lena.getArtifactFile({ project: 'Bot', artifact: guide.id });
+      expect(await lena.artifactFileJob({ project: 'Bot', artifact: guide.id })).toMatchObject({ progress: { state: 'downloading', total: github.guide.length } });
+      const got = await getting;
+      expect(await lena.artifactFileJob({ project: 'Bot', artifact: guide.id })).toBeUndefined();
       expect(readFileSync(got.path, 'utf8')).toBe('%PDF-1.4 the guide\n');
       expect(got.by).toBe('GitHub checkout, with what github-releases (martl) granted');
       // Got again: it's here, and still what was released.

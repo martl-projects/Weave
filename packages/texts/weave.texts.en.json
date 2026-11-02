@@ -2493,6 +2493,7 @@
     "ppeople.dropped.maintainer": "{name} is no longer a maintainer",
 
     "status.shipped.missing": "This Weave runs without the services it ships (Unread, Websites, GitHub releases…): the daemon found no built services folder next to it. Counts and websites stay off until a daemon with them holds this home.",
+    "art.getting": "Getting…",
     "time.ago": "{time, ago}",
     "day.today": "Today",
     "day.yesterday": "Yesterday",

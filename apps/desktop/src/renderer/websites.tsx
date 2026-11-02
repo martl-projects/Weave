@@ -507,21 +507,43 @@ const settingsReady = (artifact: ArtifactInfo, values: Record<string, string>) =
 const givenSettings = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
 
 /** Get a file artifact: its project's provider grants it, your fetcher gets it, Weave checks it; then show where it is. */
+type FileJob = { progress?: { done: number; total?: number }; error?: string };
+
+/** Get a file artifact (an installer: the one for this computer): how far it got while it comes, then where it is. */
 function GetFileButton({ artifact }: { artifact: ArtifactInfo }) {
   const { t } = useTexts();
   const [got, setGot] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [job, setJob] = useState<FileJob>();
+  useEffect(() => {
+    if (!busy) return;
+    const look = () => void api<FileJob | undefined>('artifactFileJob', { project: artifact.project.id, artifact: artifact.id }).then(setJob, () => {});
+    look();
+    const timer = setInterval(look, 700);
+    return () => clearInterval(timer);
+  }, [busy, artifact.project.id, artifact.id]);
   if (got && bridge.reveal) return <button onClick={() => void bridge.reveal!(got)}>{t('art.show.in.folder')}</button>;
+  const progress = busy ? job?.progress : undefined;
   return (
-    <AsyncButton
-      onClick={() =>
-        attempt(async () => {
-          const { path } = await api<{ path: string; by: string }>('getArtifactFile', { project: artifact.project.id, artifact: artifact.id });
-          setGot(path);
-        }, t('art.is.here', { name: artifact.name }))
-      }
-    >
-      {t('art.get')}
-    </AsyncButton>
+    <>
+      <AsyncButton
+        onClick={() => {
+          setBusy(true);
+          return attempt(async () => {
+            const { path } = await api<{ path: string; by: string }>('getArtifactFile', { project: artifact.project.id, artifact: artifact.id });
+            setGot(path);
+          }, t('art.is.here', { name: artifact.name })).finally(() => (setBusy(false), setJob(undefined)));
+        }}
+      >
+        {t(busy ? 'art.getting' : 'art.get')}
+      </AsyncButton>
+      {progress && (
+        <span className="small muted">
+          {' '}
+          {progress.total ? <progress max={progress.total} value={progress.done} /> : null} {progress.total ? `${Math.round((progress.done / progress.total) * 100)} %` : sizeText(progress.done)}
+        </span>
+      )}
+    </>
   );
 }
 

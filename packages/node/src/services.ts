@@ -12,7 +12,7 @@ import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
 import { imageDigest, imageLabels } from './registry.ts';
-import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
+import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -193,12 +193,14 @@ export class Services {
       const runs = this.h.runtime.runs(a.manifest);
       const who = access.get(a.id) ?? 'members';
       const texts = releaseTextsOf(this.h.entries(project), this.h.state(project).maintainers, a.id, a.manifest);
+      const file = a.kind === 'file' ? fileAssetOf(a.manifest) : a.manifest.install?.assets?.file;
       return {
         ...(texts.length ? { texts } : {}),
         kind: a.kind,
         ...(a.source ? { source: a.source } : {}),
         ...(a.manifest.file?.type ? { type: a.manifest.file.type } : {}),
-        ...(a.manifest.install?.assets?.file ? { file: { name: a.manifest.install.assets.file.file, ...(a.manifest.install.assets.file.size ? { size: a.manifest.install.assets.file.size } : {}) } } : {}),
+        // Its one file, or (an installer) the one for this computer: what Get would fetch.
+        ...(file ? { file: { name: file.file, ...(file.size ? { size: file.size } : {}) } } : {}),
         who,
         mine: !this.artifactRefusal(project, a.id, this.h.identity.author),
         id: a.id,
