@@ -406,7 +406,7 @@ export {
   recoveryRoot,
   type RecoveryWords,
 } from './recovery.ts';
-export { TEXT_LIMITS, tooLong, checkTextFields } from './limits.ts';
+export { TEXT_LIMITS, tooLong, checkTextFields, timeGiven } from './limits.ts';
 export { compareVersions, formatVersion, parseVersion, type Version } from './version.ts';
 export {
   bodyHash,

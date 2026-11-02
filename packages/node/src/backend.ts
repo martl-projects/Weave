@@ -2526,7 +2526,8 @@ export interface Backend {
   channels(space: string): Promise<ChannelInfo[]>;
   createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
   /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
-  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
+  /** A chat's messages, oldest first, the last `limit` of those in the range (`since`, `until`: times) and, with `people`, of those people wrote themselves (not their agents). */
+  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number; since?: string; until?: string; people?: boolean }): Promise<MessageInfo[]>;
   /** Say something, with a file or image attached (from putFile, or an image from putBlob): text may be empty then. */
   say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */

@@ -242,6 +242,20 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('reads a chat by range and by people only, so an agent takes in less (martl, 2.11.2026)', async () => {
+    const { node, call, close } = await setup();
+    await node.say({ space: 'Weave', text: 'from the person' });
+    await call('weave_say', { space: 'Weave', text: 'from the agent' });
+    const texts = async (args: Record<string, unknown>) => ((await call('weave_chat', { space: 'Weave', ...args })).data as Array<{ text: string }>).map((m) => m.text);
+    expect(await texts({})).toEqual(['from the person', 'from the agent']);
+    expect(await texts({ people_only: true })).toEqual(['from the person']);
+    expect(await texts({ since: '1h' })).toEqual(['from the person', 'from the agent']);
+    expect(await texts({ until: '1h' })).toEqual([]);
+    expect(await texts({ since: new Date(Date.now() + 60_000).toISOString() })).toEqual([]);
+    expect((await call('weave_chat', { space: 'Weave', since: 'yesterday' })).error).toMatch(/since is a time/);
+    close();
+  });
+
   it('signs everything as the agent', async () => {
     const { node, call, close } = await setup();
     await call('weave_say', { space: 'Weave', text: 'build is green' });
