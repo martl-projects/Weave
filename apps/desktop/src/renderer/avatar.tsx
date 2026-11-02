@@ -328,7 +328,10 @@ export function GroupPhoto({ dids, banner, poses, peek, className = '' }: { dids
     const f = figures![i], [did, agent] = people[i].split('·');
     return f ?? (agent ? agentDefault(l, figures![people.length + persons.indexOf(did)] ?? null, did, people[i]) : l.Avatar.fromSeed(did));
   };
-  const url = usePicture(figures && seen ? (l) => l.groupSnapshot(people.map((_, i) => figureOf(l, i)), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `group:${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(figures ?? people)}`);
+  // Kept under who's in it as drawn: someone without a figure by their key (the one it makes), never as a bare null, or
+  // everyone without an avatar would share one picture (Julian's post showed Phil's, 2.11.2026).
+  const drawn = figures ? [...people, ...persons].map((d, i) => figures[i] ?? d) : people;
+  const url = usePicture(figures && seen ? (l) => l.groupSnapshot(people.map((_, i) => figureOf(l, i)), width, height, { banner, peek, poses: people.map((d) => poses?.[d] ?? '') }) : undefined, `group:${width}x${height}:${peek ? 'peek' : ''}:${banner ?? ''}:${people.map((d) => poses?.[d] ?? '').join(',')}:${JSON.stringify(drawn)}`);
   return <div ref={ref} className={`group-photo ${className}`} style={{ aspectRatio: `${width} / ${height}` }}>{url && <img src={url} alt={banner ? t('photo.group.alt', { banner }) : t('photo.group.alt.plain')} draggable={false} />}</div>;
 }
 
