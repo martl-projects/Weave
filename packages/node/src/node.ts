@@ -409,6 +409,7 @@ import {
   type Builtin,
   type Pack,
   artifactKindOf,
+  unrunnableRelease,
   isLanguageSetting,
   LANGUAGES,
   type LanguageSetting,
@@ -1545,6 +1546,12 @@ export class WeaveNode implements Backend {
     if (!input.as && this.#isLinkedNode && !permits(NODE_PERMISSIONS, input.kind)) throw new Error(`this is ${this.nameOf(this.identity.author) ?? 'your'} always-on node: it keeps spaces and hosts rooms, and doesn't post or change anything for them (${input.kind})`);
     // Readers would cut anything longer: refuse instead, so nothing is shortened without the author knowing.
     checkTextFields(input.body);
+    // A release of a website or service that Weave couldn't run: refused, whoever publishes it (a person, an agent, a
+    // project's release service), before it sits in the project as something nobody can start.
+    if (canonicalKind(input.kind) === KIND_APP) {
+      const problem = unrunnableRelease(parseManifest(input.body));
+      if (problem) throw new Error(problem);
+    }
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);

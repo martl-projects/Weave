@@ -3,9 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { checkManifest } from '@weave/core';
+import { checkManifest, parseManifest, sealFor, type Json } from '@weave/core';
 import { startApi } from '../src/api.ts';
-import { closeOpenStores, WeaveNode } from '../src/index.ts';
+import { closeOpenStores, loadSpaces, WeaveNode } from '../src/index.ts';
 import { dockerRunning, testImage } from './helpers/docker.ts';
 import { pinnedRelease } from '../../shipped/pinned.ts';
 import { publishRelease, shippedCheckout } from './helpers/releases.ts';
@@ -177,7 +177,12 @@ describe('applets', { timeout: 60_000 }, () => {
     await lena.joinSpace(await martl.invite('Bots'));
     // As Weave released them before: a program per platform, no image, no WebAssembly.
     const manifest = { app: 'old-bot', name: 'Old bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [`${process.platform}-${process.arch}`]: ['./old-bot'] } } };
-    await publishRelease(martl, { project: 'Bots', tag: 'v0.9', repo: 'martl/bot', manifest: { ...manifest, install: { assets: { [`${process.platform}-${process.arch}`]: { file: 'old-bot.tar.gz', sha256: sha, size: 10 } } } } });
+    const release = { ...manifest, install: { source: { provider: 'github', ref: 'martl/bot' }, tag: 'v0.9', assets: { [`${process.platform}-${process.arch}`]: { file: 'old-bot.tar.gz', sha256: sha, size: 10 } } } };
+    // Released now: refused, whoever publishes it, before it sits in the project with nobody able to start it.
+    await expect(publishRelease(martl, { project: 'Bots', tag: 'v0.9', repo: 'martl/bot', manifest: { ...manifest, install: release.install } })).rejects.toThrow(/needs a container image \("start\.image"\) or WebAssembly/);
+    // Released before that rule: still there, and still never started.
+    const bots = loadSpaces(martl.home).find((s) => s.name === 'Bots')!;
+    martl.replica.write(martl.identity, sealFor(bots, { kind: 'weave.app', body: parseManifest(release) as unknown as Json }));
     syncAll([martl, lena]);
     const [artifact] = await lena.artifacts('Bots');
     expect(artifact.runs).toBeUndefined();

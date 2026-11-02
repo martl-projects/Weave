@@ -727,7 +727,7 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
     else hints = parsed.hints;
   }
-  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: its releases need a container image (start.image) or WebAssembly (wasm); without, whoever wants it runs it themselves and opens a website by its port');
+  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: a release of it is refused until it has a container image (start.image) or WebAssembly (wasm); as a description alone, whoever wants it runs it themselves and opens a website by its port');
   const start = hint || command || image ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(image ? { image } : {}) } : undefined;
 
   let install: AppInstall | undefined;
@@ -866,6 +866,20 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (site && (!m.service || (m.service.reads === 'nothing' && !m.service.writes.length))) return 'website';
   if (m.service || m.install?.image?.packaged) return 'service';
   return 'website';
+}
+
+/**
+ * Why a release of a website or service can't be published: it brings files (a tag, assets) but nothing Weave runs.
+ * Weave never runs a program from a release, only its container image or its WebAssembly; a release of programs per
+ * platform would sit in the project with nobody able to start it (Phil's MycrobiontaFinder, 2.11.2026). A description
+ * without a release (start.command for a checkout, run by hand) is still fine. Undefined: nothing in the way.
+ */
+export function unrunnableRelease(m: AppManifest): string | undefined {
+  const kind = artifactKindOf(m);
+  if (kind !== 'website' && kind !== 'service') return undefined;
+  const released = !!m.install && (!!m.install.tag || !!m.install.assets);
+  if (!released || m.wasm || m.start?.image || m.install?.image) return undefined;
+  return `${m.name} ${m.install?.tag ?? ''}`.trim() + ` isn't released: a ${kind} release needs a container image ("start.image") or WebAssembly ("wasm"), and Weave never runs programs from a release (${Object.keys(m.install?.assets ?? {}).join(', ') || 'its files'} would sit there with nobody able to start them). Build an image and set start.image, or a WebAssembly component (wasm), then release again; a description with start.command alone (no release) stays possible for running it by hand`;
 }
 
 /** Where an artifact's files are: its source, or its image (pulled by Weave itself). */
