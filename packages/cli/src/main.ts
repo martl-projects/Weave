@@ -419,7 +419,7 @@ keys (recovery words are read from a prompt or stdin, never from the command lin
   revoke <key>               revoke a device (needs your words) or agent: its events after --since are void  [--since <time>]
   rotate                     rotate your root key with your words  [--encryption: also a new encryption key]
   find <text>                search everyone you know of by name or did:key
-  contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)
+  contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)  [--door: through your front door, your always-on node, to give to anyone]
   add <link>                 add someone by their contact link: connect, follow, keep in your address book
 
 global options:
@@ -445,6 +445,7 @@ const { values, positionals } = parseArgs({
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
     bare: { type: 'boolean', default: false },
+    door: { type: 'boolean', default: false },
     file: { type: 'string' },
     invite: { type: 'string' },
     auto: { type: 'boolean' },
@@ -2993,7 +2994,8 @@ ${postLine(p)}`);
     }
 
     case 'contact': {
-      const link = await (await backend()).contactLink();
+      const link = await (await backend()).contactLink(values.door ? { door: true } : {});
+      if (values.door) return out({ link }, () => `${link}\n\nYour front door: give it to anyone (a website, a post, the app's bundle). Whoever adds it reaches your always-on node, never this computer, and sees only your public side.`);
       return out({ link }, () => `${link}\n\nSend this to anyone, however you like. They add you with: weave add <link>\nIt is your address, not a key: it lets people find your node and read your public space.`);
     }
 

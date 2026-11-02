@@ -2327,7 +2327,7 @@ export interface Backend {
   /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url; `only` keeps one kind. */
   find(query: string, limit?: number, only?: FoundKind): Promise<Found[]>;
   /** Your contact link: your address, to send to people however you like. Holds no keys. */
-  contactLink(): Promise<string>;
+  contactLink(input?: { door?: boolean }): Promise<string>;
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
   addContact(link: string): Promise<Profile>;
 

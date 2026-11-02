@@ -1431,7 +1431,7 @@ export class WeaveNode implements Backend {
    * Never its DID: that's public, and would tell anyone where this computer is.
    */
   get topics(): string[] {
-    const topics = new Set([meetTopic(this.#meetSecret()), ...this.config.topics]);
+    const topics = new Set([meetTopic(this.#meetSecret()), ...(this.#frontDoor() ? [meetTopic(this.#doorSecret())] : []), ...this.config.topics]);
     for (const space of this.#spaces.values()) {
       for (const topic of this.#meetingTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
@@ -1475,7 +1475,7 @@ export class WeaveNode implements Backend {
    * points, their DID). Announcing there would tell whoever looks where we are, and that we know them.
    */
   #looksOnly(topic: string): boolean {
-    return (topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret());
+    return (topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret()) && !(this.#frontDoor() && topic === meetTopic(this.#doorSecret()));
   }
 
   /** Connect to peers and join all topics. */
@@ -4069,9 +4069,15 @@ export class WeaveNode implements Backend {
       .map((f) => f.item);
   }
 
-  async contactLink(): Promise<string> {
+  /**
+   * Your contact link. `door`: through your front door instead, to give to anyone (a website, the app's bundle):
+   * whoever adds it reaches only your always-on node, never this computer, and learns only your public side.
+   */
+  async contactLink(input: { door?: boolean } = {}): Promise<string> {
     const name = this.nameOf(this.identity.author);
-    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry: this.#entryPoint() });
+    const door = this.#doorSecret();
+    const entry = input.door ? { topics: [meetTopic(door)], bootstrap: this.config.bootstrap, meet: b64u.encode(door) } : this.#entryPoint();
+    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry });
   }
 
   async addContact(link: string): Promise<Profile> {
@@ -4708,6 +4714,15 @@ export class WeaveNode implements Backend {
   }
 
   /** My meeting point's secret, carried by my links: from my self secret, so the same on all my devices and for good. */
+  #doorSecret(): Uint8Array {
+    return new Uint8Array(createHash('sha256').update('weave/meet/door/v1').update(this.#selfSecret()).digest());
+  }
+
+  /** This node is a front door: an always-on node, unless its config says otherwise; any other only if it says so. */
+  #frontDoor(): boolean {
+    return this.config.frontDoor ?? this.#isLinkedNode;
+  }
+
   #meetSecret(): Uint8Array {
     return new Uint8Array(createHash('sha256').update('weave/meet/v1').update(this.#selfSecret()).digest());
   }
@@ -6645,6 +6660,8 @@ export class WeaveNode implements Backend {
       { space: SELF_SCOPE, keys: [selfKey(this.#selfSecret())] },
       // Meeting points: ours, which whoever we gave a link holds, and theirs, from the links we were given.
       ...[this.#meetSecret(), ...this.#theirMeets()].map((secret) => ({ space: meetTopic(secret), keys: [secret], proof: true as const })),
+      // The front door: whoever has the public contact link gets in, here only (never on a computer that isn't one).
+      ...(this.#frontDoor() ? [{ space: meetTopic(this.#doorSecret()), keys: [this.#doorSecret()], proof: true as const }] : []),
     ];
   }
 
@@ -6671,7 +6688,32 @@ export class WeaveNode implements Backend {
       // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
       firewall: this.config.firewall !== false,
       fromBehind: (item) => this.#joinFromBehind(item),
+      // Behind the firewall, a peer learns the public side of us and of those it shares something with here, never
+      // of everyone we know (a newcomer through a contact link would otherwise get our family's names and faces).
+      ...(this.config.firewall !== false ? { publicFor: (shared: ReadonlySet<string>) => this.#publicFor(shared) } : {}),
     };
+  }
+
+  /** Whose public events a peer gets that shares these spaces with us (see SpaceAccess.publicFor). */
+  #publicFor(shared: ReadonlySet<string>): ((author: Did) => boolean) | undefined {
+    // One of our own devices: all of it.
+    if (shared.has(SELF_SCOPE)) return undefined;
+    const people = new Set<Did>([this.identity.author]);
+    for (const scope of shared) {
+      const parsed = parseScope(scope);
+      if (!parsed) continue;
+      const direct = this.#directs.get(parsed.id);
+      if (direct) {
+        people.add(direct.peer);
+        continue;
+      }
+      const space = this.#spaces.get(parsed.id);
+      if (!space) continue;
+      const state = this.#state(space);
+      people.add(space.founder);
+      for (const did of state.members.keys()) people.add(did);
+    }
+    return (author) => people.has(author);
   }
 
   /**

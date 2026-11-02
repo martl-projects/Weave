@@ -112,6 +112,12 @@ export interface SpaceAccess {
    * it, nothing from such a peer is taken.
    */
   fromBehind?(item: WireItemV2): boolean;
+  /**
+   * Whose public events this peer gets, by the spaces this connection shares: the node's own person, and those the
+   * peer shares a space or a direct chat with here (everyone, for one of the person's own devices). Undefined: all of
+   * them. A peer let in only by a contact link learns the person it reached, not who else that person knows.
+   */
+  publicFor?(shared: ReadonlySet<string>): ((author: Did) => boolean) | undefined;
 }
 
 /** How many control events one connection takes from a peer behind in a space: a join or two, never a flood. */
@@ -174,6 +180,12 @@ export class PeerSession2 {
   #admitted: boolean;
   /** Control events taken from the peer in spaces it's behind in (see MAX_FROM_BEHIND). */
   #takenFromBehind = 0;
+  /** Whose public events the peer gets (see SpaceAccess.publicFor), decided by what its hello showed. */
+  #publicOk: (author: Did) => boolean = () => true;
+  /** May this event of this space go to the peer: always in a space both hold; in public, only of whom it may know. */
+  #mayShow(space: string, author: string): boolean {
+    return space !== 'public' || this.#publicOk(author as Did);
+  }
   /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
   #behind = new Set<string>();
   /** Per space whose sync has started, the tag of the key it started with: a new key starts it again. */
@@ -359,7 +371,7 @@ export class PeerSession2 {
       case 'sync':
         if (v2 && this.#shared.has(message.space) && typeof message.since === 'string') {
           const until = typeof message.until === 'string' ? message.until : undefined;
-          const ids = this.replica.store.inSpace2(message.space, message.since, until).filter(({ event }) => event.class === 'content').map(({ id }) => id);
+          const ids = this.replica.store.inSpace2(message.space, message.since, until).filter(({ event }) => event.class === 'content' && this.#mayShow(message.space, event.author)).map(({ id }) => id);
           for (let i = 0; i < ids.length; i += MAX_IDS) this.#send({ t: 'have', space: message.space, ids: ids.slice(i, i + MAX_IDS), ...(message.bare ? { bare: true as const } : {}) });
         }
         break;
@@ -372,7 +384,7 @@ export class PeerSession2 {
           for (const id of message.ids.slice(0, MAX_IDS)) {
             const record = typeof id === 'string' ? this.replica.record2(id) : undefined;
             // Only what belongs to the space asked about, which both hold.
-            if (record && record.scope === message.space && isWireItemV2(record.wire)) items.push(message.bare ? { e: record.wire.e } : record.wire);
+            if (record && record.scope === message.space && isWireItemV2(record.wire) && this.#mayShow(message.space, record.wire.e.author)) items.push(message.bare ? { e: record.wire.e } : record.wire);
           }
           this.#sendItems(items);
         }
@@ -512,9 +524,17 @@ export class PeerSession2 {
         return;
       }
       this.#admitted = true;
+      this.#publicOk = this.#access.publicFor?.(shared) ?? (() => true);
       this.#welcome();
     }
+    // Whose public events it gets follows what it shares: more shared, more to compare again (and v1 logs to send).
+    const sharedBefore = [...this.#shared].sort().join(',');
     this.#shared = shared;
+    if (this.#access.publicFor && [...shared].sort().join(',') !== sharedBefore) {
+      this.#publicOk = this.#access.publicFor(shared) ?? (() => true);
+      this.#started.delete('public');
+      if (this.#peerHeads.size) this.#sendMissingV1();
+    }
     for (const space of behind) {
       if (this.#behind.has(space)) continue;
       this.#sendKeys(space);
@@ -589,7 +609,7 @@ export class PeerSession2 {
   #reconItems(space: string, since: string, until: string | undefined, bare: boolean): ReconItem[] {
     return this.replica.store
       .inSpace2(space, since, until)
-      .filter(({ event }) => event.class === 'content' && (bare || this.replica.store.body(event.body) !== undefined))
+      .filter(({ event }) => event.class === 'content' && this.#mayShow(space, event.author) && (bare || this.replica.store.body(event.body) !== undefined))
       .map(({ id, event }) => ({ key: reconKey(event.time, id), id }))
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   }
@@ -628,7 +648,7 @@ export class PeerSession2 {
   /** Control events of a space the peer lacks, in chain order per signer. */
   #sendChains(space: string, theirs: Record<string, unknown>): void {
     const items: WireItemV2[] = [];
-    const control = this.replica.store.inSpace2(space).filter(({ event }) => event.class === 'control');
+    const control = this.replica.store.inSpace2(space).filter(({ event }) => event.class === 'control' && this.#mayShow(space, event.author));
     control.sort((a, b) => (a.event.signer === b.event.signer ? (a.event as { seq: number }).seq - (b.event as { seq: number }).seq : a.event.signer.localeCompare(b.event.signer)));
     for (const { event } of control) {
       const peerSeq = Number.isSafeInteger(theirs[event.signer]) ? (theirs[event.signer] as number) : 0;
@@ -645,7 +665,7 @@ export class PeerSession2 {
   /** New v2 events: to the peer if it shares their space and doesn't have them yet (a peer on an older protocol shares none). */
   #offer(items: WireItemV2[]): void {
     if (this.#peerVersion !== null && !this.#speaks()) return;
-    this.#sendItems(items.filter((item) => this.#shared.has(item.e.space)));
+    this.#sendItems(items.filter((item) => this.#shared.has(item.e.space) && this.#mayShow(item.e.space, item.e.author)));
     // A new key of a space the peer is behind in: theirs to take, if a box is for them.
     for (const item of items) if (this.#behind.has(item.e.space) && item.e.class === 'control' && /\.rekey$/.test(item.e.kind)) this.#send({ t: 'keys', space: item.e.space, items: [{ e: item.e }] });
   }
@@ -674,7 +694,7 @@ export class PeerSession2 {
 
   #v1Heads(): Record<string, number> {
     const heads: Record<string, number> = {};
-    for (const [signer, seq] of Object.entries(this.replica.heads())) if (this.#sendsV1(signer as Did)) heads[signer] = seq;
+    for (const [signer, seq] of Object.entries(this.replica.heads())) if (this.#sendsV1(signer as Did) && this.#publicOk(this.replica.authority.personOf(signer as Did))) heads[signer] = seq;
     return heads;
   }
 
@@ -693,7 +713,7 @@ export class PeerSession2 {
   }
 
   #offerV1(event: WeaveEvent): void {
-    if (!this.#sendsV1(event.signer) || (this.#peerHeads.get(event.signer) ?? 0) >= event.seq) return;
+    if (!this.#sendsV1(event.signer) || !this.#publicOk(this.replica.authority.personOf(event.signer)) || (this.#peerHeads.get(event.signer) ?? 0) >= event.seq) return;
     this.#send({ t: 'events', events: [event] });
     this.#peerHeads.set(event.signer, event.seq);
   }
