@@ -2431,7 +2431,8 @@ export class WeaveNode implements Backend {
   /**
    * Keys someone missed because their join came in after them: made after their invite, while their join was still
    * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
-   * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite.
+   * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite, unless the
+   * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
    */
   #handMissedKeys(space: StoredSpace, state: SpaceState): number {
     if (space.kind === 'direct' || !canManage(state, this.identity.author)) return 0;
@@ -2452,11 +2453,19 @@ export class WeaveNode implements Backend {
       const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
       if (canonicalKind(d.inner.kind) === KIND_INVITE && typeof invite === 'string' && Number.isSafeInteger(epoch)) invitedAt.set(invite, epoch as number);
     }
+    // A space that once let newcomers read only part of it and now lets them read everything: those who came in
+    // meanwhile get the keys from before too (Julian, 2.11.2026), not only newcomers from now on.
+    const opened = (state.history?.value ?? 'all') === 'all' && this.#decodedIn(space.id).some((d) => d.inner.kind === KIND_HISTORY && (d.inner.body as { history?: unknown } | null)?.history !== 'all');
     let handed = 0;
-    for (const [epoch, to] of boxed) {
+    const epochs = opened ? Object.keys(space.keys).map(Number) : [...boxed.keys()];
+    for (const epoch of epochs) {
       const key = space.keys[String(epoch)];
       if (!key) continue;
-      const missing = [...state.members.values()].filter((m) => !to.has(m.did) && m.invite !== undefined && invitedAt.has(m.invite) && epoch > invitedAt.get(m.invite)!).map((m) => m.did);
+      const to = boxed.get(epoch) ?? new Set<Did>();
+      const missing = [...state.members.values()]
+        .filter((m) => m.did !== this.identity.author && !to.has(m.did))
+        .filter((m) => opened || (m.invite !== undefined && invitedAt.has(m.invite) && epoch > invitedAt.get(m.invite)!))
+        .map((m) => m.did);
       if (!missing.length) continue;
       const boxes: Record<string, Json> = {};
       for (const did of missing) boxes[did] = boxTo(this.#encryptionKeyOf(did), { space: space.id, epoch, key }) as unknown as Json;
