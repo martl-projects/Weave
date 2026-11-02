@@ -94,4 +94,44 @@ describe('a front door', () => {
     expect(eve.nameOf(martl.identity.author)).toBe('martl');
     expect(knows(eve, liane)).toBe(false);
   });
+
+  it('lets someone in at the computer once its person adds them back: friends meet at their direct chat, through no other link', async () => {
+    const [martl, eve] = [person('martl'), person('Eve')];
+    const boxDir = home();
+    const linked = await martl.linkNode({ request: WeaveNode.nodeRequest(boxDir, 'door') });
+    const box = await WeaveNode.completeNodeLink(linked.answer, boxDir);
+    nodes.push(box);
+    sync(martl, box);
+    await box.reconcile();
+
+    // Eve comes through the front door; martl's computer hears of her only through his node.
+    await eve.addContact(await martl.contactLink({ door: true }));
+    let close = link(box, eve);
+    await settle();
+    close();
+    sync(box, martl);
+    expect(knows(martl, eve)).toBe(true);
+
+    // martl adds her back (her contact link, as she sent it to him): his follow is told in their direct chat.
+    await martl.addContact(await eve.contactLink());
+    await martl.reconcile();
+    sync(martl, box);
+    close = link(box, eve);
+    await settle();
+    close();
+    await eve.reconcile();
+    sync(eve, box);
+    sync(box, martl);
+    expect((await eve.social()).friends.map((p) => p.name)).toEqual(['martl']);
+    expect((await martl.social()).friends.map((p) => p.name)).toEqual(['Eve']);
+
+    // Friends: martl's computer lets her in now, met at their direct chat.
+    const [la, lb] = duplexPair();
+    const left = new PeerSession2(martl.replica, la, { access: martl.sessionAccess() });
+    const right = new PeerSession2(eve.replica, lb, { access: eve.sessionAccess() });
+    await settle();
+    expect(la.destroyed || lb.destroyed).toBe(false);
+    left.close();
+    right.close();
+  });
 });

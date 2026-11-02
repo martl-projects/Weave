@@ -329,6 +329,14 @@ export interface LaunchingWebsiteInfo {
 }
 
 /** A release of a project, as it can be started as a service. */
+/** Who reaches your computer, and whether you have a front door (see WeaveNode.reach). */
+export interface ReachInfo {
+  /** Anyone who finds it gets in and sees everything public it holds; else only people you know. */
+  anyone: boolean;
+  /** You have an always-on node: your front door, the one your door contact link leads to. */
+  door: boolean;
+}
+
 export interface ArtifactInfo {
   id: string;
   project: SpaceRef;
@@ -2389,6 +2397,8 @@ export interface Backend {
   updateReady(input: { version: string }): Promise<UpdateReady | null>;
   /** Download new versions in the background, or only say there is one. */
   updateSettings(input: { auto: boolean }): Promise<{ auto: boolean }>;
+  reach(): Promise<ReachInfo>;
+  setReach(input: { anyone: boolean }): Promise<ReachInfo>;
   /** This computer's own settings, about no space: the UI's language (absent: the system's). The main process and the daemon read the same one. */
   preferences(): Promise<Preferences>;
   setPreferences(input: { language?: LanguageSetting }): Promise<Preferences>;
@@ -2558,7 +2568,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'reach', 'setReach', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',

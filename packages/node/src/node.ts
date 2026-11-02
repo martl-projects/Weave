@@ -512,6 +512,7 @@ import {
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
   type ArtifactInfo,
+  type ReachInfo,
   type AccountInfo,
   type MyAccountInfo,
   type FetcherInfo,
@@ -4099,7 +4100,7 @@ export class WeaveNode implements Backend {
     const name = this.nameOf(this.identity.author);
     const door = this.#doorSecret();
     const entry = input.door ? { topics: [meetTopic(door)], bootstrap: this.config.bootstrap, meet: b64u.encode(door) } : this.#entryPoint();
-    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry });
+    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry, ...(input.door ? { door: true as const } : {}) });
   }
 
   async addContact(link: string): Promise<Profile> {
@@ -4336,6 +4337,22 @@ export class WeaveNode implements Backend {
     this.config = { ...this.config, updates: { ...rest, ...(input.auto === false ? { auto: false } : {}) } };
     saveConfig(this.home, this.config);
     return { auto: input.auto !== false };
+  }
+
+  /**
+   * Who reaches this computer: people you know (with your link, or a space or a chat you share), or anyone who finds
+   * it (and then sees everything public it holds); and whether you have a front door (an always-on node).
+   */
+  async reach(): Promise<ReachInfo> {
+    const door = this.replica.authority.grantsOf(this.identity.author).some((g) => g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    return { anyone: this.config.firewall === false, door };
+  }
+
+  async setReach(input: { anyone: boolean }): Promise<ReachInfo> {
+    const { firewall: _firewall, ...rest } = this.config;
+    this.config = { ...rest, ...(input.anyone ? { firewall: false as const } : {}) };
+    saveConfig(this.home, this.config);
+    return this.reach();
   }
 
   async preferences(): Promise<Preferences> {
@@ -6701,6 +6718,7 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
+    const node = this;
     return {
       spaces: () => this.#heldSpaces(),
       offerKeys: (items) => this.#offeredKeys(items),
@@ -6708,11 +6726,14 @@ export class WeaveNode implements Backend {
       keep: this.#keepAccess,
       farewells: () => this.#farewells(),
       // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
-      firewall: this.config.firewall !== false,
+      // Read for each new connection, so changing who reaches you (setReach) holds from the next one on.
+      get firewall() {
+        return node.config.firewall !== false;
+      },
       fromBehind: (item) => this.#joinFromBehind(item),
       // Behind the firewall, a peer learns the public side of us and of those it shares something with here, never
       // of everyone we know (a newcomer through a contact link would otherwise get our family's names and faces).
-      ...(this.config.firewall !== false ? { publicFor: (shared: ReadonlySet<string>) => this.#publicFor(shared) } : {}),
+      publicFor: (shared: ReadonlySet<string>) => (this.config.firewall !== false ? this.#publicFor(shared) : undefined),
     };
   }
 

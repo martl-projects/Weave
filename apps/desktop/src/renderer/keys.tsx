@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
-import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, SignInStatus, Status } from '@weave/node/client';
+import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Modal, WeaveMark, Info } from './ui.tsx';
+import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
 import { LinkedAccountsBox } from './accounts.tsx';
 import { KeyvaultsBox } from './keyvaults.tsx';
@@ -359,6 +359,54 @@ type KeystoreOption = { keystore: Status['keystore']; name: string; ready: boole
  * Always-on nodes (stage 18): a server, NAS or cluster that keeps your spaces and hosts your rooms while your
  * computers are off. It shows a request (weave-server pair); this answers it, and the answer goes back to it.
  */
+/** Who reaches this computer: people you know (the default), or anyone who finds it. */
+function WhoReaches() {
+  const { t } = useTexts();
+  const { data: reach } = useApi(() => api<ReachInfo>('reach'), []);
+  if (!reach) return null;
+  const set = (anyone: boolean) => void attempt(() => api('setReach', { anyone }).then(bump), t('reach.saved'));
+  return (
+    <fieldset>
+      <legend>{t('reach.legend')}</legend>
+      <div className="field-row">
+        <input id="reach-known" type="radio" name="reach" checked={!reach.anyone} onChange={() => set(false)} />
+        <label htmlFor="reach-known">
+          <b>{t('reach.known')}</b> <span className="small muted" style={{ marginLeft: '0.4em' }}>{t('reach.known.about')}</span>
+        </label>
+      </div>
+      <div className="field-row">
+        <input id="reach-anyone" type="radio" name="reach" checked={reach.anyone} onChange={() => set(true)} />
+        <label htmlFor="reach-anyone">
+          <b>{t('reach.anyone')}</b> <span className="small muted" style={{ marginLeft: '0.4em' }}>{t('reach.anyone.about')}</span>
+        </label>
+      </div>
+    </fieldset>
+  );
+}
+
+/** Your front door, while you have an always-on node: what it is, and its link to give anyone. */
+function FrontDoor() {
+  const { t } = useTexts();
+  return (
+    <div className="field-row">
+      <Icon name="community" />
+      <span className="grow">
+        <b>{t('door.title')}</b> <span className="small">{t('door.on')}</span>{' '}
+        <Info>
+          <p>{t('door.info.what')}</p>
+          <ul>
+            <li>{t('door.info.who')}</li>
+            <li>{t('door.info.see')}</li>
+            <li>{t('door.info.not')}</li>
+            <li>{t('door.info.off')}</li>
+          </ul>
+        </Info>
+      </span>
+      <AsyncButton onClick={async () => { const link = await attempt(() => api<string>('contactLink', { door: true })); if (link) await navigator.clipboard.writeText(link).then(() => toast(t('door.copied'))); }}>{t('door.copy')}</AsyncButton>
+    </div>
+  );
+}
+
 function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
   const { t } = useTexts();
   const nodes = keys.filter((k) => k.name?.startsWith('node:'));
@@ -383,6 +431,7 @@ function AlwaysOnNodes({ keys }: { keys: KeyInfo[] }) {
           )}
         </div>
       ))}
+      {nodes.some((n) => n.revokedAfter === undefined) && <FrontDoor />}
       <p className="small">
         {t('nodes.about')} <Info>{t('nodes.about.more')}</Info>
       </p>
@@ -604,6 +653,7 @@ export function KeysView() {
       </fieldset>
       {/* Pairing more phones is for the computer itself; a phone may not. */}
       {!bridge.phone && <PhonesBox />}
+      <WhoReaches />
       <AlwaysOnNodes keys={keys} />
       <ServicesBox keys={keys} />
       <KeyvaultsBox />

@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
+import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
@@ -275,13 +275,25 @@ function CopyButtons({ text, what, onClose }: { text?: string; what: string; onC
 
 export function ContactDialog({ onClose }: { onClose(): void }) {
   const { t } = useTexts();
-  const { data: link } = useApi(() => api<string>('contactLink'), []);
+  // With a front door (an always-on node), its link is the one to give: it never leads to this computer. The personal
+  // one is still there, for close contacts.
+  const { data: reach } = useApi(() => api<ReachInfo>('reach'), []);
+  const [personal, setPersonal] = useState(false);
+  const door = !!reach?.door && !personal;
+  const { data: link } = useApi(() => (reach ? api<string>('contactLink', door ? { door: true } : {}) : Promise.resolve(undefined)), [!!reach, door]);
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   const message = link ? t(me?.name ? 'contact.message.named' : 'contact.message', { name: me?.name, link }) : '';
   return (
     <Modal title={t('contact.title')} onClose={onClose}>
-      <p className="small">{t('contact.about')}</p>
+      <p className="small">{t(door ? 'contact.about.door' : 'contact.about')}</p>
       <textarea className="wide invite" readOnly rows={4} value={message || t('contact.making')} />
+      {reach?.door && (
+        <p className="small">
+          <button type="button" className="link" onClick={() => setPersonal((p) => !p)}>
+            {t(door ? 'contact.personal' : 'contact.door')}
+          </button>
+        </p>
+      )}
       <CopyButtons text={link && message} what={t('contact.link')} onClose={onClose} />
     </Modal>
   );
