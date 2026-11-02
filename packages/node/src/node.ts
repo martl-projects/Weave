@@ -6237,16 +6237,26 @@ export class WeaveNode implements Backend {
     return (await this.channels(input.space)).find((c) => c.name === name)!;
   }
 
-  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number } = {}): Promise<MessageInfo[]> {
+  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number; since?: string; until?: string; people?: boolean } = {}): Promise<MessageInfo[]> {
     const chat = options.post ? await this.#chatOf(options.post) : undefined;
     const space = chat?.space ?? this.#space(ref ?? '');
     const entries = this.#entries(space);
     const maintainers = this.#state(space).maintainers;
     const byId = new Map(messagesOf(entries, {}, maintainers).concat(chat?.post ? messagesOf(entries, { post: chat.post }, maintainers) : []).map((m) => [m.id, m]));
     const channel = options.channel ? (channelName(options.channel) ?? DEFAULT_CHANNEL) : undefined;
+    const time = (what: string, value: string | undefined) => {
+      if (value === undefined) return undefined;
+      const at = Date.parse(value);
+      if (Number.isNaN(at)) throw new Error(`${what} is a time, like 2026-11-02T12:00:00Z`);
+      return new Date(at).toISOString();
+    };
+    const [since, until] = [time('since', options.since), time('until', options.until)];
     return messagesOf(entries, chat?.post ? { post: chat.post } : { channel }, maintainers)
-      .slice(-(options.limit ?? 200))
-      .map((m) => this.#messageInfo(m, byId));
+      .filter((m) => (!since || m.time >= since) && (!until || m.time <= until))
+      .map((m) => this.#messageInfo(m, byId))
+      // What people wrote themselves: not their agents (nor their services, which sign as agents too).
+      .filter((m) => !options.people || !m.by.agent)
+      .slice(-(options.limit ?? 200));
   }
 
   async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo> {

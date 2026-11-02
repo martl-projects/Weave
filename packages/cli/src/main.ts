@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseBlobRef, parseUnits, TEST_USDC, whoWords, type Attachment, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseBlobRef, parseUnits, TEST_USDC, timeGiven, whoWords, type Attachment, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -388,7 +388,8 @@ direct chats with friends (people you follow who follow you back):
   dm <who> <text...>         send them a message              [--reply <id>]
 
 chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
-  chat                       recent messages            [-c <channel>] [-n <count>]   (a file attached shows as 📎 name (size) wblob:…)
+  chat                       recent messages            [-c <channel>] [-n <count>] [--since <time>] [--until <time>] [--people: not agents' messages]
+                             (a file attached shows as 📎 name (size) wblob:…)
   say <text...>              send a message             [-c <channel>] [--reply <id>] [--file <path>: attach a file or image, at most 2 MB; text optional then]
   unsay <id>                 take a message down: yours, or any where you moderate (it stays in the logs)
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
@@ -445,6 +446,8 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
+    until: { type: 'string' },
+    people: { type: 'boolean' },
     bare: { type: 'boolean', default: false },
     door: { type: 'boolean', default: false },
     file: { type: 'string' },
@@ -2860,7 +2863,7 @@ ${postLine(p)}`);
     }
 
     case 'chat': {
-      const messages = await (await backend()).messages(values.post ? undefined : needSpace(), { channel: values.channel, post: values.post, limit: values.n ? Number(values.n) : 30 });
+      const messages = await (await backend()).messages(values.post ? undefined : needSpace(), { channel: values.channel, post: values.post, limit: values.n ? Number(values.n) : 30, ...(values.since ? { since: timeGiven(values.since) } : {}), ...(values.until ? { until: timeGiven(values.until) } : {}), ...(values.people ? { people: true } : {}) });
       return out(messages, () =>
         messages
           .map((m) => {

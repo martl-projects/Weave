@@ -37,3 +37,14 @@ export function checkTextFields(body: unknown): void {
     if (typeof value === 'string' && value.length > max) throw tooLong(what, value.length, max);
   }
 }
+
+/**
+ * A time as a person or agent gives it on the command line or in a tool call: ISO 8601 as it is, or how long ago
+ * (30m, 2h, 3d, 1w) as the time that was. Anything else goes through for whoever reads it to refuse.
+ */
+export function timeGiven(given: string, now = Date.now()): string {
+  const ago = /^(\d+)\s*([mhdw])$/i.exec(given.trim());
+  if (!ago) return given;
+  const unit = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }[ago[2].toLowerCase() as 'm' | 'h' | 'd' | 'w'];
+  return new Date(now - Number(ago[1]) * unit).toISOString();
+}

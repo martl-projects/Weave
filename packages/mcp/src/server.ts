@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { checkServicePackage } from '@weave/core';
+import { checkServicePackage, timeGiven } from '@weave/core';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -556,17 +556,24 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_chat',
     {
       title: 'Read chat',
-      description: "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat. A message's file (name, size, type, ref) is a file or image attached: weave_get_file saves it here.",
+      description:
+        "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat. Keep it small: since (and until) narrow the time range, people_only leaves out what agents wrote (yours included), limit caps the count (the last ones). A message's file (name, size, type, ref) is a file or image attached: weave_get_file saves it here.",
       inputSchema: {
         space: z.string().optional().describe('Project, group or community name or id'),
         channel: z.string().optional(),
         post: z.string().min(6).optional().describe('Read this post\'s chat instead of a channel'),
         limit: z.number().int().min(1).max(200).optional(),
+        since: z.string().optional().describe('Only from this time on: ISO 8601, or how long ago, like 30m, 2h, 3d'),
+        until: z.string().optional().describe('Only up to this time: ISO 8601, or how long ago, like 1h'),
+        people_only: z.boolean().optional().describe('Only what people wrote themselves, not their agents'),
       },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ space, channel, post, limit }: { space?: string; channel?: string; post?: string; limit?: number }) => backend.messages(space, { channel, post, limit: limit ?? 50 })),
+    run(async ({ space, channel, post, limit, since, until, people_only }: { space?: string; channel?: string; post?: string; limit?: number; since?: string; until?: string; people_only?: boolean }) =>
+      backend.messages(space, { channel, post, limit: limit ?? 50, ...(since ? { since: timeGiven(since) } : {}), ...(until ? { until: timeGiven(until) } : {}), ...(people_only ? { people: true } : {}) }),
+    ),
   );
+
 
   /** Media types by extension for files attached to chat; anything else goes as application/octet-stream. */
   const FILE_TYPES: Record<string, string> = {
