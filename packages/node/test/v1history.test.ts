@@ -55,3 +55,22 @@ describe('someone whose history is from before v0.4', () => {
     }
   });
 });
+
+describe('an always-on node of someone whose history is from before v0.4', () => {
+  it('is linked: the answer brings the v1 originals its v2 identity events restate', async () => {
+    const dir = home();
+    const before = WeaveNode.init('martl', dir, { writeVersion: 1 });
+    await before.close();
+    const store = new SqliteStore(join(dir, 'weave.db'));
+    store.setMeta('migrated', '');
+    store.close();
+    const martl = WeaveNode.open(dir);
+    nodes.push(martl);
+    const boxDir = home();
+    const linked = await martl.linkNode({ request: WeaveNode.nodeRequest(boxDir, 'door') });
+    const box = await WeaveNode.completeNodeLink(linked.answer, boxDir);
+    nodes.push(box);
+    expect(box.identity.author).toBe(martl.identity.author);
+    expect(box.nameOf(martl.identity.author)).toBe('martl');
+  });
+});

@@ -1338,7 +1338,15 @@ export class WeaveNode implements Backend {
       person: me,
       name: this.nameOf(me) ?? null,
       encryption: this.#encryption.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })),
-      events: this.replica.events().filter((e) => e.author === me && authority.has(canonicalKind(e.kind))) as unknown as Json[],
+      // From before v0.4 these were signed again as v2 (`was`): a node takes those only with their v1 originals, so
+      // the originals come first (martl's door node, 2.11.2026: no original, no device, so no delegation of its key).
+      events: [
+        ...Object.keys(this.replica.heads())
+          .filter((signer) => this.replica.authority.personOf(signer as Did) === me)
+          .flatMap((signer) => this.replica.store.range(signer as Did, 1))
+          .filter((e) => e.author === me && authority.has(canonicalKind(e.kind))),
+        ...this.replica.events().filter((e) => e.author === me && authority.has(canonicalKind(e.kind))),
+      ] as unknown as Json[],
       spaces: this.#nodeSpaces() as unknown as Json[],
       bootstrap: this.config.bootstrap as unknown as Json,
     };
