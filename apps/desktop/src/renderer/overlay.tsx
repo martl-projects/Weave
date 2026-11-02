@@ -197,6 +197,30 @@ function SessionsPane({ focused, me, onPick }: { focused?: string; me?: string; 
   );
 }
 
+/** The overlay's word to someone new (shown once on a device): where a session's work comes from, and what you see here. */
+function Intro({ onDone }: { onDone(): void }) {
+  const { t } = useTexts();
+  return (
+    <section className="panel-intro">
+      <b className="panel-intro-title">{t('panel.intro.title')}</b>
+      <p>{t('panel.intro.lead')}</p>
+      <div className="panel-heading">{t('panel.intro.linked')}</div>
+      <p>{t('panel.intro.where')}</p>
+      <div className="panel-heading">{t('panel.intro.gives')}</div>
+      <ul>
+        <li>{t('panel.intro.current')}</li>
+        <li>{t('panel.intro.click')}</li>
+        <li>{t('panel.intro.keep')}</li>
+        <li>{t('panel.intro.lands')}</li>
+      </ul>
+      <p className="small">{t('panel.intro.switch')}</p>
+      <button className="primary" onClick={onDone}>
+        {t('panel.intro.ok')}
+      </button>
+    </section>
+  );
+}
+
 /** Links in the panel open in Weave's main window, not in the panel. */
 function openInWeave(event: MouseEvent): void {
   const link = (event.target as Element).closest?.('a[href^="#/"]');
@@ -217,6 +241,8 @@ export function MentionsPanel() {
   const [fold, setFold] = useState(false);
   // Which session to show: the one the Claude app shows (''), or one you picked (#/overlay?session=…).
   const [pinned, setPinned] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '');
+  // The first time on this device the panel introduces itself (#/overlay?intro=1), until you've read it.
+  const [intro, setIntro] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('intro') === '1');
   useEffect(() => {
     void Promise.all([api<Profile>('profile'), api<SpaceInfo[]>('spaces')]).then(([me, spaces]) => setCtx({ me, spaces }), () => {});
   }, []);
@@ -277,6 +303,7 @@ export function MentionsPanel() {
       {/* Behind it all, faded and pinned to the bottom: the session (left) and its work item's picture (right). */}
       {pane === 'session' && session && ctx && <PanelDecor session={session} me={ctx.me.did} />}
       <div className="mentions-scroll">
+        {intro && <Intro onDone={() => setIntro(false)} />}
         {pane === 'sessions' ? (
           <SessionsPane focused={focused} me={ctx?.me.did} onPick={pick} />
         ) : session && ctx ? (

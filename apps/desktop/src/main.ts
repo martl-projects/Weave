@@ -7,6 +7,7 @@ import { newSession, openSession, pasteBack, rememberFront, showSession, startPa
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
+import { loadOverlay, overlayOpens, saveOverlay } from './overlay.ts';
 import { Updater } from './update.ts';
 import type { UpdateAction } from './updatestate.ts';
 import { loadLanguage, setLanguage, t } from './texts.ts';
@@ -176,6 +177,8 @@ ipcMain.handle('weave:show', () => showWindow());
 let mentions: BrowserWindow | undefined;
 /** The panel is open as far as you're concerned (until you close it), though hidden while another app is in front. */
 let mentionsWanted = false;
+/** Whether the panel comes up by itself on this device (overlay.ts). */
+let overlay = loadOverlay(home.dir);
 /** The app in front, where Weave can tell (Windows); undefined elsewhere. */
 let front: Front | undefined;
 let stopWatchingFront: (() => void) | undefined;
@@ -190,12 +193,17 @@ function frontChanged(now: Front): void {
 
 /**
  * The Mentions panel: a small window that stays on top beside your work (Claude
- * Code), with the posts agents point to. It comes up by itself, without taking
- * the focus, when a new one arrives, but only beside the Claude app (or Weave):
- * with another app in front it waits until you're back in Claude. Closing it
- * only hides it, until it's opened again.
+ * Code), with the posts agents point to. Opened by hand (focus) it comes now.
+ * By itself, without taking the focus, when a session or a mention comes up:
+ * the first time on this device with its introduction, after that only while
+ * Show the overlay is on (Sessions page), and only beside the Claude app (or
+ * Weave): with another app in front it waits until you're back in Claude.
+ * Closing it only hides it, until it's opened again.
  */
 function showMentions(focus = true): void {
+  if (!overlayOpens(overlay, focus)) return;
+  const intro = !overlay.introduced;
+  if (intro) saveOverlay(home.dir, (overlay = { ...overlay, introduced: true }));
   mentionsWanted = true;
   stopWatchingFront ??= watchFront(frontChanged);
   // Opened by you: now. By itself: only where it belongs.
@@ -244,13 +252,26 @@ function showMentions(focus = true): void {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url);
   });
   panel.once('ready-to-show', () => (focus ? panel.show() : now && panel.showInactive()));
-  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
+  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: intro ? '/overlay?intro=1' : '/overlay' });
 }
 
 ipcMain.handle('weave:mentions', (_event, action: string) => {
   if (action !== 'hide') return showMentions();
   mentionsWanted = false;
   mentions?.hide();
+});
+
+/** Show the overlay (Sessions page): on, it comes up now and whenever a session or a mention does; off, it goes. */
+ipcMain.handle('weave:overlay', (_event, on?: unknown) => {
+  if (typeof on === 'boolean' && on !== overlay.on) {
+    saveOverlay(home.dir, (overlay = { introduced: true, on }));
+    if (on) showMentions();
+    else {
+      mentionsWanted = false;
+      mentions?.hide();
+    }
+  }
+  return overlay.on;
 });
 
 /**
