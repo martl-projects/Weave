@@ -2,6 +2,16 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.28.0 · 2026-11-02
+
+- A node shares only its person's public side and that of whom the peer shares something with, and an always-on node is a front door: found at a public meeting point that only front doors announce
+- Ctrl+V with a file or picture on the clipboard attaches it to a chat message: a screenshot gets a name for when it was taken, text on the clipboard still pastes
+- A release of a website or service that Weave couldn't run is refused when it's published: it needs a container image or WebAssembly
+- A post's group picture is kept under who's in it: people without an avatar no longer share one picture (Julian's post showed Phil's)
+- On Windows, pages open in the default browser: through explorer, not rundll32's url.dll, which read the old association and often opened Edge
+- A node new to Weave learns the names of people from before v0.4: v1 logs travel also for keys that signed their v1 events again as v2, whose v2 versions it takes only with the v1 originals
+- udx-native 1.22.0 (libudx: a stream isn't destroyed again while its destroy packet is queued), hyperdht 6.35.0, dht-rpc 6.28.0, and the MCP SDK's body-parser and fast-uri past their advisories
+
 ## v0.27.4 · 2026-11-02
 
 - A space set to everything after it let newcomers read only from when they came: those already in get the keys from before their invite too, once
