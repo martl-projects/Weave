@@ -4,7 +4,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 import { ItemList } from './lists.tsx';
-import { T, useTexts } from './texts.tsx';
+import { T, t, useTexts } from './texts.tsx';
 
 type VaultApp = KeyvaultInfo['apps'][number];
 
@@ -34,12 +34,52 @@ export function ownerOf(text: string): { owner: string; repo?: string } | undefi
  * your services get only short-lived access derived from the app that handed a project what they ask for, cut to what
  * their contracts declare. Only you hand anything to a project.
  */
+/** What an agent asked to open here (weave_open_in_app keyvault): the keyvault, and a project to hand a repository to. Taken by the box once it shows. */
+let wanted: { name: string; project?: { id: string; name: string } } | undefined;
+const wantedListeners = new Set<() => void>();
+
+export function openKeyvault(request: { name: string; project?: { id: string; name: string } }): void {
+  wanted = request;
+  for (const listener of wantedListeners) listener();
+}
+
+/** Make the person's app for a keyvault, on the platform's page (GitHub's manifest flow), and take it in once it's made. */
+const makeApp = (v: KeyvaultInfo, setting: string, what: string, label: string) =>
+  attempt(async () => {
+    const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting });
+    window.open(url, '_blank', 'noopener');
+    await api('finishKeyvaultApp', { id });
+    bump();
+  }, t('keyvault.app.made.install', { app: label, what }));
+
 export function KeyvaultsBox() {
   const { t } = useTexts();
   const { data: vaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults'), []);
   const [opened, setOpened] = useState<{ vault: string; app: string }>();
   const [making, setMaking] = useState<KeyvaultInfo>();
+  const [handing, setHanding] = useState<{ vault: KeyvaultInfo; project: { id: string; name: string } }>();
   const [forgotten, setForgotten] = useState<{ platform: string; apps: ForgottenAppInfo[] }>();
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    const listener = () => setAsked((n) => n + 1);
+    wantedListeners.add(listener);
+    return () => void wantedListeners.delete(listener);
+  }, []);
+  // An agent's request: the keyvault's dialog, as far as the person got (added? an app yet?), the rest is theirs to click.
+  useEffect(() => {
+    const v = wanted && vaults?.find((x) => x.name === wanted!.name);
+    if (!wanted || !vaults || !v) return;
+    const request = wanted;
+    wanted = undefined;
+    if (!v.added) return;
+    const appSetting = v.settings.find((s) => s.register);
+    if (!v.apps.length) {
+      if (!appSetting) return;
+      if (appSetting.register!.pageFor) setMaking(v);
+      else void makeApp(v, appSetting.name, v.resources ?? t('pack.resources'), appSetting.label);
+    } else if (request.project) setHanding({ vault: v, project: request.project });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaults, asked]);
   if (!vaults?.length) return null;
   const open = opened && vaults.find((v) => v.name === opened.vault);
   const openApp = open?.apps.find((a) => a.key === opened!.app);
@@ -87,15 +127,7 @@ export function KeyvaultsBox() {
                         add: {
                           label: t(v.apps.length ? 'keyvault.make.another' : 'keyvault.make.app', { app: appSetting.label.charAt(0).toLowerCase() + appSetting.label.slice(1), site: new URL(appSetting.register!.page).hostname }),
                           // For whom: your account, or (where the platform has them) an organization of yours.
-                          run: () =>
-                            appSetting.register!.pageFor
-                              ? setMaking(v)
-                              : void attempt(async () => {
-                                  const { id, url } = await api<{ id: string; url: string }>('startKeyvaultApp', { name: v.name, setting: appSetting.name });
-                                  window.open(url, '_blank', 'noopener');
-                                  await api('finishKeyvaultApp', { id });
-                                  bump();
-                                }, t('keyvault.app.made.install', { app: appSetting.label, what })),
+                          run: () => (appSetting.register!.pageFor ? setMaking(v) : void makeApp(v, appSetting.name, what, appSetting.label)),
                         },
                       }
                     : {})}
@@ -132,6 +164,7 @@ export function KeyvaultsBox() {
       })}
       {open && openApp && <AppSettingsDialog vault={open} app={openApp} onClose={() => setOpened(undefined)} />}
       {making && <NewAppDialog vault={making} onClose={() => setMaking(undefined)} />}
+      {handing && <HandDialog vault={handing.vault} project={handing.project} onClose={() => (setHanding(undefined), bump())} />}
       {forgotten && <ForgottenDialog {...forgotten} onClose={() => setForgotten(undefined)} />}
     </fieldset>
   );

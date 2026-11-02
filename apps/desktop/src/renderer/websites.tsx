@@ -3,6 +3,7 @@ import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, H
 import { fieldName, type ActionWho, type TextPackage } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
 import { ago, api, bridge, bump, clock, navigate, shortDid, useApi } from './lib.ts';
+import { spaceHref } from './posts.tsx';
 import { ItemList } from './lists.tsx';
 import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { ShowsSection, useShowForm } from './shows.tsx';
@@ -1199,6 +1200,15 @@ export function ProjectLiveView({ project, members, meDid }: { project: SpaceInf
 }
 
 /** A project's services: each with what it's for and what it offers here. Websites are what the website service serves. */
+/** What an agent asked to open here (weave_open_in_app service): a project's services, one of them or something to pick in the catalog. Taken by the view once it shows. */
+let wanted: { project: string; service?: string; askedBy?: string } | undefined;
+const wantedListeners = new Set<() => void>();
+
+export function openServices(request: { project: string; service?: string; askedBy?: string }): void {
+  wanted = request;
+  for (const listener of wantedListeners) listener();
+}
+
 export function ProjectServicesView({ project, members, meDid, focus }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; focus?: string }) {
   const { t } = useTexts();
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
@@ -1207,8 +1217,25 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
   const { data: artifacts } = useApi(() => api<ArtifactInfo[]>('artifacts', project.id), [project.id]);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<{ pick?: string; askedBy?: string } | false>(false);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id).catch(() => [] as BoardInfo[]), [project.id]);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    const listener = () => setAsked((n) => n + 1);
+    wantedListeners.add(listener);
+    return () => void wantedListeners.delete(listener);
+  }, []);
+  // An agent's request: one of the project's services alone, or the catalog with something picked; the rest is the person's to click.
+  useEffect(() => {
+    if (!wanted || wanted.project !== project.id || !profiles) return;
+    const request = wanted;
+    wanted = undefined;
+    const name = request.service?.toLowerCase();
+    const running = name && profiles.find((s) => s.did === request.service || s.name.toLowerCase() === name);
+    if (running) return navigate(`${spaceHref(project)}/services/${running.did}`);
+    setAdding({ ...(request.service ? { pick: request.service } : {}), ...(request.askedBy ? { askedBy: request.askedBy } : {}) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profiles, asked, project.id]);
 
   // Room services first, then the rest.
   // Websites that are only that run in Live.
@@ -1219,7 +1246,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
     <Page
       title={list.length === 1 && focus ? <><Icon name={serviceIcon(list[0])} /> {list[0].name} · p/{project.name}</> : <><Icon name="zap" /> {t('nav.services')} · p/{project.name}</>}
       actions={
-        <button onClick={() => setAdding(true)}>
+        <button onClick={() => setAdding({})}>
           <Icon name="plus" /> {t('svc.add.a.service')}
         </button>
       }
@@ -1233,7 +1260,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
           <a href={`#/p/${project.id}/available`}>{t('psvc.everything.offers', { project: project.name })}</a>
         </p>
       )}
-      {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} onClose={() => setAdding(false)} />}
+      {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} {...(adding.pick ? { pick: adding.pick } : {})} {...(adding.askedBy ? { askedBy: adding.askedBy } : {})} onClose={() => setAdding(false)} />}
     </Page>
   );
 }

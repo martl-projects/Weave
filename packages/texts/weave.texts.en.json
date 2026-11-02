@@ -2494,6 +2494,8 @@
 
     "status.shipped.missing": "This Weave runs without the services it ships (Unread, Websites, GitHub releases…): the daemon found no built services folder next to it. Counts and websites stay off until a daemon with them holds this home.",
     "art.getting": "Getting…",
+    "addservice.title.one": "Add {name} · p/{project}",
+    "addservice.asked.by": "Your agent {agent} asks you to add {name}: it needs it for what you gave it to do. Have a look, then add it, or close this.",
     "time.ago": "{time, ago}",
     "day.today": "Today",
     "day.yesterday": "Yesterday",

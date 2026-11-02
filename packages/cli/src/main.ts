@@ -223,10 +223,11 @@ github — repositories that follow a group, tier or project (members who give t
   service add --shipped <name>     one Weave ships (packages/shipped), checked by its digest each time it starts
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
-  service add github --builtin github   the GitHub service Weave ships: hands a project's release files to its participants
-                             (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
-                             [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
-                             installed on the organization, so nobody has to sign in (with --node, on an always-on node)
+  service add --shipped github-releases   the GitHub releases service Weave ships: hands a project's release files to its
+                             participants (it offers artifact.fetch). Its access to a private repository comes from your GitHub
+                             keyvault (Keys & devices: your own GitHub App, made in one click; hand the project its repository
+                             there, or let an agent ask you with weave_request_repository)  [--spaces <project,…>]
+  service add --shipped github-access   gives the project's members access to its repositories, from the same keyvault
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]

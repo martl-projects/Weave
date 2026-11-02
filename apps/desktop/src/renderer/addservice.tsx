@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ArtifactInfo, CatalogEntryInfo, ServiceInfo, ServiceOriginInfo, ShippedServiceInfo, SpaceInfo } from '@weave/node/client';
 import type { AppSetting, ServiceContract } from '@weave/core';
 import { InstallFromCatalog } from './catalog.tsx';
@@ -61,8 +61,19 @@ type Picked =
   | { kind: 'release'; artifact: ArtifactInfo }
   | { kind: 'mine'; service: ServiceInfo };
 
-export function ServiceCatalog({ project, services, maintainer, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; onClose(): void }) {
+/** The catalog entry an agent asked for: by its key's name (shipped:github-releases, pack:github, release:<id>, mine:<name>) or its heading. */
+const entryFor = (entries: Entry[], pick: string): Entry | undefined => {
+  const name = pick.trim().toLowerCase();
+  return entries.find((e) => e.key.toLowerCase().split(':').slice(1).includes(name)) ?? entries.find((e) => e.heading.toLowerCase() === name);
+};
+
+/**
+ * `pick`: what to open as soon as it's listed (an agent's request, `askedBy` its name): the dialog is then that one
+ * service's, "Add github-access", saying who asked; not listed, it's the search.
+ */
+export function ServiceCatalog({ project, services, maintainer, pick, askedBy, onClose }: { project: SpaceInfo; services: ServiceInfo[]; maintainer: boolean; pick?: string; askedBy?: string; onClose(): void }) {
   const { t } = useTexts();
+  const [asked, setAsked] = useState<Entry>();
   const { data: shipped } = useApi(() => api<ShippedServiceInfo[]>('shippedServices').catch(() => [] as ShippedServiceInfo[]), []);
   const { data: packs } = useApi(() => api<Pack[]>('setupPacks').catch(() => [] as Pack[]), []);
   const [packing, setPacking] = useState<Pack>();
@@ -113,11 +124,23 @@ export function ServiceCatalog({ project, services, maintainer, onClose }: { pro
   // Each source its own card: what Weave ships never beside what a project released, nor one project's beside another's.
   const sources = [...new Map(shown.map((e) => [e.source.key, e.source])).values()].sort((a, b) => a.rank - b.rank || a.heading.localeCompare(b.heading));
   const loading = !shipped || !listed || !artifacts;
+  const [pickedOnce, setPickedOnce] = useState(false);
+  useEffect(() => {
+    if (!pick || loading || pickedOnce) return;
+    setPickedOnce(true);
+    const entry = entryFor(entries, pick);
+    if (entry) {
+      setAsked(entry);
+      entry.open();
+    } else setQuery(pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pick, loading, pickedOnce]);
 
   if (fromCatalog) return <InstallFromCatalog space={fromCatalog.space} entry={fromCatalog.entry} onClose={onClose} />;
   if (packing) return <SetupPackDialog project={project} pack={packing} onClose={onClose} />;
   return (
-    <Modal title={t('addservice.title', { project: project.name })} onClose={onClose} wide>
+    <Modal title={picked && asked ? t('addservice.title.one', { name: asked.heading, project: project.name }) : t('addservice.title', { project: project.name })} onClose={onClose} wide>
+      {picked && asked && askedBy && <p className="small muted">{t('addservice.asked.by', { agent: askedBy, name: asked.heading })}</p>}
       {!picked ? (
         <>
           <div className="field-row">

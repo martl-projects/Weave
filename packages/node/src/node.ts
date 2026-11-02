@@ -2741,8 +2741,30 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
-    if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen> {
+    if (!['space', 'inbox', 'post', 'person', 'keyvault', 'service'].includes(input.what)) throw new Error('what is space, inbox, post, person, keyvault or service');
+    // Which agent asked, for the dialog to say (an agent of theirs: it signs as one).
+    const askedBy = input.as && this.#agents.some((a) => a.name === input.as) ? { askedBy: input.as } : {};
+    if (input.what === 'service') {
+      // A project's services: one it runs, or its Add a service catalog with something picked (the person adds it).
+      if (!input.space) throw new Error('say which project');
+      const project = this.#project(input.space);
+      const service = input.service?.trim();
+      const open: AppOpen = { what: 'service', space: { id: project.id, kind: 'project', name: project.name }, ...(service ? { service } : {}), ...askedBy };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
+    if (input.what === 'keyvault') {
+      // A keyvault in Keys & devices (GitHub's by default): the person makes their app there, or hands a project a repository.
+      const vaults = await this.keyvaults();
+      const wanted = (input.keyvault ?? 'github').toLowerCase();
+      const k = vaults.find((v) => v.name.toLowerCase() === wanted || v.title.toLowerCase() === wanted || v.platform.toLowerCase() === wanted);
+      if (!k) throw new Error(vaults.length ? `no keyvault ${input.keyvault ?? 'github'} here (${vaults.map((v) => v.name).join(', ')})` : 'no keyvaults here');
+      const project = input.space ? this.#project(input.space) : undefined;
+      const open: AppOpen = { what: 'keyvault', keyvault: { name: k.name, title: k.title }, ...(project ? { space: { id: project.id, kind: 'project', name: project.name } } : {}), ...askedBy };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     if (input.what === 'person') {
       if (!input.who) throw new Error('say who');
       const did = this.resolve(input.who);

@@ -177,6 +177,23 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('brings the app to the front at a keyvault, ready to hand a project a repository (Codex, 2.11.2026)', async () => {
+    const { call, close } = await setup();
+    // Keys & devices at the GitHub keyvault Weave ships; with a project, its hand dialog.
+    const opened = await call('weave_open_in_app', { what: 'keyvault', space: 'Weave' });
+    expect(opened.data).toMatchObject({ what: 'keyvault', keyvault: { name: 'github-keyvault' }, space: { kind: 'project', name: 'Weave' } });
+    expect((await call('weave_open_in_app', { what: 'keyvault', keyvault: 'acme' })).error).toMatch(/no keyvault acme here/);
+    close();
+  });
+
+  it("brings the app to the front at a project's services, with something to add picked in its catalog", async () => {
+    const { call, close } = await setup();
+    const opened = await call('weave_open_in_app', { what: 'service', space: 'Weave', service: 'github-releases' });
+    expect(opened.data).toMatchObject({ what: 'service', space: { kind: 'project', name: 'Weave' }, service: 'github-releases', askedBy: 'forge' });
+    expect((await call('weave_open_in_app', { what: 'service' })).error).toMatch(/say which project/);
+    close();
+  });
+
   it('teaches and checks app manifests, every problem at once', async () => {
     const { call, close } = await setup();
     const guide = (await call('weave_app_manifest')).data;

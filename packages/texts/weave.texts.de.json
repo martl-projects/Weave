@@ -2494,6 +2494,8 @@
 
     "status.shipped.missing": "Dieses Weave läuft ohne die mitgelieferten Dienste (Unread, Websites, GitHub-Releases …): der Daemon hat keinen gebauten Dienste-Ordner neben sich gefunden. Zähler und Websites bleiben aus, bis ein Daemon mit ihnen dieses Zuhause hält.",
     "art.getting": "Wird geholt …",
+    "addservice.title.one": "{name} hinzufügen · p/{project}",
+    "addservice.asked.by": "Dein Agent {agent} bittet dich, {name} hinzuzufügen: er braucht es für seine Aufgabe. Schau es dir an und füge es hinzu, oder schließe das hier.",
     "time.ago": "{time, ago}",
     "day.today": "Heute",
     "day.yesterday": "Gestern",

@@ -2,7 +2,9 @@ import { useState } from 'react';
 import type { AccountInfo, AppOpen, MyAccountInfo, PlatformInfo, Profile, SpaceInfo } from '@weave/node/client';
 import { Icon, isIconName, type IconName } from './icons.tsx';
 import { api, bridge, bump, navigate, onItem, useApi } from './lib.ts';
+import { openKeyvault } from './keyvaults.tsx';
 import { copy, spaceHref } from './posts.tsx';
+import { openServices } from './websites.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
 import { T, useTexts } from './texts.tsx';
 
@@ -297,6 +299,16 @@ export function startAppOpens(): void {
     void bridge.show();
     // A post (Open in Weave on its page): PublicPost takes it to where it lives.
     if (open.what === 'post' && open.post) return navigate(`#/post/${open.post.id}`);
+    // A keyvault: Keys & devices, with its dialog open (the person's app to make, or a repository to hand the project).
+    if (open.what === 'keyvault' && open.keyvault) {
+      openKeyvault({ name: open.keyvault.name, ...(open.space ? { project: { id: open.space.id, name: open.space.name } } : {}) });
+      return navigate('#/keys');
+    }
+    // A project's services: one it runs, or the Add a service catalog with something picked.
+    if (open.what === 'service' && open.space) {
+      openServices({ project: open.space.id, ...(open.service ? { service: open.service } : {}), ...(open.askedBy ? { askedBy: open.askedBy } : {}) });
+      return navigate(`${spaceHref(open.space)}/services`);
+    }
     if (open.what === 'person' && open.person) return navigate(`#/space/${open.person.did}`);
     if (open.what === 'inbox' || !open.space) return navigate('#/inbox');
     navigate(spaceHref(open.space));

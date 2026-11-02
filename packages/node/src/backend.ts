@@ -1205,8 +1205,15 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'space' | 'inbox' | 'post' | 'person';
+  what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service';
+  /** For keyvault: a project to hand something to there; for service: the project; else the space to show. */
   space?: SpaceRef;
+  /** For service: one the project runs (its name or did), shown alone; else what to pick in its Add a service catalog (one Weave ships, a setup pack, a release), or nothing: the catalog. */
+  service?: string;
+  /** The person's agent that asked (its name, as it signs): said in the dialog, so they know why it's open. */
+  askedBy?: string;
+  /** For keyvault: which one (Keys & devices), ready to make the person's app there, or to hand the project a repository. */
+  keyvault?: { name: string; title: string };
   /** For post: the post to show. */
   post?: { id: string; title: string };
   /** For person: whose hub to show. */
@@ -2160,7 +2167,7 @@ export interface Backend {
   /** An agent asks its person to hand a project repositories from their keyvault for a platform (github): waits in their Inbox, like a permission. */
   requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
   showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
   /** The Mentions panel: posts agents pointed to on this computer, newest first. */

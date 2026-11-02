@@ -749,16 +749,18 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub. Tell them what to do there.",
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub; 'keyvault' opens Keys & devices at their GitHub keyvault, with the dialog to make their GitHub App there (one click, on GitHub), or, with space (a project), the dialog to hand that project a repository; 'service' opens a project's (space) services: with service, one it runs (its name or did), or its Add a service catalog with that picked (one Weave ships, like github-releases or websites; a setup pack; a release), one click from added. Tell them what to do there.",
       inputSchema: {
-        what: z.enum(['space', 'inbox', 'post', 'person']),
-        space: z.string().optional().describe('Group, tier or project name or id'),
+        what: z.enum(['space', 'inbox', 'post', 'person', 'keyvault', 'service']),
+        space: z.string().optional().describe('Group, tier or project name or id (for keyvault: the project to hand a repository to; for service: the project)'),
         post: z.string().optional().describe('For post: its id or url'),
         who: z.string().optional().describe('For person: name, did:key or person url'),
+        keyvault: z.string().optional().describe('For keyvault: which one, by platform (github, the default) or name'),
+        service: z.string().optional().describe("For service: one the project runs (name or did), or what to pick in its catalog (a shipped service's name, a setup pack, a release's app); left out, the catalog"),
       },
     },
-    run(async ({ what, space, post, who }: { what: 'space' | 'inbox' | 'post' | 'person'; space?: string; post?: string; who?: string }) => ({
-      ...(await backend.openInApp({ what, space, post, who })),
+    run(async ({ what, space, post, who, keyvault, service }: { what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service'; space?: string; post?: string; who?: string; keyvault?: string; service?: string }) => ({
+      ...(await backend.openInApp({ what, space, post, who, keyvault, service, ...(as ? { as } : {}) })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
   );
