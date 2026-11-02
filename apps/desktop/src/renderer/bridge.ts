@@ -34,6 +34,8 @@ interface Bridge {
   show(): Promise<void>;
   /** Show or hide the Mentions panel window; missing in a browser (open #/overlay there). */
   mentions?(action: 'show' | 'hide'): Promise<void>;
+  /** Show the overlay on this device (on Sessions): with a value sets it; answers whether it's on. Missing in a browser. */
+  overlay?(on?: boolean): Promise<boolean>;
   /** From the panel: show this route (#/…) in the main window. Missing in a browser. */
   route?(hash: string): Promise<void>;
   /** In the main window: a route the panel asked for. */
