@@ -2,6 +2,10 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.30.1 · 2026-11-02
+
+- Agents and sessions are martl's own robot again: small and squat, painted by hand (Weave avatar v1.18)
+
 ## v0.30.0 · 2026-11-02
 
 - Agents read a chat in slices: since and until (a time, or how long ago), and people only, in weave_chat and weave chat
