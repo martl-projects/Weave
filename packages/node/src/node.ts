@@ -1332,20 +1332,19 @@ export class WeaveNode implements Backend {
     if (this.replica.authority.grant(key)) throw new Error('that node is linked already');
     this.replica.write(this.identity, delegation(key, 'agent', NODE_PERMISSIONS, `${NODE_PREFIX}${name}`));
     this.#writeNodeIndex(true);
-    // Who you are (and what you're called) and who signs for you: the node checks its own key against them from the start.
-    const authority = new Set(['weave.identity', 'weave.rotate', 'weave.delegate', 'weave.revoke', KIND_PROFILE]);
+    // Who you are (and what you're called) and who signs for you: the node checks its own key against them from the
+    // start. Your public side whole: each key's events form a chain, and one taken out leaves the rest waiting for it
+    // (martl's door node, 2.11.2026: his device's tiers and gifts sat between his delegations). And from before v0.4,
+    // the v1 originals that the v2 events restate (`was`), first: without them a node takes none of those.
     const payload = {
       person: me,
       name: this.nameOf(me) ?? null,
       encryption: this.#encryption.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })),
-      // From before v0.4 these were signed again as v2 (`was`): a node takes those only with their v1 originals, so
-      // the originals come first (martl's door node, 2.11.2026: no original, no device, so no delegation of its key).
       events: [
         ...Object.keys(this.replica.heads())
           .filter((signer) => this.replica.authority.personOf(signer as Did) === me)
-          .flatMap((signer) => this.replica.store.range(signer as Did, 1))
-          .filter((e) => e.author === me && authority.has(canonicalKind(e.kind))),
-        ...this.replica.events().filter((e) => e.author === me && authority.has(canonicalKind(e.kind))),
+          .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
+        ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
       spaces: this.#nodeSpaces() as unknown as Json[],
       bootstrap: this.config.bootstrap as unknown as Json,
