@@ -82,7 +82,11 @@
 
     "tool.submit": "Submit",
     "tool.new": "New",
-    "tool.link": "My link",
+    "tool.link": "Open link",
+    "link.open.title": "Open a link",
+    "link.open.about": "Paste a link someone sent you, or the whole message it came in: an invite, a contact link or a post. Weave does the right thing with it.",
+    "link.open.placeholder": "weave:invite:…, weave:contact:… or a post link",
+    "link.open.unknown": "There's no Weave link in it: an invite (weave:invite:…), a contact link (weave:contact:…) or a post link.",
     "button.ok": "OK",
     "button.cancel": "Cancel",
     "button.done": "Done",
@@ -154,7 +158,7 @@
     "keys.unprotected": "Your keys aren't protected by this computer's keystore. See Keys & devices.",
 
     "link.enroll.taken": "This is a link to set up a company account. This computer has a Weave account already.",
-    "link.paste": "Paste this link into “Join with an invite link…” or “Add someone”",
+    "link.paste": "Paste this link into “Open link” in the toolbar",
     "link.post.not.here": "This post isn't on this computer. It may be in a project or community you're not in.",
     "work.desktop.only": "Ctrl+click opens a work item in the Claude app: that works in the desktop app",
     "work.clipboard": "The message is on your clipboard: paste it in Claude (Ctrl+V)",

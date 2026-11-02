@@ -82,7 +82,11 @@
 
     "tool.submit": "Einreichen",
     "tool.new": "Neu",
-    "tool.link": "Mein Link",
+    "tool.link": "Link öffnen",
+    "link.open.title": "Link öffnen",
+    "link.open.about": "Füge einen Link ein, den dir jemand geschickt hat, oder gleich die ganze Nachricht: eine Einladung, einen Kontaktlink oder einen Beitrag. Weave macht das Passende daraus.",
+    "link.open.placeholder": "weave:invite:…, weave:contact:… oder ein Beitragslink",
+    "link.open.unknown": "Darin ist kein Weave-Link: eine Einladung (weave:invite:…), ein Kontaktlink (weave:contact:…) oder ein Beitragslink.",
     "button.ok": "OK",
     "button.cancel": "Abbrechen",
     "button.done": "Fertig",
@@ -154,7 +158,7 @@
     "keys.unprotected": "Deine Schlüssel sind nicht vom Schlüsselspeicher dieses Computers geschützt. Siehe Schlüssel & Geräte.",
 
     "link.enroll.taken": "Das ist ein Link zum Einrichten eines Firmenkontos. Dieser Computer hat schon ein Weave-Konto.",
-    "link.paste": "Füge diesen Link unter „Mit Einladungslink beitreten…“ oder „Jemanden hinzufügen“ ein",
+    "link.paste": "Füge diesen Link unter „Link öffnen“ oben in der Leiste ein",
     "link.post.not.here": "Dieser Beitrag ist nicht auf diesem Computer. Er liegt vielleicht in einem Projekt oder einer Community, in der du nicht bist.",
     "work.desktop.only": "Strg+Klick öffnet ein Work Item in der Claude-App: das geht in der Desktop-App",
     "work.clipboard": "Die Nachricht ist in deiner Zwischenablage: füge sie in Claude ein (Strg+V)",

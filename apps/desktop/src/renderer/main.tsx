@@ -25,7 +25,7 @@ import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
-import { Avatar, Menu, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
+import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
 import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
@@ -34,7 +34,6 @@ import {
   CommunityAbout,
   GroupSettings,
   CommunityBanner,
-  ContactDialog,
   DelegationBar,
   InboxView,
   MembershipsView,
@@ -481,6 +480,54 @@ function openLink(link: string): void {
   );
 }
 bridge.onLink(openLink);
+
+const CONTACT_LINK = /weave:contact:[A-Za-z0-9_-]+/;
+const INVITE_IN_TEXT = /weave:(?:invite|knock):[A-Za-z0-9_-]+/;
+
+/** Paste a link someone sent, or the whole message it came in: an invite asks to join, a contact link adds them, a post or space opens. */
+function OpenLinkDialog({ onClose }: { onClose(): void }) {
+  const { t } = useTexts();
+  const [text, setText] = useState('');
+  const open = async () => {
+    const invite = INVITE_IN_TEXT.exec(text)?.[0];
+    if (invite) {
+      onClose();
+      return openInviteLink(invite);
+    }
+    const contact = CONTACT_LINK.exec(text)?.[0];
+    if (contact) {
+      const p = await attempt(() => api<Profile>('addContact', contact), t('contact.added'));
+      if (!p) return;
+      bump();
+      onClose();
+      return navigate(`#/space/${encodeURIComponent(p.did)}`);
+    }
+    const link = text.trim();
+    if (!postRefOfHref(link) && !SPACE_LINK.test(link) && !link.startsWith('weave:enroll:')) return toast(t('link.open.unknown'), 'error');
+    onClose();
+    openLink(link);
+  };
+  return (
+    <Modal title={t('link.open.title')} onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void open();
+        }}
+      >
+        <p className="small">{t('link.open.about')}</p>
+        <textarea className="wide" required autoFocus rows={4} placeholder={t('link.open.placeholder')} value={text} onChange={(e) => setText(e.target.value)} />
+        <div className="buttons">
+          <button type="button" onClick={onClose}>
+            {t('button.cancel')}
+          </button>
+          <button className="default">{t('inv.open')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 // The side panel's links open here.
 bridge.onRoute?.(navigate);
 
@@ -733,7 +780,7 @@ function Shell() {
         <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
         {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
-        {/* Your contact link, one click away: what people need to add you (it was only on People). */}
+        {/* A link someone sent (an invite, a contact link, a post): one place for all of them, one click away. */}
         <ToolButton icon="link" label={t('tool.link')} onClick={() => setDialog({ kind: 'link' })} className="not-mobile" />
         <div className="brand">
           <WeaveMark size={40} />
@@ -775,7 +822,7 @@ function Shell() {
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
-      {dialog?.kind === 'link' && <ContactDialog onClose={close} />}
+      {dialog?.kind === 'link' && <OpenLinkDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
       {dialog?.kind === 'marks' && <MarksSettings onClose={close} />}
