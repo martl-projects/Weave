@@ -1,6 +1,6 @@
 {
   "name": "@weave/sdk",
-  "version": "0.28.1",
+  "version": "0.30.0",
   "description": "Who is playing: for apps shared in Weave rooms",
   "license": "MIT",
   "type": "commonjs",
