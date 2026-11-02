@@ -31,7 +31,7 @@ Already using Weave on another computer? Choose **I already use Weave…** and t
 
 ## 2. Get connected
 
-A new identity knows nobody: Weave connects you to no one by itself. You connect by choice, with a link someone gave you.
+A new identity knows one person: martl, who started Weave, through his front door (his always-on node, not his own computer). You see his profile and can write him once he adds you back; nobody else learns you're there, and you learn nothing about who else he knows. Everyone else you connect to by choice, with a link someone gave you.
 
 Swap contact links with whoever brought you to Weave: **People → My contact link → Copy**, paste it into any chat, and add theirs in **People**. Once you've both added each other, **Chats** in the left tree shows your direct chat. Adding someone doesn't follow them publicly: whom you know stays between the two of you.
 

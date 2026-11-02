@@ -12,7 +12,7 @@
 // AWS KMS, WEAVE_GCP_SERVICE_ACCOUNT (the key's JSON or its file, e.g. a
 // mounted secret) for Google Cloud KMS. See docs/weave-server.md.
 
-import { cpSync, existsSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -66,7 +66,7 @@ const HELP = `weave-server ${VERSION}: a company's own Weave node
 
   For your own always-on node (no company): keeps your spaces and hosts your rooms while your computers are off
   weave-server pair [name]                  a request: paste it on one of your computers (weave node add, or Keys & devices)
-  weave-server join <answer>                finish with the answer from your computer, then: weave-server run
+  weave-server join <answer | file | ->     finish with the answer from your computer (or a file holding it, or - to read it), then: weave-server run
 
   weave-server backup <folder>              a consistent copy of this server's home, while it runs
   weave-server restore <folder> [--standby] set this home up from a backup (--standby: follow the active one, write nothing)
@@ -270,8 +270,11 @@ async function main(): Promise<void> {
       );
     }
     case 'join': {
-      if (!positionals[1]) throw new Error('usage: weave-server join <answer from your computer>');
-      const node = await WeaveNode.completeNodeLink(positionals[1], home.dir);
+      if (!positionals[1]) throw new Error('usage: weave-server join <answer from your computer, a file holding it, or - to read it>');
+      // An answer carries its person's public side and can be longer than a command line takes (128 KB on Linux).
+      const given = positionals[1];
+      const answer = given === '-' ? readFileSync(0, 'utf8') : !given.startsWith('weave:') && existsSync(given) ? readFileSync(given, 'utf8') : given;
+      const node = await WeaveNode.completeNodeLink(answer.trim(), home.dir);
       const spaces = await node.spaces();
       const name = node.nameOf(node.identity.author);
       await node.close();
