@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
-import { browserSignIn, isWebAddress, openInBrowser } from '../src/signin.ts';
+import { browserCommand, browserSignIn, isWebAddress, openInBrowser } from '../src/signin.ts';
 import { AzureStub, OidcStub, VaultStub } from './helpers/stubs.ts';
 
 const dirs: string[] = [];
@@ -52,6 +52,15 @@ describe('what may open in the browser', () => {
 
   it("refuses to hand anything else to the system's URL handler", () => {
     expect(() => openInBrowser('file://attacker/share/x.exe')).toThrow(/only https/);
+  });
+
+  it('opens pages in the default browser: on Windows through explorer, not url.dll (which often picked Edge)', () => {
+    const url = 'https://login.example.com/authorize?a=1&b=2';
+    expect(browserCommand(url, undefined, 'win32')).toEqual(['explorer.exe', [url]]);
+    expect(browserCommand(url, undefined, 'darwin')).toEqual(['open', [url]]);
+    expect(browserCommand(url, undefined, 'linux')).toEqual(['xdg-open', [url]]);
+    expect(browserCommand(url, '"C:\\Program Files\\Firefox\\firefox.exe" -new-tab', 'win32')).toEqual(['C:\\Program Files\\Firefox\\firefox.exe', ['-new-tab', url]]);
+    expect(browserCommand(url, 'none', 'win32')).toBeUndefined();
   });
 
   it("doesn't follow a company sign-in whose discovery names a file or share as its sign-in page", async () => {
