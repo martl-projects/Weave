@@ -34,6 +34,7 @@ import {
   CommunityAbout,
   GroupSettings,
   CommunityBanner,
+  ContactDialog,
   DelegationBar,
   InboxView,
   MembershipsView,
@@ -48,7 +49,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -732,6 +733,8 @@ function Shell() {
         <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
         {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
+        {/* Your contact link, one click away: what people need to add you (it was only on People). */}
+        <ToolButton icon="link" label={t('tool.link')} onClick={() => setDialog({ kind: 'link' })} className="not-mobile" />
         <div className="brand">
           <WeaveMark size={40} />
           <div>
@@ -772,6 +775,7 @@ function Shell() {
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
+      {dialog?.kind === 'link' && <ContactDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
       {dialog?.kind === 'marks' && <MarksSettings onClose={close} />}
