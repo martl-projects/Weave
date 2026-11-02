@@ -2,7 +2,7 @@ import data from '@emoji-mart/data';
 import { AuthorAvatar } from './avatar.tsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react';
 import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import type { Attachment } from '@weave/core';
 import { TEXT_LIMITS } from '@weave/core/limits';
@@ -14,9 +14,11 @@ import { Marks } from './marks.tsx';
 import { HintSigns, useHints } from './notify.tsx';
 import { AnnounceCard } from './announce.tsx';
 import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, uploadFile } from './attachments.tsx';
+import { pastedFile } from './paste.ts';
 import { t, useTexts } from './texts.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
+
 
 /** emoji-mart's picker is a web component; we mount it and hand back the chosen emoji. */
 export function EmojiPicker({ onPick, onClose }: { onPick(emoji: string): void; onClose(): void }) {
@@ -198,14 +200,24 @@ function Composer({
   const [file, setFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const pick = (e: ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.[0];
-    e.target.value = '';
-    if (!picked) return;
+  const take = (picked: File) => {
     // Pictures shrink before the check; anything else is sent as it is.
     if (!picked.type.startsWith('image/') && picked.size > MAX_FILE) return void toast(t('file.too.big', { name: picked.name }), 'error');
     setFile(picked);
     area.current?.focus();
+  };
+  const pick = (e: ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0];
+    e.target.value = '';
+    if (picked) take(picked);
+  };
+  // Ctrl+V with a file or picture on the clipboard (a screenshot, a file copied in Explorer or Finder) attaches it, as
+  // the button does; text on the clipboard still pastes as text.
+  const paste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = pastedFile(e.clipboardData);
+    if (!pasted) return;
+    if (!e.clipboardData.types.includes('text/plain')) e.preventDefault();
+    take(pasted);
   };
 
   useEffect(() => {
@@ -306,6 +318,7 @@ function Composer({
           placeholder={file ? t('msg.placeholder.file', { name: file.name }) : post ? t('msg.placeholder.post') : space.kind === 'direct' ? t('msg.placeholder.direct', { name: space.name }) : t('msg.placeholder.channel', { channel })}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={paste}
         />
         <button className="emoji-btn" title={t('msg.emoji')} onClick={() => setPicking((p) => !p)}>
           <Icon name="emoji" />
