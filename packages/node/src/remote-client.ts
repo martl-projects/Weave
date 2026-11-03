@@ -1,3 +1,4 @@
+import { errorFromWire, type ErrorAnswer } from '@weave/core';
 import type { DhtSocket } from '@weave/net';
 import type { FeedItem, RpcMethod } from './backend.ts';
 import { decodePhoneLink } from './phone-link.ts';
@@ -200,7 +201,8 @@ function openOnce(dht: Dialer, nodeKey: string, keyPair: KeyPair, hello: Record<
           const call = pending.get(message.id as number);
           if (!call) continue;
           pending.delete(message.id as number);
-          if (typeof message.error === 'string') call.reject(new Error(message.error));
+          // A named error (docs/localization.md, "Texts the daemon writes") is a WeaveError again here.
+          if (typeof message.error === 'string') call.reject(errorFromWire(message as Partial<ErrorAnswer>, message.error));
           else call.resolve(message.result);
         }
       }

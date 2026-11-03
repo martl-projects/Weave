@@ -3,7 +3,7 @@ import type { HarnessInfo, PermissionRequest } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, useApi } from './lib.ts';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
-import { t, T, useTexts } from './texts.tsx';
+import { named, t, T, useTexts } from './texts.tsx';
 
 /*
  * Telling the agent apps on this computer (Claude Code, Codex…) about Weave:
@@ -34,7 +34,7 @@ export function AgentsOffer() {
         <ul>
           {repaired.map((h) => (
             <li key={h.id}>
-              <T name="harness.repaired" values={{ name: <b>{h.name}</b> }} /> {h.restart}
+              <T name="harness.repaired" values={{ name: <b>{h.name}</b> }} /> {named(h.restartText) ?? h.restart}
             </li>
           ))}
         </ul>
@@ -54,7 +54,7 @@ export function AgentsOffer() {
         <ul>
           {done.map((h) => (
             <li key={h.id}>
-              <T name="harness.acts.as" values={{ name: <b>{h.name}</b>, agent: <b>{h.agent}</b> }} /> {h.restart}
+              <T name="harness.acts.as" values={{ name: <b>{h.name}</b>, agent: <b>{h.agent}</b> }} /> {named(h.restartText) ?? h.restart}
             </li>
           ))}
         </ul>
@@ -111,7 +111,7 @@ export function AgentAppsBox() {
   const { t } = useTexts();
   const { data } = useApi(() => api<Harnesses>('harnesses').catch(() => undefined), []);
   if (!data) return null;
-  const set = (h: HarnessInfo, on: boolean) => attempt(() => api('connectHarness', { harness: h.id, on }).then(bump), on ? `${t('harness.knows', { name: h.name })} ${h.restart}` : t('harness.removed', { name: h.name }));
+  const set = (h: HarnessInfo, on: boolean) => attempt(() => api('connectHarness', { harness: h.id, on }).then(bump), on ? `${t('harness.knows', { name: h.name })} ${named(h.restartText) ?? h.restart}` : t('harness.removed', { name: h.name }));
   return (
     <fieldset>
       <legend>{t('harness.legend')}</legend>

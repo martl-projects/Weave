@@ -8,7 +8,7 @@
  * its language is its own, not its node's.
  */
 import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { isLanguageSetting, pickLanguage, pickLocale, texts as makeTexts, type LanguageSetting, type TextPart, type Texts, type TextValues } from '@weave/core';
+import { isLanguageSetting, pickLanguage, pickLocale, textRecordOf, texts as makeTexts, type LanguageSetting, type TextPart, type TextRecord, type Texts, type TextValues } from '@weave/core';
 import { packagesFor } from '@weave/texts';
 import { api, bridge } from './bridge.ts';
 
@@ -44,6 +44,16 @@ function textsFor(setting: LanguageSetting): Texts {
 let current: Texts = textsFor(loadLanguageSetting());
 export const t = (name: string, values?: TextValues): string => current.t(name, values);
 export const currentTexts = (): Texts => current;
+export const has = (name: string): boolean => current.has(name);
+
+/**
+ * A text the daemon named (docs/localization.md, "Texts the daemon writes"): resolved here in the reader's language when
+ * the package has the name; undefined otherwise, so the caller shows the daemon's English.
+ */
+export const named = (record: TextRecord | undefined): string | undefined => (record && current.has(record.name) ? current.t(record.name, record.values) : undefined);
+
+/** What an error says to the reader: a named error (a WeaveError, rebuilt from the daemon's answer) in their language, else its message. */
+export const errorText = (error: unknown): string => named(textRecordOf(error)) ?? ((error as Error)?.message || String(error));
 
 interface TextsState {
   texts: Texts;

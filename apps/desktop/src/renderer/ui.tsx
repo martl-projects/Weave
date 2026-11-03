@@ -3,7 +3,7 @@ import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
 import { FigureHead, picture, postScene, useFigure, useSeen, type Figure } from './avatar.tsx';
 import { loadInviteEmbeds } from './invites.tsx';
-import { t, useTexts } from './texts.tsx';
+import { errorText, t, useTexts } from './texts.tsx';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -365,7 +365,7 @@ export async function attempt<T>(fn: () => Promise<T>, success?: string): Promis
     if (success) toast(success);
     return result;
   } catch (error) {
-    toast((error as Error).message, 'error');
+    toast(errorText(error), 'error');
     return undefined;
   }
 }

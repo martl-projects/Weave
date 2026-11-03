@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
+import { errorToWire } from '@weave/core';
 import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, watchFront, type Delivered, type Front } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
@@ -149,16 +150,22 @@ ipcMain.handle('weave:restore', async (_event, words: string) => {
   if (!daemon) await connect();
 });
 
+// Answered as {result} or {error, name?, values?}, never thrown: a thrown error reaches the renderer as
+// "Error invoking remote method…" without its name, and the renderer shows a named error in its language (bridge.ts).
 ipcMain.handle('weave:call', async (_event, method: RendererMethod, args: unknown[]) => {
-  if (!RENDERER_METHODS.includes(method)) throw new Error(`not allowed: ${method}`);
-  if (!daemon) throw new Error('not connected to a Weave daemon');
+  if (!RENDERER_METHODS.includes(method)) return { error: `not allowed: ${method}` };
+  if (!daemon) return { error: 'not connected to a Weave daemon' };
   const run = () => (daemon!.client[method] as (...a: unknown[]) => Promise<unknown>).apply(daemon!.client, args) as ReturnType<Backend[RendererMethod]>;
   try {
-    return await run();
+    return { result: await run() };
   } catch (error) {
-    if (!unreachable(error)) throw error;
-    await connect();
-    return run();
+    if (!unreachable(error)) return errorToWire(error);
+    try {
+      await connect();
+      return { result: await run() };
+    } catch (again) {
+      return errorToWire(again);
+    }
   }
 });
 

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
+import { WeaveError } from '@weave/core';
 import { connectTo, loadConfig, openTunnel, pairWith, PHONE_METHODS, resolveHome, RPC_METHODS, saveConfig, WeaveNode, type Dialer, type PostInfo, type RpcMethod, type Tunnel, closeOpenStores } from '../src/index.ts';
 
 const dirs: string[] = [];
@@ -68,6 +69,10 @@ describe('phones using a node remotely', () => {
     await expect(session.call('pairPhone')).rejects.toThrow(/a phone can't do pairPhone/);
     await expect(session.call('destroyCompanyKey', {})).rejects.toThrow(/a phone can't do destroyCompanyKey/);
     await expect(session.call('websiteEnv', 'x')).rejects.toThrow(/a phone can't do websiteEnv/);
+    // A named error (docs/localization.md) arrives with its name and values, a WeaveError again, for the phone's language.
+    const missing = await session.call('post', 'zzzzzz').catch((e: unknown) => e);
+    expect(missing).toBeInstanceOf(WeaveError);
+    expect(missing).toMatchObject({ message: 'no post found with id zzzzzz', text: { name: 'daemon.post.not.found', values: { id: 'zzzzzz' } } });
 
     // A code works once; a stranger's key is turned away at the door.
     await expect(pairWith(dialer, link, HyperDHT.keyPair(), 'Thief')).rejects.toThrow();

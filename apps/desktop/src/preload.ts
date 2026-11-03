@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('weave', {
     },
   },
   lensBase: (release: string) => `weave-lens://lens/${encodeURIComponent(release)}/`,
+  // Answers {result} or {error, name?, values?} (main.ts): bridge.ts throws the error, with its name for the reader's language.
   call: (method: string, ...args: unknown[]) => ipcRenderer.invoke('weave:call', method, args),
   onEvent: (listener: (item: FeedItem) => void) => {
     ipcRenderer.on('weave:event', (_event, item: FeedItem) => listener(item));

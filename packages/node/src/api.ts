@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { errorToWire } from '@weave/core';
 import { RPC_METHODS, type Backend, type RpcMethod, type ServiceGate } from './backend.ts';
 import { updateFeed } from './update.ts';
 
@@ -37,7 +38,8 @@ const MAX_BODY = 4 * 1024 * 1024;
 export async function startApi(backend: Backend, port = 0, hooks: Hooks = {}): Promise<ApiServer> {
   const token = randomBytes(24).toString('base64url');
   const server: Server = createServer((req, res) => {
-    handle(backend, token, req, res, hooks).catch((error: Error) => send(res, 400, { error: error.message }));
+    // A WeaveError's name and values go with its message, for screens to resolve (docs/localization.md).
+    handle(backend, token, req, res, hooks).catch((error: Error) => send(res, 400, errorToWire(error)));
   });
   await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
   return {

@@ -29,6 +29,9 @@ describe("an agent asking for a permission", () => {
       category: 'requests',
       title: 'Your agent claude asks for a permission',
       text: 'To sign weave.github.repo: “to link the Gameshow repository”',
+      // And by name, for a screen in another language (docs/localization.md, "Texts the daemon writes").
+      name: 'daemon.notice.permission',
+      values: { agent: 'claude', kinds: 'weave.github.repo', hasReason: 'yes', reason: 'to link the Gameshow repository' },
       open: { inbox: true },
     });
 

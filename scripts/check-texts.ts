@@ -10,8 +10,11 @@
  *    arguments to toast, ask, attempt, alert, confirm and prompt. Files not moved
  *    yet are in scripts/check-texts.allow.json; that list only shrinks, and a file
  *    that is clean must leave it.
- * 2. Every name used in code (t('x'), <T name="x">, t(`look.${s}`) as a prefix) is in
- *    the English package, and every English name is used, except the glossary (word.*).
+ * 2. Every name used in code (t('x'), <T name="x">, t(`look.${s}`) as a prefix, and the
+ *    daemon's new WeaveError('x', …)) is in the English package, and every English name is
+ *    used, except the glossary (word.*). The daemon's names (daemon.*) are literals in the
+ *    node's sources: errors as WeaveError's first argument, notices as `name:` properties;
+ *    a notice's second line is its name + `.text`.
  * 3. Each language parses, and its placeholders and plural categories match English.
  *    A name German lacks is a warning until the release.
  *
@@ -26,6 +29,8 @@ import * as b from '@babel/types';
 import { checkPackage, GLOSSARY_PREFIX, LANGUAGES, missingNames, TEXT_NAME, type TextPackage } from '@weave/core';
 
 const ROOTS = ['apps/desktop/src', 'apps/console/src'];
+/** Where the daemon names what it writes for screens (docs/localization.md, "Texts the daemon writes"); its English sentences are no hard-coded text. */
+const DAEMON_ROOTS = ['packages/node/src'];
 const TEXT_KEYS: ReadonlySet<string> = new Set(['title', 'placeholder', 'aria-label', 'label', 'alt']);
 const TEXT_CALLS: ReadonlySet<string> = new Set(['toast', 'ask', 'attempt', 'alert', 'confirm', 'prompt', 'copy']);
 /** Two letters in a row make a text; `p/`, `·`, `#`, `x` don't. */
@@ -120,9 +125,9 @@ export function findHardcoded(file: string, source: string): Finding[] {
 }
 
 /**
- * The names a file asks for: the literal names given to t() and <T>, chosen in a conditional too; the prefixes of template
- * names like t(`look.${s}`); and candidates: every name-shaped string in the file, for a name picked from a map and passed
- * on as a variable (a candidate counts as used only when the English package has it).
+ * The names a file asks for: the literal names given to t(), <T> and new WeaveError(), chosen in a conditional too; the
+ * prefixes of template names like t(`look.${s}`); and candidates: every name-shaped string in the file, for a name picked
+ * from a map and passed on as a variable, or a notice's `name:` (a candidate counts as used only when the English package has it).
  */
 export function namesUsed(file: string, source: string): { names: Set<string>; prefixes: Set<string>; candidates: Set<string> } {
   const names = new Set<string>();
@@ -149,6 +154,8 @@ export function namesUsed(file: string, source: string): { names: Set<string>; p
       const callee = node.callee;
       const isT = (b.isIdentifier(callee) && callee.name === 't') || (b.isMemberExpression(callee) && b.isIdentifier(callee.property) && callee.property.name === 't');
       if (isT) take(node.arguments[0]);
+    } else if (b.isNewExpression(node) && b.isIdentifier(node.callee) && node.callee.name === 'WeaveError') {
+      take(node.arguments[0]);
     } else if (b.isJSXOpeningElement(node) && b.isJSXIdentifier(node.name) && node.name.name === 'T') {
       for (const attr of node.attributes) if (b.isJSXAttribute(attr) && jsxName(attr.name) === 'name') take(attr.value);
     } else if (b.isStringLiteral(node) && isName(node.value)) candidates.add(node.value);
@@ -186,6 +193,13 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
       for (const c of used.candidates) candidates.add(c);
     }
   }
+  for (const dir of DAEMON_ROOTS) {
+    for (const file of sourceFiles(join(root, dir))) {
+      const used = namesUsed(slash(relative(root, file)), readFileSync(file, 'utf8'));
+      for (const n of used.names) names.add(n);
+      for (const c of used.candidates) candidates.add(c);
+    }
+  }
 
   const allowPath = join(root, ALLOWLIST);
   if (options.writeAllowlist) writeFileSync(allowPath, JSON.stringify(Object.keys(found).sort(), null, 2) + '\n');
@@ -218,7 +232,9 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
     for (const name of names) if (!(name in en.names)) errors.push(`t('${name}') has no English text: add it to packages/texts/weave.texts.en.json`);
     for (const name of Object.keys(en.names)) {
       if (name.startsWith(GLOSSARY_PREFIX)) continue;
-      if (!names.has(name) && !candidates.has(name) && ![...prefixes].some((p) => name.startsWith(p))) errors.push(`${name} is in the English package and used nowhere: take it out`);
+      // A notice's second line is its name + .text (notify.tsx noticeLines).
+      const noticeText = name.endsWith('.text') && candidates.has(name.slice(0, -'.text'.length));
+      if (!names.has(name) && !candidates.has(name) && !noticeText && ![...prefixes].some((p) => name.startsWith(p))) errors.push(`${name} is in the English package and used nowhere: take it out`);
     }
     for (const [lang, pkg] of packages) {
       if (lang === 'en') continue;

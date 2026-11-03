@@ -448,13 +448,13 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
 
 /** A post by its id alone, as a post link opens it: shown where it lives when that's one of your places. */
 function PublicPost({ id, me, spaces }: { id: string; me: Profile; spaces: SpaceInfo[] }) {
-  const { data, error } = useApi(() => api<PostInfo>('post', id), [id]);
+  const { data, error, errorName } = useApi(() => api<PostInfo>('post', id), [id]);
   const { t } = useTexts();
   const home = data && postHref(data);
   useEffect(() => {
     if (home && home !== `#/post/${data.id}`) location.replace(home); // no back step into this redirect
   }, [home]);
-  if (error) return <Page title={t('word.post')}>{/no post found/.test(error) ? t('post.not.here') : error}</Page>;
+  if (error) return <Page title={t('word.post')}>{errorName === 'daemon.post.not.found' || errorName === 'daemon.post.not.found.address' ? t('post.not.here') : error}</Page>;
   return data && home === `#/post/${data.id}` ? <LonePost post={data} meDid={me.did} spaces={spaces} /> : null;
 }
 
